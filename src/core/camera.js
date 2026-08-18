@@ -18,6 +18,7 @@ export class ShoulderCamera {
     this.pivot = new THREE.Vector3();
     this._tmp = new THREE.Vector3();
     this._first = true;
+    this._side = 1; // hombro actual: 1 = derecho, -1 = izquierdo (suavizado)
   }
 
   applyMouse(dx, dy, invertY) {
@@ -47,12 +48,17 @@ export class ShoulderCamera {
 
   update(dt, player) {
     const c = TUNING.cam;
-    const st = player.camState(); // { mode:'normal'|'roadie'|'aim'|'cover', coverNormal? }
+    const st = player.camState(); // { mode, side? }
 
     let shoulder = c.shoulder, height = c.height, dist = c.dist, fov = c.fovNormal;
     if (st.mode === 'roadie') { height = c.roadieHeight; dist = c.roadieDist; fov = c.fovRoadie; }
     else if (st.mode === 'aim') { shoulder = c.aimShoulder; height = c.aimHeight; dist = c.aimDist; fov = c.fovAim; }
     else if (st.mode === 'cover') { dist = c.coverDist; }
+
+    // shoulder swap suave (lean izquierdo en cover → cámara al hombro izquierdo)
+    const targetSide = st.side ?? 1;
+    this._side += (targetSide - this._side) * (1 - Math.exp(-9 * dt));
+    shoulder *= this._side;
 
     // pivot: pecho del jugador (sigue la altura del salto)
     this.pivot.set(player.pos.x, (player.y ?? 0) + height * 0.92, player.pos.z);

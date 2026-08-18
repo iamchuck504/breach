@@ -47,9 +47,14 @@ export class Controller {
 
   camState() {
     if (this.dead) return { mode: 'normal' };
-    if (this.aim) return { mode: 'aim' };
+    if (this.aim) {
+      // asomándose por la orilla izquierda: la cámara cambia de hombro
+      // (shoulder swap automático, estilo Gears) para no ver solo la pared
+      const side = this.state === 'cover' && this.coverLeanAnim ? this.coverLeanAnim : 1;
+      return { mode: 'aim', side };
+    }
     if (this.state === 'roadie') return { mode: 'roadie' };
-    if (this.state === 'cover') return { mode: 'cover' };
+    if (this.state === 'cover') return { mode: 'cover', side: this.coverLeanAnim || 1 };
     return { mode: 'normal' };
   }
 
