@@ -7,15 +7,23 @@ export class Audio {
     this.ctx = null;
     this.master = null;
     this.muted = localStorage.getItem('breach.muted') === 'true';
+    const v = parseFloat(localStorage.getItem('breach.volume'));
+    this.volume = v >= 0 && v <= 1 ? v : 0.5; // volumen general (slider)
     this._noise = null;
     this.samples = {};
+  }
+
+  setVolume(v) {
+    this.volume = Math.min(1, Math.max(0, v));
+    localStorage.setItem('breach.volume', String(this.volume));
+    if (this.master && !this.muted) this.master.gain.value = this.volume;
   }
 
   ensure() {
     if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
     this.ctx = new (window.AudioContext || window.webkitAudioContext)();
     this.master = this.ctx.createGain();
-    this.master.gain.value = this.muted ? 0 : 0.5;
+    this.master.gain.value = this.muted ? 0 : this.volume;
     this.master.connect(this.ctx.destination);
     const len = this.ctx.sampleRate * 1;
     const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
@@ -56,7 +64,7 @@ export class Audio {
   toggleMute() {
     this.muted = !this.muted;
     localStorage.setItem('breach.muted', String(this.muted));
-    if (this.master) this.master.gain.value = this.muted ? 0 : 0.5;
+    if (this.master) this.master.gain.value = this.muted ? 0 : this.volume;
     return this.muted;
   }
 

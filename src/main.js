@@ -363,6 +363,8 @@ const slMouse = document.getElementById('sl-mouse');
 const slMouseV = document.getElementById('sl-mouse-v');
 const slPad = document.getElementById('sl-pad');
 const slPadV = document.getElementById('sl-pad-v');
+const slVol = document.getElementById('sl-vol');
+const slVolV = document.getElementById('sl-vol-v');
 const chkInvert = document.getElementById('chk-invert');
 const chkInvertPad = document.getElementById('chk-invert-pad');
 let rebinding = null; // { cancel() }
@@ -375,6 +377,7 @@ function showControls(on) {
     renderBinds();
     slMouse.value = TUNING.cam.sens;
     slPad.value = TUNING.cam.padSens;
+    slVol.value = audio.volume;
     chkInvert.checked = input.invertY;
     chkInvertPad.checked = input.invertYPad;
     updateSliderLabels();
@@ -457,6 +460,7 @@ document.getElementById('btn-reset-binds').addEventListener('click', () => { res
 function updateSliderLabels() {
   slMouseV.textContent = Number(slMouse.value).toFixed(3);
   slPadV.textContent = slPad.value + '°/s';
+  slVolV.textContent = Math.round(audio.volume * 100) + '%';
 }
 slMouse.addEventListener('input', () => {
   TUNING.cam.sens = parseFloat(slMouse.value);
@@ -467,6 +471,12 @@ slPad.addEventListener('input', () => {
   TUNING.cam.padSens = parseFloat(slPad.value);
   localStorage.setItem('breach.sens.pad', slPad.value);
   updateSliderLabels();
+});
+slVol.addEventListener('input', () => {
+  audio.ensure();
+  audio.setVolume(parseFloat(slVol.value));
+  updateSliderLabels();
+  audio.hit(); // bip de referencia para calibrar al oído
 });
 chkInvert.addEventListener('change', () => {
   input.invertY = chkInvert.checked;
