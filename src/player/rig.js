@@ -11,8 +11,7 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 
 const TEAM_COLORS = { red: 0xd94f3f, blue: 0x4f8de0 };
-const DARK = 0x33363c, MID = 0x565b63, VISOR = 0x15171c;
-const SKIN = 0xc9a077, HAIR = 0x4a3524;
+const DARK = 0x25292f, MID = 0x464c55, LIGHT = 0xd5cfbf, VISOR = 0x111318;
 
 // Primitivas y materiales compartidos por TODOS los rigs. Antes cada pieza de
 // cada personaje creaba su propio geometry/material: mucha memoria, uploads y
@@ -46,10 +45,9 @@ function toonMaterial(color) {
   return mat;
 }
 
-// 5 variantes de soldado por equipo — SOLO estética: mismas proporciones,
-// mismo hitbox (la cápsula de ballistics es analítica, independiente del
-// modelo) y el pecho SIEMPRE del color del equipo. Ningún accesorio sale
-// más de ~3cm de la silueta base.
+// Vanguard: cinco armaduras sobre EXACTAMENTE el mismo cuerpo, rig e hitbox.
+// La identidad de clase vive en accesorios desmontables (casco, peto, mochila,
+// hombreras y faldón), nunca en la escala de huesos o extremidades.
 export const CHAR_NAMES = ['RECLUTA', 'CENTINELA', 'EXPLORADOR', 'PESADO', 'FANTASMA'];
 
 const L1 = 0.28, L2 = 0.36; // largo húmero / antebrazo (pivotes)
@@ -80,6 +78,13 @@ function tube(r, len, color, x = 0, y = 0, z = 0) {
   m.position.set(x, y, z);
   m.scale.set(r * 2, len, r * 2);
   m.rotation.x = Math.PI / 2;
+  m.castShadow = true;
+  return m;
+}
+function rod(r, len, color, x = 0, y = 0, z = 0) {
+  const m = new THREE.Mesh(CYLINDER_GEO, toonMaterial(color));
+  m.position.set(x, y, z);
+  m.scale.set(r * 2, len, r * 2);
   m.castShadow = true;
   return m;
 }
@@ -161,13 +166,16 @@ export class Rig {
 
     this.torso = new THREE.Group();
     this.hips.add(this.torso);
-    this.torso.add(box(0.46, 0.16, 0.3, DARK, 0, 0.02, 0.015));     // cinturón/pelvis
-    this.torso.add(box(0.5, 0.32, 0.32, MID, 0, 0.2, 0));           // abdomen blindado
-    this.torso.add(box(0.68, 0.34, 0.42, tc, 0, 0.46, 0));          // peto exagerado
-    this.torso.add(box(0.55, 0.1, 0.43, DARK, 0, 0.62, 0));         // collar/hombrera base
-    this.torso.add(ball(0.17, tc, -0.38, 0.56, 0, 1.1, 0.82, 1));   // hombrera L
-    this.torso.add(ball(0.17, tc, 0.38, 0.56, 0, 1.1, 0.82, 1));    // hombrera R
-    this.torso.add(box(0.34, 0.055, 0.025, DARK, 0, 0.47, -0.222)); // respiradero del peto
+    this.torso.add(box(0.46, 0.15, 0.3, DARK, 0, 0.02, 0.015));      // cinturón/pelvis
+    this.torso.add(box(0.49, 0.3, 0.31, MID, 0, 0.2, 0));            // abdomen común
+    this.torso.add(box(0.66, 0.34, 0.4, DARK, 0, 0.46, 0));          // coraza común
+    this.torso.add(box(0.48, 0.25, 0.055, tc, 0, 0.46, -0.225));     // panel de equipo
+    this.torso.add(box(0.54, 0.09, 0.42, MID, 0, 0.63, 0));         // collar común
+    this.torso.add(box(0.08, 0.19, 0.04, LIGHT, -0.24, 0.48, -0.24));
+    this.torso.add(box(0.08, 0.19, 0.04, LIGHT, 0.24, 0.48, -0.24));
+    this.torso.add(ball(0.18, tc, -0.38, 0.56, 0, 1.12, 0.82, 1));   // hombrera L común
+    this.torso.add(ball(0.18, tc, 0.38, 0.56, 0, 1.12, 0.82, 1));    // hombrera R común
+    this.torso.add(box(0.3, 0.045, 0.025, VISOR, 0, 0.42, -0.258));  // respiradero
 
     this.head = new THREE.Group();
     this.head.position.set(0, 0.66, 0);
@@ -185,15 +193,16 @@ export class Rig {
       const shoulder = new THREE.Group();
       shoulder.position.set(s * 0.36, 0, 0);
       this.aimRig.add(shoulder);
-      shoulder.add(capsule(0.15, 0.28, 0.15, MID, 0, -0.14, 0));    // bíceps redondeado
+      shoulder.add(capsule(0.15, 0.28, 0.15, MID, 0, -0.14, 0));    // bíceps común
       const elbow = new THREE.Group();
       elbow.position.set(0, -L1, 0);
       shoulder.add(elbow);
-      elbow.add(box(0.18, 0.32, 0.18, DARK, 0, -0.16, 0));          // guantelete grande
+      elbow.add(box(0.18, 0.32, 0.18, DARK, 0, -0.16, 0));          // guantelete común
+      elbow.add(box(0.1, 0.16, 0.025, tc, 0, -0.14, -0.105));       // placa de equipo
       const hand = new THREE.Group();
       hand.position.set(0, -L2, 0);
       elbow.add(hand);
-      hand.add(ball(0.115, tc, 0, -0.01, 0, 1.05, 0.9, 1.05));     // manota
+      hand.add(ball(0.115, DARK, 0, -0.01, 0, 1.05, 0.9, 1.05));   // mano común
       return { shoulder, elbow, hand };
     };
     this.armL = mkArm('L');
@@ -204,12 +213,14 @@ export class Rig {
       const hip = new THREE.Group();
       hip.position.set(s * 0.15, 0.02, 0);
       this.hips.add(hip);
-      hip.add(capsule(0.21, 0.31, 0.22, MID, 0, -0.155, 0));        // muslo corto/pesado
+      hip.add(capsule(0.21, 0.31, 0.22, MID, 0, -0.155, 0));        // muslo común
       const knee = new THREE.Group();
       knee.position.set(0, -0.32, 0);
       hip.add(knee);
-      knee.add(box(0.18, 0.25, 0.2, DARK, 0, -0.12, 0));            // canilla
-      knee.add(box(0.23, 0.13, 0.34, DARK, 0, -0.31, -0.075));      // botota chibi
+      knee.add(box(0.18, 0.25, 0.2, DARK, 0, -0.12, 0));            // canilla común
+      knee.add(box(0.15, 0.1, 0.035, tc, 0, -0.04, -0.12));         // rodillera de equipo
+      knee.add(box(0.23, 0.13, 0.34, DARK, 0, -0.31, -0.075));      // bota común
+      knee.add(box(0.19, 0.055, 0.07, LIGHT, 0, -0.29, -0.25));     // puntera clara
       return { hip, knee };
     };
     this.legL = mkLeg('L');
@@ -241,66 +252,104 @@ export class Rig {
     this.groundFn = null; // (x,z,y)->alturaSuelo — lo inyecta quien tiene el world
   }
 
-  // Cabeza por variante — todas dentro del mismo volumen del casco base.
+  // Mismo volumen craneal para las cinco variantes. Todo lo que cambia es
+  // casco/equipamiento superpuesto; nunca se escala this.head ni el esqueleto.
   _buildHead(tc, v) {
     const h = this.head;
-    h.add(ball(0.12, DARK, 0, -0.015, 0.015, 1, 0.68, 1));          // cuello flexible
-    // los rasgos frontales sobresalen ~2cm del casco: a ras de la esfera la
-    // curvatura los ocultaba desde casi todos los ángulos
-    if (v === 1) {          // CENTINELA: casco cerrado, visor panorámico
-      h.add(ball(0.195, DARK, 0, 0.14, 0, 1.02, 1, 1));
-      h.add(box(0.34, 0.12, 0.065, VISOR, 0, 0.14, -0.194));
-      h.add(box(0.08, 0.2, 0.045, tc, 0, 0.25, -0.15));             // franja vertical
-      h.add(box(0.055, 0.15, 0.11, MID, 0.205, 0.18, 0));           // módulo lateral
-    } else if (v === 2) {   // EXPLORADOR: sin casco — pelo y goggles en la frente
-      h.add(ball(0.183, SKIN, 0, 0.13, 0, 1, 1.04, 0.98));
-      h.add(box(0.31, 0.13, 0.29, HAIR, 0, 0.285, 0.035));           // pelo compacto
-      h.add(box(0.28, 0.075, 0.075, DARK, 0, 0.235, -0.17));        // goggles arriba
-      h.add(box(0.32, 0.055, 0.065, tc, 0, 0.075, -0.18));          // pañuelo del equipo
-      h.add(ball(0.052, DARK, -0.19, 0.15, 0, 0.7, 1, 1));         // auricular
-    } else if (v === 3) {   // PESADO: casco con placas laterales y mentonera
-      h.add(ball(0.195, MID, 0, 0.14, 0, 1.04, 1, 1.04));
-      h.add(box(0.25, 0.09, 0.07, VISOR, 0, 0.15, -0.202));
-      h.add(box(0.075, 0.18, 0.19, DARK, -0.19, 0.13, 0));
-      h.add(box(0.075, 0.18, 0.19, DARK, 0.19, 0.13, 0));
-      h.add(box(0.19, 0.08, 0.075, DARK, 0, 0.015, -0.19));         // mentonera
-      h.add(box(0.16, 0.045, 0.2, tc, 0, 0.33, 0));                // placa superior
-    } else if (v === 4) {   // FANTASMA: pasamontañas oscuro, goggles del equipo
-      h.add(ball(0.195, DARK, 0, 0.14, 0, 1.03, 1.03, 1));
-      h.add(box(0.27, 0.065, 0.07, tc, 0, 0.17, -0.2));             // goggles finos
-      h.add(box(0.14, 0.1, 0.065, VISOR, 0, 0.045, -0.192));        // respirador
-      h.add(box(0.31, 0.045, 0.18, MID, 0, -0.015, -0.015));       // cuello de capucha
-    } else {                // RECLUTA: el clásico
-      h.add(ball(0.192, MID, 0, 0.14, 0, 1.02, 1.02, 1));
-      h.add(box(0.27, 0.095, 0.065, VISOR, 0, 0.15, -0.198));
-      h.add(box(0.075, 0.07, 0.22, tc, 0, 0.315, 0));               // cresta
-      h.add(box(0.17, 0.055, 0.065, DARK, 0, 0.025, -0.19));       // mentonera ligera
+    h.add(ball(0.12, DARK, 0, -0.015, 0.015, 1, 0.68, 1));        // cuello común
+    h.add(ball(0.19, DARK, 0, 0.14, 0, 1.02, 1.02, 1));           // cabeza común
+
+    if (v === 1) {          // CENTINELA: carcasa torre + visor vertical
+      h.add(box(0.38, 0.5, 0.38, DARK, 0, 0.23, 0));
+      h.add(box(0.3, 0.42, 0.045, MID, 0, 0.23, -0.215));
+      h.add(box(0.055, 0.25, 0.025, tc, 0, 0.24, -0.245));
+      h.add(ball(0.065, LIGHT, -0.22, 0.17, 0, 0.72, 1, 1));
+      h.add(ball(0.065, LIGHT, 0.22, 0.17, 0, 0.72, 1, 1));
+      h.add(box(0.24, 0.06, 0.06, VISOR, 0, -0.015, -0.19));
+    } else if (v === 2) {   // EXPLORADOR: casco compacto + goggles dobles
+      h.add(ball(0.202, MID, 0, 0.14, 0, 1.03, 1.03, 1.02));
+      h.add(box(0.09, 0.07, 0.25, tc, 0, 0.33, 0));
+      h.add(tube(0.105, 0.055, DARK, -0.105, 0.16, -0.2));
+      h.add(tube(0.105, 0.055, DARK, 0.105, 0.16, -0.2));
+      h.add(tube(0.068, 0.028, tc, -0.105, 0.16, -0.24));
+      h.add(tube(0.068, 0.028, tc, 0.105, 0.16, -0.24));
+      h.add(box(0.31, 0.065, 0.075, tc, 0, 0.015, -0.18));         // pañuelo
+      h.add(ball(0.055, LIGHT, -0.205, 0.15, 0, 0.75, 1, 1));
+      h.add(ball(0.055, LIGHT, 0.205, 0.15, 0, 0.75, 1, 1));
+    } else if (v === 3) {   // PESADO: casco cerrado; cuerpo interno idéntico
+      h.add(ball(0.205, MID, 0, 0.14, 0, 1.06, 1.03, 1.04));
+      h.add(box(0.3, 0.12, 0.075, DARK, 0, 0.16, -0.205));
+      h.add(box(0.22, 0.045, 0.025, tc, 0, 0.18, -0.25));
+      h.add(box(0.09, 0.19, 0.2, DARK, -0.2, 0.12, 0));
+      h.add(box(0.09, 0.19, 0.2, DARK, 0.2, 0.12, 0));
+      h.add(box(0.22, 0.09, 0.075, DARK, 0, 0.015, -0.19));
+      h.add(box(0.1, 0.055, 0.22, tc, 0, 0.34, 0));
+    } else if (v === 4) {   // FANTASMA: capucha facetada + respirador
+      const hoodL = box(0.18, 0.42, 0.38, DARK, -0.13, 0.18, 0.025);
+      const hoodR = box(0.18, 0.42, 0.38, DARK, 0.13, 0.18, 0.025);
+      hoodL.rotation.z = -0.16;
+      hoodR.rotation.z = 0.16;
+      h.add(hoodL, hoodR);
+      h.add(box(0.11, 0.16, 0.34, MID, 0, 0.37, 0.015));           // cumbrera
+      h.add(box(0.11, 0.055, 0.03, tc, -0.07, 0.18, -0.225));      // ojos
+      h.add(box(0.11, 0.055, 0.03, tc, 0.07, 0.18, -0.225));
+      h.add(box(0.16, 0.12, 0.075, VISOR, 0, 0.055, -0.205));
+      h.add(tube(0.055, 0.05, LIGHT, -0.11, 0.045, -0.22));
+      h.add(tube(0.055, 0.05, LIGHT, 0.11, 0.045, -0.22));
+    } else {                // RECLUTA: casco redondo + visor panorámico
+      h.add(ball(0.205, MID, 0, 0.14, 0, 1.04, 1.03, 1.04));
+      h.add(box(0.32, 0.16, 0.075, DARK, 0, 0.15, -0.205));
+      h.add(box(0.25, 0.105, 0.025, tc, 0, 0.15, -0.25));
+      h.add(box(0.085, 0.08, 0.24, tc, 0, 0.34, 0));               // cresta
+      h.add(ball(0.065, LIGHT, -0.205, 0.15, 0, 0.7, 1, 1));
+      h.add(ball(0.065, LIGHT, 0.205, 0.15, 0, 0.7, 1, 1));
+      h.add(box(0.2, 0.065, 0.065, DARK, 0, 0.02, -0.19));
     }
   }
 
-  // Detalles de pecho/extremidades por variante (≤3cm sobre la silueta).
+  // Accesorios Vanguard. Las posiciones de huesos y las dimensiones de las
+  // piezas anatómicas son idénticas para todas las variantes.
   _variantExtras(tc, v) {
     const t = this.torso;
     if (v === 1) {
-      t.add(box(0.24, 0.23, 0.035, MID, 0, 0.45, -0.225));          // placa central
-      t.add(box(0.08, 0.05, 0.04, tc, 0, 0.55, -0.25));            // sensor de facción
+      t.add(box(0.38, 0.3, 0.06, MID, 0, 0.46, -0.27));            // peto-escudo
+      t.add(box(0.06, 0.25, 0.025, LIGHT, -0.18, 0.46, -0.31));
+      t.add(box(0.06, 0.25, 0.025, LIGHT, 0.18, 0.46, -0.31));
+      t.add(box(0.22, 0.13, 0.025, tc, 0, 0.47, -0.315));
     } else if (v === 2) {
-      const strap = box(0.075, 0.46, 0.035, DARK, 0, 0.43, -0.225); // correa cruzada
+      const strap = box(0.07, 0.45, 0.035, DARK, 0, 0.43, -0.265); // correa cruzada
       strap.rotation.z = 0.65;
       t.add(strap);
-      t.add(box(0.13, 0.13, 0.04, MID, -0.16, 0.34, -0.24));        // bolsa frontal
+      t.add(box(0.14, 0.13, 0.05, LIGHT, -0.16, 0.34, -0.28));     // bolsa frontal
+      t.add(box(0.3, 0.34, 0.14, DARK, 0, 0.42, 0.24));            // mochila
+      t.add(box(0.1, 0.22, 0.12, tc, 0.12, 0.43, 0.33));
+      t.add(rod(0.018, 0.35, MID, 0.24, 0.76, 0.25));              // antena
+      t.add(ball(0.035, tc, 0.24, 0.95, 0.25));
+      t.add(box(0.22, 0.12, 0.1, DARK, -0.42, 0.58, -0.03));       // hombrera asimétrica
     } else if (v === 3) {
-      t.add(box(0.5, 0.07, 0.035, DARK, 0, 0.52, -0.225));          // listones de blindaje
-      t.add(box(0.5, 0.07, 0.035, DARK, 0, 0.39, -0.225));
-      this.legL.knee.add(box(0.17, 0.11, 0.075, tc, 0, -0.06, -0.12)); // rodilleras
-      this.legR.knee.add(box(0.17, 0.11, 0.075, tc, 0, -0.06, -0.12));
+      t.add(box(0.58, 0.16, 0.08, MID, 0, 0.54, -0.27));           // peto superior
+      t.add(box(0.3, 0.18, 0.055, tc, 0, 0.39, -0.3));
+      t.add(ball(0.23, tc, -0.43, 0.57, 0, 1.2, 0.86, 1.08));      // carcasa hombro L
+      t.add(ball(0.23, tc, 0.43, 0.57, 0, 1.2, 0.86, 1.08));       // carcasa hombro R
+      this.armL.elbow.add(box(0.24, 0.3, 0.23, MID, 0, -0.16, 0)); // blindaje antebrazo
+      this.armR.elbow.add(box(0.24, 0.3, 0.23, MID, 0, -0.16, 0));
+      this.armL.elbow.add(box(0.13, 0.17, 0.025, tc, 0, -0.14, -0.135));
+      this.armR.elbow.add(box(0.13, 0.17, 0.025, tc, 0, -0.14, -0.135));
     } else if (v === 4) {
-      this.armR.shoulder.add(box(0.16, 0.07, 0.16, tc, 0, -0.09, 0)); // banda al brazo
-      t.add(box(0.36, 0.055, 0.035, DARK, 0, 0.34, -0.225));        // cincho bajo
-      t.add(box(0.08, 0.12, 0.035, MID, 0.2, 0.42, -0.235));       // módulo sigiloso
+      t.add(box(0.4, 0.06, 0.05, MID, 0, 0.64, -0.18));            // cuello de capucha
+      const skirtL = box(0.2, 0.38, 0.075, DARK, -0.13, -0.12, -0.1);
+      const skirtR = box(0.2, 0.38, 0.075, DARK, 0.13, -0.12, -0.1);
+      skirtL.rotation.z = -0.06;
+      skirtR.rotation.z = 0.06;
+      t.add(skirtL, skirtR);
+      t.add(box(0.055, 0.29, 0.025, LIGHT, -0.13, -0.12, -0.145));
+      t.add(box(0.055, 0.29, 0.025, LIGHT, 0.13, -0.12, -0.145));
+      this.armR.shoulder.add(box(0.16, 0.07, 0.16, tc, 0, -0.09, 0));
     } else {
-      t.add(box(0.23, 0.16, 0.035, MID, 0, 0.45, -0.225));          // placa recluta
-      t.add(box(0.08, 0.035, 0.04, tc, 0, 0.48, -0.25));           // marca de facción
+      t.add(box(0.34, 0.17, 0.055, MID, 0, 0.46, -0.275));         // placa recluta
+      t.add(box(0.13, 0.07, 0.025, tc, 0, 0.47, -0.31));
+      t.add(box(0.09, 0.07, 0.025, LIGHT, -0.17, 0.53, -0.31));
+      t.add(box(0.09, 0.07, 0.025, LIGHT, 0.17, 0.53, -0.31));
     }
   }
 
