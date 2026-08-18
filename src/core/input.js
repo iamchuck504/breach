@@ -17,6 +17,9 @@ export class Input {
     this.reloadPressed = false;
     this.swapPressed = false;
     this.locked = false;
+    this.suppress = false; // true con el menú abierto: los inputs de juego se ignoran
+    this.onLockedMouseDown = null;
+    this.onLockedMouseUp = null;
     // invert Y separado por dispositivo (ambos default ON, preferencia de Chuck)
     this.invertY = localStorage.getItem('breach.invertY') !== 'false';       // ratón (F9)
     this.invertYPad = localStorage.getItem('breach.invertYPad') !== 'false'; // control
@@ -32,10 +35,13 @@ export class Input {
     window.addEventListener('keyup', (e) => this._key(e, false));
     canvas.addEventListener('mousedown', (e) => {
       if (!this.locked) { this.requestLock(); return; }
+      // el cursor virtual del menú consume el click (pausa con lock activo)
+      if (this.onLockedMouseDown?.(e.button)) return;
       if (e.button === 0) { this._mouseFire = true; this.firePressed = true; }
       if (e.button === 2) this._mouseAim = true;
     });
     window.addEventListener('mouseup', (e) => {
+      this.onLockedMouseUp?.(e.button);
       if (e.button === 0) this._mouseFire = false;
       if (e.button === 2) this._mouseAim = false;
     });
@@ -125,9 +131,10 @@ export class Input {
     if (!wasFire && this.pad.fireHeld) this.firePressed = true;
   }
 
-  get fireHeld() { return this._mouseFire || this.pad.fireHeld; }
-  get aimHeld() { return this._mouseAim || this.pad.aimHeld; }
+  get fireHeld() { return !this.suppress && (this._mouseFire || this.pad.fireHeld); }
+  get aimHeld() { return !this.suppress && (this._mouseAim || this.pad.aimHeld); }
   get sprintHeld() {
+    if (this.suppress) return false;
     return this.keys.has(BINDS.kb.sprint) || this.keys.has('ShiftRight') || this.pad.sprintHeld;
   }
   get anyDevice() { return this.locked || this.pad.connected; }
@@ -137,6 +144,7 @@ export class Input {
 
   // Vector de movimiento (x = derecha, z = adelante); teclado manda, si no, stick
   moveVec() {
+    if (this.suppress) return { x: 0, z: 0 };
     let x = 0, z = 0;
     if (this.keys.has(BINDS.kb.forward)) z += 1;
     if (this.keys.has(BINDS.kb.back)) z -= 1;

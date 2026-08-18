@@ -117,6 +117,13 @@
   .sb-row span:not(:first-child) { text-align: right; }
   .sb-row.sb-cols-head { color: var(--dim); font-size: 10px; letter-spacing: .12em; }
 
+  /* cursor virtual: el juego mantiene el pointer lock en pausa y dibuja su
+     propio cursor (evita el bug de ClipCursor de Chromium/Windows) */
+  #vcursor { position: fixed; z-index: 60; pointer-events: none; display: none;
+    left: 50%; top: 50%; filter: drop-shadow(0 1px 2px rgba(0,0,0,.6)); }
+  #vcursor.on { display: block; }
+  .vhover { border-color: var(--accent) !important; color: var(--accent) !important; }
+
   #btn-pause, #btn-fs { position: fixed; top: 14px; width: 42px; height: 42px;
     display: flex; align-items: center; justify-content: center; cursor: pointer;
     pointer-events: auto; color: var(--dim); padding: 0; }
@@ -312,6 +319,12 @@
       <button class="btn primary" id="btn-back" style="margin-top:0">Volver</button>
     </div>
   </div>
+</div>
+
+<div id="vcursor">
+  <svg width="20" height="22" viewBox="0 0 20 22">
+    <path d="M2 1l14 12-6.2 0.8L13 20l-3.4 1.4-3.2-6.4L2 19z" fill="#fff" stroke="#17181c" stroke-width="1.4"/>
+  </svg>
 </div>
 
 <script type="module" src="/src/main.js"></script>

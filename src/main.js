@@ -124,15 +124,48 @@ function openMenu() {
   hud.showMenu(true);
   showControls(false);
   btnResume.style.display = G.mode ? 'flex' : 'none';
-  input.releaseLock();
+  // NO soltamos el pointer lock: el menú se usa con el cursor virtual.
+  // (Cada exit de lock es una oportunidad para el bug de ClipCursor de
+  // Chromium/Windows que deja el cursor confinado.)
+  vc.x = innerWidth / 2;
+  vc.y = innerHeight / 2;
 }
 function closeMenu() {
   if (!G.mode) return; // sin partida no hay a dónde volver
   hud.showMenu(false);
   showControls(false);
   cancelRebind();
-  input.requestLock();
+  if (!input.locked) input.requestLock();
 }
+
+// ---------- cursor virtual (menú en pausa con pointer lock activo) ----------
+const vcursorEl = document.getElementById('vcursor');
+const vc = { x: innerWidth / 2, y: innerHeight / 2 };
+let vDrag = null;   // slider siendo arrastrado
+let vHover = null;  // elemento con hover simulado
+
+function vDragUpdate() {
+  const r = vDrag.getBoundingClientRect();
+  const t = Math.min(1, Math.max(0, (vc.x - r.left) / Math.max(1, r.width)));
+  const min = +vDrag.min || 0, max = +vDrag.max || 100, step = +vDrag.step || 1;
+  const val = Math.round((min + t * (max - min)) / step) * step;
+  vDrag.value = val;
+  vDrag.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+input.onLockedMouseDown = (btn) => {
+  if (!menuIsOpen()) return false; // jugando: el click es disparo/apuntar
+  if (btn === 0) {
+    const el = document.elementFromPoint(vc.x, vc.y);
+    if (el) {
+      if (el.tagName === 'INPUT' && el.type === 'range') { vDrag = el; vDragUpdate(); }
+      else if (el.tagName === 'INPUT') el.focus();
+      else (el.closest('button, label, a') ?? el).click();
+    }
+  }
+  return true; // el menú consume cualquier botón
+};
+input.onLockedMouseUp = () => { vDrag = null; };
 
 document.getElementById('btn-bots').addEventListener('click', () => startBots());
 document.getElementById('btn-practice').addEventListener('click', () => startPractice());
@@ -153,6 +186,12 @@ document.addEventListener('fullscreenchange', () => {
   const on = !!document.fullscreenElement;
   document.getElementById('btn-fullscreen').lastChild.textContent = on
     ? ' Salir de pantalla completa' : ' Pantalla completa';
+  // en fullscreen, capturar Esc (Keyboard Lock API): ni Esc suelta el pointer
+  // lock → el bug de ClipCursor no tiene forma de dispararse jugando
+  try {
+    if (on) navigator.keyboard?.lock?.(['Escape']).catch(() => {});
+    else navigator.keyboard?.unlock?.();
+  } catch { /* sin soporte */ }
 });
 
 input.onEscape = () => {
@@ -813,7 +852,29 @@ function frame(now) {
   last = now;
 
   const menuOpen = menuIsOpen();
+  input.suppress = menuOpen; // con menú abierto los inputs de juego se ignoran
   input.pollPad(dt, !!G.mode && !menuOpen);
+
+  // cursor virtual: menú abierto con pointer lock activo
+  const vcOn = menuOpen && input.locked;
+  vcursorEl.classList.toggle('on', vcOn);
+  if (vcOn) {
+    vc.x = Math.min(innerWidth - 2, Math.max(0, vc.x + input.mouseDX));
+    vc.y = Math.min(innerHeight - 2, Math.max(0, vc.y + input.mouseDY));
+    vcursorEl.style.left = vc.x + 'px';
+    vcursorEl.style.top = vc.y + 'px';
+    if (vDrag) vDragUpdate();
+    const el = document.elementFromPoint(vc.x, vc.y);
+    const target = el?.closest?.('.btn, .bind-btn, #btn-resume') ?? null;
+    if (vHover !== target) {
+      vHover?.classList.remove('vhover');
+      target?.classList.add('vhover');
+      vHover = target;
+    }
+  } else if (vHover) {
+    vHover.classList.remove('vhover');
+    vHover = null;
+  }
   if (input.pad.connected !== padWasConnected) {
     padWasConnected = input.pad.connected;
     hud.hint(padWasConnected ? 'CONTROL CONECTADO' : 'CONTROL DESCONECTADO', 1600);
