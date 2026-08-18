@@ -39,18 +39,22 @@ export class RemotePlayer {
       const k = Math.max(0, Math.min(1, (t - s1.rt) / span));
       this.x = s1.x + (s2.x - s1.x) * k;
       this.z = s1.z + (s2.z - s1.z) * k;
+      this.y = (s1.y ?? 0) + ((s2.y ?? 0) - (s1.y ?? 0)) * k;
       this.yaw = lerpAngle(s1.yaw, s2.yaw, k);
       this.st = s2.st; this.aim = !!s2.aim; this.pitch = s2.p ?? 0; this.sp = s2.sp ?? 0;
       this.rig.setWeapon(s2.w ?? 'lancer');
     }
     this.firing = Math.max(0, this.firing - dt);
-    this.rig.setTransform(this.x, this.z, this.yaw);
+    // flip remoto: progreso local aproximado mientras el estado sea 'flip'
+    this.flipT = this.st === 'flip' ? Math.min(1, (this.flipT ?? 0) + dt / 0.72) : 0;
+    this.rig.setTransform(this.x, this.z, this.yaw, this.y ?? 0);
     this.rig.update(dt, {
       state: this.alive ? this.st : 'dead',
       speed: this.sp,
       aim: this.aim,
       aimPitch: this.pitch,
       firing: this.firing > 0,
+      flipT: this.flipT,
     });
   }
 

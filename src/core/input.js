@@ -13,6 +13,7 @@ export class Input {
     this._mouseFire = false; this._mouseAim = false;
     this.firePressed = false;
     this.evadePressed = false;
+    this.jumpPressed = false;
     this.reloadPressed = false;
     this.swapPressed = false;
     this.locked = false;
@@ -80,6 +81,7 @@ export class Input {
       if (!this.locked) return;
       this.keys.add(c);
       if (c === BINDS.kb.evade) this.evadePressed = true;
+      if (c === BINDS.kb.jump) this.jumpPressed = true;
       if (c === BINDS.kb.reload) this.reloadPressed = true;
       if (c === BINDS.kb.swap) this.swapPressed = true;
     } else {
@@ -95,6 +97,7 @@ export class Input {
     if (this.pad.justPressed.has(BINDS.pad.pause)) this.onEscape?.();
     if (!gameplay) return;
     if (this.pad.justPressed.has(BINDS.pad.evade)) this.evadePressed = true;
+    if (this.pad.justPressed.has(BINDS.pad.jump)) this.jumpPressed = true;
     if (this.pad.justPressed.has(BINDS.pad.reload)) this.reloadPressed = true;
     if (this.pad.justPressed.has(BINDS.pad.swap)) this.swapPressed = true;
     if (!wasFire && this.pad.fireHeld) this.firePressed = true;
@@ -129,6 +132,7 @@ export class Input {
   consumeEdges() {
     this.firePressed = false;
     this.evadePressed = false;
+    this.jumpPressed = false;
     this.reloadPressed = false;
     this.swapPressed = false;
   }

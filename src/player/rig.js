@@ -300,6 +300,31 @@ export class Rig {
         hipsY = 0.66 + bob * 0.045 * m;
         break;
       }
+      case 'jump': {
+        // salto normal: piernas recogidas asimétricas, arma al pecho
+        damp = 14;
+        R(this.torso, -0.18, 0, 0.03);
+        R(this.head, 0.1, 0, 0);
+        R(this.legL.hip, 0.55, 0, 0); R(this.legL.knee, -1.0, 0, 0);
+        R(this.legR.hip, 0.2, 0, 0); R(this.legR.knee, -0.5, 0, 0);
+        leftOnGun = true;
+        M(0.15, -0.16, -0.22, 0, 0.15, 0);
+        hipsY = 0.66;
+        break;
+      }
+      case 'flip': {
+        // vuelta de gato: tuck completo, gira alrededor de la cadera
+        damp = 20;
+        R(this.torso, -0.45, 0, 0);
+        R(this.head, -0.15, 0, 0);
+        R(this.legL.hip, 1.8, 0, 0); R(this.legL.knee, -2.3, 0, 0);
+        R(this.legR.hip, 1.7, 0, 0); R(this.legR.knee, -2.2, 0, 0);
+        leftOnGun = true;
+        M(0.1, -0.1, -0.2, 0.7, 0, 0);
+        R(this.aimRig, 0, 0, 0);
+        hipsY = 0.72;
+        break;
+      }
       case 'dive': {
         damp = 16;
         R(this.torso, -0.8, 0, 0);
@@ -402,6 +427,10 @@ export class Rig {
     this.hips.position.y += (hipsY - this.hips.position.y) * k;
     this.root.rotation.x += (rootRotX - this.root.rotation.x) * (1 - Math.exp(-10 * dt));
 
+    // vuelta de gato: giro completo hacia atrás alrededor de la cadera
+    if (p.state === 'flip') this.hips.rotation.x = (p.flipT ?? 0) * Math.PI * 2;
+    else this.hips.rotation.x = 0; // 2π ≡ 0: aterriza limpio
+
     // IK: manos sobre el arma (después del damping, sobre la pose ya aplicada)
     if (ikArms) {
       this.root.updateWorldMatrix(true, true);
@@ -415,9 +444,8 @@ export class Rig {
     }
   }
 
-  setTransform(x, z, yaw) {
-    this.root.position.x = x;
-    this.root.position.z = z;
+  setTransform(x, z, yaw, y = 0) {
+    this.root.position.set(x, y, z);
     this.root.rotation.y = yaw;
   }
 

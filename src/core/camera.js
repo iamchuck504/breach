@@ -54,8 +54,8 @@ export class ShoulderCamera {
     else if (st.mode === 'aim') { shoulder = c.aimShoulder; height = c.aimHeight; dist = c.aimDist; fov = c.fovAim; }
     else if (st.mode === 'cover') { dist = c.coverDist; }
 
-    // pivot: pecho del jugador
-    this.pivot.set(player.pos.x, height * 0.92, player.pos.z);
+    // pivot: pecho del jugador (sigue la altura del salto)
+    this.pivot.set(player.pos.x, (player.y ?? 0) + height * 0.92, player.pos.z);
 
     const cy = Math.cos(this.yaw), sy = Math.sin(this.yaw);
     const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);

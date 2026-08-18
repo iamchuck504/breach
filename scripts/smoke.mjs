@@ -97,6 +97,37 @@ try {
   if (padCtx.padId !== 'FakePad') errors.push('PAD: adoptó el pad fantasma en vez del activo (' + padCtx.padId + ')');
   await page.evaluate(() => { window.__pad.axes[1] = 0; });
 
+  // ---- salto normal (F) y vuelta de gato contra el pilar central ----
+  await page.evaluate(() => {
+    const P = window.BREACH.player;
+    P.cover = null; P.state = 'idle'; P.pos.x = 0; P.pos.z = -6;
+  });
+  await page.keyboard.press('f');
+  await page.waitForTimeout(230);
+  const jumpY = await page.evaluate(() => +window.BREACH.player.y.toFixed(2));
+  console.log('JUMP:', JSON.stringify({ y: jumpY }));
+  if (jumpY < 0.25) errors.push('JUMP: no despegó (y=' + jumpY + ')');
+  await page.waitForTimeout(900); // aterrizar
+
+  await page.evaluate(() => {
+    const P = window.BREACH.player;
+    P.cover = null; P.state = 'idle'; P.pos.x = 0; P.pos.z = -1.32;
+    P.cam.yaw = Math.PI; P.yaw = Math.PI; // de cara al pilar central
+  });
+  await page.waitForTimeout(80);
+  await page.keyboard.press('f');
+  await page.waitForTimeout(180);
+  const flip = await page.evaluate(() => ({
+    st: window.BREACH.player.state,
+    y: +window.BREACH.player.y.toFixed(2),
+    z: +window.BREACH.player.pos.z.toFixed(2),
+  }));
+  console.log('WALLJUMP:', JSON.stringify(flip));
+  await page.screenshot({ path: path.join(root, 'scripts', 'shot-flip.png') });
+  if (flip.st !== 'flip') errors.push('WALLJUMP: no entró en flip (st=' + flip.st + ')');
+  if (flip.z > -1.35) errors.push('WALLJUMP: no se alejó de la pared (z=' + flip.z + ')');
+  await page.waitForTimeout(900); // aterrizar antes de seguir
+
   // ---- menú de pausa + panel de controles ----
   await page.keyboard.press('Escape');
   await page.waitForTimeout(300);
@@ -113,7 +144,7 @@ try {
     padRows: document.getElementById('pad-rows').children.length,
   }));
   console.log('CONTROLS:', JSON.stringify(ctrls));
-  if (ctrls.kbRows !== 8 || ctrls.padRows !== 7) errors.push('CONTROLS: filas esperadas 8/7, got ' + ctrls.kbRows + '/' + ctrls.padRows);
+  if (ctrls.kbRows !== 9 || ctrls.padRows !== 8) errors.push('CONTROLS: filas esperadas 9/8, got ' + ctrls.kbRows + '/' + ctrls.padRows);
   await page.screenshot({ path: path.join(root, 'scripts', 'shot-controls.png') });
   await page.evaluate(() => document.getElementById('btn-back').click());
   await page.evaluate(() => document.getElementById('btn-resume').click());

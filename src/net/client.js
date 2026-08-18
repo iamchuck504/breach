@@ -64,6 +64,7 @@ export class NetClient {
     this.send({
       t: 's',
       x: +player.pos.x.toFixed(3), z: +player.pos.z.toFixed(3),
+      y: +player.y.toFixed(2),
       yaw: +player.yaw.toFixed(3),
       st: player.animState(),
       aim: player.aim ? 1 : 0,

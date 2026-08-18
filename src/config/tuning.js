@@ -25,6 +25,14 @@ export const TUNING = {
     chainSpeedBonus: 0.05,// % de velocidad extra por rebote encadenado
     chainMax: 5,
   },
+  jump: {
+    vel: 6.0,          // impulso vertical (apex ~1.2m: pasa coberturas bajas)
+    gravity: 15,
+    wallVel: 5.4,      // impulso del salto de pared
+    wallPush: 3.8,     // empuje horizontal alejándose de la pared
+    airControl: 0.35,  // control de movimiento en el aire
+    wallMinH: 1.4,     // altura mínima de pared para vuelta de gato
+  },
   cover: {
     snapRange: 1.7,       // distancia para engancharse a una cara de cobertura
     detachPush: 0.55,     // cuánto hay que empujar lejos del cover para soltarse

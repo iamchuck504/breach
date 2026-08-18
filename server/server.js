@@ -89,7 +89,7 @@ wss.on('connection', (ws) => {
     if (!me) return;
 
     if (msg.t === 's') {
-      me.x = num(msg.x); me.z = num(msg.z); me.yaw = num(msg.yaw);
+      me.x = num(msg.x); me.z = num(msg.z); me.y = num(msg.y); me.yaw = num(msg.yaw);
       me.st = String(msg.st || 'idle'); me.aim = msg.aim ? 1 : 0;
       me.p = num(msg.p); me.w = msg.w === 'gnasher' ? 'gnasher' : 'lancer';
       me.sp = num(msg.sp);
@@ -171,7 +171,7 @@ setInterval(() => {
     broadcast({
       t: 'snap',
       ps: [...players.values()].map((p) => ({
-        id: p.id, x: p.x, z: p.z, yaw: p.yaw, st: p.st, aim: p.aim,
+        id: p.id, x: p.x, z: p.z, y: p.y || 0, yaw: p.yaw, st: p.st, aim: p.aim,
         p: p.p, w: p.w, sp: p.sp, hp: Math.round(p.hp), alive: p.alive,
       })),
     });

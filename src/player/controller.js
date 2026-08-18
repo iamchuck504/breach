@@ -22,6 +22,10 @@ export class Controller {
     this.ev = events; // {onSlideStart, onCoverEnter, onBounce, onDive, onDetach}
     this.pos = { x: 0, z: -16 };
     this.vel = { x: 0, z: 0 };
+    this.y = 0;             // altura de los pies
+    this.vy = 0;
+    this.grounded = true;
+    this.flip = null;       // { t, dur } — vuelta de gato del salto de pared
     this.yaw = 0;
     this.state = 'idle';
     this.stateT = 0;
@@ -57,10 +61,13 @@ export class Controller {
         if (this.firingBlind > 0 && !this.aim && low) return 'blind_over';
         return low ? 'cover_low' : 'cover_high';
       }
-      case 'roadie': return 'roadie';
+      case 'flip': return 'flip';
+      case 'roadie': return this.grounded ? 'roadie' : 'jump';
       case 'dive': return 'dive';
       case 'slide': return 'slide';
-      default: return this.speed > 0.4 ? 'run' : 'idle';
+      default:
+        if (!this.grounded) return 'jump';
+        return this.speed > 0.4 ? 'run' : 'idle';
     }
   }
 
@@ -81,12 +88,14 @@ export class Controller {
       aimPitch: this.cam.pitch,
       twist,
       firing: this.firingBlind > 0,
+      flipT: this.flip ? Math.min(1, this.flip.t / this.flip.dur) : 0,
     };
   }
 
   respawn(spawn) {
     this.pos = { x: spawn.x, z: spawn.z };
     this.vel = { x: 0, z: 0 };
+    this.y = 0; this.vy = 0; this.grounded = true; this.flip = null;
     this.yaw = spawn.yaw;
     this.cam.yaw = spawn.yaw;
     this.cam.pitch = -0.12;
@@ -98,7 +107,7 @@ export class Controller {
   kill() {
     this.dead = true;
     this.state = 'idle';
-    this.cover = null; this.slide = null; this.dive = null;
+    this.cover = null; this.slide = null; this.dive = null; this.flip = null;
     this.aim = false;
     this.vel = { x: 0, z: 0 };
   }
@@ -147,7 +156,8 @@ export class Controller {
 
     const mw = this._moveWorld(input);
     const hasInput = mw.mag > 0.1;
-    const aimAllowed = this.state !== 'dive' && this.state !== 'slide' && this.state !== 'roadie';
+    const aimAllowed = this.state !== 'dive' && this.state !== 'slide' &&
+      this.state !== 'roadie' && this.state !== 'flip';
     this.aim = input.aimHeld && aimAllowed;
 
     switch (this.state) {
@@ -181,13 +191,16 @@ export class Controller {
         const want = hasInput || this.state === 'roadie';
         const tx = want ? dx * targetSpeed : 0;
         const tz = want ? dz * targetSpeed : 0;
-        const acc = want ? M.accel : M.decel;
+        const acc = (want ? M.accel : M.decel) * (this.grounded ? 1 : TUNING.jump.airControl);
         const k = 1 - Math.exp(-(acc / Math.max(targetSpeed, 1)) * dt);
         this.vel.x += (tx - this.vel.x) * k;
         this.vel.z += (tz - this.vel.z) * k;
 
-        // evadir / cover
-        if (input.evadePressed) {
+        // saltar (normal o vuelta de gato contra pared)
+        if (input.jumpPressed && this.grounded) this._tryJump();
+
+        // evadir / cover (solo en el suelo)
+        if (input.evadePressed && this.grounded) {
           this.chain = 0;
           const dir = hasInput ? { x: mw.x, z: mw.z } : this.facing();
           const range = this.state === 'roadie' ? E.roadieSlideDist : E.slideMaxDist;
@@ -196,6 +209,12 @@ export class Controller {
           if (snap) this._enterCover(snap.face, snap.target);
           else this._tryEvade(dir, range);
         }
+        break;
+      }
+
+      case 'flip': {
+        // vuelta de gato: sin control aéreo, el empuje del muro manda
+        this.flip.t += dt;
         break;
       }
 
@@ -301,7 +320,54 @@ export class Controller {
       this.pos.x += this.vel.x * dt;
       this.pos.z += this.vel.z * dt;
     }
-    this.world.resolveCircle(this.pos, PLAYER_R);
+    this.world.resolveCircle(this.pos, PLAYER_R, this.y);
+
+    // vertical: gravedad + suelo (permite pararse sobre coberturas)
+    const airStates = this.state === 'idle' || this.state === 'run' ||
+      this.state === 'roadie' || this.state === 'flip';
+    if (airStates) {
+      const J = TUNING.jump;
+      this.vy -= J.gravity * dt;
+      this.y += this.vy * dt;
+      const ground = this.world.groundHeight(this.pos, PLAYER_R, this.y);
+      if (this.y <= ground + 1e-3 && this.vy <= 0) {
+        const wasAir = !this.grounded;
+        const fallSpeed = -this.vy;
+        this.y = ground; this.vy = 0; this.grounded = true;
+        if (this.state === 'flip') {
+          this.flip = null;
+          this._setState(hasInput ? 'run' : 'idle');
+        }
+        if (wasAir && fallSpeed > 3) this.ev.onLand?.();
+      } else {
+        this.grounded = this.y <= ground + 0.02;
+      }
+    } else {
+      this.vy = 0;
+      this.grounded = true;
+    }
+  }
+
+  _tryJump() {
+    const J = TUNING.jump;
+    const f = this.facing();
+    // ¿pared enfrente? → pies a la pared y vuelta de gato de regreso (Ratchet)
+    const wall = this.world.findCover(this.pos, f, 0.8, PLAYER_R, 0.4);
+    if (wall && wall.face.h >= J.wallMinH && wall.t < 0.65) {
+      const n = wall.face.n;
+      this.vy = J.wallVel;
+      this.vel.x = n.x * J.wallPush;
+      this.vel.z = n.z * J.wallPush;
+      this.grounded = false;
+      this.flip = { t: 0, dur: Math.max(0.4, (2 * J.wallVel / J.gravity) * 0.92) };
+      this.cover = null;
+      this._setState('flip');
+      this.ev.onWallJump?.();
+    } else {
+      this.vy = J.vel;
+      this.grounded = false;
+      this.ev.onJump?.();
+    }
   }
 
   _enterCover(face, target) {

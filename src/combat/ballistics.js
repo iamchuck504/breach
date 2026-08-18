@@ -45,9 +45,10 @@ export function resolveShot(world, targets, origin, dir, maxRange, excludeId = n
 
   for (const tg of targets) {
     if (!tg.alive || tg.id === excludeId) continue;
-    const th = raySphere(origin, dir, tg.x, 1.52, tg.z, 0.22);
+    const ty = tg.y || 0; // altura de los pies (saltos / encima de cajas)
+    const th = raySphere(origin, dir, tg.x, 1.52 + ty, tg.z, 0.22);
     if (th !== null && th < bestT) { bestT = th; hit = { kind: 'player', t: th, id: tg.id, part: 'head' }; continue; }
-    const tb = rayCapsule(origin, dir, tg.x, tg.z, 0.35, 1.3, 0.4);
+    const tb = rayCapsule(origin, dir, tg.x, tg.z, 0.35 + ty, 1.3 + ty, 0.4);
     if (tb !== null && tb < bestT) { bestT = tb; hit = { kind: 'player', t: tb, id: tg.id, part: 'body' }; }
   }
 

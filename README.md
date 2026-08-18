@@ -32,14 +32,16 @@ Para LAN, usar el server local es lo más simple.
 | Espacio | Cover / slide into cover / wallbounce / dive (contextual) |
 | Click derecho | Apuntar (precisión) |
 | Click izquierdo | Disparar — sin apuntar dispara **desde el cañón** (retícula naranja proyectada) |
+| F | Saltar — contra una pared alta hace **vuelta de gato** (wall jump estilo Ratchet) |
 | R / Q | Recargar / cambiar Lancer↔Gnasher |
 | F9 | Invertir eje Y (default: invertido) |
 | F10 | Panel de tuning en vivo (lil-gui) |
 | M / Esc | Silencio / pausa |
 
 **Gamepad (layout Xbox, Gamepad API):** stick izq mover, stick der cámara
-(curva cuadrática, sens en °/s), **A** cover/evadir, **L3** roadie run,
-LT apuntar, RT disparar, X recargar, Y cambiar arma, MENU pausa. Vibración en
+(curva cuadrática, sens en °/s), **A** roadie run, **X** cover/evadir,
+**B** saltar, **RB** recargar, LT apuntar, RT disparar, Y cambiar arma,
+MENU pausa. Vibración en
 disparo/daño/cover si el control lo soporta. La config del control (bindings,
 sensibilidad, invert Y) es independiente de la de teclado/ratón.
 
@@ -52,6 +54,14 @@ Desde ahí → **Controles**: rebinding de teclado y de botones del control
 (click en el binding y presiona la tecla/botón), sensibilidad de ratón y stick,
 e invert Y. Todo persiste en localStorage. En práctica la pausa congela el
 juego; en línea la partida sigue.
+
+## Salto
+
+Salto arcade con gravedad (`TUNING.jump`): pasa por encima de coberturas bajas
+(y te puedes parar sobre ellas). Saltando de frente contra una pared alta
+(≥ `wallMinH`), el jugador pone los pies en la pared y hace una **vuelta de
+gato** hacia atrás alejándose (estilo Ratchet); sin control aéreo durante el
+flip. La bala respeta la altura del salto (hitbox con `y`).
 
 ## Wallbounce
 

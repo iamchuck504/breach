@@ -71,6 +71,8 @@ export class Audio {
   whoosh() { this._noiseShot(0.22, 0.16, 500, 2400, 0.6); }
   thump() { this._tone('sine', 110, 55, 0.4, 0.11); this._noiseShot(0.12, 0.07, 500, 150); }
   footstep() { this._noiseShot(0.05, 0.045, 700, 250); }
+  jump() { this._noiseShot(0.13, 0.1, 800, 2300, 0.6); }
+  land() { this._tone('sine', 100, 58, 0.18, 0.07); this._noiseShot(0.08, 0.05, 600, 200); }
   hurt() { this._tone('sawtooth', 220, 90, 0.2, 0.12); }
   death() { this._tone('sawtooth', 320, 60, 0.35, 0.5); }
   win() { for (const [f, d] of [[520, 0], [660, 0.12], [780, 0.24]]) setTimeout(() => this._tone('sine', f, f, 0.25, 0.3), d * 1000); }

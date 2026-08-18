@@ -205,11 +205,26 @@ export class World {
     return best;
   }
 
+  // Altura del "suelo" bajo el círculo: la caja más alta que quede a la
+  // altura de los pies o debajo (permite pararse sobre coberturas).
+  groundHeight(p, r, y) {
+    let g = 0;
+    const m = r * 0.5;
+    for (const c of this.colliders) {
+      if (c.h > y + 0.25) continue; // demasiado alta para apoyarse
+      if (p.x + m < c.minx || p.x - m > c.maxx || p.z + m < c.minz || p.z - m > c.maxz) continue;
+      if (c.h > g) g = c.h;
+    }
+    return g;
+  }
+
   // Empuja un círculo (x,z,r) fuera de los AABBs. Muta p.
-  resolveCircle(p, r) {
+  // y: altura de los pies — las cajas por debajo no bloquean (se salta encima).
+  resolveCircle(p, r, y = 0) {
     for (let iter = 0; iter < 3; iter++) {
       let moved = false;
       for (const c of this.colliders) {
+        if (y >= c.h - 0.05) continue;
         const cx = Math.max(c.minx, Math.min(c.maxx, p.x));
         const cz = Math.max(c.minz, Math.min(c.maxz, p.z));
         let dx = p.x - cx, dz = p.z - cz;

@@ -77,6 +77,17 @@ const ctrlEvents = {
     if (chain >= 2) hud.hint('BOUNCE ×' + chain, 700);
   },
   onDive: () => { audio.whoosh(); },
+  onJump: () => { audio.jump(); },
+  onWallJump: () => {
+    audio.whoosh();
+    audio.jump();
+    input.pad.rumble(70, 0.25, 0.45);
+    if (G.player) effects.dust(G.player.pos);
+  },
+  onLand: () => {
+    audio.land();
+    if (G.player) effects.dust(G.player.pos);
+  },
 };
 
 // ---------- menú ----------
@@ -445,7 +456,7 @@ function currentTargets() {
   if (G.mode === 'practice') return G.dummies.targets();
   const out = [];
   for (const r of G.remotes.values()) {
-    if (r.team !== G.team) out.push({ id: r.id, x: r.x, z: r.z, alive: r.alive });
+    if (r.team !== G.team) out.push({ id: r.id, x: r.x, z: r.z, y: r.y ?? 0, alive: r.alive });
   }
   return out;
 }
@@ -547,7 +558,7 @@ function fireShot() {
 function updateReticle() {
   const p = G.player;
   const canShow = p && !p.dead && G.mode &&
-    p.state !== 'roadie' && p.state !== 'dive' && p.state !== 'slide';
+    p.state !== 'roadie' && p.state !== 'dive' && p.state !== 'slide' && p.state !== 'flip';
   if (!canShow) { hud.reticle(false, null); return; }
   if (p.aim) { hud.reticle(true, null); return; }
   const dir = hipDir();
@@ -591,7 +602,7 @@ function simStep(dt) {
   if (!p) return;
 
   const stateOk = !p.dead && p.state !== 'dive' && p.state !== 'slide' &&
-    p.state !== 'roadie' && input.anyDevice;
+    p.state !== 'roadie' && p.state !== 'flip' && input.anyDevice;
   // giro brusco: el tiro NO sale hasta que el cuerpo esté alineado con la
   // cámara (el trigger fuerza el giro rápido; nunca dispara "por la espalda")
   const maxA = TUNING.combat.fireAlignMaxDeg * Math.PI / 180;
@@ -673,7 +684,7 @@ function frame(now) {
     }
 
     shoulderCam.update(dt, G.player);
-    G.rig.setTransform(G.player.pos.x, G.player.pos.z, G.player.yaw);
+    G.rig.setTransform(G.player.pos.x, G.player.pos.z, G.player.yaw, G.player.y);
     G.rig.update(dt, G.player.animParams());
     for (const r of G.remotes.values()) r.update(dt);
 
