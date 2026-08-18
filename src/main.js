@@ -714,10 +714,11 @@ function simStep(dt) {
   // (el flip Matrix SÍ permite disparar en el aire)
   const stateOk = !p.dead && p.state !== 'dive' && p.state !== 'slide' &&
     p.state !== 'roadie' && input.anyDevice;
-  // giro brusco: el tiro NO sale hasta que el cuerpo esté alineado con la
-  // cámara (el trigger fuerza el giro rápido; nunca dispara "por la espalda")
+  // giro brusco: el tiro de CADERA espera solo si el cuerpo apunta casi de
+  // espaldas (el trigger fuerza el giro rápido). Apuntando (ADS) nunca se
+  // bloquea: la bala sale de la cámara.
   const maxA = TUNING.combat.fireAlignMaxDeg * Math.PI / 180;
-  const aligned = Math.abs(angDiff(shoulderCam.yaw, p.yaw)) < maxA;
+  const aligned = p.aim || Math.abs(angDiff(shoulderCam.yaw, p.yaw)) < maxA;
   const canFire = stateOk && aligned;
   // cualquier click que no pueda salir YA (roadie, cuerpo girando, cooldown,
   // dive/slide, final de recarga) queda bufereado — y el buffer dura AL MENOS

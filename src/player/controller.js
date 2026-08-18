@@ -193,13 +193,12 @@ export class Controller {
           this.yaw = lerpAngle(this.yaw, desired, 1 - Math.exp(-M.roadieTurnLerp * dt));
           const f = this.facing();
           dx = f.x; dz = f.z;
-        } else if (this.aim) {
+        } else if (this.aim || firing) {
+          // DISPARAR MANDA sobre correr: el cuerpo encara a la cámara aunque
+          // te muevas hacia atrás o de lado (las piernas strafean)
           this.yaw = lerpAngle(this.yaw, this.cam.yaw, 1 - Math.exp(-M.aimTurnLerp * dt));
         } else if (hasInput) {
           this.yaw = lerpAngle(this.yaw, yawFromDir(dx, dz), 1 - Math.exp(-M.turnLerp * dt));
-        } else if (firing) {
-          // hipfire parado: encarar hacia la cámara para disparar del cañón
-          this.yaw = lerpAngle(this.yaw, this.cam.yaw, 1 - Math.exp(-M.aimTurnLerp * dt));
         } else {
           // Gears: en reposo el cuerpo (y la mira) siguen a la cámara
           this.yaw = lerpAngle(this.yaw, this.cam.yaw, 1 - Math.exp(-9 * dt));

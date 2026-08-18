@@ -9,7 +9,7 @@ export const TUNING = {
     decel: 34,            // frenado al soltar
     turnLerp: 15,         // giro del personaje hacia la dirección de movimiento
     roadieTurnLerp: 6.5,  // roadie gira más pesado (feel Gears)
-    aimTurnLerp: 22,      // giro hacia la cámara al apuntar
+    aimTurnLerp: 30,      // giro hacia la cámara al apuntar/disparar
     coverStrafe: 3.5,     // velocidad lateral pegado a cobertura
   },
   evade: {
@@ -78,7 +78,7 @@ export const TUNING = {
     },
   },
   combat: {
-    fireAlignMaxDeg: 60,  // el tiro de cadera espera a que el cuerpo esté así de alineado con la cámara
+    fireAlignMaxDeg: 115, // el tiro de cadera solo espera si el cuerpo apunta casi de espaldas a la cámara
     hp: 100,
     regenDelay: 3.6, regenRate: 48,
     respawnTime: 4,

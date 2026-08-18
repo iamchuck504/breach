@@ -207,6 +207,23 @@ try {
   await page.keyboard.press('q');
   await page.waitForTimeout(750);
 
+  // disparar corriendo HACIA ATRÁS (el cuerpo debe encarar a la cámara y tirar)
+  await page.evaluate(() => {
+    const P = window.BREACH.player;
+    P.pos.x = 0; P.pos.z = -5; P.cover = null; P.state = 'idle';
+    P.cam.yaw = Math.PI; P.yaw = Math.PI;
+  });
+  await page.keyboard.down('s');
+  await page.waitForTimeout(300); // retrocediendo, cuerpo tendería a mirar atrás
+  const bk0 = await page.evaluate(() => window.BREACH.weapons.st.mag);
+  await page.mouse.down();
+  await page.waitForTimeout(300);
+  await page.mouse.up();
+  await page.keyboard.up('s');
+  const bk1 = await page.evaluate(() => window.BREACH.weapons.st.mag);
+  console.log('BACKFIRE:', JSON.stringify({ antes: bk0, despues: bk1 }));
+  if (bk1 >= bk0) errors.push('BACKFIRE: no disparó moviéndose hacia atrás');
+
   // disparar en el aire saltando DESDE roadie run (cancela el sprint y tira)
   await page.evaluate(() => { const P = window.BREACH.player; P.pos.x = 0; P.pos.z = -8; });
   await page.keyboard.down('Shift');
