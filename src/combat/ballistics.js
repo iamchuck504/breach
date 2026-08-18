@@ -27,11 +27,16 @@ export function rayCapsule(o, d, x, z, y0, y1, r) {
   const disc = b * b - a * c;
   if (disc < 0) return null;
   const t = (-b - Math.sqrt(disc)) / a;
-  if (t < 0) return null;
-  const y = o.y + d.y * t;
-  if (y >= y0 && y <= y1) return t;
-  // tapas (esferas en los extremos)
-  return raySphere(o, d, x, y < y0 ? y0 : y1, z, r) ?? null;
+  if (t >= 0) {
+    const y = o.y + d.y * t;
+    if (y >= y0 && y <= y1) return t;
+  }
+  // tapas (esferas en los extremos) — también cuando el origen está dentro
+  // del radio del cilindro pero por encima/debajo del segmento
+  const t0 = raySphere(o, d, x, y0, z, r);
+  const t1 = raySphere(o, d, x, y1, z, r);
+  if (t0 !== null && t1 !== null) return Math.min(t0, t1);
+  return t0 ?? t1;
 }
 
 // targets: [{id, x, z, alive}] — hitbox: cuerpo y0.35..1.3 r0.4, cabeza y1.52 r0.22

@@ -13,7 +13,7 @@ export class WeaponDrops {
     this.drops = new Map(); // id -> {mesh, x, z, wep, mag, res, t, claimed}
   }
 
-  spawn(id, wep, x, z, team, mag = 0, res = 0) {
+  spawn(id, wep, x, z, team, mag = 0, res = 0, t = LIFE) {
     if (this.drops.has(id)) return;
     const mesh = (wep === 'shotgun' ? buildShotgun : buildSMG)(TEAM_HEX[team] ?? 0x999999);
     mesh.scale.set(1.3, 1.3, 1.35);
@@ -23,7 +23,7 @@ export class WeaponDrops {
     // tumbada de lado en el suelo, con orientación aleatoria
     mesh.rotation.set(0, Math.random() * Math.PI * 2, Math.PI / 2 * 0.96);
     this.scene.add(mesh);
-    this.drops.set(id, { mesh, x: dx, z: dz, wep, mag, res, t: LIFE, claimed: false });
+    this.drops.set(id, { mesh, x: dx, z: dz, wep, mag, res, t, claimed: false });
   }
 
   remove(id) {
@@ -37,12 +37,18 @@ export class WeaponDrops {
     this.drops.delete(id);
   }
 
-  update(dt, px, pz, canPick, onPick) {
+  update(dt, px, pz, py, canPick, onPick) {
     for (const [id, d] of this.drops) {
       d.t -= dt;
       if (d.t <= 0) { this.remove(id); continue; }
       d.mesh.visible = d.t > BLINK_AT || Math.floor(d.t * 6) % 2 === 0;
-      if (canPick && !d.claimed && Math.hypot(px - d.x, pz - d.z) < 1.1) {
+      // reclamo online sin confirmación del server: vuelve a ser reclamable
+      if (d.claimed && d.claimT !== undefined) {
+        d.claimT -= dt;
+        if (d.claimT <= 0) d.claimed = false;
+      }
+      // py: no se recoge desde ENCIMA de un bloque (el arma está en el suelo)
+      if (canPick && !d.claimed && py < 0.8 && Math.hypot(px - d.x, pz - d.z) < 1.1) {
         onPick(id, d);
       }
     }

@@ -23,9 +23,7 @@ export class Input {
     // invert Y separado por dispositivo (ambos default ON, preferencia de Chuck)
     this.invertY = localStorage.getItem('breach.invertY') !== 'false';       // ratón (F9)
     this.invertYPad = localStorage.getItem('breach.invertYPad') !== 'false'; // control
-    // raw input (unadjustedMovement): OFF por default — en Chrome/Windows
-    // tiene un bug que deja el cursor confinado a una región tras des-lockear
-    this.rawInput = localStorage.getItem('breach.rawInput') === 'true';
+    this.kbLocked = false; // main lo pone en true si navigator.keyboard.lock fue CONCEDIDO
     this.onToggleTuning = null;
     this.onToggleMute = null;
     this.onEscape = null;
@@ -53,7 +51,12 @@ export class Input {
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     document.addEventListener('pointerlockchange', () => {
       this.locked = document.pointerLockElement === canvas;
-      if (!this.locked) { this._mouseFire = false; this._mouseAim = false; this.keys.clear(); }
+      if (!this.locked) {
+        this._mouseFire = false; this._mouseAim = false;
+        this.keys.clear();
+        this.consumeEdges();               // sin edges fantasma al des-lockear
+        this.mouseDX = 0; this.mouseDY = 0; // sin delta acumulado al re-lockear
+      }
     });
     // MEDIDO en la máquina de Chuck (scripts/diag-clip.mjs): la salida
     // PROGRAMÁTICA (exitPointerLock) limpia el ClipCursor de Windows
@@ -62,7 +65,10 @@ export class Input {
     // SIEMPRE nosotros primero, por el camino limpio.
     this.cleanExitAt = 0; // marca de exits limpios (con foco): no necesitan saneo
     window.addEventListener('keydown', (e) => {
-      if (e.code === 'Escape' && this.locked && !document.fullscreenElement) {
+      // salir programáticamente ANTES que el navegador (camino limpio medido),
+      // salvo en fullscreen con keyboard.lock CONFIRMADO (ahí Esc es nuestro)
+      if (e.code === 'Escape' && this.locked &&
+          !(document.fullscreenElement && this.kbLocked)) {
         this.cleanExitAt = performance.now();
         try { document.exitPointerLock(); } catch { /* ok */ }
       }
@@ -80,29 +86,32 @@ export class Input {
   }
 
   // unadjustedMovement: sin aceleración de mouse del OS (si el navegador lo soporta)
+  // Siempre pointer lock PLANO: el modo raw input (unadjustedMovement) se
+  // eliminó por completo — es el camino con el bug de ClipCursor en Windows.
   requestLock() {
-    const plain = () => {
-      try {
-        const q = this.canvas.requestPointerLock();
-        if (q && q.catch) q.catch(() => {});
-      } catch { /* sin gesto de usuario: se re-lockea al clickear el canvas */ }
-    };
-    if (!this.rawInput) { plain(); return; }
     try {
-      const p = this.canvas.requestPointerLock({ unadjustedMovement: true });
-      // reintentar SOLO si el navegador no soporta unadjustedMovement;
-      // otros errores (falta de gesto, cooldown de Esc) no deben re-pedir
-      if (p && p.catch) p.catch((e) => {
-        if (e && e.name === 'NotSupportedError') plain();
-      });
-    } catch { plain(); }
+      const q = this.canvas.requestPointerLock();
+      if (q && q.catch) q.catch(() => {});
+    } catch { /* sin gesto: el keeper de main reintenta, o el click al canvas */ }
   }
-  releaseLock() { if (this.locked) document.exitPointerLock(); }
+  releaseLock() {
+    if (this.locked) {
+      this.cleanExitAt = performance.now(); // exit propio con foco = limpio
+      document.exitPointerLock();
+    }
+  }
 
   _key(e, down) {
     if (e.repeat) return;
-    if (e.target && e.target.tagName === 'INPUT') return; // escribiendo en el menú
     const c = e.code;
+    // Escape SIEMPRE funciona, incluso con el foco en un input de texto
+    // (si no, enfocar el campo "Nombre" mataba la pausa para siempre)
+    if (down && c === 'Escape') {
+      if (e.target && e.target.tagName === 'INPUT') e.target.blur();
+      this.onEscape?.();
+      return;
+    }
+    if (e.target && e.target.tagName === 'INPUT') return; // escribiendo en el menú
     if (c === BINDS.kb.score && this.locked) e.preventDefault(); // Tab no cicla el foco
     if (down) {
       if (c === 'F9') {

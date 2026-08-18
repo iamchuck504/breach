@@ -129,21 +129,33 @@ class Bot {
     this.swapCd = Math.max(0, this.swapCd - dt);
     this.swapAnim = Math.max(0, this.swapAnim - dt);
     this.jumpCd = Math.max(0, this.jumpCd - dt);
-    this.shotCd -= dt;
+    this.shotCd = Math.max(-0.5, this.shotCd - dt);
+    // ráfaga/pausa SIEMPRE decrementan: si el bot pierde al enemigo a mitad
+    // de ráfaga, la pose de disparo no debe quedarse congelada
+    this.burstT = Math.max(0, this.burstT - dt);
+    if (this.burstT === 0 && this.pauseT > 0) this.pauseT -= dt;
     if (this.lastDamage > TUNING.combat.regenDelay && this.hp < TUNING.combat.hp) {
       this.hp = Math.min(TUNING.combat.hp, this.hp + TUNING.combat.regenRate * dt);
     }
 
     const enemy = match.nearestVisibleEnemy(this);
-    const dist = enemy ? Math.hypot(enemy.x - this.pos.x, enemy.z - this.pos.z) : Infinity;
+    // epsilon: dos entidades solapadas producían NaN en yaw/pos (bot invisible)
+    const dist = enemy
+      ? Math.max(0.05, Math.hypot(enemy.x - this.pos.x, enemy.z - this.pos.z))
+      : Infinity;
 
     // ---- decidir estado ----
     if (this.state !== 'cover' && this.hp < 38 && enemy) {
       const spot = match.findCoverSpot(this, enemy);
-      if (spot) { this.cover = spot; this.state = 'cover'; this.coverPhase = 'go'; this.coverT = 0; }
+      if (spot) {
+        this.cover = spot; this.state = 'cover';
+        this.coverPhase = 'go'; this.coverT = 0; this.coverPhaseT = 0;
+      }
     } else if (this.state === 'cover') {
       this.coverT += dt;
-      // recuperado (o lleva demasiado escondido) → volver a pelear
+      this.coverPhaseT = (this.coverPhaseT ?? 0) + dt;
+      // recuperado o demasiado tiempo escondido → volver a pelear
+      // (coverT es GLOBAL del estado; el timer de fase es coverPhaseT)
       if (this.hp > 80 || this.coverT > 9) { this.state = 'advance'; this.cover = null; }
     } else if (enemy) {
       // arma según distancia; los agresivos con vida llena se comprometen al rush
@@ -185,14 +197,14 @@ class Bot {
       if (this.coverPhase === 'go') {
         const dx = c.x - this.pos.x, dz = c.z - this.pos.z;
         const d = Math.hypot(dx, dz);
-        if (d < 0.5) { this.coverPhase = 'hide'; this.coverT = 0; }
+        if (d < 0.5) { this.coverPhase = 'hide'; this.coverPhaseT = 0; }
         else { mx = dx / d; mz = dz / d; this._face(mx, mz, dt); }
       } else if (this.coverPhase === 'hide') {
         // agazapado tras el bloque, regenerando
         animOverride = c.low ? 'cover_low' : 'cover_high';
         if (enemy) this._face((enemy.x - this.pos.x), (enemy.z - this.pos.z), dt, 5);
-        if (this.coverT > 1.2 + Math.random() * 0.8 && this.hp > 55) {
-          this.coverPhase = 'peek'; this.coverT = 0;
+        if (this.coverPhaseT > 1.2 + Math.random() * 0.8 && this.hp > 55) {
+          this.coverPhase = 'peek'; this.coverPhaseT = 0;
           this.peekDir = Math.random() < 0.5 ? -1 : 1;
         }
       } else { // peek: asomarse por el costado y tirar
@@ -206,7 +218,7 @@ class Bot {
           this._face((enemy.x - this.pos.x), (enemy.z - this.pos.z), dt, 10);
           this._fireAt(dt, match, enemy, dist);
         }
-        if (this.coverT > 1.1) { this.coverPhase = 'hide'; this.coverT = 0; }
+        if (this.coverPhaseT > 1.1) { this.coverPhase = 'hide'; this.coverPhaseT = 0; }
       }
     } else {
       // advance: waypoints al lado seguro de las coberturas, rumbo al enemigo
@@ -273,6 +285,8 @@ class Bot {
   }
 
   // ráfagas (metralleta) o bombazos sueltos (escopeta)
+  // ráfagas (metralleta) o bombazos sueltos (escopeta). Los timers burstT y
+  // pauseT decrementan GLOBALMENTE en update(); aquí solo se dispara/arma.
   _fireAt(dt, match, enemy, dist) {
     if (this.wep === 'shotgun') {
       if (this.shotCd <= 0 && dist < 20) {
@@ -280,19 +294,16 @@ class Bot {
         this.burstT = 0.15;
         match.botShoot(this, enemy);
       }
-      this.burstT = Math.max(0, this.burstT - dt);
       return;
     }
     if (this.burstT > 0) {
-      this.burstT -= dt;
       if (this.shotCd <= 0) {
         this.shotCd = (60 / TUNING.weapons.smg.rpm) * 1.6;
         match.botShoot(this, enemy);
       }
-      if (this.burstT <= 0) this.pauseT = 0.5 + Math.random() * 0.9;
-    } else {
-      this.pauseT -= dt;
-      if (this.pauseT <= 0) this.burstT = 0.4 + Math.random() * 0.5;
+    } else if (this.pauseT <= 0) {
+      this.burstT = 0.4 + Math.random() * 0.5;
+      this.pauseT = 0.5 + Math.random() * 0.9;
     }
   }
 
@@ -322,7 +333,8 @@ export class BotMatch {
     for (const team of ['red', 'blue']) {
       for (const name of BOT_NAMES[team]) {
         const id = 'bot' + n++;
-        const spawn = world.spawns[team][this.bots.length % 4];
+        // +1: el spawn [0] del lado rojo es del JUGADOR (evitar solaparse)
+        const spawn = world.spawns[team][(this.bots.length + 1) % 4];
         this.bots.push(new Bot(scene, world, id, name, team, spawn));
         this.stats.set(id, { name, team, kills: 0, deaths: 0 });
       }

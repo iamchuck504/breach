@@ -116,10 +116,22 @@ export class Controller {
     return Math.max(-1, Math.min(1, v));
   }
 
+  // limpia TODO el estado transitorio (flags pegados = poses/gameplay rotos)
+  _clearTransient() {
+    this.firingBlind = 0;
+    this.coverLeanAnim = 0;
+    this.detachT = 0;
+    this.evadeCooldown = 0;
+    this.bounceWindow = 0;
+    this.chain = 0;
+    this.usedDouble = false;
+  }
+
   respawn(spawn) {
     this.pos = { x: spawn.x, z: spawn.z };
     this.vel = { x: 0, z: 0 };
-    this.y = 0; this.vy = 0; this.grounded = true; this.flip = null; this.usedDouble = false;
+    this.y = 0; this.vy = 0; this.grounded = true; this.flip = null;
+    this._clearTransient();
     this.yaw = spawn.yaw;
     this.cam.yaw = spawn.yaw;
     this.cam.pitch = -0.12;
@@ -134,6 +146,7 @@ export class Controller {
     this.cover = null; this.slide = null; this.dive = null; this.flip = null;
     this.aim = false;
     this.vel = { x: 0, z: 0 };
+    this._clearTransient();
   }
 
   // dir del input en mundo (relativo a cámara)
@@ -149,10 +162,17 @@ export class Controller {
   _tryEvade(dir, range) {
     const T = TUNING.evade;
     if (this.evadeCooldown > 0) return false;
+    // normalizar SIEMPRE: con el stick a medio recorrido la búsqueda de
+    // cobertura y la velocidad del dive salían escaladas por la magnitud
+    const m = Math.hypot(dir.x, dir.z);
+    if (m < 0.001) return false;
+    dir = { x: dir.x / m, z: dir.z / m };
+    this.coverLeanAnim = 0; // no arrastrar el lean al salir de cover
     const exclude = this.cover;
     const found = this.world.findCover(this.pos, dir, range, PLAYER_R, 0.4);
     if (found && found.face !== exclude && found.dist > 0.5) {
       this.slide = { target: found.target, face: found.face, dir };
+      this.dive = null;
       this.cover = null;
       this._setState('slide');
       this.evadeCooldown = T.bounceCooldown;
@@ -161,6 +181,7 @@ export class Controller {
     }
     // sin cobertura: dive en la dirección pedida
     this.dive = { dir };
+    this.slide = null;
     this.cover = null;
     this._setState('dive');
     this.evadeCooldown = T.bounceCooldown;
@@ -260,7 +281,13 @@ export class Controller {
         const dx = s.target.x - this.pos.x, dz = s.target.z - this.pos.z;
         const d = Math.hypot(dx, dz);
         this.yaw = lerpAngle(this.yaw, yawFromDir(dx, dz), 1 - Math.exp(-18 * dt));
-        if (d < Math.max(0.16, spd * dt)) {
+        if (this.stateT > 0.9) {
+          // target inalcanzable (colisión lo empuja fuera): NUNCA deslizarse
+          // para siempre — rescate a run
+          this.slide = null;
+          this._setState('run');
+          this.chain = 0;
+        } else if (d < Math.max(0.16, spd * dt)) {
           this._enterCover(s.face, s.target);
         } else {
           this.vel.x = (dx / d) * spd; this.vel.z = (dz / d) * spd;
@@ -269,8 +296,8 @@ export class Controller {
             const ndir = mw.mag > 0.1 ? { x: mw.x, z: mw.z } : null;
             if (ndir) {
               this.chain++;
-              this.ev.onBounce?.(this.chain);
-              this._tryEvade(ndir, E.bounceRange);
+              if (this._tryEvade(ndir, E.bounceRange)) this.ev.onBounce?.(this.chain);
+              else this.chain--; // sin rebote real, sin bonus ni SFX
             }
           }
         }
@@ -287,8 +314,8 @@ export class Controller {
         if (input.evadePressed && t > E.diveCancelPct && this.chain < E.chainMax) {
           const ndir = mw.mag > 0.1 ? { x: mw.x, z: mw.z } : this.dive.dir;
           this.chain++;
-          this.ev.onBounce?.(this.chain);
-          this._tryEvade(ndir, E.bounceRange);
+          if (this._tryEvade(ndir, E.bounceRange)) this.ev.onBounce?.(this.chain);
+          else this.chain--;
         } else if (t >= 1) {
           this._setState(hasInput ? 'run' : 'idle');
           this.chain = 0;
@@ -359,11 +386,11 @@ export class Controller {
           const dir = hasInput ? { x: mw.x, z: mw.z } : { x: n.x, z: n.z };
           const into = -(dir.x * n.x + dir.z * n.z);
           if (into < 0.5) { // no re-entrar al mismo cover
-            if (this.bounceWindow > 0 && this.chain < E.chainMax) {
-              this.chain++;
-              this.ev.onBounce?.(this.chain);
-            } else this.chain = 0;
-            this._tryEvade(dir, E.bounceRange);
+            const chained = this.bounceWindow > 0 && this.chain < E.chainMax;
+            if (chained) this.chain++; else this.chain = 0;
+            if (this._tryEvade(dir, E.bounceRange)) {
+              if (chained) this.ev.onBounce?.(this.chain);
+            } else if (chained) this.chain--;
           }
         }
         break;
@@ -399,6 +426,9 @@ export class Controller {
         this.grounded = this.y <= ground + 0.02;
       }
     } else {
+      // estados pegados al suelo: la Y sigue al terreno real (un slide que
+      // sale de una caja no debe conservar una altura fantasma)
+      this.y = this.world.groundHeight(this.pos, PLAYER_R, this.y);
       this.vy = 0;
       this.grounded = true;
     }

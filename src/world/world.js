@@ -52,6 +52,15 @@ export class World {
     else if (layout === 'district') this._buildDistrict();
     else this._buildMap();
     this._buildSpawns();
+
+    // el frustum de sombras debe cubrir el mapa ACTUAL (con ±30 fijos, las
+    // esquinas de District quedaban sin sombra)
+    if (this.sun) {
+      const r = Math.max(this.fx, this.fz) + 6;
+      const sc = this.sun.shadow.camera;
+      sc.left = -r; sc.right = r; sc.top = r; sc.bottom = -r;
+      sc.updateProjectionMatrix();
+    }
   }
 
   _mat(color, topColor) {
@@ -73,6 +82,7 @@ export class World {
     sc.left = -30; sc.right = 30; sc.top = 30; sc.bottom = -30;
     sc.near = 2; sc.far = 80;
     sun.shadow.bias = -0.0004;
+    this.sun = sun;
     this.scene.add(sun);
     this.scene.background = new THREE.Color(0xb9c8d2);
     // sin niebla: nada de "blur" atmosférico, geometría nítida a toda distancia

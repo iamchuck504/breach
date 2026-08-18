@@ -57,7 +57,9 @@ export class Weapons {
   // Devuelve true si disparó este frame.
   update(dt, wantsFire, wantsFirePressed, canFire) {
     const s = this.st, d = this.def;
-    s.cd = Math.max(0, s.cd - dt);
+    // el cooldown corre para AMBAS armas (guardar la escopeta no lo congela)
+    this.state.smg.cd = Math.max(0, this.state.smg.cd - dt);
+    this.state.shotgun.cd = Math.max(0, this.state.shotgun.cd - dt);
 
     // auto-recarga al quedarse sin balas (sin esperar otro click)
     if (s.mag === 0 && s.reload === 0 && this.swapT === 0 && s.reserve > 0) {

@@ -154,7 +154,9 @@ export class HUD {
     clearTimeout(this._centerT);
     if (ms > 0) this._centerT = setTimeout(() => this.el.center.classList.remove('on'), ms);
   }
-  centerOff() { clearTimeout(this._centerT); this.el.center.classList.remove('on'); }
+  centerOff() { clearTimeout(this._centerT); this.el.center.classList.remove('on', 'big'); }
+
+  clearFeed() { this.el.feed.innerHTML = ''; }
 
   // countdown grande de respawn: sec entero, o null para ocultarlo
   respawnTick(sec) {

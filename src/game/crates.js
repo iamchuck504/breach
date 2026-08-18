@@ -47,14 +47,17 @@ function buildCrate() {
 }
 
 export class AmmoCrates {
-  constructor(scene) {
+  // authoritative=true (online): el server manda — sin auto-respawn local y
+  // el pickup solo notifica (el estado visible lo fija el broadcast del server)
+  constructor(scene, authoritative = false) {
     this.scene = scene;
+    this.authoritative = authoritative;
     this.t = 0;
     this.crates = CRATE_POS.map((p) => {
       const mesh = buildCrate();
       mesh.position.set(p.x, 0.35, p.z);
       scene.add(mesh);
-      return { x: p.x, z: p.z, mesh, up: true, respawnT: 0 };
+      return { x: p.x, z: p.z, mesh, up: true, respawnT: 0, pendingT: 0 };
     });
   }
 
@@ -62,27 +65,37 @@ export class AmmoCrates {
     const c = this.crates[i];
     if (!c) return;
     c.up = up;
+    c.pendingT = 0;
     c.respawnT = up ? 0 : CRATE_RESPAWN;
     c.mesh.visible = up;
   }
 
   // canPick: jugador vivo y jugando. onPick(i) se llama al recoger.
-  update(dt, px, pz, canPick, onPick) {
+  update(dt, px, pz, py, canPick, onPick) {
     this.t += dt;
     for (let i = 0; i < this.crates.length; i++) {
       const c = this.crates[i];
       if (!c.up) {
-        c.respawnT -= dt;
-        if (c.respawnT <= 0) { c.up = true; c.mesh.visible = true; }
+        // en online el respawn lo dicta el server (broadcast → setState)
+        if (!this.authoritative) {
+          c.respawnT -= dt;
+          if (c.respawnT <= 0) { c.up = true; c.mesh.visible = true; }
+        }
         continue;
       }
       // flotar + girar
       c.mesh.position.y = 0.35 + Math.sin(this.t * 2 + i * 2) * 0.08;
       c.mesh.rotation.y += dt * 0.9;
-      if (canPick && Math.hypot(px - c.x, pz - c.z) < 1.15) {
-        c.up = false;
-        c.respawnT = CRATE_RESPAWN;
-        c.mesh.visible = false;
+      if (c.pendingT > 0) { c.pendingT -= dt; continue; } // reclamo en vuelo
+      // py: la caja está en el suelo; no se toma desde encima de un bloque
+      if (canPick && py < 0.8 && Math.hypot(px - c.x, pz - c.z) < 1.15) {
+        if (this.authoritative) {
+          c.pendingT = 1.5; // esperar confirmación; si no llega, reintenta
+        } else {
+          c.up = false;
+          c.respawnT = CRATE_RESPAWN;
+          c.mesh.visible = false;
+        }
         onPick(i);
       }
     }

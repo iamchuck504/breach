@@ -10,7 +10,7 @@ export class NetClient {
     this.handlers = {};
     this._sendAcc = 0;
     this.connected = false;
-    this.ping = 0;
+    this.dead = false; // tras close(): ni un mensaje más toca los handlers
   }
 
   on(type, cb) { this.handlers[type] = cb; }
@@ -27,7 +27,8 @@ export class NetClient {
         this.send({ t: 'join', name });
       };
       this.ws.onmessage = (ev) => {
-        let msg;
+        if (this.dead) return; // sesión desechada: los mensajes bufereados
+        let msg;               // no deben ejecutar closures de la partida vieja
         try { msg = JSON.parse(ev.data); } catch { return; }
         if (msg.t === 'welcome' && !settled) {
           settled = true;
@@ -45,7 +46,7 @@ export class NetClient {
       this.ws.onclose = () => {
         this.connected = false;
         if (!settled) { settled = true; clearTimeout(timeout); reject(new Error('conexión cerrada')); }
-        else this.handlers['close']?.();
+        else if (!this.dead) this.handlers['close']?.();
       };
     });
   }
@@ -83,5 +84,5 @@ export class NetClient {
     this.send({ t: 'hit', target: targetId, dmg: Math.round(dmg), part, gib: gib ? 1 : 0 });
   }
 
-  close() { this.ws?.close(); }
+  close() { this.dead = true; this.ws?.close(); }
 }

@@ -89,7 +89,7 @@ wss.on('connection', (ws) => {
         t: 'welcome', id, team, spawn, scores,
         players: [...players.values()].map(pub),
         crates: CRATES.map((c) => (c.up ? 1 : 0)),
-        drops: [...drops.entries()].map(([id, d]) => ({ id, wep: d.wep, x: d.x, z: d.z, team: d.team })),
+        drops: [...drops.entries()].map(([id, d]) => ({ id, wep: d.wep, x: d.x, z: d.z, team: d.team, t: d.t })),
       });
       broadcast({ t: 'joined', id, name: me.name, team });
       console.log(`+ ${me.name} (${team}) — ${players.size}/${MAX_PLAYERS}`);
@@ -98,16 +98,25 @@ wss.on('connection', (ws) => {
     if (!me) return;
 
     if (msg.t === 's') {
-      me.x = num(msg.x); me.z = num(msg.z); me.y = num(msg.y); me.yaw = num(msg.yaw);
-      me.st = String(msg.st || 'idle'); me.aim = msg.aim ? 1 : 0;
-      me.p = num(msg.p); me.w = msg.w === 'shotgun' ? 'shotgun' : 'smg';
-      me.am = num(msg.am); me.ar = num(msg.ar);
-      me.sp = num(msg.sp);
+      me.x = clamp(msg.x, -100, 100); me.z = clamp(msg.z, -100, 100);
+      me.y = clamp(msg.y, 0, 20); me.yaw = num(msg.yaw);
+      let st = String(msg.st || 'idle');
+      if (!VALID_STATES.has(st)) st = 'idle';
+      if (st === 'dead' && me.alive) st = 'idle'; // sin "cadáveres falsos" que disparan
+      me.st = st;
+      me.aim = msg.aim ? 1 : 0;
+      me.p = clamp(msg.p, -1.6, 1.6);
+      me.w = msg.w === 'shotgun' ? 'shotgun' : 'smg';
+      me.am = clamp(msg.am, 0, 500); me.ar = clamp(msg.ar, 0, 500);
+      me.sp = clamp(msg.sp, 0, 1);
       return;
     }
     if (msg.t === 'fire') {
+      if (!me.alive) return; // los muertos no disparan
+      const o = vec3(msg.o), pt = vec3(msg.p);
+      if (!o || !pt) return; // malformado: descartar, no propagar el crash
       me.prot = 0; // disparar rompe la protección de spawn
-      broadcast({ t: 'fire', id: me.id, o: msg.o, p: msg.p, w: me.w });
+      broadcast({ t: 'fire', id: me.id, o, p: pt, w: me.w });
       return;
     }
     if (msg.t === 'takeDrop') {
@@ -166,6 +175,14 @@ wss.on('connection', (ws) => {
       broadcast({ t: 'left', id: me.id });
       console.log(`- ${me.name} — ${players.size}/${MAX_PLAYERS}`);
     }
+    me = null; // mensajes in-flight del socket cerrado no mutan la partida
+    // sala vacía: partida fresca para el siguiente que entre
+    if (players.size === 0) {
+      scores = { red: 0, blue: 0 };
+      drops.clear();
+      for (const c of CRATES) { c.up = true; c.t = 0; }
+      resetting = false;
+    }
   });
 });
 
@@ -174,7 +191,13 @@ function endRound(team) {
   broadcast({ t: 'win', team });
   setTimeout(() => {
     scores = { red: 0, blue: 0 };
+    // partida nueva: sin drops viejos, cajas arriba, stats a cero
+    for (const id of [...drops.keys()]) { drops.delete(id); broadcast({ t: 'dropR', id }); }
+    for (let i = 0; i < CRATES.length; i++) {
+      if (!CRATES[i].up) { CRATES[i].up = true; CRATES[i].t = 0; broadcast({ t: 'crate', i, up: 1 }); }
+    }
     for (const p of players.values()) {
+      p.kills = 0; p.deaths = 0;
       p.hp = HP; p.alive = true; p.respawnAt = 0;
       p.prot = Date.now() / 1000 + SPAWN_PROT;
       const spawn = pickSpawn(p.team);
@@ -190,6 +213,16 @@ function pub(p) {
   return { id: p.id, name: p.name, team: p.team, alive: p.alive, hp: p.hp };
 }
 function num(v) { return typeof v === 'number' && isFinite(v) ? v : 0; }
+function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, num(v))); }
+// vector [x,y,z] saneado o null — un 'fire' malformado NO debe reventar
+// el handler de mensajes de los demás clientes
+function vec3(v) {
+  if (!Array.isArray(v) || v.length !== 3) return null;
+  const out = v.map(num);
+  return out.every((n) => Math.abs(n) < 1000) ? out : null;
+}
+const VALID_STATES = new Set(['idle', 'run', 'roadie', 'dive', 'slide',
+  'cover_low', 'cover_high', 'blind_over', 'jump', 'flip', 'dead']);
 
 // tick: regen + respawns + snapshot
 setInterval(() => {

@@ -187,6 +187,7 @@ export class Rig {
     const rnd = (a, b) => a + Math.random() * (b - a);
     this.rag = {
       bx: this.root.position.x, bz: this.root.position.z, byaw: yaw,
+      by: this.root.position.y, vyy: 0, // caída vertical real (muerte en el aire)
       ox: 0, oz: 0, oy: 0,
       vx: (back.x + right.x * lat * 0.8) * spd,
       vz: (back.z + right.z * lat * 0.8) * spd,
@@ -339,7 +340,7 @@ export class Rig {
         hipsY = 0.58 + bob * 0.06;
         break;
       }
-      case 'run': case 'idle': {
+      case 'run': case 'idle': default: { // default: estados desconocidos (red) caen a idle
         const m = p.state === 'run' ? 1 : 0;
         const tw = p.twist ?? 0; // torso/cabeza giran hacia la cámara
         R(this.torso, -0.1 * m + Math.sin(ph * 0.4) * 0.015, tw * 0.55, swing * 0.04 * m);
@@ -508,13 +509,21 @@ export class Rig {
       if (p.state === 'blind_over') {
         set(this.aimRig.rotation, 'x', pitch);
         set(this.aimRig.rotation, 'y', yawErr);
-      } else if (p.state === 'idle' || p.state === 'run' || p.state === 'jump') {
-        set(this.aimRig.rotation, 'x', pitch * (p.firing ? 1 : 0.5));
-        set(this.aimRig.rotation, 'y', p.firing ? yawErr : 0);
       } else if (p.state === 'cover_low' || p.state === 'cover_high') {
         set(this.aimRig.rotation, 'x', p.firing ? pitch : 0);
         set(this.aimRig.rotation, 'y', p.firing ? yawErr : 0);
+      } else if (p.state === 'dive' || p.state === 'slide') {
+        // sin target explícito, dive/slide heredaban el pitch/yaw del frame
+        // anterior y el arma quedaba apuntando al cielo mientras ruedas
+        set(this.aimRig.rotation, 'x', 0);
+        set(this.aimRig.rotation, 'y', 0);
+      } else if (p.state !== 'roadie' && p.state !== 'flip') {
+        // (roadie y flip fijan su propio aimRig dentro del switch)
+        set(this.aimRig.rotation, 'x', pitch * (p.firing ? 1 : 0.5));
+        set(this.aimRig.rotation, 'y', p.firing ? yawErr : 0);
       }
+      // el roll del lean de ADS no debe quedarse pegado en hipfire
+      set(this.aimRig.rotation, 'z', 0);
     }
 
     // cambio de arma: el arma barre hacia el hombro/espalda y regresa
@@ -581,13 +590,19 @@ export class Rig {
       else { this.hips.rotation.z = a; this.hips.rotation.x = r.tilt * fall; }
       // rodillas que ceden: la cadera baja con la caída (golpe, no flotación)
       this.hips.position.y = 0.66 - 0.37 * fall;
-      this.root.position.set(r.bx + r.ox, 0, r.bz + r.oz);
+      // el cuerpo cae con gravedad hasta el suelo (muerte en el aire incluida)
+      if (r.by > 0) {
+        r.vyy -= 22 * dt;
+        r.by = Math.max(0, r.by + r.vyy * dt);
+      }
+      this.root.position.set(r.bx + r.ox, r.by, r.bz + r.oz);
       this.root.rotation.y = r.byaw + r.spin * fall;
     } else if (p.state !== 'dead') {
       if (this.rag) {
         this.rag = null;
         this.gunSMG.visible = true;
         this.gunShotgun.visible = true;
+        this.hips.position.y = 0.66; // sin "brotar" del suelo al revivir
       }
     }
 
@@ -597,12 +612,17 @@ export class Rig {
       const gun = this.activeGun;
       gun.userData.grip.getWorldPosition(TMP_A);
       this._ikArm(this.armR, 1, this.aimRig.worldToLocal(TMP_A));
-      if (leftOnGun || p.reloading) {
-        // recargando: la mano izq. va al cargador y hace el gesto de meter/sacar
-        const a = p.reloading ? (gun.userData.mag ?? gun.userData.forend) : gun.userData.forend;
+      // el gesto de recarga solo aplica en posturas con el arma al frente
+      // (en dive/slide/roadie el brazo izq. tiene pose propia: IK + Euler a
+      // la vez producían temblor)
+      const reloadIk = p.reloading &&
+        (p.state === 'idle' || p.state === 'run' || p.state === 'jump' ||
+         p.state === 'cover_low' || p.state === 'cover_high');
+      if (leftOnGun || reloadIk) {
+        const a = reloadIk ? (gun.userData.mag ?? gun.userData.forend) : gun.userData.forend;
         a.getWorldPosition(TMP_B);
         const tgt = this.aimRig.worldToLocal(TMP_B);
-        if (p.reloading) tgt.y -= 0.16 * Math.sin(Math.PI * (p.reloadT ?? 0));
+        if (reloadIk) tgt.y -= 0.16 * Math.sin(Math.PI * (p.reloadT ?? 0));
         this._ikArm(this.armL, -1, tgt);
       }
     }
@@ -653,7 +673,12 @@ export class Rig {
     scene.remove(this.root);
     this.root.traverse((o) => {
       if (o.geometry) o.geometry.dispose();
-      if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.dispose());
+      if (o.material) {
+        (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => {
+          if (m.map) m.map.dispose(); // la CanvasTexture del nametag fugaba
+          m.dispose();
+        });
+      }
     });
   }
 }
