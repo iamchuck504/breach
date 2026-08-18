@@ -350,21 +350,37 @@ export class Rig {
       }
       case 'cover_low': case 'cover_high': {
         const low = p.state === 'cover_low';
-        R(this.torso, low ? -0.15 : -0.05, 0, 0);
-        R(this.head, 0.05, 0, 0);
-        if (low) {
-          R(this.legL.hip, 1.3 + swing * 0.15 * sp, 0, 0); R(this.legL.knee, -1.7, 0, 0);
-          R(this.legR.hip, 1.15 + swing2 * 0.15 * sp, 0, 0); R(this.legR.knee, -1.65, 0, 0);
-          hipsY = 0.34;
-        } else {
-          R(this.legL.hip, -0.08, 0, 0); R(this.legL.knee, -0.2, 0, 0);
-          R(this.legR.hip, 0.08, 0, 0); R(this.legR.knee, -0.12, 0, 0);
-          hipsY = 0.6;
-        }
-        // arma casi vertical al pecho (icónico), ambas manos
+        const lat = p.latMove ?? 0;         // -1..1: paso lateral
+        const stepping = Math.abs(lat) > 0.12;
+        const stepSw = stepping ? Math.sin(ph * 1.5) : 0;
         leftOnGun = true;
-        M(0.06, -0.08, -0.18, 1.3, 0, 0.08);
-        R(this.aimRig, 0, 0, 0);
+        if (low) {
+          // agachado PROFUNDO de espaldas al bloque: la cabeza queda bajo el borde
+          R(this.torso, -0.72 + (stepping ? Math.abs(stepSw) * 0.04 : 0), lat * 0.18, -lat * 0.1);
+          R(this.head, 0.55, lat * 0.35, 0);
+          R(this.legL.hip, 1.85 + stepSw * 0.3 * lat, 0, lat * 0.2);
+          R(this.legL.knee, -2.35, 0, 0);
+          R(this.legR.hip, 1.7 - stepSw * 0.3 * lat, 0, lat * 0.2);
+          R(this.legR.knee, -2.25, 0, 0);
+          hipsY = 0.18 + (stepping ? Math.abs(Math.cos(ph * 1.5)) * 0.02 : 0);
+        } else {
+          // de pie con la espalda apoyada en la pared
+          R(this.torso, 0.14, lat * 0.15, -lat * 0.07);
+          R(this.head, 0.02, lat * 0.45, 0);
+          R(this.legL.hip, -0.05 + stepSw * 0.35 * lat, 0, 0.06 + lat * 0.15);
+          R(this.legL.knee, -0.2 - Math.max(0, stepSw * lat) * 0.4, 0, 0);
+          R(this.legR.hip, 0.05 - stepSw * 0.35 * lat, 0, -0.06 + lat * 0.15);
+          R(this.legR.knee, -0.15 - Math.max(0, -stepSw * lat) * 0.4, 0, 0);
+          hipsY = 0.62 + (stepping ? Math.abs(Math.cos(ph * 1.5)) * 0.02 : 0);
+        }
+        // arma al pecho: vertical relajada, o al frente si está disparando
+        if (p.firing) {
+          M(0.14, -0.12, -0.26, 0, 0.06, 0);
+          set(this.aimRig.rotation, 'x', pitch * 0.85);
+        } else {
+          M(0.07, -0.06, -0.2, 1.25, 0, 0.06);
+          R(this.aimRig, 0, 0, 0);
+        }
         break;
       }
       case 'blind_over': {
@@ -399,12 +415,18 @@ export class Rig {
     if (p.aim && p.state !== 'dead' && p.state !== 'dive' && p.state !== 'slide') {
       damp = 18;
       leftOnGun = true;
-      R(this.aimRig, pitch, 0, 0);
-      R(this.torso, -0.12, -0.15, 0);
-      R(this.head, pitch * 0.25, 0, 0);
+      const lean = p.coverLean ?? 0; // asomarse en la orilla de pared alta
+      R(this.aimRig, pitch, 0, lean * 0.1);
+      R(this.torso, -0.12, -0.15, -lean * 0.22);
+      R(this.head, pitch * 0.25, 0, lean * 0.08);
       // arma al hombro derecho, a la altura de la mejilla (pronunciada)
       M(0.1, 0.06, -0.28, 0, 0.05, 0);
-      if (p.state === 'cover_low') hipsY = 0.56; // popover: se levanta
+      if (p.state === 'cover_low') hipsY = 0.56; // popover: se levanta y apunta
+      if (lean) {
+        // piernas plantadas hacia la pared, torso fuera de la esquina
+        R(this.legL.hip, 0, 0, 0.1 + lean * 0.12);
+        R(this.legR.hip, 0, 0, -0.1 + lean * 0.12);
+      }
     } else if (p.state !== 'dead') {
       // hipfire/blindfire: postura moderada — el conjunto sigue parte del pitch
       const hipPitch = p.state === 'blind_over' ? pitch * 0.8
@@ -425,6 +447,9 @@ export class Rig {
     for (const [o, props] of T) {
       for (const prop in props) o[prop] += (props[prop] - o[prop]) * k;
     }
+    // desplazamiento lateral de cadera al asomarse (lean)
+    const hipsX = p.aim && p.coverLean ? p.coverLean * 0.1 : 0;
+    this.hips.position.x += (hipsX - this.hips.position.x) * k;
     this.hips.position.y += (hipsY - this.hips.position.y) * k;
     this.root.rotation.x += (rootRotX - this.root.rotation.x) * (1 - Math.exp(-10 * dt));
 

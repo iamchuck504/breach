@@ -90,7 +90,17 @@ export class Controller {
       firing: this.firingBlind > 0,
       flipT: this.flip ? Math.min(1, this.flip.t / this.flip.dur) : 0,
       flipDir: this.flip?.dir ?? 1,
+      coverLean: this.coverLeanAnim ?? 0,
+      latMove: this._latMove(),
     };
+  }
+
+  // velocidad lateral en el frame del personaje (-1..1), para el paso lateral
+  _latMove() {
+    if (this.state !== 'cover') return 0;
+    const rx = Math.cos(this.yaw), rz = -Math.sin(this.yaw);
+    const v = (this.vel.x * rx + this.vel.z * rz) / TUNING.move.coverStrafe;
+    return Math.max(-1, Math.min(1, v));
   }
 
   respawn(spawn) {
@@ -273,26 +283,45 @@ export class Controller {
         const tx = f.b.x - f.a.x, tz = f.b.z - f.a.z;
         const len = Math.hypot(tx, tz);
         const ux = tx / len, uz = tz / len;
+        const low = f.h <= TUNING.cover.lowHeight;
 
         // pegarse a la cara
         const rel = (this.pos.x - f.a.x) * n.x + (this.pos.z - f.a.z) * n.z;
         this.pos.x += n.x * (PLAYER_R - rel);
         this.pos.z += n.z * (PLAYER_R - rel);
 
-        // movimiento lateral por la cara
+        // posición a lo largo de la cara + orillas
+        let u = ((this.pos.x - f.a.x) * ux + (this.pos.z - f.a.z) * uz);
+        const edgeDist = C.cornerLean + PLAYER_R;
+        const nearA = u < edgeDist, nearB = (len - u) < edgeDist;
+
+        // en pared alta solo se puede apuntar asomándose en una orilla
+        if (!low && this.aim && !nearA && !nearB) this.aim = false;
+        let leanSide = 0; // -1 = orilla A, +1 = orilla B (en frame del tangente)
+        if (!low && this.aim) leanSide = nearA && (!nearB || u < len - u) ? -1 : 1;
+
+        // movimiento lateral + auto-asomarse hacia la orilla al apuntar
         const lat = hasInput ? (mw.x * ux + mw.z * uz) : 0;
-        let u = ((this.pos.x - f.a.x) * ux + (this.pos.z - f.a.z) * uz) + lat * M.coverStrafe * dt;
-        u = Math.max(PLAYER_R * 0.7, Math.min(len - PLAYER_R * 0.7, u));
+        u += lat * M.coverStrafe * dt + leanSide * 1.3 * dt;
+        const leanOut = leanSide !== 0 ? 0.45 : 0;
+        u = Math.max(PLAYER_R * 0.7 - (leanSide < 0 ? leanOut : 0),
+          Math.min(len - PLAYER_R * 0.7 + (leanSide > 0 ? leanOut : 0), u));
         this.pos.x = f.a.x + ux * u + n.x * PLAYER_R;
         this.pos.z = f.a.z + uz * u + n.z * PLAYER_R;
         this.vel.x = lat * ux * M.coverStrafe; this.vel.z = lat * uz * M.coverStrafe;
 
-        // orientación: hacia el cover; al apuntar, hacia la cámara
+        // orientación: DE ESPALDAS a la pared; al apuntar/disparar → cámara
         if (this.aim || this.firingBlind > 0) {
           this.yaw = lerpAngle(this.yaw, this.cam.yaw, 1 - Math.exp(-M.aimTurnLerp * dt));
         } else {
-          this.yaw = lerpAngle(this.yaw, yawFromDir(-n.x, -n.z), 1 - Math.exp(-10 * dt));
+          this.yaw = lerpAngle(this.yaw, yawFromDir(n.x, n.z), 1 - Math.exp(-10 * dt));
         }
+
+        // señal de lean para la animación, en el frame del personaje
+        if (leanSide !== 0) {
+          const rx = Math.cos(this.yaw), rz = -Math.sin(this.yaw);
+          this.coverLeanAnim = (ux * leanSide) * rx + (uz * leanSide) * rz >= 0 ? 1 : -1;
+        } else this.coverLeanAnim = 0;
 
         // soltarse empujando lejos del cover
         const away = hasInput ? (mw.x * n.x + mw.z * n.z) : 0;

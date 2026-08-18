@@ -108,8 +108,17 @@ try {
   await page.keyboard.up('w');
   await page.waitForTimeout(700);
   await page.screenshot({ path: path.join(root, 'scripts', 'pose-cover.png') });
-  const cover = await page.evaluate(`(() => window.BREACH.player.state)()`);
-  console.log('COVER STATE:', cover);
+  const cover = await page.evaluate(`(() => {
+    const G = window.BREACH;
+    G.rig.root.updateWorldMatrix(true, true);
+    const v = new window.THREE.Vector3();
+    G.rig.head.getWorldPosition(v);
+    return { st: G.player.state, anim: G.player.animState(), headTop: +(v.y + 0.34).toFixed(2) };
+  })()`);
+  console.log('COVER:', JSON.stringify(cover));
+  if (cover.anim === 'cover_low' && cover.headTop > 1.08) {
+    problems.push('cover bajo: la cabeza asoma sobre el bloque (top=' + cover.headTop + 'm vs 1.05)');
+  }
 } catch (e) {
   problems.push('FATAL: ' + e.message);
 } finally {
