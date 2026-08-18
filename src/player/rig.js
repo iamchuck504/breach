@@ -172,6 +172,35 @@ export class Rig {
     this.phase = 0;
     this._recoil = 0;
     this._deadT = 0;
+    this.rag = null; // estado del ragdoll de muerte
+  }
+
+  // Impulso y pose de desparrame aleatorios para esta muerte
+  _startRagdoll() {
+    const yaw = this.root.rotation.y;
+    const back = { x: Math.sin(yaw), z: Math.cos(yaw) };
+    const right = { x: Math.cos(yaw), z: -Math.sin(yaw) };
+    const lat = Math.random() * 2 - 1;
+    const spd = 1.6 + Math.random() * 1.1;
+    const rnd = (a, b) => a + Math.random() * (b - a);
+    this.rag = {
+      ox: 0, oz: 0, oy: 0,
+      vx: (back.x + right.x * lat * 0.8) * spd,
+      vz: (back.z + right.z * lat * 0.8) * spd,
+      vy: 1.3,
+      ang: 0,
+      axis: Math.abs(lat) > 0.6 ? 'z' : 'x',
+      angTarget: (Math.abs(lat) > 0.6 ? (lat > 0 ? -1 : 1) : 1) * (Math.PI / 2) * rnd(0.9, 1.05),
+      tilt: rnd(-0.35, 0.35),
+      spin: rnd(-0.5, 0.5),
+      pose: [
+        rnd(-0.2, 0.2), rnd(-0.3, 0.3), rnd(-0.4, 0.2), rnd(-0.4, 0.4),
+        rnd(0.2, 0.9), rnd(0.4, 1.0), rnd(0.1, 0.6),
+        rnd(0.2, 0.9), rnd(0.4, 1.0), rnd(0.1, 0.6),
+        rnd(-0.2, 0.5), rnd(0.1, 0.4), rnd(-0.6, -0.1),
+        rnd(-0.3, 0.4), rnd(-0.7, -0.2),
+      ],
+    };
   }
 
   _addNameTag(name, tc) {
@@ -420,16 +449,21 @@ export class Rig {
         break;
       }
       case 'dead': {
-        damp = 8;
+        // ragdoll procedural CON PESO: impulso corto, caída rápida sin
+        // rebote y extremidades sueltas hacia una pose desparramada única
+        if (!this.rag) this._startRagdoll();
+        damp = 4.5; // articulaciones flojas que van llegando al desparrame
         ikArms = false;
-        this._deadT += dt;
-        rootRotX = -Math.min(1, this._deadT * 4) * Math.PI / 2;
-        R(this.torso, 0, 0, 0); R(this.head, 0, 0, 0.3);
-        R(this.armL.shoulder, 0.4, 0, -0.9); R(this.armR.shoulder, 0.3, 0, 0.9);
-        R(this.armL.elbow, 0.2, 0, 0); R(this.armR.elbow, 0.2, 0, 0);
-        R(this.legL.hip, 0.2, 0, 0); R(this.legR.hip, -0.1, 0, 0);
-        M(0.1, -0.2, -0.15, 0.3, 0, 0);
-        hipsY = 0.66;
+        const rp = this.rag.pose;
+        R(this.torso, rp[0], rp[1], 0);
+        R(this.head, rp[2], 0, rp[3]);
+        R(this.armL.shoulder, rp[4], 0, -Math.abs(rp[5])); R(this.armL.elbow, rp[6], 0, 0);
+        R(this.armR.shoulder, rp[7], 0, Math.abs(rp[8])); R(this.armR.elbow, rp[9], 0, 0);
+        R(this.legL.hip, rp[10], 0, rp[11]); R(this.legL.knee, rp[12], 0, 0);
+        R(this.legR.hip, rp[13], 0, -rp[11]); R(this.legR.knee, rp[14], 0, 0);
+        R(this.aimRig, 0, 0, 0);
+        M(0.12, -0.18, -0.14, 0.4, 0, 0.2);
+        hipsY = 0.3;
         break;
       }
     }
@@ -501,9 +535,30 @@ export class Rig {
         this.hips.rotation.z = -(p.flipDir ?? 1) * ang;
         this.hips.rotation.x = 0;
       }
-    } else {
+    } else if (p.state !== 'dead') {
       this.hips.rotation.z = 0; // 2π ≡ 0: aterriza limpio
       this.hips.rotation.x = 0;
+    }
+
+    // física del ragdoll: caída pesada, sin rebote, fricción fuerte
+    if (p.state === 'dead' && this.rag) {
+      const r = this.rag;
+      r.vy -= 22 * dt;
+      r.oy = Math.max(0, r.oy + r.vy * dt);
+      if (r.oy === 0) r.vy = 0;
+      const fr = Math.exp(-5.5 * dt);
+      r.vx *= fr; r.vz *= fr;
+      r.ox += r.vx * dt; r.oz += r.vz * dt;
+      r.ang = Math.min(1, r.ang + dt * 3.4);
+      const a = (1 - (1 - r.ang) ** 2) * r.angTarget; // ease-out: golpe seco
+      if (r.axis === 'x') { this.hips.rotation.x = a; this.hips.rotation.z = r.tilt * r.ang; }
+      else { this.hips.rotation.z = a; this.hips.rotation.x = r.tilt * r.ang; }
+      this.root.position.x += r.ox;
+      this.root.position.y += r.oy;
+      this.root.position.z += r.oz;
+      this.root.rotation.y += r.spin * r.ang;
+    } else if (p.state !== 'dead') {
+      this.rag = null;
     }
 
     // IK: manos sobre el arma (después del damping, sobre la pose ya aplicada)

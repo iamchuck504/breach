@@ -56,6 +56,7 @@ const G = {
   botMatch: null,
   crates: null,
   spawnProt: 0,        // protección de spawn (5s, se rompe al disparar)
+  respawnT: 0,         // countdown visible de reaparición
   playerLastHit: 99,
   remotes: new Map(),  // id -> RemotePlayer
   net: null,
@@ -373,6 +374,8 @@ function teardown() {
   if (G.botMatch) { G.botMatch.dispose(); G.botMatch = null; }
   if (G.crates) { G.crates.dispose(); G.crates = null; }
   G.spawnProt = 0;
+  G.respawnT = 0;
+  hud.respawnTick(null);
   hud.timer(null);
   hud.roundPips(null);
   hud.scoreboard(null);
@@ -412,7 +415,7 @@ function damagePlayerLocal(dmg) {
     G.player.kill();
     audio.death();
     input.pad.rumble(350, 0.8, 1.0);
-    hud.center('ELIMINADO', 'respawn en 4s', 3800);
+    G.respawnT = TUNING.combat.respawnTime;
     return true;
   }
   return false;
@@ -437,6 +440,7 @@ function startBots() {
     respawnPlayer: (spawn) => {
       G.selfAlive = true;
       G.selfHp = TUNING.combat.hp;
+      G.respawnT = 0;
       G.player.respawn(spawn);
       G.weapons.reset();
       grantSpawnProtection();
@@ -563,7 +567,7 @@ function bindNet(net) {
       G.player.kill();
       audio.death();
       input.pad.rumble(350, 0.8, 1.0);
-      hud.center('ELIMINADO', 'respawn en ' + TUNING.combat.respawnTime + 's', TUNING.combat.respawnTime * 1000);
+      G.respawnT = TUNING.combat.respawnTime;
     } else if (m.from === net.id) {
       audio.kill();
       hud.hitmarker();
@@ -853,8 +857,9 @@ function simStep(dt) {
 
   if (G.dummies) G.dummies.update(dt);
 
-  // protección de spawn + cajas de munición
+  // protección de spawn + countdown de respawn + cajas de munición
   G.spawnProt = Math.max(0, G.spawnProt - dt);
+  G.respawnT = Math.max(0, G.respawnT - dt);
   if (G.crates) {
     G.crates.update(dt, p.pos.x, p.pos.z, G.selfAlive && !p.dead, (i) => {
       G.weapons.refill();
@@ -956,6 +961,12 @@ function frame(now) {
 
     hud.ammo(G.weapons);
     hud.health(G.mode === 'online' || G.mode === 'bots' ? G.selfHp / TUNING.combat.hp : 1);
+    // countdown grande de reaparición
+    if (!G.selfAlive && G.respawnT > 0 && G.botMatch?.phase !== 'over') {
+      hud.respawnTick(Math.ceil(G.respawnT));
+    } else {
+      hud.respawnTick(null);
+    }
     if (G.mode === 'bots' && G.botMatch) {
       hud.score(G.botMatch.livesOf('red'), G.botMatch.livesOf('blue'));
       hud.timer(G.botMatch.timer);

@@ -9,7 +9,7 @@ import { WebSocketServer } from 'ws';
 
 const PORT = process.env.PORT || 8787;
 const MAX_PLAYERS = 8;
-const HP = 100, REGEN_DELAY = 3.6, REGEN_RATE = 48, RESPAWN_TIME = 4, KILL_LIMIT = 25;
+const HP = 100, REGEN_DELAY = 3.6, REGEN_RATE = 48, RESPAWN_TIME = 5, KILL_LIMIT = 25;
 const SPAWN_PROT = 5;    // seg de invulnerabilidad al nacer (se rompe al disparar)
 const CRATE_RESPAWN = 30;
 const CRATES = [{ x: 7, z: 0, up: true, t: 0 }, { x: -7, z: 0, up: true, t: 0 }];

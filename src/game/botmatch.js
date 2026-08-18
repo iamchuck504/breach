@@ -17,7 +17,8 @@ import { resolveShot, applySpread } from '../combat/ballistics.js';
 
 const ROUND_TIME = 300;      // 5 minutos
 const RESPAWN_POOL = 15;     // respawns por equipo (además de las 4 vidas iniciales)
-const BOT_RESPAWN = 3, PLAYER_RESPAWN = 4;
+const BOT_RESPAWN = 3;
+const PLAYER_RESPAWN = () => TUNING.combat.respawnTime;
 const BOT_NAMES = { red: ['REX', 'VOLT', 'JAZZ'], blue: ['NOVA', 'DUKE', 'BLITZ', 'PIXEL'] };
 const TEAM_HEX = { red: 0xd94f3f, blue: 0x4f8de0 };
 const BOT_DMG = 0.7;         // los bots pegan más suave que un jugador
@@ -495,7 +496,7 @@ export class BotMatch {
       this.pool[team]--;
       this.respawnQueue.push({
         id: victimId,
-        t: victimId === 'player' ? PLAYER_RESPAWN : BOT_RESPAWN,
+        t: victimId === 'player' ? PLAYER_RESPAWN() : BOT_RESPAWN,
       });
     }
     this._checkRoundEnd();

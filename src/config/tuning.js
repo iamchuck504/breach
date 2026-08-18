@@ -82,7 +82,7 @@ export const TUNING = {
     fireAlignMaxDeg: 115, // el tiro de cadera solo espera si el cuerpo apunta casi de espaldas a la cámara
     hp: 100,
     regenDelay: 3.6, regenRate: 48,
-    respawnTime: 4,
+    respawnTime: 5,
     killLimit: 25,
   },
   net: {

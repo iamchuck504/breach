@@ -156,6 +156,22 @@ export class HUD {
   }
   centerOff() { clearTimeout(this._centerT); this.el.center.classList.remove('on'); }
 
+  // countdown grande de respawn: sec entero, o null para ocultarlo
+  respawnTick(sec) {
+    if (sec === null) {
+      if (this._resp) {
+        this._resp = false;
+        this.el.center.classList.remove('big', 'on');
+      }
+      return;
+    }
+    if (this._resp === sec) return;
+    this._resp = sec;
+    clearTimeout(this._centerT);
+    this.el.center.classList.add('big', 'on');
+    this.el.center.innerHTML = sec + '<div class="sub">REAPARECIENDO</div>';
+  }
+
   hint(text, ms = 1600) {
     this.el.hint.textContent = text;
     this.el.hint.classList.add('on');
