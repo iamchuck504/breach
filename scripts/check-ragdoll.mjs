@@ -20,6 +20,7 @@ page.on('pageerror', (e) => console.log('PAGEERROR:', e.message));
 await page.goto('http://localhost:8796/', { waitUntil: 'networkidle' });
 await page.evaluate(() => document.getElementById('btn-bots').click());
 await page.waitForTimeout(1500);
+await page.screenshot({ path: path.join(root, 'scripts', 'shot-outline.png') });
 
 // esperar la primera muerte de un bot y seguir su cadáver
 let tracked = null;
@@ -48,6 +49,18 @@ for (let i = 0; i < 10; i++) {
   console.log(i * 150 + 'ms', JSON.stringify(s));
   if (!s || s.alive) break;
   samples.push(s);
+  if (i === 2) {
+    // acercar la cámara del jugador al cadáver para verlo
+    await page.evaluate((id) => {
+      const b = window.BREACH.botMatch.bots.find((x) => x.id === id);
+      const P = window.BREACH.player;
+      P.pos.x = b.pos.x + 2.5; P.pos.z = b.pos.z + 2.5;
+      P.cam.yaw = Math.atan2(-(b.pos.x - P.pos.x), -(b.pos.z - P.pos.z));
+      P.cam.pitch = -0.4;
+    }, tracked);
+    await page.waitForTimeout(120);
+    await page.screenshot({ path: path.join(root, 'scripts', 'shot-corpse.png') });
+  }
   await page.waitForTimeout(150);
 }
 const first = samples[0], last = samples[samples.length - 1];

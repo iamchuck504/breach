@@ -192,6 +192,8 @@ export class Rig {
       vz: (back.z + right.z * lat * 0.8) * spd,
       vy: 0,
       ang: 0,
+      hit: false, flopT: 0, // impacto contra el suelo → flop de extremidades
+      fl: [rnd(0.15, 0.45), rnd(0.15, 0.45), rnd(0.1, 0.35), rnd(0.1, 0.35), rnd(0.25, 0.55), rnd(0.5, 1)],
       axis: Math.abs(lat) > 0.6 ? 'z' : 'x',
       angTarget: (Math.abs(lat) > 0.6 ? (lat > 0 ? -1 : 1) : 1) * (Math.PI / 2) * rnd(0.9, 1.05),
       tilt: rnd(-0.35, 0.35),
@@ -454,21 +456,28 @@ export class Rig {
         break;
       }
       case 'dead': {
-        // ragdoll procedural CON PESO: impulso corto, caída rápida sin
-        // rebote y extremidades sueltas hacia una pose desparramada única
+        // ragdoll de PESO MUERTO en dos fases: rodillas que ceden y caída
+        // ACELERADA por gravedad (tope seco), y al impactar un flop de
+        // extremidades amortiguado (flexible, pero se apaga rápido = peso)
         if (!this.rag) this._startRagdoll();
-        damp = 4.5; // articulaciones flojas que van llegando al desparrame
+        damp = 3.2; // articulaciones flojas: van rezagadas detrás del cuerpo
         ikArms = false;
-        const rp = this.rag.pose;
-        R(this.torso, rp[0], rp[1], 0);
-        R(this.head, rp[2], 0, rp[3]);
-        R(this.armL.shoulder, rp[4], 0, -Math.abs(rp[5])); R(this.armL.elbow, rp[6], 0, 0);
-        R(this.armR.shoulder, rp[7], 0, Math.abs(rp[8])); R(this.armR.elbow, rp[9], 0, 0);
-        R(this.legL.hip, rp[10], 0, rp[11]); R(this.legL.knee, rp[12], 0, 0);
-        R(this.legR.hip, rp[13], 0, -rp[11]); R(this.legR.knee, rp[14], 0, 0);
+        const rg = this.rag;
+        const rp = rg.pose;
+        // flop al impactar: oscilación amortiguada, coeficiente por miembro
+        const flop = rg.hit ? Math.sin(rg.flopT * 24) * Math.exp(-rg.flopT * 8) : 0;
+        R(this.torso, rp[0] + flop * rg.fl[5] * 0.4, rp[1], 0);
+        R(this.head, rp[2] + flop * rg.fl[4], 0, rp[3]);
+        R(this.armL.shoulder, rp[4] + flop * rg.fl[0], 0, -Math.abs(rp[5]));
+        R(this.armL.elbow, rp[6] + flop * rg.fl[0] * 0.7, 0, 0);
+        R(this.armR.shoulder, rp[7] + flop * rg.fl[1], 0, Math.abs(rp[8]));
+        R(this.armR.elbow, rp[9] + flop * rg.fl[1] * 0.7, 0, 0);
+        R(this.legL.hip, rp[10] + flop * rg.fl[2], 0, rp[11]);
+        R(this.legL.knee, rp[12], 0, 0);
+        R(this.legR.hip, rp[13] + flop * rg.fl[3], 0, -rp[11]);
+        R(this.legR.knee, rp[14], 0, 0);
         R(this.aimRig, 0, 0, 0);
         M(0.12, -0.18, -0.14, 0.4, 0, 0.2);
-        hipsY = 0.3;
         break;
       }
     }
@@ -551,19 +560,28 @@ export class Rig {
       this.hips.rotation.x = 0;
     }
 
-    // física del ragdoll: peso muerto — el cuerpo se desploma EN el lugar
-    // (posición absoluta anclada a la muerte, deslizamiento mínimo, sin rebote)
+    // física del ragdoll: peso muerto anclado al lugar de la muerte.
+    // La rotación de caída ACELERA (gravedad) y para en seco contra el
+    // suelo; ahí dispara el flop de extremidades del case 'dead'.
     if (p.state === 'dead' && this.rag) {
       const r = this.rag;
       const fr = Math.exp(-6 * dt);
       r.vx *= fr; r.vz *= fr;
       r.ox += r.vx * dt; r.oz += r.vz * dt;
-      r.ang = Math.min(1, r.ang + dt * 4.2);
-      const a = (1 - (1 - r.ang) ** 2) * r.angTarget; // ease-out: colapso seco
-      if (r.axis === 'x') { this.hips.rotation.x = a; this.hips.rotation.z = r.tilt * r.ang; }
-      else { this.hips.rotation.z = a; this.hips.rotation.x = r.tilt * r.ang; }
+      if (r.ang < 1) {
+        r.ang = Math.min(1, r.ang + dt * (0.9 + r.ang * 7.5)); // cae acelerando
+        if (r.ang >= 1 && !r.hit) { r.hit = true; r.flopT = 0; }
+      } else if (r.hit) {
+        r.flopT += dt;
+      }
+      const fall = r.ang * r.ang; // ease-in: el desplome gana velocidad
+      const a = fall * r.angTarget;
+      if (r.axis === 'x') { this.hips.rotation.x = a; this.hips.rotation.z = r.tilt * fall; }
+      else { this.hips.rotation.z = a; this.hips.rotation.x = r.tilt * fall; }
+      // rodillas que ceden: la cadera baja con la caída (golpe, no flotación)
+      this.hips.position.y = 0.66 - 0.37 * fall;
       this.root.position.set(r.bx + r.ox, 0, r.bz + r.oz);
-      this.root.rotation.y = r.byaw + r.spin * r.ang;
+      this.root.rotation.y = r.byaw + r.spin * fall;
     } else if (p.state !== 'dead') {
       this.rag = null;
     }
@@ -592,16 +610,37 @@ export class Rig {
 
   setVisible(v) { this.root.visible = v; }
 
-  // Spawn protection: highlight SUTIL en el color del equipo (emissive suave)
+  // Spawn protection: OUTLINE sutil del color del equipo — silueta de
+  // contorno (backface escalado), no cubre el cuerpo
   setProtected(on) {
     if (this._prot === on) return;
     this._prot = on;
-    const c = on ? new THREE.Color(TEAM_COLORS[this.team]).multiplyScalar(0.32) : null;
-    this.root.traverse((o) => {
-      if (o.material && o.material.emissive) {
-        if (c) o.material.emissive.copy(c);
-        else o.material.emissive.setRGB(0, 0, 0);
-      }
+    if (on && !this._outlines) this._buildOutline();
+    if (this._outlines) for (const o of this._outlines) o.visible = on;
+  }
+
+  _buildOutline() {
+    this._outlineMat = new THREE.MeshBasicMaterial({
+      color: TEAM_COLORS[this.team],
+      side: THREE.BackSide,
+      transparent: true,
+      opacity: 0.45,
+    });
+    const pairs = [];
+    const collect = (node) => {
+      if (node === this.gunMount || node === this.backMount || node === this.nameTag) return;
+      if (node.isMesh) pairs.push(node);
+      for (const c of node.children) collect(c);
+    };
+    collect(this.root);
+    this._outlines = pairs.map((mesh) => {
+      const o = new THREE.Mesh(mesh.geometry, this._outlineMat);
+      o.position.copy(mesh.position);
+      o.rotation.copy(mesh.rotation);
+      o.scale.copy(mesh.scale).multiplyScalar(1.05);
+      o.visible = false;
+      mesh.parent.add(o);
+      return o;
     });
   }
 
