@@ -274,6 +274,21 @@ class Bot {
     if (this.y <= ground && this.vy <= 0) { this.y = ground; this.vy = 0; this.grounded = true; }
     else this.grounded = this.y <= ground + 0.02;
 
+    // pasos posicionales del bot: por distancia recorrida real + aterrizaje
+    const stepped = Math.hypot(this.pos.x - (this._fx ?? this.pos.x), this.pos.z - (this._fz ?? this.pos.z));
+    this._fx = this.pos.x; this._fz = this.pos.z;
+    if (this.grounded && this.speed > 1) {
+      this._facc = (this._facc ?? 0) + stepped;
+      if (this._facc > (this.speed > 4.6 ? 1.9 : 1.6)) {
+        this._facc = 0;
+        match.cb.stepSound?.(this.pos.x, this.pos.z, this.speed > 4.6 ? 'run' : 'walk');
+      }
+    } else {
+      this._facc = 0;
+    }
+    if (this._wasAir && this.grounded) match.cb.stepSound?.(this.pos.x, this.pos.z, 'land');
+    this._wasAir = !this.grounded;
+
     let anim = animOverride;
     if (!anim) anim = !this.grounded ? 'jump' : this.speed > 0.4 ? 'run' : 'idle';
     this.rig.setTransform(this.pos.x, this.pos.z, this.yaw, this.y);

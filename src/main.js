@@ -669,6 +669,7 @@ function startBots() {
   G.botMatch = new BotMatch(scene, world, {
     effects, audio, hud,
     playerName: G.name,
+    stepSound,
     dropWeapon: (wep, x, z, team, y = 0) => {
       // los bots no llevan contador de balas: sueltan un remanente plausible
       const def = TUNING.weapons[wep];
@@ -919,6 +920,20 @@ function bindNet(net) {
       input.releaseLock();
     }
   });
+}
+
+// ---------- pasos posicionales (bots / remotos) ----------
+// Volumen por distancia + paneo estéreo según el lado respecto a la cámara:
+// escuchas POR DÓNDE viene el que corre.
+function stepSound(x, z, kind) {
+  if (!G.player) return;
+  const dx = x - G.player.pos.x, dz = z - G.player.pos.z;
+  const d = Math.hypot(dx, dz);
+  if (d > 24) return;
+  const vol = Math.pow(Math.max(0, 1 - d / 24), 1.4) * 0.8;
+  const rt = shoulderCam.flatRight();
+  const pan = Math.max(-0.85, Math.min(0.85, (dx * rt.x + dz * rt.z) / Math.max(3.5, d)));
+  audio.footstep(kind, vol, pan);
 }
 
 // ---------- disparos ----------
@@ -1173,11 +1188,18 @@ function simStep(dt) {
   }
   if (input.swapPressed && !p.dead && G.weapons.startSwap()) audio.reload();
 
-  // pasos: por distancia recorrida
-  if ((p.state === 'run' || p.state === 'roadie') && p.speed > 1) {
+  // pasos: por distancia recorrida; el tipo según estado y velocidad
+  if ((p.state === 'run' || p.state === 'roadie') && p.speed > 1 && p.grounded) {
     G.footAcc += p.speed * dt;
-    const stride = p.state === 'roadie' ? 2.1 : 1.7;
-    if (G.footAcc > stride) { G.footAcc = 0; audio.footstep(); }
+    const roadie = p.state === 'roadie';
+    if (G.footAcc > (roadie ? 2.1 : 1.7)) {
+      G.footAcc = 0;
+      audio.footstep(roadie ? 'roadie' : (p.speed < 3 ? 'walk' : 'run'));
+    }
+  } else if (p.state === 'cover' && p.speed > 1) {
+    // paso lateral pegado al muro: shuffle corto
+    G.footAcc += p.speed * dt;
+    if (G.footAcc > 0.95) { G.footAcc = 0; audio.footstep('shuffle'); }
   }
 
   if (G.dummies) G.dummies.update(dt);
@@ -1319,7 +1341,25 @@ function frame(now) {
       reloading: G.weapons.reloading,
       reloadT: G.weapons.reloading ? 1 - G.weapons.st.reload / G.weapons.def.reloadTime : 0,
     });
-    for (const r of G.remotes.values()) r.update(dt);
+    for (const r of G.remotes.values()) {
+      r.update(dt);
+      // pasos de remotos: por distancia recorrida real, posicionales
+      const mdx = r.x - (r._sx ?? r.x), mdz = r.z - (r._sz ?? r.z);
+      r._sx = r.x; r._sz = r.z;
+      const airborne = r.st === 'jump' || r.st === 'flip' || (r.y ?? 0) > 0.08;
+      if (r.alive && !airborne && (r.st === 'run' || r.st === 'roadie')) {
+        r._facc = (r._facc ?? 0) + Math.hypot(mdx, mdz);
+        const roadie = r.st === 'roadie';
+        if (r._facc > (roadie ? 2.1 : 1.7)) {
+          r._facc = 0;
+          stepSound(r.x, r.z, roadie ? 'roadie' : 'run');
+        }
+      } else {
+        r._facc = 0;
+      }
+      if (r._wasAir && !airborne && r.alive) stepSound(r.x, r.z, 'land');
+      r._wasAir = airborne;
+    }
 
     hud.ammo(G.weapons);
     hud.health(G.mode === 'online' || G.mode === 'bots' ? G.selfHp / TUNING.combat.hp : 1);
