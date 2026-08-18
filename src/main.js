@@ -163,6 +163,7 @@ const slPad = document.getElementById('sl-pad');
 const slPadV = document.getElementById('sl-pad-v');
 const chkInvert = document.getElementById('chk-invert');
 const chkInvertPad = document.getElementById('chk-invert-pad');
+const chkRaw = document.getElementById('chk-raw');
 let rebinding = null; // { cancel() }
 
 function showControls(on) {
@@ -174,6 +175,7 @@ function showControls(on) {
     slPad.value = TUNING.cam.padSens;
     chkInvert.checked = input.invertY;
     chkInvertPad.checked = input.invertYPad;
+    chkRaw.checked = input.rawInput;
     updateSliderLabels();
   } else cancelRebind();
 }
@@ -202,6 +204,10 @@ chkInvert.addEventListener('change', () => {
 chkInvertPad.addEventListener('change', () => {
   input.invertYPad = chkInvertPad.checked;
   localStorage.setItem('breach.invertYPad', String(input.invertYPad));
+});
+chkRaw.addEventListener('change', () => {
+  input.rawInput = chkRaw.checked;
+  localStorage.setItem('breach.rawInput', String(input.rawInput));
 });
 
 function cancelRebind() {

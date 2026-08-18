@@ -20,6 +20,9 @@ export class Input {
     // invert Y separado por dispositivo (ambos default ON, preferencia de Chuck)
     this.invertY = localStorage.getItem('breach.invertY') !== 'false';       // ratón (F9)
     this.invertYPad = localStorage.getItem('breach.invertYPad') !== 'false'; // control
+    // raw input (unadjustedMovement): OFF por default — en Chrome/Windows
+    // tiene un bug que deja el cursor confinado a una región tras des-lockear
+    this.rawInput = localStorage.getItem('breach.rawInput') === 'true';
     this.onToggleTuning = null;
     this.onToggleMute = null;
     this.onEscape = null;
@@ -69,6 +72,7 @@ export class Input {
         if (q && q.catch) q.catch(() => {});
       } catch { /* sin gesto de usuario: se re-lockea al clickear el canvas */ }
     };
+    if (!this.rawInput) { plain(); return; }
     try {
       const p = this.canvas.requestPointerLock({ unadjustedMovement: true });
       // reintentar SOLO si el navegador no soporta unadjustedMovement;
