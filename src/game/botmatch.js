@@ -63,6 +63,9 @@ class Bot {
     this.cover = null;   // {x, z, tx, tz, low}
     this.coverPhase = 'hide'; this.coverT = 0; this.peekDir = 1;
     this.aggro = Math.random(); // personalidad por vida: >0.55 = rushea con escopeta
+    this.laneBias = Math.random() * 2 - 1; // carril propio: dispersa el ataque
+    this.coverCd = 0;  // enfriamiento entre visitas a cobertura
+    this.flip = null;  // vuelta acrobática en el aire (solo estilo)
     this.stuckT = 0; this.avoidSide = 0;
     this._px = this.pos.x; this._pz = this.pos.z;
     this.protT = TUNING.combat.spawnProtection; // invulnerable al nacer
@@ -103,11 +106,19 @@ class Bot {
     this.rig.setWeapon(want);
   }
 
-  _jump() {
+  _jump(acrobatic = false) {
     if (!this.grounded || this.jumpCd > 0) return;
     this.vy = 6.2; // mismo apex que el jugador: pasa bloques LOW (1.1)
     this.grounded = false;
     this.jumpCd = 1.2;
+    // de vez en cuando, vuelta en el aire (misma física, solo animación)
+    if (acrobatic && Math.random() < 0.4) {
+      this.flip = {
+        t: 0,
+        axis: Math.random() < 0.65 ? 'z' : 'x', // lateral Matrix o voltereta
+        dir: Math.random() < 0.5 ? 1 : -1,
+      };
+    }
   }
 
   // ¿hay un obstáculo BAJO justo en el camino? → saltarlo
@@ -132,6 +143,7 @@ class Bot {
     this.swapCd = Math.max(0, this.swapCd - dt);
     this.swapAnim = Math.max(0, this.swapAnim - dt);
     this.jumpCd = Math.max(0, this.jumpCd - dt);
+    this.coverCd = Math.max(0, this.coverCd - dt);
     this.shotCd = Math.max(-0.5, this.shotCd - dt);
     // ráfaga/pausa SIEMPRE decrementan: si el bot pierde al enemigo a mitad
     // de ráfaga, la pose de disparo no debe quedarse congelada
@@ -150,8 +162,10 @@ class Bot {
 
     // ---- decidir estado ----
     // sin spot disponible se sigue a las ramas de combate: antes el if vacío
-    // congelaba estado Y arma del bot herido hasta que regeneraba
-    const spot = this.state !== 'cover' && this.hp < 38 && enemy
+    // congelaba estado Y arma del bot herido hasta que regeneraba.
+    // coverCd + umbral 28: buscan cobertura solo MUY heridos y no en cadena
+    // (antes vivían corriendo a esconderse)
+    const spot = this.state !== 'cover' && this.coverCd <= 0 && this.hp < 28 && enemy
       ? match.findCoverSpot(this, enemy) : null;
     if (spot) {
       this.cover = spot; this.state = 'cover';
@@ -159,9 +173,12 @@ class Bot {
     } else if (this.state === 'cover') {
       this.coverT += dt;
       this.coverPhaseT = (this.coverPhaseT ?? 0) + dt;
-      // recuperado o demasiado tiempo escondido → volver a pelear
-      // (coverT es GLOBAL del estado; el timer de fase es coverPhaseT)
-      if (this.hp > 80 || this.coverT > 9) { this.state = 'advance'; this.cover = null; }
+      // recuperado o demasiado tiempo escondido → volver a pelear, y un
+      // buen rato sin volver a esconderse
+      if (this.hp > 62 || this.coverT > 6) {
+        this.state = 'advance'; this.cover = null;
+        this.coverCd = 6 + Math.random() * 5;
+      }
     } else if (enemy) {
       // arma según distancia; los agresivos con vida llena se comprometen al rush
       if (dist < 8 || (this.aggro > 0.55 && dist < 14 && this.hp > 60)) this._trySwap('shotgun');
@@ -171,8 +188,8 @@ class Bot {
       this.state = 'advance';
     }
 
-    // salto de esquiva bajo fuego reciente
-    if (this.recentHit < 0.6 && this.state !== 'cover' && Math.random() < 1.2 * dt) this._jump();
+    // salto de esquiva bajo fuego reciente (a veces con vuelta en el aire)
+    if (this.recentHit < 0.6 && this.state !== 'cover' && Math.random() < 1.2 * dt) this._jump(true);
 
     // ---- comportamiento por estado ----
     let mx = 0, mz = 0, aiming = false, animOverride = null;
@@ -195,7 +212,7 @@ class Bot {
       // cerrar distancia con jitter lateral y saltos ocasionales
       mx = ex + -ez * this.strafeDir * 0.35;
       mz = ez + ex * this.strafeDir * 0.35;
-      if (Math.random() < 0.5 * dt) this._jump();
+      if (Math.random() < 0.5 * dt) this._jump(true);
       if (dist < 9) this._fireAt(dt, match, enemy, dist);
     } else if (this.state === 'cover' && this.cover) {
       const c = this.cover;
@@ -243,6 +260,19 @@ class Bot {
 
     // ---- mover (con steering) + salto de obstáculos + física vertical ----
     const spd = this.state === 'rush' ? 5.2 : this.state === 'engage' ? 3.2 : 4.2;
+    // separación de compañeros: repulsión suave bajo 3.4m — sin esto
+    // atacaban en racimo, prácticamente agarrados de la mano
+    let sepX = 0, sepZ = 0;
+    for (const o of match.bots) {
+      if (o === this || !o.alive || o.team !== this.team) continue;
+      const ddx = this.pos.x - o.pos.x, ddz = this.pos.z - o.pos.z;
+      const dd = Math.hypot(ddx, ddz);
+      if (dd < 3.4 && dd > 0.01) {
+        const w = (3.4 - dd) / 3.4;
+        sepX += (ddx / dd) * w; sepZ += (ddz / dd) * w;
+      }
+    }
+    mx += sepX * 0.9; mz += sepZ * 0.9;
     const mlen = Math.hypot(mx, mz);
     if (mlen > 0.05) {
       const d = this._steer(mx / mlen, mz / mlen);
@@ -274,6 +304,12 @@ class Bot {
     if (this.y <= ground && this.vy <= 0) { this.y = ground; this.vy = 0; this.grounded = true; }
     else this.grounded = this.y <= ground + 0.02;
 
+    // vuelta acrobática: progresa en el aire, se limpia al aterrizar
+    if (this.flip) {
+      this.flip.t = Math.min(1, this.flip.t + dt / 0.72);
+      if (this.grounded) this.flip = null;
+    }
+
     // pasos posicionales del bot: por distancia recorrida real + aterrizaje
     const stepped = Math.hypot(this.pos.x - (this._fx ?? this.pos.x), this.pos.z - (this._fz ?? this.pos.z));
     this._fx = this.pos.x; this._fz = this.pos.z;
@@ -290,15 +326,18 @@ class Bot {
     this._wasAir = !this.grounded;
 
     let anim = animOverride;
-    if (!anim) anim = !this.grounded ? 'jump' : this.speed > 0.4 ? 'run' : 'idle';
+    if (!anim) anim = !this.grounded ? (this.flip ? 'flip' : 'jump') : this.speed > 0.4 ? 'run' : 'idle';
     this.rig.setTransform(this.pos.x, this.pos.z, this.yaw, this.y);
     this.rig.update(dt, {
       state: anim,
       speed: Math.min(1, this.speed / TUNING.move.roadieSpeed),
-      aim: aiming && !animOverride,
+      aim: aiming && !animOverride && anim !== 'flip',
       aimPitch: 0,
       firing: this.burstT > 0 || this.muzzleT > 0,
       swapping: this.swapAnim > 0,
+      flipT: this.flip ? this.flip.t : 0,
+      flipDir: this.flip?.dir ?? 1,
+      flipAxis: this.flip?.axis ?? 'z',
     });
     // protección de spawn: highlight sutil del color del equipo
     this.rig.setProtected(this.protT > 0);
@@ -428,11 +467,17 @@ export class BotMatch {
     for (const f of this.world.faces) {
       if (f.h > 2.6) continue; // muros perimetrales no
       const mx = (f.a.x + f.b.x) / 2, mz = (f.a.z + f.b.z) / 2;
+      // la cara debe darle la ESPALDA al enemigo: sin este check el bot se
+      // "cubría" parado del lado del enemigo, de frente a él contra la pared
+      if ((threat.x - mx) * f.n.x + (threat.z - mz) * f.n.z > -0.2) continue;
       const sx = mx + f.n.x * 0.7, sz = mz + f.n.z * 0.7;
       const d = Math.hypot(sx - bot.pos.x, sz - bot.pos.z);
       if (d >= bestD) continue;
-      // desde el spot, la vista al enemigo debe estar bloqueada
-      _v1.set(sx, 1.2, sz);
+      if (Math.hypot(threat.x - sx, threat.z - sz) < 5) continue; // no en la cara del enemigo
+      // vista bloqueada desde la POSTURA real: agachado (0.8) tras bloques
+      // LOW — con ojo fijo a 1.2 un bloque de 1.1 jamás calificaba
+      const eye = f.h <= TUNING.cover.lowHeight ? 0.8 : 1.2;
+      _v1.set(sx, eye, sz);
       _v2.set(threat.x - sx, 0.1, threat.z - sz);
       const len = _v2.length();
       _v2.normalize();
@@ -448,14 +493,20 @@ export class BotMatch {
     return best;
   }
 
-  // Waypoint de avance: 60% al lado seguro de una cobertura rumbo al enemigo
+  // Waypoint de avance: 55% al lado seguro de una cobertura rumbo al enemigo,
+  // sesgado al CARRIL propio del bot (laneBias) para que el equipo se abra
+  // por el mapa en vez de avanzar en racimo.
   advanceWaypoint(bot) {
     const towardEnemy = bot.team === 'red' ? 1 : -1;
-    if (Math.random() < 0.6) {
+    const laneX = (bot.laneBias ?? 0) * this.world.fx * 0.8;
+    if (Math.random() < 0.55) {
       const candidates = this.world.faces.filter((f) =>
         f.h <= 2.6 && f.n.z * towardEnemy < -0.3); // cara que mira a NUESTRO lado
       if (candidates.length) {
-        const f = candidates[Math.floor(Math.random() * candidates.length)];
+        // las 3 coberturas más cercanas al carril propio, una al azar
+        candidates.sort((a, b) =>
+          Math.abs((a.a.x + a.b.x) / 2 - laneX) - Math.abs((b.a.x + b.b.x) / 2 - laneX));
+        const f = candidates[Math.floor(Math.random() * Math.min(3, candidates.length))];
         return {
           x: (f.a.x + f.b.x) / 2 + f.n.x * 0.8,
           z: (f.a.z + f.b.z) / 2 + f.n.z * 0.8,
@@ -463,7 +514,7 @@ export class BotMatch {
       }
     }
     return {
-      x: (Math.random() * 2 - 1) * (this.world.fx - 2),
+      x: Math.max(-this.world.fx + 2, Math.min(this.world.fx - 2, laneX + (Math.random() * 8 - 4))),
       z: (Math.random() * 1.4 - 0.4) * towardEnemy * (this.world.fz - 3),
     };
   }
