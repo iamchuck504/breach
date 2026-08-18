@@ -72,6 +72,8 @@ export class World {
       stoneTop: this._stoneCanvas(3, 3, true), // losas planas para los topes
       floor: this._floorCanvas(),
       banner: this._bannerCanvas(),
+      ivy: this._ivyCanvas(),                  // hiedra colgante (alphaTest)
+      grass: this._grassCanvas(),              // mata de pasto (alphaTest)
     };
     this._texCache = new Map(); // compartidas por (canvas, repeat): pocas subidas a GPU
   }
@@ -157,6 +159,57 @@ export class World {
     // franjas superiores
     g.fillStyle = 'rgba(34,30,24,0.6)';
     g.fillRect(6, 10, w - 12, 5);
+    return cv;
+  }
+
+  // Hiedra: guías que cuelgan desde arriba con hojas en rombos nítidos.
+  _ivyCanvas() {
+    const s = 256;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = s;
+    const g = cv.getContext('2d');
+    g.clearRect(0, 0, s, s);
+    for (let v = 0; v < 9; v++) {
+      let x = 12 + v * 28 + Math.random() * 10;
+      const len = s * (0.45 + Math.random() * 0.5);
+      g.strokeStyle = '#3c5a2e'; g.lineWidth = 3;
+      g.beginPath(); g.moveTo(x, 0);
+      let y = 0;
+      while (y < len) {
+        y += 14 + Math.random() * 10;
+        x += (Math.random() - 0.5) * 12;
+        g.lineTo(x, y);
+      }
+      g.stroke();
+      // hojas a lo largo de la guía (rombos de dos verdes)
+      for (let ly = 8; ly < len; ly += 12 + Math.random() * 8) {
+        const lx = x + (Math.random() - 0.5) * 22;
+        const r = 5 + Math.random() * 4;
+        g.fillStyle = Math.random() < 0.5 ? '#4e7038' : '#5d8243';
+        g.beginPath();
+        g.moveTo(lx, ly - r); g.lineTo(lx + r, ly); g.lineTo(lx, ly + r); g.lineTo(lx - r, ly);
+        g.closePath(); g.fill();
+      }
+    }
+    return cv;
+  }
+
+  // Mata de pasto: abanico de hojas en tres verdes.
+  _grassCanvas() {
+    const s = 64;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = s;
+    const g = cv.getContext('2d');
+    g.clearRect(0, 0, s, s);
+    for (let i = 0; i < 12; i++) {
+      const bx = 12 + Math.random() * 40;
+      const tip = bx + (bx - 32) * (0.6 + Math.random() * 0.8);
+      const h = 20 + Math.random() * 36;
+      g.fillStyle = ['#5d8243', '#4e7038', '#719350'][i % 3];
+      g.beginPath();
+      g.moveTo(bx - 3, s); g.lineTo(tip, s - h); g.lineTo(bx + 3, s);
+      g.closePath(); g.fill();
+    }
     return cv;
   }
 
@@ -261,7 +314,11 @@ export class World {
   // Caja física + visual. mirror=true agrega la copia rotada 180° (-x,-z).
   _box(x, z, w, d, h, { mirror = true, color = 0x9a958c, top = 0xaeaaa1, cover = true } = {}) {
     const place = (px, pz) => {
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), this._mat(color, top, w, d, h));
+      // variación sutil de tono por caja: rompe la monotonía sin romper la paleta
+      const jit = 0.95 + Math.random() * 0.1;
+      const c = new THREE.Color(color).multiplyScalar(jit).getHex();
+      const t = new THREE.Color(top).multiplyScalar(jit).getHex();
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), this._mat(c, t, w, d, h));
       mesh.position.set(px, h / 2, pz);
       mesh.castShadow = true; mesh.receiveShadow = true;
       this.mapGroup.add(mesh);
@@ -543,6 +600,158 @@ export class World {
       );
       cap.position.set(x, h - 0.5 + r * 0.6, z);
       this.mapGroup.add(cap);
+    }
+
+    this._vegetation(towers);
+    this._props(towers);
+  }
+
+  // Vegetación: hiedra en muros, matas de pasto entre las losas, arbustos
+  // low-poly y árboles asomando tras la muralla. Todo decorativo.
+  _vegetation(towers) {
+    const ivyMat = new THREE.MeshLambertMaterial({
+      map: this._tex('ivy'), alphaTest: 0.5, side: THREE.DoubleSide,
+    });
+    // [x, z, giroY, ancho, alto, yCentro] — caras que miran al campo
+    const ivies = [
+      [-20.95, -8, Math.PI / 2, 2.6, 2.6, 1.55],   // muralla oeste
+      [20.95, 8, -Math.PI / 2, 2.6, 2.6, 1.55],
+      [-14, -24.95, 0, 3.0, 2.7, 1.5],             // muralla norte/sur
+      [14, 24.95, Math.PI, 3.0, 2.7, 1.5],
+      [-8.5, -15.47, 0, 2.2, 1.7, 0.95],           // muro mediano de base
+      [8.5, 15.47, Math.PI, 2.2, 1.7, 0.95],
+      [9.5, -9.97, 0, 2.2, 2.4, 1.6],              // forma en L
+      [-9.5, 9.97, Math.PI, 2.2, 2.4, 1.6],
+      [-0.93, 0, -Math.PI / 2, 1.6, 2.6, 1.5],     // pilar central, caras laterales
+      [0.93, 0, Math.PI / 2, 1.6, 2.6, 1.5],
+    ];
+    for (const [x, z, ry, w, h, y] of ivies) {
+      const p = new THREE.Mesh(new THREE.PlaneGeometry(w, h), ivyMat);
+      p.position.set(x, y, z);
+      p.rotation.y = ry;
+      this.mapGroup.add(p);
+    }
+
+    // matas de pasto instanciadas (2 planos cruzados por mata)
+    const spots = [];
+    for (let i = 0; i < 90; i++) {
+      // pegadas a la muralla interior o alrededor de bloques, no en los carriles
+      const side = Math.floor(Math.random() * 4);
+      const t = Math.random() * 2 - 1;
+      let x, z;
+      if (side === 0) { x = -this.fx + 0.55 + Math.random() * 0.9; z = t * (this.fz - 2); }
+      else if (side === 1) { x = this.fx - 0.55 - Math.random() * 0.9; z = t * (this.fz - 2); }
+      else if (side === 2) { z = -this.fz + 0.55 + Math.random() * 0.9; x = t * (this.fx - 2); }
+      else { z = this.fz - 0.55 - Math.random() * 0.9; x = t * (this.fx - 2); }
+      spots.push([x, z, Math.random() * Math.PI, 0.75 + Math.random() * 0.7]);
+    }
+    const grassMat = new THREE.MeshLambertMaterial({
+      map: this._tex('grass'), alphaTest: 0.5, side: THREE.DoubleSide,
+    });
+    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
+    const v = new THREE.Vector3(), sc = new THREE.Vector3();
+    for (const rot of [0, Math.PI / 2]) {
+      const g = new THREE.PlaneGeometry(0.55, 0.4);
+      g.translate(0, 0.2, 0);
+      g.rotateY(rot);
+      const im = new THREE.InstancedMesh(g, grassMat, spots.length);
+      spots.forEach(([x, z, ry, s], i) => {
+        e.set(0, ry, 0); q.setFromEuler(e);
+        m4.compose(v.set(x, 0, z), q, sc.set(s, s, s));
+        im.setMatrixAt(i, m4);
+      });
+      this.mapGroup.add(im);
+    }
+
+    // arbustos low-poly (icosaedros achatados, dos verdes)
+    const bushGeo = new THREE.IcosahedronGeometry(0.45, 0);
+    const bushMats = [
+      new THREE.MeshLambertMaterial({ color: 0x5d7a44 }),
+      new THREE.MeshLambertMaterial({ color: 0x6c8a4d }),
+    ];
+    const bushes = [
+      [-20.2, -22, 1.1], [20.2, 22, 1.1], [-19.8, 3.4, 0.9], [19.8, -3.4, 0.9],
+      [-12.9, -24.3, 0.8], [12.9, 24.3, 0.8], [6.3, -24.3, 1.0], [-6.3, 24.3, 1.0],
+      [18.2, -10.6, 0.75], [-18.2, 10.6, 0.75], [-15.2, -15.8, 0.85], [15.2, 15.8, 0.85],
+    ];
+    for (const [x, z, s] of bushes) {
+      const b = new THREE.Mesh(bushGeo, bushMats[(x * 7 + z * 13 & 1) === 0 ? 0 : 1]);
+      b.position.set(x, 0.3 * s, z);
+      b.scale.set(s, s * 0.72, s);
+      b.rotation.y = x + z;
+      b.castShadow = true;
+      this.mapGroup.add(b);
+    }
+
+    // árboles tras la muralla (copas visibles desde el patio) + cipreses
+    const trunkMat = new THREE.MeshLambertMaterial({ color: 0x6e5138 });
+    const leafMats = [
+      new THREE.MeshLambertMaterial({ color: 0x557a3e }),
+      new THREE.MeshLambertMaterial({ color: 0x648a47 }),
+    ];
+    const trees = [
+      [-26.5, -6, 1.3], [26.5, 6, 1.3], [-25.5, 10, 1.0], [25.5, -10, 1.0],
+      [-11, -30.5, 1.15], [11, 30.5, 1.15], [19, -31, 0.9], [-19, 31, 0.9],
+    ];
+    for (const [x, z, s] of trees) {
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.22 * s, 0.3 * s, 2.4 * s, 6), trunkMat);
+      trunk.position.set(x, 1.2 * s, z);
+      this.mapGroup.add(trunk);
+      for (const [ox, oy, oz, r] of [[0, 3.1, 0, 1.35], [0.9, 2.5, 0.3, 0.95], [-0.8, 2.6, -0.4, 0.85]]) {
+        const c = new THREE.Mesh(new THREE.IcosahedronGeometry(r * s, 0), leafMats[(ox > 0 ? 1 : 0)]);
+        c.position.set(x + ox * s, oy * s, z + oz * s);
+        c.castShadow = true;
+        this.mapGroup.add(c);
+      }
+    }
+    // cipreses junto a los torreones lejanos
+    for (const [x, z, s] of [[-33, -12, 1], [29, 13, 1.15], [-25, 23, 0.85], [26, -25.5, 1]]) {
+      const cy = new THREE.Mesh(new THREE.ConeGeometry(0.85 * s, 4.6 * s, 7), leafMats[0]);
+      cy.position.set(x, 2.3 * s - 0.4, z);
+      this.mapGroup.add(cy);
+    }
+  }
+
+  // Props: barriles de madera junto a los muros y banderines en los torreones.
+  _props(towers) {
+    const woodMat = new THREE.MeshLambertMaterial({ color: 0x8a6a48 });
+    const woodTopMat = new THREE.MeshLambertMaterial({ color: 0x6e5138 });
+    const bandMat = new THREE.MeshLambertMaterial({ color: 0x4a4038 });
+    const barrels = [
+      [-19.9, -18.5, 0], [19.9, 18.5, 0], [-19.5, -17.6, 0], [19.5, 17.6, 0],
+      [10.3, -24.2, 0], [-10.3, 24.2, 0], [10.3, -24.2, 0.78], [-10.3, 24.2, 0.78],
+      [-20.6, -6.2, 0], [20.6, 6.2, 0],
+    ];
+    for (const [x, z, y] of barrels) {
+      const b = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.34, 0.78, 9), woodMat);
+      b.position.set(x, y + 0.39, z);
+      b.castShadow = true;
+      this.mapGroup.add(b);
+      const lid = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.26, 0.05, 9), woodTopMat);
+      lid.position.set(x, y + 0.8, z);
+      this.mapGroup.add(lid);
+      for (const by of [0.2, 0.6]) {
+        const ring = new THREE.Mesh(new THREE.CylinderGeometry(0.335, 0.335, 0.05, 9), bandMat);
+        ring.position.set(x, y + by, z);
+        this.mapGroup.add(ring);
+      }
+    }
+
+    // banderines triangulares: torreones (color del lado) + pilar central
+    const flagGeo = new THREE.ShapeGeometry(new THREE.Shape([
+      new THREE.Vector2(0, 0), new THREE.Vector2(0.85, 0.22), new THREE.Vector2(0, 0.44),
+    ]));
+    const poleMat = new THREE.MeshLambertMaterial({ color: 0x4a4038 });
+    const spots = towers.map(([tx, tz]) => [tx, 8.0, tz, tz < 0 ? 0xd94f3f : 0x4f8de0]);
+    spots.push([0, BLOCK.HIGH, 0, 0xff8a3d]); // pilar central, acento
+    for (const [x, base, z, color] of spots) {
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 1.7, 5), poleMat);
+      pole.position.set(x, base + 0.85, z);
+      this.mapGroup.add(pole);
+      const flag = new THREE.Mesh(flagGeo, new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide }));
+      flag.position.set(x, base + 1.18, z);
+      flag.rotation.y = (x + z) * 0.7; // orientaciones variadas
+      this.mapGroup.add(flag);
     }
   }
 
