@@ -313,15 +313,16 @@ export class Rig {
         break;
       }
       case 'flip': {
-        // vuelta de gato: tuck completo, gira alrededor de la cadera
+        // patada de pared Matrix: giro LATERAL con piernas semi-recogidas,
+        // arma al frente en ambas manos para disparar en el aire
         damp = 20;
-        R(this.torso, -0.45, 0, 0);
-        R(this.head, -0.15, 0, 0);
-        R(this.legL.hip, 1.8, 0, 0); R(this.legL.knee, -2.3, 0, 0);
-        R(this.legR.hip, 1.7, 0, 0); R(this.legR.knee, -2.2, 0, 0);
+        R(this.torso, -0.2, 0, 0);
+        R(this.head, 0.05, 0, 0);
+        R(this.legL.hip, 1.25, 0, 0.15); R(this.legL.knee, -1.7, 0, 0);
+        R(this.legR.hip, 1.05, 0, -0.15); R(this.legR.knee, -1.5, 0, 0);
         leftOnGun = true;
-        M(0.1, -0.1, -0.2, 0.7, 0, 0);
-        R(this.aimRig, 0, 0, 0);
+        M(0.13, -0.12, -0.24, 0, 0.05, 0);
+        set(this.aimRig.rotation, 'x', pitch * 0.85); // apunta con la cámara en el aire
         hipsY = 0.72;
         break;
       }
@@ -427,9 +428,14 @@ export class Rig {
     this.hips.position.y += (hipsY - this.hips.position.y) * k;
     this.root.rotation.x += (rootRotX - this.root.rotation.x) * (1 - Math.exp(-10 * dt));
 
-    // vuelta de gato: giro completo hacia atrás alrededor de la cadera
-    if (p.state === 'flip') this.hips.rotation.x = (p.flipT ?? 0) * Math.PI * 2;
-    else this.hips.rotation.x = 0; // 2π ≡ 0: aterriza limpio
+    // patada de pared: giro completo LATERAL (roll) alrededor de la cadera
+    if (p.state === 'flip') {
+      this.hips.rotation.z = -(p.flipDir ?? 1) * (p.flipT ?? 0) * Math.PI * 2;
+      this.hips.rotation.x = 0;
+    } else {
+      this.hips.rotation.z = 0; // 2π ≡ 0: aterriza limpio
+      this.hips.rotation.x = 0;
+    }
 
     // IK: manos sobre el arma (después del damping, sobre la pose ya aplicada)
     if (ikArms) {

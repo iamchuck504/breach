@@ -558,7 +558,7 @@ function fireShot() {
 function updateReticle() {
   const p = G.player;
   const canShow = p && !p.dead && G.mode &&
-    p.state !== 'roadie' && p.state !== 'dive' && p.state !== 'slide' && p.state !== 'flip';
+    p.state !== 'roadie' && p.state !== 'dive' && p.state !== 'slide';
   if (!canShow) { hud.reticle(false, null); return; }
   if (p.aim) { hud.reticle(true, null); return; }
   const dir = hipDir();
@@ -601,8 +601,9 @@ function simStep(dt) {
   const p = G.player;
   if (!p) return;
 
+  // (el flip Matrix SÍ permite disparar en el aire)
   const stateOk = !p.dead && p.state !== 'dive' && p.state !== 'slide' &&
-    p.state !== 'roadie' && p.state !== 'flip' && input.anyDevice;
+    p.state !== 'roadie' && input.anyDevice;
   // giro brusco: el tiro NO sale hasta que el cuerpo esté alineado con la
   // cámara (el trigger fuerza el giro rápido; nunca dispara "por la espalda")
   const maxA = TUNING.combat.fireAlignMaxDeg * Math.PI / 180;

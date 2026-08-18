@@ -58,10 +58,12 @@ juego; en línea la partida sigue.
 ## Salto
 
 Salto arcade con gravedad (`TUNING.jump`): pasa por encima de coberturas bajas
-(y te puedes parar sobre ellas). Saltando de frente contra una pared alta
-(≥ `wallMinH`), el jugador pone los pies en la pared y hace una **vuelta de
-gato** hacia atrás alejándose (estilo Ratchet); sin control aéreo durante el
-flip. La bala respeta la altura del salto (hitbox con `y`).
+(y te puedes parar sobre ellas). **Wall kick estilo Matrix**: salta HACIA una
+pared alta (≥ `wallMinH`) y presiona salto otra vez en el aire — el jugador
+planta los pies en la pared y patea de regreso con **giro lateral** (el
+sentido del roll sigue tu movimiento a lo largo de la pared). Se puede
+**disparar en el aire**, incluido durante el flip (el cuerpo sigue a la
+cámara mientras rueda). La bala respeta la altura del salto (hitbox con `y`).
 
 ## Wallbounce
 

@@ -109,14 +109,17 @@ try {
   if (jumpY < 0.25) errors.push('JUMP: no despegó (y=' + jumpY + ')');
   await page.waitForTimeout(900); // aterrizar
 
+  // Matrix kick: saltar HACIA la pared y en el aire volver a presionar salto
   await page.evaluate(() => {
     const P = window.BREACH.player;
-    P.cover = null; P.state = 'idle'; P.pos.x = 0; P.pos.z = -1.32;
+    P.cover = null; P.state = 'idle'; P.pos.x = 0; P.pos.z = -1.45;
     P.cam.yaw = Math.PI; P.yaw = Math.PI; // de cara al pilar central
   });
   await page.waitForTimeout(80);
-  await page.keyboard.press('f');
-  await page.waitForTimeout(180);
+  await page.keyboard.press('f');      // salto normal
+  await page.waitForTimeout(200);      // subiendo…
+  await page.keyboard.press('f');      // patada de pared en el aire
+  await page.waitForTimeout(160);
   const flip = await page.evaluate(() => ({
     st: window.BREACH.player.state,
     y: +window.BREACH.player.y.toFixed(2),
@@ -125,8 +128,16 @@ try {
   console.log('WALLJUMP:', JSON.stringify(flip));
   await page.screenshot({ path: path.join(root, 'scripts', 'shot-flip.png') });
   if (flip.st !== 'flip') errors.push('WALLJUMP: no entró en flip (st=' + flip.st + ')');
-  if (flip.z > -1.35) errors.push('WALLJUMP: no se alejó de la pared (z=' + flip.z + ')');
-  await page.waitForTimeout(900); // aterrizar antes de seguir
+  if (flip.z > -1.5) errors.push('WALLJUMP: no se alejó de la pared (z=' + flip.z + ')');
+  // disparar EN EL AIRE durante el flip
+  const ammoBefore = await page.evaluate(() => window.BREACH.weapons.st.mag);
+  await page.mouse.down();
+  await page.waitForTimeout(180);
+  await page.mouse.up();
+  const ammoAfter = await page.evaluate(() => window.BREACH.weapons.st.mag);
+  console.log('AIRFIRE:', JSON.stringify({ before: ammoBefore, after: ammoAfter }));
+  if (ammoAfter >= ammoBefore) errors.push('AIRFIRE: no disparó durante el flip');
+  await page.waitForTimeout(800); // aterrizar antes de seguir
 
   // ---- menú de pausa + panel de controles ----
   await page.keyboard.press('Escape');

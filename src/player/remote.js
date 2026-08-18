@@ -55,6 +55,7 @@ export class RemotePlayer {
       aimPitch: this.pitch,
       firing: this.firing > 0,
       flipT: this.flipT,
+      flipDir: 1,
     });
   }
 

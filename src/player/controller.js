@@ -89,6 +89,7 @@ export class Controller {
       twist,
       firing: this.firingBlind > 0,
       flipT: this.flip ? Math.min(1, this.flip.t / this.flip.dur) : 0,
+      flipDir: this.flip?.dir ?? 1,
     };
   }
 
@@ -196,8 +197,12 @@ export class Controller {
         this.vel.x += (tx - this.vel.x) * k;
         this.vel.z += (tz - this.vel.z) * k;
 
-        // saltar (normal o vuelta de gato contra pared)
-        if (input.jumpPressed && this.grounded) this._tryJump();
+        // saltar: en el suelo salto normal; EN EL AIRE cerca de una pared,
+        // planta los pies y patea de regreso con giro lateral (Matrix)
+        if (input.jumpPressed) {
+          if (this.grounded) this._tryJump();
+          else this._tryWallKick();
+        }
 
         // evadir / cover (solo en el suelo)
         if (input.evadePressed && this.grounded) {
@@ -213,8 +218,10 @@ export class Controller {
       }
 
       case 'flip': {
-        // vuelta de gato: sin control aéreo, el empuje del muro manda
+        // patada de pared: el empuje del muro manda; el yaw sigue a la
+        // cámara para poder disparar en el aire (el roll es del modelo)
         this.flip.t += dt;
+        this.yaw = lerpAngle(this.yaw, this.cam.yaw, 1 - Math.exp(-9 * dt));
         break;
       }
 
@@ -349,24 +356,38 @@ export class Controller {
   }
 
   _tryJump() {
+    this.vy = TUNING.jump.vel;
+    this.grounded = false;
+    this.ev.onJump?.();
+  }
+
+  // En el aire, cerca de una pared (hacia el movimiento o el facing):
+  // pies a la pared y patada de regreso con giro LATERAL estilo Matrix.
+  _tryWallKick() {
+    if (this.flip) return;
     const J = TUNING.jump;
-    const f = this.facing();
-    // ¿pared enfrente? → pies a la pared y vuelta de gato de regreso (Ratchet)
-    const wall = this.world.findCover(this.pos, f, 0.8, PLAYER_R, 0.4);
-    if (wall && wall.face.h >= J.wallMinH && wall.t < 0.65) {
+    const dirs = [];
+    if (this.speed > 1) dirs.push({ x: this.vel.x / this.speed, z: this.vel.z / this.speed });
+    dirs.push(this.facing());
+    for (const d of dirs) {
+      const wall = this.world.findCover(this.pos, d, 0.95, PLAYER_R, 0.3);
+      if (!wall || wall.face.h < J.wallMinH || wall.face.h < this.y + 0.8 || wall.t > 0.85) continue;
       const n = wall.face.n;
+      // el sentido del giro lateral sigue el movimiento a lo largo de la pared
+      const tx = -n.z, tz = n.x;
+      const lat = this.vel.x * tx + this.vel.z * tz;
       this.vy = J.wallVel;
-      this.vel.x = n.x * J.wallPush;
-      this.vel.z = n.z * J.wallPush;
-      this.grounded = false;
-      this.flip = { t: 0, dur: Math.max(0.4, (2 * J.wallVel / J.gravity) * 0.92) };
+      this.vel.x = n.x * J.wallPush + tx * lat * 0.4;
+      this.vel.z = n.z * J.wallPush + tz * lat * 0.4;
+      this.flip = {
+        t: 0,
+        dur: Math.max(0.4, (2 * J.wallVel / J.gravity) * 0.92),
+        dir: lat >= 0 ? 1 : -1,
+      };
       this.cover = null;
       this._setState('flip');
       this.ev.onWallJump?.();
-    } else {
-      this.vy = J.vel;
-      this.grounded = false;
-      this.ev.onJump?.();
+      return;
     }
   }
 
