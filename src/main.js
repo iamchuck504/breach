@@ -410,7 +410,7 @@ function startPractice() {
   audio.ensure();
   teardown();
   G.name = saveName();
-  world.setLayout('foundry');
+  world.setLayout('district'); // el mapa grande, para explorarlo con dummies
   G.mode = 'practice';
   spawnLocal('red', world.spawns.red[1]);
   G.dummies = new Dummies(scene);
