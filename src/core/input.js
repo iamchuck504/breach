@@ -55,11 +55,18 @@ export class Input {
       this.locked = document.pointerLockElement === canvas;
       if (!this.locked) { this._mouseFire = false; this._mouseAim = false; this.keys.clear(); }
     });
-    // Al perder el foco (alt-tab / otra ventana): limpiar inputs y avisar.
-    // OJO: NO llamamos exitPointerLock() aquí — Chrome suelta el lock solo al
-    // perder foco por su camino sano; soltarlo manualmente durante el blur es
-    // justo el camino del bug de Windows que deja el cursor confinado (ClipCursor).
+    // MEDIDO en la máquina de Chuck (scripts/diag-clip.mjs): la salida
+    // PROGRAMÁTICA (exitPointerLock) limpia el ClipCursor de Windows
+    // correctamente; el camino interno del navegador (Esc real / blur) es el
+    // que a veces lo deja pegado con la escala 125%. Estrategia: salir
+    // SIEMPRE nosotros primero, por el camino limpio.
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'Escape' && this.locked && !document.fullscreenElement) {
+        try { document.exitPointerLock(); } catch { /* ok */ }
+      }
+    }, true);
     const onFocusLoss = () => {
+      if (this.locked) { try { document.exitPointerLock(); } catch { /* ok */ } }
       this._mouseFire = false; this._mouseAim = false;
       this.keys.clear();
       this.onFocusLost?.();
