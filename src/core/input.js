@@ -49,18 +49,18 @@ export class Input {
       this.locked = document.pointerLockElement === canvas;
       if (!this.locked) { this._mouseFire = false; this._mouseAim = false; this.keys.clear(); }
     });
-    // Al perder el foco (alt-tab / otra ventana) hay que SOLTAR el pointer
-    // lock explícitamente: si queda vivo, Windows deja el cursor confinado
-    // a la región de la ventana ("atrapado en un cuadrante").
-    const dropLock = () => {
-      this.releaseLock();
+    // Al perder el foco (alt-tab / otra ventana): limpiar inputs y avisar.
+    // OJO: NO llamamos exitPointerLock() aquí — Chrome suelta el lock solo al
+    // perder foco por su camino sano; soltarlo manualmente durante el blur es
+    // justo el camino del bug de Windows que deja el cursor confinado (ClipCursor).
+    const onFocusLoss = () => {
       this._mouseFire = false; this._mouseAim = false;
       this.keys.clear();
       this.onFocusLost?.();
     };
-    window.addEventListener('blur', dropLock);
+    window.addEventListener('blur', onFocusLoss);
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden') dropLock();
+      if (document.visibilityState === 'hidden') onFocusLoss();
     });
   }
 
