@@ -12,12 +12,12 @@ const MAX_PLAYERS = 8;
 const HP = 100, REGEN_DELAY = 3.6, REGEN_RATE = 48, RESPAWN_TIME = 4, KILL_LIMIT = 25;
 const TICK_HZ = 20;
 
-// espejo de world.js
+// espejo de world.js (mapa 'district', fz 25 → spawns en ±23.4)
 const SPAWNS = { red: [], blue: [] };
 for (let i = 0; i < 4; i++) {
   const x = -3.6 + i * 2.4;
-  SPAWNS.red.push({ x, z: -16.4, yaw: Math.PI });
-  SPAWNS.blue.push({ x: -x, z: 16.4, yaw: 0 });
+  SPAWNS.red.push({ x, z: -23.4, yaw: Math.PI });
+  SPAWNS.blue.push({ x: -x, z: 23.4, yaw: 0 });
 }
 
 // ---------- estático ----------

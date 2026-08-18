@@ -435,7 +435,7 @@ async function startOnline() {
   try {
     const welcome = await net.connect(url, G.name);
     teardown();
-    world.setLayout('foundry');
+    world.setLayout('district'); // mapa grande de multijugador
     G.net = net;
     G.mode = 'online';
     spawnLocal(welcome.team, welcome.spawn);
@@ -590,19 +590,30 @@ function fireShot() {
   } else {
     baseDir = hipDir();
     origin = muzzle.clone();
-    // desde cover el cañón puede estar dentro del collider: adelantar el origen
-    if (inCover) origin.addScaledVector(baseDir, 0.4);
-    // pegado a una pared el cañón la atraviesa: disparar desde el punto de
-    // contacto (los impactos se ven en la pared en vez de "no disparar")
-    const chest = G.rig.aimRig.getWorldPosition(_v3);
-    const toM = origin.clone().sub(chest);
-    const mLen = toM.length();
-    if (mLen > 0.01) {
-      toM.normalize();
-      const tb = world.raycast(chest, toM, mLen);
-      if (tb !== null) {
-        origin.copy(chest).addScaledVector(toM, Math.max(0.05, tb - 0.03));
-        muzzle.copy(origin); // flash y tracer desde el punto visible
+    const f = G.player.cover;
+    if (inCover && f && f.h <= TUNING.cover.lowHeight) {
+      // blindfire SOBRE el bloque bajo: origen virtual encima del borde y
+      // pasado el bloque (agachado, el cañón queda bajo el borde y le pegaba)
+      origin.set(
+        G.player.pos.x - f.n.x * 1.15,
+        f.h + 0.14,
+        G.player.pos.z - f.n.z * 1.15,
+      );
+    } else {
+      // desde cover alto el cañón puede estar dentro del collider: adelantar
+      if (inCover) origin.addScaledVector(baseDir, 0.4);
+      // pegado a una pared el cañón la atraviesa: disparar desde el punto de
+      // contacto (los impactos se ven en la pared en vez de "no disparar")
+      const chest = G.rig.aimRig.getWorldPosition(_v3);
+      const toM = origin.clone().sub(chest);
+      const mLen = toM.length();
+      if (mLen > 0.01) {
+        toM.normalize();
+        const tb = world.raycast(chest, toM, mLen);
+        if (tb !== null) {
+          origin.copy(chest).addScaledVector(toM, Math.max(0.05, tb - 0.03));
+          muzzle.copy(origin); // flash y tracer desde el punto visible
+        }
       }
     }
   }
@@ -694,8 +705,15 @@ function updateReticle() {
   // con suavizado de pantalla para que nunca brinque
   const dir = hipDir();
   G.rig.root.updateWorldMatrix(true, true);
-  const origin = G.rig.aimRig.getWorldPosition(_v1)
-    .addScaledVector(dir, p.state === 'cover' ? 0.9 : 0.3);
+  let origin;
+  const cf = p.cover;
+  if (p.state === 'cover' && cf && cf.h <= TUNING.cover.lowHeight) {
+    // la retícula usa el mismo origen que el blindfire: sobre el borde del bloque
+    origin = _v1.set(p.pos.x - cf.n.x * 1.15, cf.h + 0.14, p.pos.z - cf.n.z * 1.15);
+  } else {
+    origin = G.rig.aimRig.getWorldPosition(_v1)
+      .addScaledVector(dir, p.state === 'cover' ? 0.9 : 0.3);
+  }
   const t = world.raycast(origin, dir, 60) ?? 60;
   _v3.copy(origin).addScaledVector(dir, t).project(camera);
   if (_v3.z > 1) { hud.reticle(false, null); dotWasOn = false; return; }

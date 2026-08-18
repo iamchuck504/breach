@@ -37,11 +37,13 @@ export class World {
     this.colliders = []; // {minx,minz,maxx,maxz,h}
     this.faces = [];     // caras de cobertura {n:{x,z}, a:{x,z}, b:{x,z}, h}
     this.spawns = { red: [], blue: [] };
-    this.fx = layout === 'arena' ? 11 : FIELD_X;
-    this.fz = layout === 'arena' ? 13 : FIELD_Z;
+    const dims = { arena: [11, 13], district: [21, 25], foundry: [FIELD_X, FIELD_Z] };
+    [this.fx, this.fz] = dims[layout] ?? dims.foundry;
 
     this._buildFloor();
-    if (layout === 'arena') this._buildArena(); else this._buildMap();
+    if (layout === 'arena') this._buildArena();
+    else if (layout === 'district') this._buildDistrict();
+    else this._buildMap();
     this._buildSpawns();
   }
 
@@ -61,8 +63,8 @@ export class World {
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
     const sc = sun.shadow.camera;
-    sc.left = -24; sc.right = 24; sc.top = 24; sc.bottom = -24;
-    sc.near = 2; sc.far = 60;
+    sc.left = -30; sc.right = 30; sc.top = 30; sc.bottom = -30;
+    sc.near = 2; sc.far = 80;
     sun.shadow.bias = -0.0004;
     this.scene.add(sun);
     this.scene.background = new THREE.Color(0xb9c8d2);
@@ -223,6 +225,70 @@ export class World {
     // centro: pilar contestado + baja lateral (el espejo crea el par)
     this._box(0, 0, 1.3, 1.3, 2.6, { ...highOpts, mirror: false, top: 0xffb075 });
     this._box(-4.6, 0.4, 0.9, 2.0, LOW, lowOpts);
+  }
+
+  // Mapa "District": multijugador, el doble de área que Foundry (42×50).
+  // Variedad de obstáculos con simetría rotacional: bloques bajos (1.05),
+  // muros medios (1.5), plataformas pisables (0.6), formas en L, pilares
+  // y cuartos laterales con corredores CQC.
+  _buildDistrict() {
+    const LOW = 1.05, MID = 1.5, SLAB = 0.6, HIGH = 2.4;
+    const lowOpts = { color: 0x9c968c, top: 0xc6c1b5 };
+    const midOpts = { color: 0x928d84, top: 0xb5b0a5 };
+    const slabOpts = { color: 0xa39e93, top: 0xcfcabf };
+    const highOpts = { color: 0x969188, top: 0xaba69d };
+    const wallOpts = { mirror: false, color: 0x8a857d, top: 0x9a958c };
+
+    // perímetro
+    this._box(0, -this.fz - 0.4, this.fx * 2 + 2, 0.8, 3.2, wallOpts);
+    this._box(0, this.fz + 0.4, this.fx * 2 + 2, 0.8, 3.2, wallOpts);
+    this._box(-this.fx - 0.4, 0, 0.8, this.fz * 2 + 2, 3.2, wallOpts);
+    this._box(this.fx + 0.4, 0, 0.8, this.fz * 2 + 2, 3.2, wallOpts);
+
+    // --- base (lado rojo; el espejo crea el azul)
+    this._box(0, -22.8, 8, 1, 2.3, highOpts);              // escudo de spawn
+    this._box(-6, -20.2, 2.6, 0.9, LOW, lowOpts);          // salidas flanqueadas
+    this._box(6, -20.2, 2.6, 0.9, LOW, lowOpts);
+    this._box(-8.5, -16, 5, 1, MID, midOpts);              // muro medio de base
+    this._box(5.5, -17, 3, 3, SLAB, slabOpts);             // plataforma pisable
+
+    // --- cuartos laterales (corredores CQC)
+    this._box(-14.5, -12, 1, 6.5, 2.6, highOpts);
+    this._box(-17.5, -8.5, 1.8, 0.9, LOW, lowOpts);
+    // forma en L
+    this._box(11.5, -12.5, 1, 5, HIGH, highOpts);
+    this._box(9.5, -10.5, 3, 1, HIGH, highOpts);
+
+    // --- cadena central de bloques bajos (ruta de wallbounce)
+    this._box(-2, -11, 2.6, 0.9, LOW, lowOpts);
+    this._box(2.5, -8.5, 2.6, 0.9, LOW, lowOpts);
+    this._box(-1.5, -6, 2.6, 0.9, LOW, lowOpts);
+
+    // --- pilares de flanco
+    this._box(7, -6, 1.2, 1.2, 2.5, highOpts);
+    this._box(-11, -5, 1.2, 1.2, 2.5, highOpts);
+
+    // --- carriles laterales
+    this._box(-19, -3.5, 1.6, 0.9, LOW, lowOpts);
+    this._box(18.5, -6, 0.9, 2.4, LOW, lowOpts);
+
+    // --- media cancha: muro medio + losa pisable
+    this._box(5, -2.5, 3.2, 0.9, MID, midOpts);
+    this._box(-8.5, -1.5, 2.4, 2.4, SLAB, slabOpts);
+
+    // --- centro (auto-simétrico): gran pilar + flancos bajos
+    this._box(0, 0, 1.8, 1.8, 3, { ...highOpts, mirror: false, top: 0xffb075 });
+    this._box(-5.5, 0.6, 0.9, 2.4, LOW, lowOpts);
+
+    // --- siluetas decorativas
+    for (const [x, z, w, h] of [[-28, -14, 6, 8], [30, 8, 7, 10], [-26, 18, 5, 6], [27, -20, 6, 7]]) {
+      const m = new THREE.Mesh(
+        new THREE.BoxGeometry(w, h, 4),
+        new THREE.MeshLambertMaterial({ color: 0x8794a0 })
+      );
+      m.position.set(x, h / 2 - 0.5, z);
+      this.mapGroup.add(m);
+    }
   }
 
   _buildSpawns() {
