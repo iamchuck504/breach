@@ -44,9 +44,12 @@ const server = http.createServer((req, res) => {
 // ---------- sala ----------
 const wss = new WebSocketServer({ server });
 const players = new Map(); // id -> player
+const drops = new Map();   // armas caídas: id -> {wep, x, z, team, mag, res, t}
+let nextDropId = 1;
 let nextId = 1;
 let scores = { red: 0, blue: 0 };
 let resetting = false;
+const DROP_LIFE = 8;
 
 const send = (ws, obj) => { if (ws.readyState === 1) ws.send(JSON.stringify(obj)); };
 const broadcast = (obj) => { const s = JSON.stringify(obj); for (const p of players.values()) if (p.ws.readyState === 1) p.ws.send(s); };
@@ -86,6 +89,7 @@ wss.on('connection', (ws) => {
         t: 'welcome', id, team, spawn, scores,
         players: [...players.values()].map(pub),
         crates: CRATES.map((c) => (c.up ? 1 : 0)),
+        drops: [...drops.entries()].map(([id, d]) => ({ id, wep: d.wep, x: d.x, z: d.z, team: d.team })),
       });
       broadcast({ t: 'joined', id, name: me.name, team });
       console.log(`+ ${me.name} (${team}) — ${players.size}/${MAX_PLAYERS}`);
@@ -97,12 +101,22 @@ wss.on('connection', (ws) => {
       me.x = num(msg.x); me.z = num(msg.z); me.y = num(msg.y); me.yaw = num(msg.yaw);
       me.st = String(msg.st || 'idle'); me.aim = msg.aim ? 1 : 0;
       me.p = num(msg.p); me.w = msg.w === 'shotgun' ? 'shotgun' : 'smg';
+      me.am = num(msg.am); me.ar = num(msg.ar);
       me.sp = num(msg.sp);
       return;
     }
     if (msg.t === 'fire') {
       me.prot = 0; // disparar rompe la protección de spawn
       broadcast({ t: 'fire', id: me.id, o: msg.o, p: msg.p, w: me.w });
+      return;
+    }
+    if (msg.t === 'takeDrop') {
+      const d = drops.get(msg.id);
+      if (!d || !me.alive) return;
+      if (Math.hypot(me.x - d.x, me.z - d.z) > 3) return;
+      drops.delete(msg.id);
+      broadcast({ t: 'dropR', id: msg.id });
+      send(ws, { t: 'dropGive', wep: d.wep, mag: d.mag, res: d.res });
       return;
     }
     if (msg.t === 'crate') {
@@ -132,6 +146,13 @@ wss.on('connection', (ws) => {
           t: 'death', target: target.id, from: me.id, gib: msg.gib ? 1 : 0,
           kn: me.name, kt: me.team, vn: target.name, vt: target.team,
         });
+        // el arma del muerto cae con sus balas restantes (8s para recogerla)
+        const did = 'd' + nextDropId++;
+        drops.set(did, {
+          wep: target.w, x: target.x, z: target.z, team: target.team,
+          mag: target.am || 0, res: target.ar || 0, t: DROP_LIFE,
+        });
+        broadcast({ t: 'dropA', id: did, wep: target.w, x: target.x, z: target.z, team: target.team });
         broadcast({ t: 'score', ...scores });
         if (scores[me.team] >= KILL_LIMIT) endRound(me.team);
       }
@@ -184,6 +205,11 @@ setInterval(() => {
       p.x = spawn.x; p.z = spawn.z;
       broadcast({ t: 'respawn', id: p.id, spawn });
     }
+  }
+  // expiración de armas caídas
+  for (const [id, d] of drops) {
+    d.t -= 1 / TICK_HZ;
+    if (d.t <= 0) { drops.delete(id); broadcast({ t: 'dropR', id }); }
   }
   // respawn de cajas de munición
   for (let i = 0; i < CRATES.length; i++) {

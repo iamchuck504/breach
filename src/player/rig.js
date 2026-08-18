@@ -36,7 +36,7 @@ function anchor(parent, x, y, z) {
 
 // METRALLETA: subfusil compacto — cuerpo corto, riel superior, cargador
 // largo con base de color, bocacha ancha y culata plegable.
-function buildSMG(teamColor) {
+export function buildSMG(teamColor) {
   const g = new THREE.Group();
   g.add(box(0.085, 0.14, 0.36, DARK, 0, 0, -0.06));           // cuerpo compacto
   g.add(box(0.06, 0.045, 0.2, MID, 0, 0.095, -0.1));          // riel superior
@@ -55,7 +55,7 @@ function buildSMG(teamColor) {
 }
 
 // ESCOPETA: pump-action — cañón + tubo de carga, bomba y culata de madera.
-function buildShotgun(teamColor) {
+export function buildShotgun(teamColor) {
   const WOOD = 0x8a5a32;
   const g = new THREE.Group();
   g.add(box(0.085, 0.13, 0.3, DARK, 0, 0, 0.0));              // receptor
@@ -460,6 +460,7 @@ export class Rig {
         // ACELERADA por gravedad (tope seco), y al impactar un flop de
         // extremidades amortiguado (flexible, pero se apaga rápido = peso)
         if (!this.rag) this._startRagdoll();
+        this.activeGun.visible = false; // el arma cae al suelo (WeaponDrops)
         damp = 3.2; // articulaciones flojas: van rezagadas detrás del cuerpo
         ikArms = false;
         const rg = this.rag;
@@ -583,7 +584,11 @@ export class Rig {
       this.root.position.set(r.bx + r.ox, 0, r.bz + r.oz);
       this.root.rotation.y = r.byaw + r.spin * fall;
     } else if (p.state !== 'dead') {
-      this.rag = null;
+      if (this.rag) {
+        this.rag = null;
+        this.gunSMG.visible = true;
+        this.gunShotgun.visible = true;
+      }
     }
 
     // IK: manos sobre el arma (después del damping, sobre la pose ya aplicada)

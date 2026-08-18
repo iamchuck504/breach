@@ -18,6 +18,7 @@ import { HUD } from './ui/hud.js';
 import { NetClient } from './net/client.js';
 import { BotMatch } from './game/botmatch.js';
 import { AmmoCrates } from './game/crates.js';
+import { WeaponDrops } from './game/drops.js';
 
 const TEAM_HEX = { red: 0xd94f3f, blue: 0x4f8de0 };
 
@@ -55,6 +56,8 @@ const G = {
   dummies: null,
   botMatch: null,
   crates: null,
+  drops: null,         // armas caídas de los muertos
+  dropSeq: 0,
   spawnProt: 0,        // protección de spawn (5s, se rompe al disparar)
   respawnT: 0,         // countdown visible de reaparición
   playerLastHit: 99,
@@ -373,6 +376,7 @@ function teardown() {
   if (G.dummies) { G.dummies.dispose(); G.dummies = null; }
   if (G.botMatch) { G.botMatch.dispose(); G.botMatch = null; }
   if (G.crates) { G.crates.dispose(); G.crates = null; }
+  if (G.drops) { G.drops.dispose(); G.drops = null; }
   G.spawnProt = 0;
   G.respawnT = 0;
   hud.respawnTick(null);
@@ -416,6 +420,10 @@ function damagePlayerLocal(dmg) {
     audio.death();
     input.pad.rumble(350, 0.8, 1.0);
     G.respawnT = TUNING.combat.respawnTime;
+    // el arma en mano cae junto al cuerpo con las balas restantes
+    G.drops?.spawn('p' + G.dropSeq++, G.weapons.cur,
+      G.player.pos.x, G.player.pos.z, 'red',
+      G.weapons.st.mag, G.weapons.st.reserve);
     return true;
   }
   return false;
@@ -432,9 +440,17 @@ function startBots() {
   G.selfAlive = true;
   G.playerLastHit = 99;
   G.crates = new AmmoCrates(scene);
+  G.drops = new WeaponDrops(scene);
   G.botMatch = new BotMatch(scene, world, {
     effects, audio, hud,
     playerName: G.name,
+    dropWeapon: (wep, x, z, team) => {
+      // los bots no llevan contador de balas: sueltan un remanente plausible
+      const def = TUNING.weapons[wep];
+      G.drops?.spawn('b' + G.dropSeq++, wep, x, z, team,
+        Math.ceil(def.mag * (0.2 + Math.random() * 0.6)),
+        Math.ceil(def.reserve * Math.random() * 0.4));
+    },
     player: () => ({ x: G.player.pos.x, z: G.player.pos.z, y: G.player.y, alive: G.selfAlive }),
     damagePlayer: (dmg) => damagePlayerLocal(dmg),
     respawnPlayer: (spawn) => {
@@ -498,6 +514,8 @@ async function startOnline() {
     spawnLocal(welcome.team, welcome.spawn);
     G.crates = new AmmoCrates(scene);
     if (welcome.crates) welcome.crates.forEach((up, i) => G.crates.setState(i, !!up));
+    G.drops = new WeaponDrops(scene);
+    if (welcome.drops) for (const d of welcome.drops) G.drops.spawn(d.id, d.wep, d.x, d.z, d.team);
     grantSpawnProtection();
     G.scores = welcome.scores;
     for (const p of welcome.players) {
@@ -576,6 +594,16 @@ function bindNet(net) {
     }
   });
   net.on('crate', (m) => { G.crates?.setState(m.i, !!m.up); });
+  net.on('dropA', (m) => { G.drops?.spawn(m.id, m.wep, m.x, m.z, m.team); });
+  net.on('dropR', (m) => { G.drops?.remove(m.id); });
+  net.on('dropGive', (m) => {
+    const def = TUNING.weapons[m.wep];
+    const s = G.weapons.state[m.wep];
+    const total = (m.mag || 0) + (m.res || 0);
+    s.reserve = Math.min(def.reserve, s.reserve + total);
+    audio.reloadDone();
+    hud.hint('+' + total + ' BALAS DE ' + def.name, 1500);
+  });
   net.on('respawn', (m) => {
     if (m.id === net.id) {
       G.selfAlive = true;
@@ -860,6 +888,25 @@ function simStep(dt) {
   // protección de spawn + countdown de respawn + cajas de munición
   G.spawnProt = Math.max(0, G.spawnProt - dt);
   G.respawnT = Math.max(0, G.respawnT - dt);
+
+  // armas caídas: recoger = quedarse con sus balas restantes
+  if (G.drops) {
+    G.drops.update(dt, p.pos.x, p.pos.z, G.selfAlive && !p.dead, (id, d) => {
+      if (G.mode === 'online') {
+        d.claimed = true;
+        G.net?.send({ t: 'takeDrop', id });
+        return;
+      }
+      const def = TUNING.weapons[d.wep];
+      const s = G.weapons.state[d.wep];
+      const total = d.mag + d.res;
+      s.reserve = Math.min(def.reserve, s.reserve + total);
+      G.drops.remove(id);
+      audio.reloadDone();
+      hud.hint('+' + total + ' BALAS DE ' + def.name, 1500);
+      input.pad.rumble(50, 0.15, 0.25);
+    });
+  }
   if (G.crates) {
     G.crates.update(dt, p.pos.x, p.pos.z, G.selfAlive && !p.dead, (i) => {
       G.weapons.refill();

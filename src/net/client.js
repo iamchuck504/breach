@@ -70,6 +70,7 @@ export class NetClient {
       aim: player.aim ? 1 : 0,
       p: +player.cam.pitch.toFixed(3),
       w: wep.cur,
+      am: wep.st.mag, ar: wep.st.reserve, // para el drop del arma al morir
       sp: +Math.min(1, player.speed / TUNING.move.roadieSpeed).toFixed(2),
     });
   }

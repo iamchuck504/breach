@@ -318,7 +318,7 @@ try {
   if (crate.mag !== 50 || crate.up) errors.push('CRATE: no recargó/consumió (' + JSON.stringify(crate) + ')');
 
   // observar la IA: conductas (cover/rush/salto/escopeta) + que nadie se atasque
-  const seen = { cover: false, rush: false, jump: false, shotgun: false };
+  const seen = { cover: false, rush: false, jump: false, shotgun: false, drop: false };
   const walked = [0, 0, 0, 0, 0, 0, 0];
   let prevPos = null;
   let samples = 0;
@@ -327,6 +327,7 @@ try {
     samples++;
     const states = await page.evaluate(() =>
       window.BREACH.botMatch.bots.map((b) => ({ st: b.state, y: b.y, w: b.wep, x: b.pos.x, z: b.pos.z })));
+    if (await page.evaluate(() => window.BREACH.drops.drops.size > 0)) seen.drop = true;
     if (prevPos) {
       states.forEach((b, j) => { walked[j] += Math.hypot(b.x - prevPos[j].x, b.z - prevPos[j].z); });
     }
@@ -344,6 +345,7 @@ try {
   if (!seen.jump) errors.push('AI: ningún bot saltó');
   if (!seen.shotgun && !seen.rush) errors.push('AI: nadie cambió a escopeta/rusheó');
   if (!seen.cover) errors.push('AI: nadie se cubrió');
+  if (!seen.drop) errors.push('DROPS: ninguna arma cayó al morir alguien');
   if (minWalk < 1.5) errors.push('AI: hay un bot atascado (recorrió ' + minWalk + 'm en ' + samples / 2 + 's)');
 
   await page.keyboard.down('Tab');

@@ -488,6 +488,11 @@ export class BotMatch {
     const v = this.stats.get(victimId), k = this.stats.get(killerId);
     if (v) v.deaths++;
     if (k) k.kills++;
+    // el arma del bot cae junto a su cuerpo (la del jugador la suelta main)
+    if (victimId !== 'player') {
+      const b = this.bots.find((x) => x.id === victimId);
+      if (b) this.cb.dropWeapon?.(b.wep, b.pos.x, b.pos.z, b.team);
+    }
     if (v && k) this.cb.hud.kill(k.name, k.team, v.name, v.team);
     if (killerId === 'player') { this.cb.audio.kill(); this.cb.hud.hitmarker(); }
     const team = v?.team;
