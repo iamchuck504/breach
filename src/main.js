@@ -617,10 +617,20 @@ function frame(now) {
   if (input.pad.connected !== padWasConnected) {
     padWasConnected = input.pad.connected;
     hud.hint(padWasConnected ? 'CONTROL CONECTADO' : 'CONTROL DESCONECTADO', 1600);
-    if (padStatus) {
-      padStatus.textContent = padWasConnected ? 'CONTROL CONECTADO' : 'SIN CONTROL DETECTADO';
-      padStatus.classList.toggle('on', padWasConnected);
+    if (!padWasConnected) {
+      padStatus.textContent = 'SIN CONTROL DETECTADO';
+      padStatus.classList.remove('on');
     }
+  }
+  // diagnóstico en vivo con el panel de controles abierto: id, mapping,
+  // ejes y botones presionados (para depurar pads raros/fantasma)
+  if (input.pad.connected && input.pad.info && controlsCard.style.display === 'block') {
+    const i = input.pad.info;
+    padStatus.textContent =
+      i.id + ' · ' + i.mapping +
+      ' · ejes [' + [...i.axes].slice(0, 4).map((a) => a.toFixed(1)).join(', ') + ']' +
+      ' · botones [' + (i.pressed.join(',') || '—') + ']';
+    padStatus.classList.add('on');
   }
   if (menuOpen) input.consumeEdges();
 

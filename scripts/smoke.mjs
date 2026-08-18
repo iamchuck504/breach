@@ -59,15 +59,18 @@ try {
   await page.screenshot({ path: path.join(root, 'scripts', 'shot-aim.png') });
   await page.mouse.up({ button: 'right' });
 
-  // ---- gamepad simulado: stick izq adelante debe mover al jugador ----
+  // ---- gamepad simulado: un pad FANTASMA (sin actividad) en el índice 0
+  // y el pad real (stick adelante) en el índice 1 — debe adoptar el activo ----
   await page.evaluate(() => {
-    const fake = {
-      id: 'FakePad', connected: true, mapping: 'standard', index: 0,
-      axes: [0, -1, 0, 0],
+    const mkPad = (index, axes) => ({
+      id: index === 0 ? 'PhantomPad' : 'FakePad', connected: true,
+      mapping: 'standard', index, axes,
       buttons: Array.from({ length: 17 }, () => ({ pressed: false, value: 0 })),
-    };
-    navigator.getGamepads = () => [fake];
-    window.__pad = fake;
+    });
+    const phantom = mkPad(0, [0, 0, 0, 0]);
+    const real = mkPad(1, [0, -1, 0, 0]);
+    navigator.getGamepads = () => [phantom, real];
+    window.__pad = real;
   });
   await page.waitForTimeout(400);
   const padOn = await page.evaluate(() => window.BREACH_INPUT.pad.connected);
@@ -86,10 +89,12 @@ try {
     yaw: +window.BREACH.player.yaw.toFixed(2),
     cam: +window.BREACH.player.cam.yaw.toFixed(2),
     spd: +window.BREACH.player.speed.toFixed(2),
+    padId: window.BREACH_INPUT.pad.info?.id,
   }));
   console.log('PAD:', JSON.stringify({ connected: padOn, moved: +moved.toFixed(2), ...padCtx }));
   if (!padOn) errors.push('PAD: no detectado');
   if (moved < 0.4) errors.push('PAD: el stick no movió al jugador (moved=' + moved.toFixed(2) + ')');
+  if (padCtx.padId !== 'FakePad') errors.push('PAD: adoptó el pad fantasma en vez del activo (' + padCtx.padId + ')');
   await page.evaluate(() => { window.__pad.axes[1] = 0; });
 
   // ---- menú de pausa + panel de controles ----

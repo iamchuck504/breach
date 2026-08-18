@@ -7,6 +7,8 @@ const DEADZONE = 0.16;
 export class PadInput {
   constructor() {
     this.connected = false;
+    this.info = null;
+    this._idx = -1;
     this.moveX = 0; this.moveZ = 0;
     this.camX = 0; this.camY = 0;
     this.pressed = new Set();
@@ -20,16 +22,35 @@ export class PadInput {
 
   poll(dt) {
     const pads = navigator.getGamepads ? navigator.getGamepads() : [];
-    let gp = null;
-    for (const g of pads) if (g && g.connected) { gp = g; break; }
+    // Hay dispositivos virtuales "fantasma" (Steam, receivers, vJoy) que
+    // aparecen conectados pero nunca emiten input: nos quedamos con el pad
+    // que muestre ACTIVIDAD real, con índice pegajoso hasta que se desconecte.
+    const isActive = (g) =>
+      g.buttons.some((b) => b.pressed || b.value > 0.3) ||
+      g.axes.some((a) => Math.abs(a) > 0.35);
+    let gp = (this._idx >= 0 && pads[this._idx] && pads[this._idx].connected)
+      ? pads[this._idx] : null;
+    for (const g of pads) {
+      if (!g || !g.connected) continue;
+      if (!gp) { gp = g; continue; }
+      if (g.index !== gp.index && isActive(g) && !isActive(gp)) gp = g;
+    }
+    this._idx = gp ? gp.index : -1;
     this._gp = gp;
     this.justPressed.clear();
     if (!gp) {
       if (this.connected) this._reset();
       this.connected = false;
+      this.info = null;
       return;
     }
     this.connected = true;
+    this.info = {
+      id: gp.id.slice(0, 44),
+      mapping: gp.mapping || 'no-standard',
+      axes: gp.axes,
+      pressed: gp.buttons.map((b, i) => (b.pressed || b.value > 0.3 ? i : -1)).filter((i) => i >= 0),
+    };
 
     const dz = (v) => Math.abs(v) < DEADZONE ? 0 : (v - Math.sign(v) * DEADZONE) / (1 - DEADZONE);
     const curve = (v) => v * Math.abs(v);
