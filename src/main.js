@@ -140,6 +140,10 @@ input.onEscape = () => {
   if (!G.mode) return;
   if (menuIsOpen()) closeMenu(); else openMenu();
 };
+// alt-tab / cambio de ventana: soltar el mouse y abrir la pausa
+input.onFocusLost = () => {
+  if (G.mode && !menuIsOpen()) openMenu();
+};
 input.onToggleMute = () => {
   const m = audio.toggleMute();
   hud.hint(m ? 'AUDIO OFF' : 'AUDIO ON', 900);

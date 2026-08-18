@@ -46,6 +46,19 @@ export class Input {
       this.locked = document.pointerLockElement === canvas;
       if (!this.locked) { this._mouseFire = false; this._mouseAim = false; this.keys.clear(); }
     });
+    // Al perder el foco (alt-tab / otra ventana) hay que SOLTAR el pointer
+    // lock explícitamente: si queda vivo, Windows deja el cursor confinado
+    // a la región de la ventana ("atrapado en un cuadrante").
+    const dropLock = () => {
+      this.releaseLock();
+      this._mouseFire = false; this._mouseAim = false;
+      this.keys.clear();
+      this.onFocusLost?.();
+    };
+    window.addEventListener('blur', dropLock);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') dropLock();
+    });
   }
 
   // unadjustedMovement: sin aceleración de mouse del OS (si el navegador lo soporta)
@@ -58,7 +71,11 @@ export class Input {
     };
     try {
       const p = this.canvas.requestPointerLock({ unadjustedMovement: true });
-      if (p && p.catch) p.catch(plain);
+      // reintentar SOLO si el navegador no soporta unadjustedMovement;
+      // otros errores (falta de gesto, cooldown de Esc) no deben re-pedir
+      if (p && p.catch) p.catch((e) => {
+        if (e && e.name === 'NotSupportedError') plain();
+      });
     } catch { plain(); }
   }
   releaseLock() { if (this.locked) document.exitPointerLock(); }
