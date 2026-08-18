@@ -25,7 +25,7 @@ const canvas = document.getElementById('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap; // bordes de sombra nítidos, sin suavizado
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(TUNING.cam.fovNormal, 1, 0.1, 200);
@@ -764,8 +764,7 @@ function updateReticle() {
 }
 
 // ---------- loop principal ----------
-const FIXED = 1 / 60;
-let acc = 0, last = performance.now();
+let last = performance.now();
 
 // handle de debug/testing
 window.BREACH = G;
@@ -901,15 +900,11 @@ function frame(now) {
       if (input.pad.connected) shoulderCam.applyStick(input.pad.camX, input.pad.camY, dt, input.invertYPad);
     }
 
-    // pausa real en práctica y vs bots; online la partida sigue
+    // pausa real en práctica y vs bots; online la partida sigue.
+    // Simulación por frame con dt variable: un paso de sim por frame dibujado
+    // elimina el judder (imagen "doble"/blur) en monitores de más de 60 Hz.
     const paused = menuOpen && (G.mode === 'practice' || G.mode === 'bots');
-    if (paused) {
-      acc = 0;
-    } else {
-      acc += dt;
-      let steps = 0;
-      while (acc >= FIXED && steps < 5) { simStep(FIXED); acc -= FIXED; steps++; }
-    }
+    if (!paused) simStep(Math.min(dt, 1 / 30));
 
     shoulderCam.update(dt, G.player);
     G.rig.setWeapon(G.weapons.cur); // el intercambio real ocurre a mitad del gesto

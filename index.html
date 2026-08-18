@@ -83,7 +83,7 @@
 
   #center-msg { position: fixed; left: 50%; top: 38%; transform: translateX(-50%);
     font-family: var(--mono); font-size: 22px; font-weight: 600; letter-spacing: .2em;
-    text-transform: uppercase; text-shadow: 0 2px 12px rgba(0,0,0,.6); text-align: center;
+    text-transform: uppercase; text-shadow: 0 2px 0 rgba(0,0,0,.55); text-align: center;
     opacity: 0; transition: opacity .25s; }
   #center-msg.on { opacity: 1; }
   #center-msg .sub { font-size: 12px; color: var(--dim); letter-spacing: .3em; margin-top: 10px; }
@@ -91,7 +91,7 @@
   #context-hint { position: fixed; left: 50%; bottom: 12%; transform: translateX(-50%);
     font-family: var(--mono); font-size: 12px; letter-spacing: .22em; color: #ffffffcc;
     text-transform: uppercase; opacity: 0; transition: opacity .2s;
-    text-shadow: 0 1px 8px rgba(0,0,0,.8); }
+    text-shadow: 0 1px 0 rgba(0,0,0,.85); }
   #context-hint.on { opacity: 1; }
 
   #round-pips { position: fixed; top: 62px; left: 50%; transform: translateX(-50%);
@@ -120,7 +120,7 @@
   /* cursor virtual: el juego mantiene el pointer lock en pausa y dibuja su
      propio cursor (evita el bug de ClipCursor de Chromium/Windows) */
   #vcursor { position: fixed; z-index: 60; pointer-events: none; display: none;
-    left: 50%; top: 50%; filter: drop-shadow(0 1px 2px rgba(0,0,0,.6)); }
+    left: 50%; top: 50%; }
   #vcursor.on { display: block; }
   .vhover { border-color: var(--accent) !important; color: var(--accent) !important; }
 
