@@ -16,6 +16,7 @@ import { Effects } from './fx/effects.js';
 import { Audio } from './fx/audio.js';
 import { HUD } from './ui/hud.js';
 import { NetClient } from './net/client.js';
+import { BotMatch } from './game/botmatch.js';
 
 const TEAM_HEX = { red: 0xd94f3f, blue: 0x4f8de0 };
 
@@ -51,6 +52,8 @@ const G = {
   player: null,        // controller local
   weapons: new Weapons(),
   dummies: null,
+  botMatch: null,
+  playerLastHit: 99,
   remotes: new Map(),  // id -> RemotePlayer
   net: null,
   selfHp: TUNING.combat.hp,
@@ -131,6 +134,7 @@ function closeMenu() {
   input.requestLock();
 }
 
+document.getElementById('btn-bots').addEventListener('click', () => startBots());
 document.getElementById('btn-practice').addEventListener('click', () => startPractice());
 document.getElementById('btn-online').addEventListener('click', () => startOnline());
 btnResume.addEventListener('click', () => closeMenu());
@@ -309,6 +313,10 @@ function deepCopy(src, dst) {
 function teardown() {
   if (G.rig) { G.rig.dispose(scene); G.rig = null; }
   if (G.dummies) { G.dummies.dispose(); G.dummies = null; }
+  if (G.botMatch) { G.botMatch.dispose(); G.botMatch = null; }
+  hud.timer(null);
+  hud.roundPips(null);
+  hud.scoreboard(null);
   for (const r of G.remotes.values()) r.dispose(scene);
   G.remotes.clear();
   if (G.net) { G.net.close(); G.net = null; }
@@ -326,10 +334,68 @@ function spawnLocal(team, spawn) {
   G.rig.setWeapon('smg');
 }
 
+function damagePlayerLocal(dmg) {
+  if (!G.selfAlive) return false;
+  G.selfHp -= dmg;
+  G.playerLastHit = 0;
+  audio.hurt();
+  shoulderCam.addShake(0.35);
+  input.pad.rumble(120, 0.4, 0.6);
+  if (G.selfHp <= 0) {
+    G.selfHp = 0;
+    G.selfAlive = false;
+    G.player.kill();
+    audio.death();
+    input.pad.rumble(350, 0.8, 1.0);
+    hud.center('ELIMINADO', 'respawn en 4s', 3800);
+    return true;
+  }
+  return false;
+}
+
+function startBots() {
+  audio.ensure();
+  teardown();
+  G.name = saveName();
+  world.setLayout('arena');
+  G.mode = 'bots';
+  spawnLocal('red', world.spawns.red[0]);
+  G.selfHp = TUNING.combat.hp;
+  G.selfAlive = true;
+  G.playerLastHit = 99;
+  G.botMatch = new BotMatch(scene, world, {
+    effects, audio, hud,
+    playerName: G.name,
+    player: () => ({ x: G.player.pos.x, z: G.player.pos.z, y: G.player.y, alive: G.selfAlive }),
+    damagePlayer: (dmg) => damagePlayerLocal(dmg),
+    respawnPlayer: (spawn) => {
+      G.selfAlive = true;
+      G.selfHp = TUNING.combat.hp;
+      G.player.respawn(spawn);
+      G.weapons.reset();
+    },
+    onMatchEnd: () => {
+      setTimeout(() => {
+        if (G.mode !== 'bots') return;
+        G.mode = null;
+        teardown();
+        hud.show(false);
+        openMenu();
+      }, 6500);
+    },
+  });
+  hud.showMenu(false);
+  showControls(false);
+  hud.show(true);
+  input.requestLock();
+  setTimeout(() => hud.hint('TAB / VIEW: MARCADOR', 2800), 3400);
+}
+
 function startPractice() {
   audio.ensure();
   teardown();
   G.name = saveName();
+  world.setLayout('foundry');
   G.mode = 'practice';
   spawnLocal('red', world.spawns.red[1]);
   G.dummies = new Dummies(scene);
@@ -354,6 +420,7 @@ async function startOnline() {
   try {
     const welcome = await net.connect(url, G.name);
     teardown();
+    world.setLayout('foundry');
     G.net = net;
     G.mode = 'online';
     spawnLocal(welcome.team, welcome.spawn);
@@ -468,6 +535,7 @@ const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vect
 
 function currentTargets() {
   if (G.mode === 'practice') return G.dummies.targets();
+  if (G.mode === 'bots') return G.botMatch ? G.botMatch.targets() : [];
   const out = [];
   for (const r of G.remotes.values()) {
     if (r.team !== G.team) out.push({ id: r.id, x: r.x, z: r.z, y: r.y ?? 0, alive: r.alive });
@@ -567,6 +635,9 @@ function fireShot() {
         audio.kill();
         if (gib) effects.gib(new THREE.Vector3(d.x, 0, d.z), TEAM_HEX.blue);
       });
+      if (!killed) audio.hit();
+    } else if (G.mode === 'bots' && G.botMatch) {
+      const killed = G.botMatch.damageBot(id, e.dmg, 'player', gib);
       if (!killed) audio.hit();
     } else if (G.net) {
       const r = G.remotes.get(id);
@@ -687,6 +758,14 @@ function simStep(dt) {
   }
 
   if (G.dummies) G.dummies.update(dt);
+  if (G.botMatch) {
+    G.botMatch.update(dt);
+    // regen del jugador (igual que online, pero local)
+    G.playerLastHit += dt;
+    if (G.selfAlive && G.playerLastHit > TUNING.combat.regenDelay && G.selfHp < TUNING.combat.hp) {
+      G.selfHp = Math.min(TUNING.combat.hp, G.selfHp + TUNING.combat.regenRate * dt);
+    }
+  }
   if (G.net) G.net.tickState(dt, p, G.weapons);
 
   input.consumeEdges();
@@ -727,8 +806,8 @@ function frame(now) {
       if (input.pad.connected) shoulderCam.applyStick(input.pad.camX, input.pad.camY, dt, input.invertYPad);
     }
 
-    // pausa real en práctica; online la partida sigue
-    const paused = menuOpen && G.mode === 'practice';
+    // pausa real en práctica y vs bots; online la partida sigue
+    const paused = menuOpen && (G.mode === 'practice' || G.mode === 'bots');
     if (paused) {
       acc = 0;
     } else {
@@ -749,7 +828,13 @@ function frame(now) {
     for (const r of G.remotes.values()) r.update(dt);
 
     hud.ammo(G.weapons);
-    hud.health(G.mode === 'online' ? G.selfHp / TUNING.combat.hp : 1);
+    hud.health(G.mode === 'online' || G.mode === 'bots' ? G.selfHp / TUNING.combat.hp : 1);
+    if (G.mode === 'bots' && G.botMatch) {
+      hud.score(G.botMatch.livesOf('red'), G.botMatch.livesOf('blue'));
+      hud.timer(G.botMatch.timer);
+      hud.roundPips(G.botMatch.wins.red, G.botMatch.wins.blue);
+      hud.scoreboard(input.scoreHeld && !menuOpen ? G.botMatch.statRows() : null);
+    }
     updateReticle();
   }
 

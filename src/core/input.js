@@ -88,6 +88,7 @@ export class Input {
     if (e.repeat) return;
     if (e.target && e.target.tagName === 'INPUT') return; // escribiendo en el menú
     const c = e.code;
+    if (c === BINDS.kb.score && this.locked) e.preventDefault(); // Tab no cicla el foco
     if (down) {
       if (c === 'F9') {
         e.preventDefault();
@@ -130,6 +131,9 @@ export class Input {
     return this.keys.has(BINDS.kb.sprint) || this.keys.has('ShiftRight') || this.pad.sprintHeld;
   }
   get anyDevice() { return this.locked || this.pad.connected; }
+  get scoreHeld() {
+    return this.keys.has(BINDS.kb.score) || this.pad.pressed.has(BINDS.pad.score);
+  }
 
   // Vector de movimiento (x = derecha, z = adelante); teclado manda, si no, stick
   moveVec() {

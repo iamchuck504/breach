@@ -65,6 +65,16 @@ sentido del roll sigue tu movimiento a lo largo de la pared). Se puede
 **disparar en el aire**, incluido durante el flip (el cuerpo sigue a la
 cámara mientras rueda). La bala respeta la altura del salto (hitbox con `y`).
 
+## VS Bots (4v4)
+
+TDM por rondas contra bots en el mapa compacto **Arena**: tú + 3 bots aliados
+vs 4 bots. Rondas de 5 min; cada equipo tiene **19 vidas** (4 iniciales + 15
+respawns) y gana la ronda quien agota las del rival (al expirar el tiempo gana
+quien conserve más vidas). **Match al mejor de 3** (primero a 2 rondas).
+Scoreboard con **Tab / VIEW**: nombres, kills, deaths y puntaje (100 pts por
+kill). Los bots patrullan, buscan línea de visión, strafean y disparan en
+ráfagas con error de puntería; regeneran vida como los jugadores.
+
 ## Wallbounce
 
 Espacio hacia una cobertura = slide. Durante el slide (o justo al llegar,

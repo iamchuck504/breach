@@ -94,6 +94,29 @@
     text-shadow: 0 1px 8px rgba(0,0,0,.8); }
   #context-hint.on { opacity: 1; }
 
+  #round-pips { position: fixed; top: 62px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 6px; }
+  #round-pips .pip { width: 9px; height: 9px; border-radius: 3px; background: #2a2c33;
+    border: 1px solid var(--line); }
+  #round-pips .pip.red { background: var(--red); border-color: var(--red); }
+  #round-pips .pip.blue { background: var(--blue); border-color: var(--blue); }
+
+  #scoreboard { position: fixed; left: 50%; top: 50%; transform: translate(-50%,-50%);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 22px 26px; min-width: 620px; display: none; backdrop-filter: blur(8px); }
+  #scoreboard.on { display: block; }
+  .sb-head { font-family: var(--mono); font-size: 11px; letter-spacing: .24em;
+    color: var(--dim); text-transform: uppercase; margin-bottom: 14px; text-align: center; }
+  .sb-cols { display: flex; gap: 26px; }
+  .sb-team { flex: 1; }
+  .sb-title { font-family: var(--mono); font-size: 11px; letter-spacing: .2em;
+    margin-bottom: 8px; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+  .sb-row { display: grid; grid-template-columns: 1fr 40px 40px 56px; gap: 8px;
+    font-family: var(--mono); font-size: 12.5px; padding: 4px 0; }
+  .sb-row.me { color: var(--accent); }
+  .sb-row span:not(:first-child) { text-align: right; }
+  .sb-row.sb-cols-head { color: var(--dim); font-size: 10px; letter-spacing: .12em; }
+
   #btn-pause { position: fixed; top: 14px; right: 16px; width: 42px; height: 42px;
     display: flex; align-items: center; justify-content: center; cursor: pointer;
     pointer-events: auto; color: var(--dim); padding: 0; }
@@ -177,8 +200,16 @@
   </div>
   <div id="score" class="hud-panel">
     <span class="t"><span class="chip" style="background:var(--red)"></span><span id="score-red">0</span></span>
-    <span class="sep">VS</span>
+    <span class="sep" id="score-sep">VS</span>
     <span class="t"><span id="score-blue">0</span><span class="chip" style="background:var(--blue)"></span></span>
+  </div>
+  <div id="round-pips"></div>
+  <div id="scoreboard">
+    <div class="sb-head">MARCADOR — 100 PTS POR KILL</div>
+    <div class="sb-cols">
+      <div class="sb-team" id="sb-red"><div class="sb-title" style="color:var(--red)">EQUIPO ROJO</div></div>
+      <div class="sb-team" id="sb-blue"><div class="sb-title" style="color:var(--blue)">EQUIPO AZUL</div></div>
+    </div>
   </div>
   <div id="weapon" class="hud-panel">
     <div class="name" id="wep-name">METRALLETA</div>
@@ -210,7 +241,11 @@
       <svg width="13" height="13" viewBox="0 0 13 13" fill="currentColor"><path d="M2 1.5l9 5-9 5z"/></svg>
       Reanudar
     </button>
-    <button class="btn primary" id="btn-practice">
+    <button class="btn primary" id="btn-bots">
+      <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="4" width="9" height="6" rx="2"/><circle cx="5" cy="7" r="0.8" fill="currentColor"/><circle cx="8" cy="7" r="0.8" fill="currentColor"/><path d="M6.5 4V1.8"/></svg>
+      VS Bots (4v4)
+    </button>
+    <button class="btn" id="btn-practice">
       <svg width="13" height="13" viewBox="0 0 13 13" fill="currentColor"><path d="M2 1.5l9 5-9 5z"/></svg>
       Práctica
     </button>

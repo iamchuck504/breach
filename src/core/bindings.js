@@ -2,22 +2,23 @@
 const KB_DEFAULT = {
   forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD',
   sprint: 'ShiftLeft', evade: 'Space', jump: 'KeyF', reload: 'KeyR', swap: 'KeyQ',
+  score: 'Tab',
 };
 // Índices estándar de Gamepad API (layout Xbox)
 // A=correr, X=cubrirse/evadir, B=saltar, RB=recargar (pedido de Chuck)
-const PAD_DEFAULT = { sprint: 0, evade: 2, jump: 1, reload: 5, swap: 3, aim: 6, fire: 7, pause: 9 };
+const PAD_DEFAULT = { sprint: 0, evade: 2, jump: 1, reload: 5, swap: 3, aim: 6, fire: 7, score: 8, pause: 9 };
 
 export const BINDS = { kb: { ...KB_DEFAULT }, pad: { ...PAD_DEFAULT } };
 
 export const KB_LABELS = {
   forward: 'Adelante', back: 'Atrás', left: 'Izquierda', right: 'Derecha',
   sprint: 'Roadie run', evade: 'Cover / Evadir', jump: 'Saltar',
-  reload: 'Recargar', swap: 'Cambiar arma',
+  reload: 'Recargar', swap: 'Cambiar arma', score: 'Marcador',
 };
 export const PAD_LABELS = {
   sprint: 'Roadie run', evade: 'Cover / Evadir', jump: 'Saltar',
   aim: 'Apuntar', fire: 'Disparar', reload: 'Recargar',
-  swap: 'Cambiar arma', pause: 'Pausa',
+  swap: 'Cambiar arma', score: 'Marcador', pause: 'Pausa',
 };
 
 export const PAD_BTN_NAMES = [

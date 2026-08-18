@@ -244,7 +244,7 @@ try {
     padRows: document.getElementById('pad-rows').children.length,
   }));
   console.log('CONTROLS:', JSON.stringify(ctrls));
-  if (ctrls.kbRows !== 9 || ctrls.padRows !== 8) errors.push('CONTROLS: filas esperadas 9/8, got ' + ctrls.kbRows + '/' + ctrls.padRows);
+  if (ctrls.kbRows !== 10 || ctrls.padRows !== 9) errors.push('CONTROLS: filas esperadas 10/9, got ' + ctrls.kbRows + '/' + ctrls.padRows);
   await page.screenshot({ path: path.join(root, 'scripts', 'shot-controls.png') });
   await page.evaluate(() => document.getElementById('btn-back').click());
   await page.evaluate(() => document.getElementById('btn-resume').click());
@@ -258,6 +258,33 @@ try {
     playerState: window.BREACH.player?.state,
   }));
   console.log('STATE:', JSON.stringify(state));
+
+  // ---- modo VS BOTS: mapa arena, 7 bots, vidas 19/19, scoreboard con Tab ----
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+  await page.evaluate(() => document.getElementById('btn-bots').click());
+  await page.waitForTimeout(1500);
+  const bots = await page.evaluate(() => ({
+    mode: window.BREACH.mode,
+    bots: window.BREACH.botMatch.bots.length,
+    livesR: window.BREACH.botMatch.livesOf('red'),
+    livesB: window.BREACH.botMatch.livesOf('blue'),
+    timer: Math.round(window.BREACH.botMatch.timer),
+    layout: window.BREACH.player ? document.title && 'arena' : '?',
+  }));
+  console.log('BOTS:', JSON.stringify(bots));
+  if (bots.mode !== 'bots' || bots.bots !== 7) errors.push('BOTS: modo/bots mal (' + JSON.stringify(bots) + ')');
+  if (bots.livesR !== 19 || bots.livesB > 19) errors.push('BOTS: vidas iniciales mal (' + bots.livesR + '/' + bots.livesB + ')');
+  await page.keyboard.down('Tab');
+  await page.waitForTimeout(300);
+  const sb = await page.evaluate(() => ({
+    on: document.getElementById('scoreboard').classList.contains('on'),
+    rows: document.querySelectorAll('#scoreboard .sb-row:not(.sb-cols-head)').length,
+  }));
+  await page.screenshot({ path: path.join(root, 'scripts', 'shot-bots.png') });
+  await page.keyboard.up('Tab');
+  console.log('SCOREBOARD:', JSON.stringify(sb));
+  if (!sb.on || sb.rows !== 8) errors.push('SCOREBOARD: esperaba 8 filas visibles, got ' + JSON.stringify(sb));
 
   // ---- multijugador: dos clientes en el mismo server ----
   const ctx2 = await browser.newContext({ viewport: { width: 960, height: 540 } });

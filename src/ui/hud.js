@@ -11,6 +11,11 @@ export class HUD {
       hitmarker: document.getElementById('hitmarker'),
       scoreRed: document.getElementById('score-red'),
       scoreBlue: document.getElementById('score-blue'),
+      scoreSep: document.getElementById('score-sep'),
+      roundPips: document.getElementById('round-pips'),
+      scoreboard: document.getElementById('scoreboard'),
+      sbRed: document.getElementById('sb-red'),
+      sbBlue: document.getElementById('sb-blue'),
       wepName: document.getElementById('wep-name'),
       wepMag: document.getElementById('wep-mag'),
       wepRes: document.getElementById('wep-res'),
@@ -67,6 +72,39 @@ export class HUD {
   score(r, b) {
     this.el.scoreRed.textContent = r;
     this.el.scoreBlue.textContent = b;
+  }
+
+  // temporizador de ronda en el separador central (m:ss); null → "VS"
+  timer(sec) {
+    if (sec === null) { this.el.scoreSep.textContent = 'VS'; return; }
+    const s = Math.max(0, Math.ceil(sec));
+    this.el.scoreSep.textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  }
+
+  // pips de rondas ganadas (mejor de 3)
+  roundPips(winsR, winsB) {
+    if (winsR === null) { this.el.roundPips.innerHTML = ''; return; }
+    let html = '';
+    for (let i = 0; i < 2; i++) html += `<div class="pip${i < winsR ? ' red' : ''}"></div>`;
+    for (let i = 0; i < 2; i++) html += `<div class="pip${i < winsB ? ' blue' : ''}"></div>`;
+    this.el.roundPips.innerHTML = html;
+  }
+
+  // scoreboard (Tab / VIEW): rows ordenadas por puntaje, null → ocultar
+  scoreboard(rows) {
+    this.el.scoreboard.classList.toggle('on', !!rows);
+    if (!rows) return;
+    const head = '<div class="sb-row sb-cols-head"><span>NOMBRE</span><span>K</span><span>D</span><span>PTS</span></div>';
+    for (const team of ['red', 'blue']) {
+      const el = team === 'red' ? this.el.sbRed : this.el.sbBlue;
+      const title = el.querySelector('.sb-title').outerHTML;
+      el.innerHTML = title + head + rows
+        .filter((r) => r.team === team)
+        .map((r) =>
+          `<div class="sb-row${r.id === 'player' ? ' me' : ''}">` +
+          `<span>${esc(r.name)}</span><span>${r.kills}</span><span>${r.deaths}</span><span>${r.score}</span></div>`)
+        .join('');
+    }
   }
 
   health(pct) {

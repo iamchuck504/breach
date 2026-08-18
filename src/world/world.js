@@ -8,15 +8,40 @@ import * as THREE from 'three';
 const FIELD_X = 15, FIELD_Z = 18; // semiancho / semilargo
 
 export class World {
-  constructor(scene) {
+  constructor(scene, layout = 'foundry') {
     this.scene = scene;
+    this._buildLights();
+    this.mapGroup = null;
+    this.layout = null;
+    this.setLayout(layout);
+  }
+
+  // Cambia de mapa en caliente: 'foundry' (grande) | 'arena' (compacto, bots)
+  setLayout(layout) {
+    if (this.layout === layout && this.mapGroup) return;
+    this.layout = layout;
+    if (this.mapGroup) {
+      this.scene.remove(this.mapGroup);
+      this.mapGroup.traverse((o) => {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) {
+          (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => {
+            if (m.map) m.map.dispose();
+            m.dispose();
+          });
+        }
+      });
+    }
+    this.mapGroup = new THREE.Group();
+    this.scene.add(this.mapGroup);
     this.colliders = []; // {minx,minz,maxx,maxz,h}
     this.faces = [];     // caras de cobertura {n:{x,z}, a:{x,z}, b:{x,z}, h}
     this.spawns = { red: [], blue: [] };
+    this.fx = layout === 'arena' ? 11 : FIELD_X;
+    this.fz = layout === 'arena' ? 13 : FIELD_Z;
 
-    this._buildLights();
     this._buildFloor();
-    this._buildMap();
+    if (layout === 'arena') this._buildArena(); else this._buildMap();
     this._buildSpawns();
   }
 
@@ -56,41 +81,42 @@ export class World {
     g.strokeRect(8, 8, 240, 240);
     const tex = new THREE.CanvasTexture(cv);
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.repeat.set(FIELD_X, FIELD_Z);
+    tex.repeat.set(this.fx, this.fz);
     tex.colorSpace = THREE.SRGBColorSpace;
     const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(FIELD_X * 2, FIELD_Z * 2),
+      new THREE.PlaneGeometry(this.fx * 2, this.fz * 2),
       new THREE.MeshLambertMaterial({ map: tex })
     );
     floor.rotation.x = -Math.PI / 2;
     floor.receiveShadow = true;
-    this.scene.add(floor);
+    this.mapGroup.add(floor);
 
     // tinte de zona por equipo cerca de cada base
-    for (const [color, z] of [[0xe05545, -15.5], [0x4f8de0, 15.5]]) {
+    for (const [color, sign] of [[0xe05545, -1], [0x4f8de0, 1]]) {
+      const z = sign * (this.fz - 2.5);
       const zone = new THREE.Mesh(
-        new THREE.PlaneGeometry(FIELD_X * 2 - 1, 4.6),
+        new THREE.PlaneGeometry(this.fx * 2 - 1, 4.6),
         new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.10 })
       );
       zone.rotation.x = -Math.PI / 2;
       zone.position.set(0, 0.01, z);
-      this.scene.add(zone);
+      this.mapGroup.add(zone);
       const strip = new THREE.Mesh(
-        new THREE.PlaneGeometry(FIELD_X * 2 - 1, 0.22),
+        new THREE.PlaneGeometry(this.fx * 2 - 1, 0.22),
         new THREE.MeshBasicMaterial({ color })
       );
       strip.rotation.x = -Math.PI / 2;
       strip.position.set(0, 0.012, z + (z < 0 ? 2.4 : -2.4));
-      this.scene.add(strip);
+      this.mapGroup.add(strip);
     }
     // línea central
     const mid = new THREE.Mesh(
-      new THREE.PlaneGeometry(FIELD_X * 2 - 1, 0.14),
+      new THREE.PlaneGeometry(this.fx * 2 - 1, 0.14),
       new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35 })
     );
     mid.rotation.x = -Math.PI / 2;
     mid.position.y = 0.011;
-    this.scene.add(mid);
+    this.mapGroup.add(mid);
   }
 
   // Caja física + visual. mirror=true agrega la copia rotada 180° (-x,-z).
@@ -99,7 +125,7 @@ export class World {
       const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), this._mat(color, top));
       mesh.position.set(px, h / 2, pz);
       mesh.castShadow = true; mesh.receiveShadow = true;
-      this.scene.add(mesh);
+      this.mapGroup.add(mesh);
       const minx = px - w / 2, maxx = px + w / 2, minz = pz - d / 2, maxz = pz + d / 2;
       this.colliders.push({ minx, minz, maxx, maxz, h });
       if (cover) {
@@ -122,10 +148,10 @@ export class World {
 
     // --- muros perimetrales (no espejar, cover en cara interna solamente por geometría)
     const wallOpts = { mirror: false, color: 0x8a857d, top: 0x9a958c };
-    this._box(0, -FIELD_Z - 0.4, FIELD_X * 2 + 2, 0.8, 3.2, wallOpts);
-    this._box(0, FIELD_Z + 0.4, FIELD_X * 2 + 2, 0.8, 3.2, wallOpts);
-    this._box(-FIELD_X - 0.4, 0, 0.8, FIELD_Z * 2 + 2, 3.2, wallOpts);
-    this._box(FIELD_X + 0.4, 0, 0.8, FIELD_Z * 2 + 2, 3.2, wallOpts);
+    this._box(0, -this.fz - 0.4, this.fx * 2 + 2, 0.8, 3.2, wallOpts);
+    this._box(0, this.fz + 0.4, this.fx * 2 + 2, 0.8, 3.2, wallOpts);
+    this._box(-this.fx - 0.4, 0, 0.8, this.fz * 2 + 2, 3.2, wallOpts);
+    this._box(this.fx + 0.4, 0, 0.8, this.fz * 2 + 2, 3.2, wallOpts);
 
     // --- base (lado rojo; espejo crea el lado azul)
     // escudo de spawn con salidas a los lados
@@ -164,16 +190,48 @@ export class World {
         new THREE.MeshLambertMaterial({ color: 0x8794a0 })
       );
       m.position.set(x, h / 2 - 0.5, z);
-      this.scene.add(m);
+      this.mapGroup.add(m);
     }
   }
 
+  // Mapa "Arena": compacto (22×26), para el modo 4v4 vs bots — cadena corta
+  // de coberturas al centro, pilares de flanco y carriles laterales rápidos.
+  _buildArena() {
+    const LOW = 1.05, HIGH = 2.4;
+    const lowOpts = { color: 0x9c968c, top: 0xc6c1b5 };
+    const highOpts = { color: 0x969188, top: 0xaba69d };
+    const wallOpts = { mirror: false, color: 0x8a857d, top: 0x9a958c };
+
+    // perímetro
+    this._box(0, -this.fz - 0.4, this.fx * 2 + 2, 0.8, 3.2, wallOpts);
+    this._box(0, this.fz + 0.4, this.fx * 2 + 2, 0.8, 3.2, wallOpts);
+    this._box(-this.fx - 0.4, 0, 0.8, this.fz * 2 + 2, 3.2, wallOpts);
+    this._box(this.fx + 0.4, 0, 0.8, this.fz * 2 + 2, 3.2, wallOpts);
+
+    // escudo de spawn con salidas laterales
+    this._box(0, -10.6, 5, 0.9, 2.3, highOpts);
+    // bajas flanqueando las salidas
+    this._box(-4.4, -8.4, 2.2, 0.9, LOW, lowOpts);
+    this._box(4.4, -8.4, 2.2, 0.9, LOW, lowOpts);
+    // cadena escalonada hacia el centro
+    this._box(-1.6, -5.6, 2.4, 0.9, LOW, lowOpts);
+    this._box(2.4, -3.2, 2.4, 0.9, LOW, lowOpts);
+    // pilar alto de flanco
+    this._box(-6.6, -3.6, 1.1, 1.1, HIGH, highOpts);
+    // cover del carril lateral
+    this._box(9.2, -5.6, 0.9, 2.2, LOW, lowOpts);
+    // centro: pilar contestado + baja lateral (el espejo crea el par)
+    this._box(0, 0, 1.3, 1.3, 2.6, { ...highOpts, mirror: false, top: 0xffb075 });
+    this._box(-4.6, 0.4, 0.9, 2.0, LOW, lowOpts);
+  }
+
   _buildSpawns() {
+    const z = this.fz - 1.6;
     for (let i = 0; i < 4; i++) {
       const x = -3.6 + i * 2.4;
       // convención: facing = (-sin yaw, -cos yaw) → yaw π mira a +z, yaw 0 a -z
-      this.spawns.red.push({ x, z: -16.4, yaw: Math.PI });   // miran hacia +z
-      this.spawns.blue.push({ x: -x, z: 16.4, yaw: 0 });     // miran hacia -z
+      this.spawns.red.push({ x, z: -z, yaw: Math.PI });   // miran hacia +z
+      this.spawns.blue.push({ x: -x, z, yaw: 0 });        // miran hacia -z
     }
   }
 
