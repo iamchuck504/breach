@@ -1112,6 +1112,7 @@ let last = performance.now();
 window.BREACH = G;
 window.BREACH_INPUT = input;
 window.BREACH_CAM = camera;
+window.BREACH_AUDIO = audio;
 window.THREE = THREE;
 
 function angDiff(a, b) {

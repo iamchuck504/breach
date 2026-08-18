@@ -1,10 +1,14 @@
-// Audio 100% procedural con WebAudio (sin assets). M = mute.
+// Audio WebAudio: sintético procedural + samples de armas (public/audio).
+// Las armas usan UN sample por disparo — a 620 RPM el uzi suena exactamente
+// al rate of fire real porque cada bala dispara su propia reproducción.
+// M = mute.
 export class Audio {
   constructor() {
     this.ctx = null;
     this.master = null;
     this.muted = localStorage.getItem('breach.muted') === 'true';
     this._noise = null;
+    this.samples = {};
   }
 
   ensure() {
@@ -18,6 +22,35 @@ export class Audio {
     const d = buf.getChannelData(0);
     for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
     this._noise = buf;
+    this._loadSamples();
+  }
+
+  // Samples de armas (mejor esfuerzo): si no cargan, queda el sintético.
+  _loadSamples() {
+    if (this._samplesReq) return;
+    this._samplesReq = true;
+    for (const [k, url] of [['smg', 'audio/smg.mp3'], ['shotgun', 'audio/shotgun.mp3']]) {
+      fetch(url)
+        .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.arrayBuffer(); })
+        .then((ab) => this.ctx.decodeAudioData(ab))
+        .then((buf) => { this.samples[k] = buf; })
+        .catch(() => { /* sin sample: fallback sintético */ });
+    }
+  }
+
+  // true si el sample sonó; rate con leve variación evita el efecto metralla
+  // de fotocopia (mismo golpe idéntico 10 veces por segundo)
+  _sample(k, gain, rate = 1) {
+    const buf = this.samples[k];
+    if (!buf || !this.ctx) return false;
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    src.playbackRate.value = rate;
+    const g = this.ctx.createGain();
+    g.gain.value = gain;
+    src.connect(g).connect(this.master);
+    src.start(this.ctx.currentTime);
+    return true;
   }
 
   toggleMute() {
@@ -62,8 +95,14 @@ export class Audio {
     o.start(t); o.stop(t + dec + 0.05);
   }
 
-  smg() { this._noiseShot(0.5, 0.09, 3200, 900); this._tone('square', 190, 90, 0.12, 0.06); }
-  shotgun() { this._noiseShot(0.85, 0.28, 1600, 220, 2); this._tone('sine', 130, 45, 0.55, 0.22); }
+  smg() {
+    if (this._sample('smg', 0.8, 0.97 + Math.random() * 0.06)) return;
+    this._noiseShot(0.5, 0.09, 3200, 900); this._tone('square', 190, 90, 0.12, 0.06);
+  }
+  shotgun() {
+    if (this._sample('shotgun', 1.6, 0.98 + Math.random() * 0.04)) return;
+    this._noiseShot(0.85, 0.28, 1600, 220, 2); this._tone('sine', 130, 45, 0.55, 0.22);
+  }
   reload() { this._tone('square', 700, 500, 0.07, 0.04); }
   reloadDone() { this._tone('square', 900, 1200, 0.08, 0.05); }
   hit() { this._tone('sine', 1150, 900, 0.14, 0.045); }
