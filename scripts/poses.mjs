@@ -118,7 +118,7 @@ try {
   await page.screenshot({ path: path.join(root, 'scripts', 'pose-roadie.png') });
   await page.keyboard.up('a'); await page.keyboard.up('Shift');
 
-  // cover contra un bloque LOW (1.1) del mapa District
+  // cover contra un bloque LOW (1.1) del mapa Fortaleza
   await page.evaluate(() => {
     const G = window.BREACH;
     G.player.pos.x = -1.5; G.player.pos.z = -4.4;

@@ -15,7 +15,7 @@ const CRATE_RESPAWN = 30;
 const CRATES = [{ x: 7, z: 0, up: true, t: 0 }, { x: -7, z: 0, up: true, t: 0 }];
 const TICK_HZ = 20;
 
-// espejo de world.js (mapa 'district', fz 25 → spawns en ±23.4)
+// espejo de world.js (mapa 'fortaleza', fz 25 → spawns en ±23.4)
 const SPAWNS = { red: [], blue: [] };
 for (let i = 0; i < 4; i++) {
   const x = -3.6 + i * 2.4;

@@ -582,7 +582,7 @@ function startBots() {
   startSeq++;
   teardown();
   G.name = saveName();
-  world.setLayout('district'); // mapa grande también para el 4v4 vs bots
+  world.setLayout('fortaleza'); // mapa grande también para el 4v4 vs bots
   G.mode = 'bots';
   spawnLocal('red', world.spawns.red[0]);
   G.selfHp = TUNING.combat.hp;
@@ -636,7 +636,7 @@ function startPractice() {
   startSeq++;
   teardown();
   G.name = saveName();
-  world.setLayout('district'); // el mapa grande, para explorarlo con dummies
+  world.setLayout('fortaleza'); // el mapa grande, para explorarlo con dummies
   G.mode = 'practice';
   spawnLocal('red', world.spawns.red[1]);
   G.dummies = new Dummies(scene);
@@ -667,7 +667,7 @@ async function startOnline() {
     // este welcome tardío no debe secuestrarla
     if (startSeq !== mySeq) { net.close(); return; }
     teardown();
-    world.setLayout('district'); // mapa grande de multijugador
+    world.setLayout('fortaleza'); // mapa grande de multijugador
     G.net = net;
     G.mode = 'online';
     spawnLocal(welcome.team, welcome.spawn);
@@ -1035,6 +1035,7 @@ let last = performance.now();
 // handle de debug/testing
 window.BREACH = G;
 window.BREACH_INPUT = input;
+window.BREACH_CAM = camera;
 window.THREE = THREE;
 
 function angDiff(a, b) {
