@@ -148,12 +148,13 @@ export class Audio {
     src.stop(t + dec + 0.06);
   }
 
+  // ambos samples normalizados a pico 0dB: el balance vive en estas ganancias
   smg() {
-    if (this._sample('smg', 0.8, 0.97 + Math.random() * 0.06)) return;
+    if (this._sample('smg', 0.75, 0.97 + Math.random() * 0.06)) return;
     this._noiseShot(0.5, 0.09, 3200, 900); this._tone('square', 190, 90, 0.12, 0.06);
   }
   shotgun() {
-    if (this._sample('shotgun', 1.6, 0.98 + Math.random() * 0.04)) return;
+    if (this._sample('shotgun', 0.85, 0.98 + Math.random() * 0.04)) return;
     this._noiseShot(0.85, 0.28, 1600, 220, 2); this._tone('sine', 130, 45, 0.55, 0.22);
   }
   reload() { this._tone('square', 700, 500, 0.07, 0.04); }
