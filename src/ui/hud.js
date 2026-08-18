@@ -5,6 +5,7 @@ export class HUD {
     this.el = {
       hud: document.getElementById('hud'),
       crosshair: document.getElementById('crosshair'),
+      crossRing: document.getElementById('cross-ring'),
       barrel: document.getElementById('barrel-dot'),
       vignette: document.getElementById('vignette'),
       hitmarker: document.getElementById('hitmarker'),
@@ -48,9 +49,15 @@ export class HUD {
     this.el.hitmarker.classList.add('pop');
   }
 
-  // aiming: cruz central. hip/blind: punto proyectado del cañón.
-  reticle(aiming, barrelXY) {
+  // aiming: anillo dimensionado por el spread/rango del arma.
+  // hip/blind: punto proyectado del cañón.
+  reticle(aiming, barrelXY, aimInfo = null) {
     this.el.crosshair.classList.toggle('aim', aiming);
+    if (aiming && aimInfo) {
+      this.el.crossRing.setAttribute('r', Math.max(5, aimInfo.r).toFixed(1));
+      // fuera del rango efectivo del arma: el anillo se atenúa
+      this.el.crossRing.setAttribute('stroke-opacity', aimInfo.inRange ? '0.9' : '0.28');
+    }
     if (!aiming && barrelXY) {
       this.el.barrel.classList.add('on');
       this.el.barrel.style.left = barrelXY.x + 'px';

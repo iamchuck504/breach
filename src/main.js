@@ -572,30 +572,42 @@ function fireShot() {
 }
 
 // ---------- retícula de cañón (shoot from the barrel) ----------
+let dotX = 0, dotY = 0, dotWasOn = false;
+
 function updateReticle() {
   const p = G.player;
   const canShow = p && !p.dead && G.mode &&
     p.state !== 'roadie' && p.state !== 'dive' && p.state !== 'slide';
-  if (!canShow) { hud.reticle(false, null); return; }
-  if (p.aim) { hud.reticle(true, null); return; }
-  const dir = hipDir();
-  // origen: el cañón real si está disparando / en cover; si está relajado
-  // (low-ready), el pecho — donde quedará el arma al levantar a postura de tiro
-  let muzzle;
-  if (p.firingBlind > 0 || p.state === 'cover') {
-    muzzle = _v1.copy(G.rig.muzzleWorld(_v2));
-    if (p.state === 'cover') muzzle.addScaledVector(dir, 0.4);
-  } else {
-    G.rig.root.updateWorldMatrix(true, true);
-    muzzle = G.rig.aimRig.getWorldPosition(_v1).addScaledVector(dir, 0.3);
+  if (!canShow) { hud.reticle(false, null); dotWasOn = false; return; }
+
+  if (p.aim) {
+    // ADS: anillo del tamaño real del cono de dispersión del arma,
+    // atenuado si el punto apuntado queda fuera de su rango efectivo
+    dotWasOn = false;
+    const def = G.weapons.def;
+    const ringPx = Math.tan(def.spreadAim * Math.PI / 180) /
+      Math.tan(camera.fov * Math.PI / 360) * (innerHeight / 2);
+    const ray = shoulderCam.aimRay();
+    const t = world.raycast(ray.origin, ray.dir, 200) ?? 200;
+    hud.reticle(true, null, { r: ringPx, inRange: t <= def.range });
+    return;
   }
-  const hit = resolveShot(world, currentTargets(), muzzle, dir, 60, null);
-  _v3.copy(hit.point).project(camera);
-  if (_v3.z > 1) { hud.reticle(false, null); return; }
-  hud.reticle(false, {
-    x: (_v3.x * 0.5 + 0.5) * innerWidth,
-    y: (-_v3.y * 0.5 + 0.5) * innerHeight,
-  });
+
+  // hip/blind: punto proyectado ESTABLE — origen fijo en el pecho (no cambia
+  // con la pose del arma), solo contra geometría (no "pesca" enemigos) y
+  // con suavizado de pantalla para que nunca brinque
+  const dir = hipDir();
+  G.rig.root.updateWorldMatrix(true, true);
+  const origin = G.rig.aimRig.getWorldPosition(_v1)
+    .addScaledVector(dir, p.state === 'cover' ? 0.9 : 0.3);
+  const t = world.raycast(origin, dir, 60) ?? 60;
+  _v3.copy(origin).addScaledVector(dir, t).project(camera);
+  if (_v3.z > 1) { hud.reticle(false, null); dotWasOn = false; return; }
+  const tx = (_v3.x * 0.5 + 0.5) * innerWidth;
+  const ty = (-_v3.y * 0.5 + 0.5) * innerHeight;
+  if (!dotWasOn) { dotX = tx; dotY = ty; dotWasOn = true; }
+  else { dotX += (tx - dotX) * 0.4; dotY += (ty - dotY) * 0.4; }
+  hud.reticle(false, { x: dotX, y: dotY });
 }
 
 // ---------- loop principal ----------

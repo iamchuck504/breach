@@ -154,7 +154,28 @@ try {
   await page.keyboard.up('d');
   console.log('DOUBLEJUMP:', JSON.stringify(dj));
   if (dj.st !== 'flip' || !dj.used) errors.push('DOUBLEJUMP: no hizo la vuelta (' + JSON.stringify(dj) + ')');
+  if (dj.axis !== 'z') errors.push('DOUBLEJUMP: stick derecha debería dar giro lateral, dio ' + dj.axis);
   await page.waitForTimeout(800);
+
+  // retícula ADS por arma: la escopeta debe dibujar un anillo mucho mayor
+  await page.mouse.down({ button: 'right' });
+  await page.waitForTimeout(250);
+  const rSmg = await page.evaluate(() => +document.getElementById('cross-ring').getAttribute('r'));
+  await page.mouse.up({ button: 'right' });
+  await page.keyboard.press('q'); // cambiar a escopeta (con animación)
+  await page.waitForTimeout(750);
+  await page.mouse.down({ button: 'right' });
+  await page.waitForTimeout(250);
+  const rSg = await page.evaluate(() => ({
+    r: +document.getElementById('cross-ring').getAttribute('r'),
+    wep: window.BREACH.weapons.cur,
+  }));
+  await page.mouse.up({ button: 'right' });
+  console.log('RETICLE:', JSON.stringify({ smg: rSmg, shotgun: rSg.r, wep: rSg.wep }));
+  if (rSg.wep !== 'shotgun') errors.push('RETICLE: el swap no llegó a escopeta');
+  if (!(rSg.r > rSmg * 3)) errors.push('RETICLE: anillo de escopeta no es mayor (' + rSmg + ' vs ' + rSg.r + ')');
+  await page.keyboard.press('q'); // volver a metralleta
+  await page.waitForTimeout(700);
 
   // ---- menú de pausa + panel de controles ----
   await page.keyboard.press('Escape');

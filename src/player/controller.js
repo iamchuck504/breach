@@ -214,7 +214,7 @@ export class Controller {
         // pared, si no doble salto = vuelta hacia la dirección presionada
         if (input.jumpPressed) {
           if (this.grounded) this._tryJump();
-          else if (!this._tryWallKick() && !this.usedDouble && hasInput) this._airRoll(mw);
+          else if (!this._tryWallKick() && !this.usedDouble && hasInput) this._airRoll(mw, input.moveVec());
         }
 
         // evadir / cover (solo en el suelo)
@@ -432,8 +432,10 @@ export class Controller {
     return false;
   }
 
-  // Doble salto: vuelta hacia la dirección presionada (sin ganar altura)
-  _airRoll(mw) {
+  // Doble salto: vuelta hacia la dirección presionada (sin ganar altura).
+  // mv es el stick CRUDO (x = derecha en pantalla, z = adelante): el eje del
+  // giro respeta lo que el jugador presiona, no la orientación del cuerpo.
+  _airRoll(mw, mv) {
     const J = TUNING.jump;
     const mag = Math.max(0.001, Math.hypot(mw.x, mw.z));
     const d = { x: mw.x / mag, z: mw.z / mag };
@@ -442,14 +444,14 @@ export class Controller {
     this.vel.z = d.z * spd;
     this.vy = Math.max(this.vy, J.doubleVy);
     this.usedDouble = true;
-    // eje del giro según la dirección relativa al personaje
-    const f = this.facing();
-    const rx = Math.cos(this.yaw), rz = -Math.sin(this.yaw);
-    const fwd = d.x * f.x + d.z * f.z;
-    const lat = d.x * rx + d.z * rz;
     let axis, dir;
-    if (Math.abs(fwd) >= Math.abs(lat)) { axis = 'x'; dir = fwd >= 0 ? -1 : 1; } // adelante = front flip
-    else { axis = 'z'; dir = lat >= 0 ? 1 : -1; }
+    if (Math.abs(mv.z) >= Math.abs(mv.x)) {
+      axis = 'x';
+      dir = mv.z >= 0 ? -1 : 1;   // adelante = front flip, atrás = backflip
+    } else {
+      axis = 'z';
+      dir = mv.x >= 0 ? 1 : -1;   // stick derecha = giro a la derecha
+    }
     this.flip = { t: 0, dur: J.rollDur, axis, dir };
     this._setState('flip');
     this.ev.onDoubleJump?.();
