@@ -46,6 +46,10 @@ export class World {
     this.colliders = []; // {minx,minz,maxx,maxz,h}
     this.faces = [];     // caras de cobertura {n:{x,z}, a:{x,z}, b:{x,z}, h}
     this.spawns = { red: [], blue: [] };
+    // La geometría jugable se acumula en CPU y se sube como solo DOS meshes:
+    // uno para los lados y otro para las tapas. Antes, cada BoxGeometry tenía
+    // seis grupos/materiales y Fortaleza gastaba cientos de draw calls.
+    this._boxBatch = { sides: this._newBatch(), tops: this._newBatch() };
     // fz de fortaleza 26.6: bolsillo de spawn de 3.2m (spawns fijos en ±23.4)
     // — la cámara (dist 2.7) ya no choca con la muralla y no hace zoom forzado
     const dims = { arena: [11, 13], fortaleza: [21, 26.6], foundry: [FIELD_X, FIELD_Z] };
@@ -55,6 +59,7 @@ export class World {
     if (layout === 'arena') this._buildArena();
     else if (layout === 'fortaleza') this._buildFortaleza();
     else this._buildMap();
+    this._flushBoxBatch();
     this._buildSpawns();
 
     // el frustum de sombras debe cubrir el mapa ACTUAL (con ±30 fijos, las
@@ -117,7 +122,9 @@ export class World {
     const cv = document.createElement('canvas');
     cv.width = cv.height = s;
     const g = cv.getContext('2d');
-    g.fillStyle = '#6d6558'; g.fillRect(0, 0, s, s);
+    // Junta menos oscura: el grid sigue guiando distancias, pero ya no domina
+    // toda la imagen por encima de personajes y coberturas.
+    g.fillStyle = '#7a7367'; g.fillRect(0, 0, s, s);
     for (let r = 0; r < n; r++) {
       for (let c = 0; c < n; c++) {
         const x = c * cell, y = r * cell;
@@ -125,10 +132,10 @@ export class World {
         g.fillRect(x + 2, y + 2, cell - 4, cell - 4);
         g.fillStyle = 'rgba(255,255,255,0.14)';
         g.fillRect(x + 2, y + 2, cell - 4, 2);
-        g.fillStyle = 'rgba(40,34,26,0.22)';
+        g.fillStyle = 'rgba(40,34,26,0.15)';
         g.fillRect(x + 2, y + cell - 4, cell - 4, 2);
         if (Math.random() < 0.4) { // grieta
-          g.strokeStyle = 'rgba(52,45,36,0.35)'; g.lineWidth = 1;
+          g.strokeStyle = 'rgba(52,45,36,0.25)'; g.lineWidth = 1;
           g.beginPath();
           g.moveTo(x + 8 + Math.random() * 20, y + 6);
           g.lineTo(x + 14 + Math.random() * 30, y + cell - 8);
@@ -229,18 +236,68 @@ export class World {
     return t;
   }
 
-  // Materiales por cara con textura de sillar escalada al tamaño real de la
-  // caja (~1 tile por 1.7 m). El color del material tiñe la piedra.
-  _mat(color, topColor, w = 2, d = 2, h = 2) {
+  _newBatch() {
+    return { pos: [], norm: [], uv: [], color: [], idx: [], count: 0 };
+  }
+
+  // Agrega un quad al batch. Los UV pueden exceder 1: la textura usa RepeatWrapping.
+  _batchQuad(batch, verts, normal, uv, color) {
+    const base = batch.count;
+    const c = new THREE.Color(color);
+    for (let i = 0; i < 4; i++) {
+      batch.pos.push(...verts[i]);
+      batch.norm.push(...normal);
+      batch.uv.push(...uv[i]);
+      batch.color.push(c.r, c.g, c.b);
+    }
+    batch.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    batch.count += 4;
+  }
+
+  _batchBox(x, z, w, d, h, sideColor, topColor) {
+    const x0 = x - w / 2, x1 = x + w / 2;
+    const z0 = z - d / 2, z1 = z + d / 2;
     const S = 1.7;
-    const mk = (id, rx, ry, tint) => new THREE.MeshLambertMaterial({
-      color: tint,
-      map: this._tex(id, Math.max(0.5, Math.round(rx / S * 2) / 2), Math.max(0.5, Math.round(ry / S * 2) / 2)),
-    });
-    const sx = mk('stone', d, h, color);            // caras ±x
-    const sz = mk('stone', w, h, color);            // caras ±z
-    const tp = mk('stoneTop', w, d, topColor ?? color);
-    return [sx, sx, tp, tp, sz, sz];
+    const uw = w / S, ud = d / S, vh = h / S;
+    const b = this._boxBatch;
+
+    this._batchQuad(b.sides,
+      [[x1, 0, z0], [x1, h, z0], [x1, h, z1], [x1, 0, z1]],
+      [1, 0, 0], [[0, 0], [0, vh], [ud, vh], [ud, 0]], sideColor);
+    this._batchQuad(b.sides,
+      [[x0, 0, z1], [x0, h, z1], [x0, h, z0], [x0, 0, z0]],
+      [-1, 0, 0], [[0, 0], [0, vh], [ud, vh], [ud, 0]], sideColor);
+    this._batchQuad(b.sides,
+      [[x1, 0, z1], [x1, h, z1], [x0, h, z1], [x0, 0, z1]],
+      [0, 0, 1], [[0, 0], [0, vh], [uw, vh], [uw, 0]], sideColor);
+    this._batchQuad(b.sides,
+      [[x0, 0, z0], [x0, h, z0], [x1, h, z0], [x1, 0, z0]],
+      [0, 0, -1], [[0, 0], [0, vh], [uw, vh], [uw, 0]], sideColor);
+    this._batchQuad(b.tops,
+      [[x0, h, z0], [x0, h, z1], [x1, h, z1], [x1, h, z0]],
+      [0, 1, 0], [[0, 0], [0, ud], [uw, ud], [uw, 0]], topColor);
+  }
+
+  _flushBoxBatch() {
+    const build = (batch, texture) => {
+      if (!batch.count) return;
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(batch.pos, 3));
+      g.setAttribute('normal', new THREE.Float32BufferAttribute(batch.norm, 3));
+      g.setAttribute('uv', new THREE.Float32BufferAttribute(batch.uv, 2));
+      g.setAttribute('color', new THREE.Float32BufferAttribute(batch.color, 3));
+      g.setIndex(batch.idx);
+      g.computeBoundingSphere();
+      const mesh = new THREE.Mesh(g, new THREE.MeshLambertMaterial({
+        map: this._tex(texture), vertexColors: true,
+      }));
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      this.mapGroup.add(mesh);
+    };
+    build(this._boxBatch.sides, 'stone');
+    build(this._boxBatch.tops, 'stoneTop');
+    this._boxBatch = null;
   }
 
   _buildLights() {
@@ -252,7 +309,8 @@ export class World {
     const sun = new THREE.DirectionalLight(0xffe9c4, 2.3);
     sun.position.set(14, 22, 8);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
+    const coarseDisplay = matchMedia('(pointer: coarse)').matches;
+    sun.shadow.mapSize.set(coarseDisplay ? 1024 : 2048, coarseDisplay ? 1024 : 2048);
     const sc = sun.shadow.camera;
     sc.left = -30; sc.right = 30; sc.top = 30; sc.bottom = -30;
     sc.near = 2; sc.far = 80;
@@ -320,10 +378,7 @@ export class World {
       const jit = 0.95 + Math.random() * 0.1;
       const c = new THREE.Color(color).multiplyScalar(jit).getHex();
       const t = new THREE.Color(top).multiplyScalar(jit).getHex();
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), this._mat(c, t, w, d, h));
-      mesh.position.set(px, h / 2, pz);
-      mesh.castShadow = true; mesh.receiveShadow = true;
-      this.mapGroup.add(mesh);
+      this._batchBox(px, pz, w, d, h, c, t);
       const minx = px - w / 2, maxx = px + w / 2, minz = pz - d / 2, maxz = pz + d / 2;
       this.colliders.push({ minx, minz, maxx, maxz, h });
       if (cover) {

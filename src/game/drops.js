@@ -38,8 +38,13 @@ export class WeaponDrops {
     if (!d) return;
     this.scene.remove(d.mesh);
     d.mesh.traverse((o) => {
-      if (o.geometry) o.geometry.dispose();
-      if (o.material) o.material.dispose();
+      // Las armas procedurales comparten primitivas/materiales con los rigs.
+      // Destruirlos al recoger un drop corrompería los personajes restantes.
+      if (o.geometry && !o.geometry.userData.shared) o.geometry.dispose();
+      if (o.material) {
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of mats) if (!m.userData.shared) m.dispose();
+      }
     });
     this.drops.delete(id);
   }

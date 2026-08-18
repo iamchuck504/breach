@@ -25,7 +25,12 @@ const TEAM_HEX = { red: 0xd94f3f, blue: 0x4f8de0 };
 // ---------- setup base ----------
 const canvas = document.getElementById('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+// En pantallas táctiles/DPR alto, 2× cuadruplica el fill-rate sin aportar
+// legibilidad al shooter. Escritorio conserva el máximo; móvil usa un techo
+// más sensato y estable.
+const coarseDisplay = matchMedia('(pointer: coarse)').matches;
+renderer.setPixelRatio(Math.min(devicePixelRatio, coarseDisplay ? 1.35 : 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap; // bordes de sombra nítidos, sin suavizado
 

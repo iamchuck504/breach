@@ -13,6 +13,36 @@ const TEAM_COLORS = { red: 0xd94f3f, blue: 0x4f8de0 };
 const DARK = 0x33363c, MID = 0x565b63, VISOR = 0x15171c;
 const SKIN = 0xc9a077, HAIR = 0x4a3524;
 
+// Primitivas y materiales compartidos por TODOS los rigs. Antes cada pieza de
+// cada personaje creaba su propio geometry/material: mucha memoria, uploads y
+// compilaciones repetidas para objetos visualmente idénticos.
+const BOX_GEO = new THREE.BoxGeometry(1, 1, 1);
+const BALL_GEO = new THREE.SphereGeometry(1, 14, 10);
+BOX_GEO.userData.shared = BALL_GEO.userData.shared = true;
+
+// Gradiente toon de cuatro pasos: conserva el coste ligero del estilo actual,
+// pero da más lectura de volumen y una silueta chibi menos plana.
+const TOON_GRADIENT = new THREE.DataTexture(new Uint8Array([
+  70, 70, 70, 255,
+  125, 125, 125, 255,
+  190, 190, 190, 255,
+  255, 255, 255, 255,
+]), 4, 1, THREE.RGBAFormat);
+TOON_GRADIENT.minFilter = TOON_GRADIENT.magFilter = THREE.NearestFilter;
+TOON_GRADIENT.needsUpdate = true;
+TOON_GRADIENT.userData.cached = true;
+
+const MATERIALS = new Map();
+function toonMaterial(color) {
+  let mat = MATERIALS.get(color);
+  if (!mat) {
+    mat = new THREE.MeshToonMaterial({ color, gradientMap: TOON_GRADIENT });
+    mat.userData.shared = true;
+    MATERIALS.set(color, mat);
+  }
+  return mat;
+}
+
 // 5 variantes de soldado por equipo — SOLO estética: mismas proporciones,
 // mismo hitbox (la cápsula de ballistics es analítica, independiente del
 // modelo) y el pecho SIEMPRE del color del equipo. Ningún accesorio sale
@@ -22,15 +52,16 @@ export const CHAR_NAMES = ['RECLUTA', 'CENTINELA', 'EXPLORADOR', 'PESADO', 'FANT
 const L1 = 0.28, L2 = 0.36; // largo húmero / antebrazo (pivotes)
 
 function box(w, h, d, color, x = 0, y = 0, z = 0) {
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshLambertMaterial({ color }));
+  const m = new THREE.Mesh(BOX_GEO, toonMaterial(color));
   m.position.set(x, y, z);
+  m.scale.set(w, h, d);
   m.castShadow = true;
   return m;
 }
 function ball(r, color, x = 0, y = 0, z = 0, sx = 1, sy = 1, sz = 1) {
-  const m = new THREE.Mesh(new THREE.SphereGeometry(r, 14, 10), new THREE.MeshLambertMaterial({ color }));
+  const m = new THREE.Mesh(BALL_GEO, toonMaterial(color));
   m.position.set(x, y, z);
-  m.scale.set(sx, sy, sz);
+  m.scale.set(r * sx, r * sy, r * sz);
   m.castShadow = true;
   return m;
 }
@@ -752,14 +783,19 @@ export class Rig {
 
   dispose(scene) {
     scene.remove(this.root);
+    const geos = new Set(), mats = new Set(), maps = new Set();
     this.root.traverse((o) => {
-      if (o.geometry) o.geometry.dispose();
+      if (o.geometry && !o.geometry.userData.shared) geos.add(o.geometry);
       if (o.material) {
         (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => {
-          if (m.map) m.map.dispose(); // la CanvasTexture del nametag fugaba
-          m.dispose();
+          if (m.userData.shared) return;
+          if (m.map && !m.map.userData.cached) maps.add(m.map);
+          mats.add(m);
         });
       }
     });
+    for (const g of geos) g.dispose();
+    for (const t of maps) t.dispose(); // CanvasTexture única del nametag
+    for (const m of mats) m.dispose();
   }
 }

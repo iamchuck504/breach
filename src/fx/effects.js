@@ -7,6 +7,16 @@ export class Effects {
     this.items = []; // {obj, life, ttl, tick(item, dt)}
     this._tracerMat = new THREE.MeshBasicMaterial({ color: 0xffd9a0, transparent: true });
     this._tracerGeo = new THREE.BoxGeometry(1, 1, 1);
+    this._flashMat = new THREE.MeshBasicMaterial({ color: 0xffcf7d, transparent: true, opacity: 0.95 });
+    this._flashGeo = [
+      new THREE.SphereGeometry(0.09, 8, 6),
+      new THREE.SphereGeometry(0.14, 8, 6),
+    ];
+    this._gibGeo = new THREE.BoxGeometry(1, 1, 1);
+    this._gibMats = new Map();
+    for (const r of [this._tracerMat, this._tracerGeo, this._flashMat, ...this._flashGeo, this._gibGeo]) {
+      r.userData.shared = true;
+    }
   }
 
   _add(obj, ttl, tick) {
@@ -18,12 +28,13 @@ export class Effects {
     const dir = to.clone().sub(from);
     const len = dir.length();
     if (len < 0.3) return;
-    const m = new THREE.Mesh(this._tracerGeo, this._tracerMat.clone());
+    const m = new THREE.Mesh(this._tracerGeo, this._tracerMat);
     m.scale.set(0.025, 0.025, len);
     m.position.copy(from).addScaledVector(dir, 0.5);
     m.lookAt(to);
     this._add(m, 0.07, (it) => {
-      it.obj.material.opacity = 1 - it.life / it.ttl;
+      const fade = Math.max(0.15, 1 - it.life / it.ttl);
+      it.obj.scale.x = it.obj.scale.y = 0.025 * fade;
     });
   }
 
@@ -34,13 +45,12 @@ export class Effects {
       it.obj.intensity *= 0.75;
     });
     const s = new THREE.Mesh(
-      new THREE.SphereGeometry(big ? 0.14 : 0.09, 8, 6),
-      new THREE.MeshBasicMaterial({ color: 0xffcf7d, transparent: true, opacity: 0.95 })
+      this._flashGeo[big ? 1 : 0],
+      this._flashMat
     );
     s.position.copy(pos);
     this._add(s, 0.05, (it) => {
       it.obj.scale.multiplyScalar(1.18);
-      it.obj.material.opacity = 0.95 * (1 - it.life / it.ttl);
     });
   }
 
@@ -79,10 +89,17 @@ export class Effects {
     for (let i = 0; i < 14; i++) {
       const c = i % 3 === 0 ? teamColor : (i % 3 === 1 ? 0x565b63 : 0x33363c);
       const s = 0.07 + Math.random() * 0.12;
+      let mat = this._gibMats.get(c);
+      if (!mat) {
+        mat = new THREE.MeshLambertMaterial({ color: c });
+        mat.userData.shared = true;
+        this._gibMats.set(c, mat);
+      }
       const m = new THREE.Mesh(
-        new THREE.BoxGeometry(s, s, s),
-        new THREE.MeshLambertMaterial({ color: c })
+        this._gibGeo,
+        mat
       );
+      m.scale.setScalar(s);
       m.castShadow = true;
       m.position.set(pos.x, 0.9 + Math.random() * 0.5, pos.z);
       const vel = new THREE.Vector3(
@@ -95,8 +112,8 @@ export class Effects {
         if (it.obj.position.y < 0.05) { it.obj.position.y = 0.05; vel.y *= -0.35; vel.x *= 0.7; vel.z *= 0.7; }
         it.obj.rotation.x += rot.x * dt; it.obj.rotation.y += rot.y * dt;
         if (it.life > it.ttl * 0.7) {
-          it.obj.material.transparent = true;
-          it.obj.material.opacity = 1 - (it.life - it.ttl * 0.7) / (it.ttl * 0.3);
+          const fade = Math.max(0.05, 1 - (it.life - it.ttl * 0.7) / (it.ttl * 0.3));
+          it.obj.scale.setScalar(s * fade);
         }
       });
     }
@@ -108,8 +125,8 @@ export class Effects {
       it.life += dt;
       if (it.life >= it.ttl) {
         this.scene.remove(it.obj);
-        if (it.obj.geometry && it.obj.geometry !== this._tracerGeo) it.obj.geometry.dispose();
-        if (it.obj.material && it.obj.material !== this._tracerMat) it.obj.material.dispose?.();
+        if (it.obj.geometry && !it.obj.geometry.userData.shared) it.obj.geometry.dispose();
+        if (it.obj.material && !it.obj.material.userData.shared) it.obj.material.dispose?.();
         this.items.splice(i, 1);
       } else it.tick(it, dt);
     }
