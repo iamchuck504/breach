@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import GUI from 'lil-gui';
 import { TUNING, TUNING_DEFAULTS } from './config/tuning.js';
+import { BINDS, KB_LABELS, PAD_LABELS, keyLabel, padBtnName, loadBinds, saveBinds, resetBinds } from './core/bindings.js';
 import { Input } from './core/input.js';
 import { ShoulderCamera } from './core/camera.js';
 import { World } from './world/world.js';
@@ -66,6 +67,7 @@ const ctrlEvents = {
   onCoverEnter: () => {
     audio.thump();
     shoulderCam.addShake(0.35);
+    input.pad.rumble(60, 0.15, 0.4);
     if (G.player) effects.dust(G.player.pos);
   },
   onBounce: (chain) => {
@@ -77,6 +79,14 @@ const ctrlEvents = {
 };
 
 // ---------- menú ----------
+loadBinds();
+{
+  const sm = parseFloat(localStorage.getItem('breach.sens.mouse'));
+  if (sm > 0) TUNING.cam.sens = sm;
+  const sp = parseFloat(localStorage.getItem('breach.sens.pad'));
+  if (sp > 0) TUNING.cam.padSens = sp;
+}
+
 const inName = document.getElementById('in-name');
 const inServer = document.getElementById('in-server');
 const netStatus = document.getElementById('net-status');
@@ -85,19 +95,161 @@ const isSecure = location.protocol === 'https:';
 inServer.value = localStorage.getItem('breach.server') ||
   (isSecure ? '' : `ws://${location.hostname}:8787`);
 
+const mainCard = document.querySelector('#menu .menu-card');
+const controlsCard = document.getElementById('controls-card');
+const btnResume = document.getElementById('btn-resume');
+
+const menuIsOpen = () => !hud.el.menu.classList.contains('off');
+
+function openMenu() {
+  hud.showMenu(true);
+  showControls(false);
+  btnResume.style.display = G.mode ? 'flex' : 'none';
+  input.releaseLock();
+}
+function closeMenu() {
+  if (!G.mode) return; // sin partida no hay a dónde volver
+  hud.showMenu(false);
+  showControls(false);
+  cancelRebind();
+  input.requestLock();
+}
+
 document.getElementById('btn-practice').addEventListener('click', () => startPractice());
 document.getElementById('btn-online').addEventListener('click', () => startOnline());
+btnResume.addEventListener('click', () => closeMenu());
+document.getElementById('btn-pause').addEventListener('click', () => openMenu());
 
 input.onEscape = () => {
   if (!G.mode) return;
-  const menuOpen = !hud.el.menu.classList.contains('off');
-  hud.showMenu(!menuOpen);
+  if (menuIsOpen()) closeMenu(); else openMenu();
 };
 input.onToggleMute = () => {
   const m = audio.toggleMute();
   hud.hint(m ? 'AUDIO OFF' : 'AUDIO ON', 900);
 };
-input.onInvertChanged = (inv) => hud.hint('EJE Y ' + (inv ? 'INVERTIDO' : 'NORMAL'), 1200);
+input.onInvertChanged = (inv) => {
+  hud.hint('EJE Y ' + (inv ? 'INVERTIDO' : 'NORMAL'), 1200);
+  chkInvert.checked = inv;
+};
+
+// ---------- panel de controles ----------
+const kbRows = document.getElementById('kb-rows');
+const padRows = document.getElementById('pad-rows');
+const padStatus = document.getElementById('pad-status');
+const slMouse = document.getElementById('sl-mouse');
+const slMouseV = document.getElementById('sl-mouse-v');
+const slPad = document.getElementById('sl-pad');
+const slPadV = document.getElementById('sl-pad-v');
+const chkInvert = document.getElementById('chk-invert');
+let rebinding = null; // { cancel() }
+
+function showControls(on) {
+  mainCard.style.display = on ? 'none' : 'block';
+  controlsCard.style.display = on ? 'block' : 'none';
+  if (on) {
+    renderBinds();
+    slMouse.value = TUNING.cam.sens;
+    slPad.value = TUNING.cam.padSens;
+    chkInvert.checked = input.invertY;
+    updateSliderLabels();
+  } else cancelRebind();
+}
+document.getElementById('btn-controls').addEventListener('click', () => showControls(true));
+document.getElementById('btn-back').addEventListener('click', () => showControls(false));
+document.getElementById('btn-reset-binds').addEventListener('click', () => { resetBinds(); renderBinds(); });
+
+function updateSliderLabels() {
+  slMouseV.textContent = Number(slMouse.value).toFixed(3);
+  slPadV.textContent = slPad.value + '°/s';
+}
+slMouse.addEventListener('input', () => {
+  TUNING.cam.sens = parseFloat(slMouse.value);
+  localStorage.setItem('breach.sens.mouse', slMouse.value);
+  updateSliderLabels();
+});
+slPad.addEventListener('input', () => {
+  TUNING.cam.padSens = parseFloat(slPad.value);
+  localStorage.setItem('breach.sens.pad', slPad.value);
+  updateSliderLabels();
+});
+chkInvert.addEventListener('change', () => {
+  input.invertY = chkInvert.checked;
+  localStorage.setItem('breach.invertY', String(input.invertY));
+});
+
+function cancelRebind() {
+  if (rebinding) { rebinding.cancel(); rebinding = null; }
+}
+
+function renderBinds() {
+  cancelRebind();
+  kbRows.innerHTML = '';
+  for (const action in KB_LABELS) {
+    const row = document.createElement('div');
+    row.className = 'bind-row';
+    const label = document.createElement('span');
+    label.textContent = KB_LABELS[action];
+    const btn = document.createElement('button');
+    btn.className = 'bind-btn';
+    btn.textContent = keyLabel(BINDS.kb[action]);
+    btn.addEventListener('click', () => startRebindKb(action, btn));
+    row.append(label, btn);
+    kbRows.append(row);
+  }
+  padRows.innerHTML = '';
+  for (const action in PAD_LABELS) {
+    const row = document.createElement('div');
+    row.className = 'bind-row';
+    const label = document.createElement('span');
+    label.textContent = PAD_LABELS[action];
+    const btn = document.createElement('button');
+    btn.className = 'bind-btn';
+    btn.textContent = padBtnName(BINDS.pad[action]);
+    btn.addEventListener('click', () => startRebindPad(action, btn));
+    row.append(label, btn);
+    padRows.append(row);
+  }
+}
+
+function startRebindKb(action, btn) {
+  cancelRebind();
+  btn.textContent = '· · ·';
+  btn.classList.add('listening');
+  const h = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    window.removeEventListener('keydown', h, true);
+    rebinding = null;
+    if (e.code !== 'Escape') { BINDS.kb[action] = e.code; saveBinds(); }
+    renderBinds();
+  };
+  window.addEventListener('keydown', h, true);
+  rebinding = { cancel: () => window.removeEventListener('keydown', h, true) };
+}
+
+function startRebindPad(action, btn) {
+  cancelRebind();
+  btn.textContent = '· · ·';
+  btn.classList.add('listening');
+  const startPressed = new Set(input.pad.pressed);
+  const t0 = performance.now();
+  const iv = setInterval(() => {
+    for (const b of input.pad.pressed) {
+      if (!startPressed.has(b)) {
+        clearInterval(iv);
+        rebinding = null;
+        BINDS.pad[action] = b;
+        saveBinds();
+        renderBinds();
+        return;
+      }
+    }
+    for (const b of startPressed) if (!input.pad.pressed.has(b)) startPressed.delete(b);
+    if (performance.now() - t0 > 6000) { clearInterval(iv); rebinding = null; renderBinds(); }
+  }, 30);
+  rebinding = { cancel: () => clearInterval(iv) };
+}
 
 // ---------- panel de tuning (F10) ----------
 let gui = null;
@@ -150,6 +302,7 @@ function startPractice() {
   spawnLocal('red', world.spawns.red[1]);
   G.dummies = new Dummies(scene);
   hud.showMenu(false);
+  showControls(false);
   hud.show(true);
   hud.score(0, 0);
   hud.center('PRÁCTICA', 'blancos móviles en el lado azul', 2600);
@@ -177,6 +330,7 @@ async function startOnline() {
       if (p.id !== net.id) addRemote(p);
     }
     hud.showMenu(false);
+    showControls(false);
     hud.show(true);
     hud.score(G.scores.red, G.scores.blue);
     hud.center('EQUIPO ' + (welcome.team === 'red' ? 'ROJO' : 'AZUL'), 'primero a ' + TUNING.combat.killLimit, 2600);
@@ -210,7 +364,7 @@ function bindNet(net) {
   net.on('snap', (m) => {
     for (const p of m.ps) {
       if (p.id === net.id) {
-        if (p.hp < G.selfHp) { audio.hurt(); shoulderCam.addShake(0.4); }
+        if (p.hp < G.selfHp) { audio.hurt(); shoulderCam.addShake(0.4); input.pad.rumble(140, 0.5, 0.7); }
         G.selfHp = p.hp;
         continue;
       }
@@ -236,6 +390,7 @@ function bindNet(net) {
       G.selfAlive = false;
       G.player.kill();
       audio.death();
+      input.pad.rumble(350, 0.8, 1.0);
       hud.center('ELIMINADO', 'respawn en ' + TUNING.combat.respawnTime + 's', TUNING.combat.respawnTime * 1000);
     } else if (m.from === net.id) {
       audio.kill();
@@ -344,7 +499,8 @@ function fireShot() {
 
   // feedback de disparo
   effects.muzzleFlash(muzzle, w.cur === 'gnasher');
-  if (w.cur === 'gnasher') audio.gnasher(); else audio.lancer();
+  if (w.cur === 'gnasher') { audio.gnasher(); input.pad.rumble(90, 0.5, 0.9); }
+  else { audio.lancer(); input.pad.rumble(45, 0.2, 0.4); }
   G.rig.kick(def.recoil * 0.5);
   shoulderCam.addShake(def.recoil * TUNING.cam.shakeFire);
   shoulderCam.pitch += def.recoil * 0.006;
@@ -403,6 +559,7 @@ let acc = 0, last = performance.now();
 
 // handle de debug/testing
 window.BREACH = G;
+window.BREACH_INPUT = input;
 window.THREE = THREE;
 
 function simStep(dt) {
@@ -410,7 +567,7 @@ function simStep(dt) {
   if (!p) return;
 
   const canFire = !p.dead && p.state !== 'dive' && p.state !== 'slide' &&
-    p.state !== 'roadie' && input.locked;
+    p.state !== 'roadie' && input.anyDevice;
   const wasReloading = G.weapons.reloading;
 
   const fired = G.weapons.update(dt, input.fireHeld, input.firePressed, canFire);
@@ -438,17 +595,40 @@ function simStep(dt) {
   input.consumeEdges();
 }
 
+let padWasConnected = false;
+
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
 
-  if (G.mode && G.player) {
-    if (input.locked) shoulderCam.applyMouse(input.mouseDX, input.mouseDY, input.invertY);
+  const menuOpen = menuIsOpen();
+  input.pollPad(dt, !!G.mode && !menuOpen);
+  if (input.pad.connected !== padWasConnected) {
+    padWasConnected = input.pad.connected;
+    hud.hint(padWasConnected ? 'CONTROL CONECTADO' : 'CONTROL DESCONECTADO', 1600);
+    if (padStatus) {
+      padStatus.textContent = padWasConnected ? 'CONTROL CONECTADO' : 'SIN CONTROL DETECTADO';
+      padStatus.classList.toggle('on', padWasConnected);
+    }
+  }
+  if (menuOpen) input.consumeEdges();
 
-    acc += dt;
-    let steps = 0;
-    while (acc >= FIXED && steps < 5) { simStep(FIXED); acc -= FIXED; steps++; }
+  if (G.mode && G.player) {
+    if (!menuOpen) {
+      if (input.locked) shoulderCam.applyMouse(input.mouseDX, input.mouseDY, input.invertY);
+      if (input.pad.connected) shoulderCam.applyStick(input.pad.camX, input.pad.camY, dt, input.invertY);
+    }
+
+    // pausa real en práctica; online la partida sigue
+    const paused = menuOpen && G.mode === 'practice';
+    if (paused) {
+      acc = 0;
+    } else {
+      acc += dt;
+      let steps = 0;
+      while (acc >= FIXED && steps < 5) { simStep(FIXED); acc -= FIXED; steps++; }
+    }
 
     shoulderCam.update(dt, G.player);
     G.rig.setTransform(G.player.pos.x, G.player.pos.z, G.player.yaw);

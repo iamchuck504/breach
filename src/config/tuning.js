@@ -34,6 +34,7 @@ export const TUNING = {
   },
   cam: {
     sens: 0.045,          // sensibilidad ratón (deg por pixel; ~360° en 20cm a 1000dpi)
+    padSens: 170,         // sensibilidad stick derecho (deg por segundo a full)
     pitchMin: -62, pitchMax: 55,
     fovNormal: 57, fovRoadie: 66, fovAim: 41,
     fovLerp: 9,

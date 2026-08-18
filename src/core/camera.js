@@ -32,6 +32,15 @@ export class ShoulderCamera {
 
   addShake(amount) { this.shake = Math.min(1.5, this.shake + amount); }
 
+  // stick derecho del gamepad (valores -1..1 ya con curva), escala por FOV
+  applyStick(cx, cy, dt, invertY) {
+    const s = TUNING.cam.padSens * DEG * dt * (this.fov / TUNING.cam.fovNormal);
+    this.yaw -= cx * s;
+    this.pitch += (invertY ? cy : -cy) * s;
+    const c = TUNING.cam;
+    this.pitch = Math.max(c.pitchMin * DEG, Math.min(c.pitchMax * DEG, this.pitch));
+  }
+
   // dir de la cámara en el plano (para movimiento relativo a cámara)
   flatForward() { return { x: -Math.sin(this.yaw), z: -Math.cos(this.yaw) }; }
   flatRight() { return { x: Math.cos(this.yaw), z: -Math.sin(this.yaw) }; }

@@ -59,6 +59,49 @@ try {
   await page.screenshot({ path: path.join(root, 'scripts', 'shot-aim.png') });
   await page.mouse.up({ button: 'right' });
 
+  // ---- gamepad simulado: stick izq adelante debe mover al jugador ----
+  await page.evaluate(() => {
+    const fake = {
+      id: 'FakePad', connected: true, mapping: 'standard', index: 0,
+      axes: [0, -1, 0, 0],
+      buttons: Array.from({ length: 17 }, () => ({ pressed: false, value: 0 })),
+    };
+    navigator.getGamepads = () => [fake];
+    window.__pad = fake;
+  });
+  await page.waitForTimeout(400);
+  const padOn = await page.evaluate(() => window.BREACH_INPUT.pad.connected);
+  const p0 = await page.evaluate(() => ({ x: window.BREACH.player.pos.x, z: window.BREACH.player.pos.z }));
+  await page.waitForTimeout(1000);
+  const p1 = await page.evaluate(() => ({ x: window.BREACH.player.pos.x, z: window.BREACH.player.pos.z }));
+  const moved = Math.hypot(p1.x - p0.x, p1.z - p0.z);
+  console.log('PAD:', JSON.stringify({ connected: padOn, moved: +moved.toFixed(2) }));
+  if (!padOn) errors.push('PAD: no detectado');
+  if (moved < 0.4) errors.push('PAD: el stick no movió al jugador (moved=' + moved.toFixed(2) + ')');
+  await page.evaluate(() => { window.__pad.axes[1] = 0; });
+
+  // ---- menú de pausa + panel de controles ----
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+  const paused = await page.evaluate(() => ({
+    menuOpen: !document.getElementById('menu').classList.contains('off'),
+    resumeVisible: document.getElementById('btn-resume').style.display !== 'none',
+  }));
+  console.log('PAUSE:', JSON.stringify(paused));
+  if (!paused.menuOpen || !paused.resumeVisible) errors.push('PAUSE: menú/reanudar no visible');
+  await page.evaluate(() => document.getElementById('btn-controls').click());
+  await page.waitForTimeout(200);
+  const ctrls = await page.evaluate(() => ({
+    kbRows: document.getElementById('kb-rows').children.length,
+    padRows: document.getElementById('pad-rows').children.length,
+  }));
+  console.log('CONTROLS:', JSON.stringify(ctrls));
+  if (ctrls.kbRows !== 8 || ctrls.padRows !== 6) errors.push('CONTROLS: filas esperadas 8/6, got ' + ctrls.kbRows + '/' + ctrls.padRows);
+  await page.screenshot({ path: path.join(root, 'scripts', 'shot-controls.png') });
+  await page.evaluate(() => document.getElementById('btn-back').click());
+  await page.evaluate(() => document.getElementById('btn-resume').click());
+  await page.waitForTimeout(300);
+
   // estado del juego para verificación
   const state = await page.evaluate(() => ({
     hudOn: document.getElementById('hud').classList.contains('on'),

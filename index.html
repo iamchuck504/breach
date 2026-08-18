@@ -85,6 +85,11 @@
     text-shadow: 0 1px 8px rgba(0,0,0,.8); }
   #context-hint.on { opacity: 1; }
 
+  #btn-pause { position: fixed; top: 14px; right: 16px; width: 42px; height: 42px;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    pointer-events: auto; color: var(--dim); padding: 0; }
+  #btn-pause:hover { color: var(--accent); border-color: var(--accent); }
+
   /* ---------- MENU ---------- */
   #menu { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
     background: linear-gradient(180deg, #101114d9, #101114f2); z-index: 10; }
@@ -114,6 +119,33 @@
   .menu-note b { color: var(--text); font-weight: 500; }
   #net-status { font-family: var(--mono); font-size: 11px; color: var(--accent);
     letter-spacing: .1em; margin-top: 10px; min-height: 14px; }
+
+  /* ---------- panel de controles ---------- */
+  #controls-card { width: 560px; display: none; }
+  .cols { display: flex; gap: 22px; margin-top: 18px; }
+  .col { flex: 1; }
+  .col-title { font-family: var(--mono); font-size: 10.5px; letter-spacing: .22em;
+    color: var(--dim); text-transform: uppercase; margin-bottom: 10px;
+    border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+  .bind-row { display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 6px; font-size: 13px; }
+  .bind-btn { background: #101114; border: 1px solid var(--line); color: var(--text);
+    border-radius: 7px; padding: 5px 10px; font-family: var(--mono); font-size: 11.5px;
+    letter-spacing: .08em; cursor: pointer; min-width: 86px; text-align: center; }
+  .bind-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .bind-btn.listening { border-color: var(--accent); color: var(--accent); animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: .4; } }
+  .slider-row { display: flex; align-items: center; gap: 12px; margin-top: 12px;
+    font-size: 12.5px; }
+  .slider-row label { flex: 0 0 110px; color: var(--dim); font-family: var(--mono);
+    font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; }
+  .slider-row input[type=range] { flex: 1; accent-color: var(--accent); }
+  .slider-row .val { font-family: var(--mono); font-size: 11.5px; min-width: 44px; text-align: right; }
+  .chk-row { margin-top: 14px; font-size: 13px; }
+  .chk-row input { accent-color: var(--accent); margin-right: 8px; }
+  #pad-status { font-family: var(--mono); font-size: 10.5px; color: var(--dim);
+    letter-spacing: .1em; margin-top: 10px; }
+  #pad-status.on { color: var(--accent); }
 </style>
 </head>
 <body>
@@ -144,6 +176,9 @@
   <div id="feed"></div>
   <div id="center-msg"></div>
   <div id="context-hint"></div>
+  <button id="btn-pause" class="hud-panel" title="Pausa (Esc)">
+    <svg width="13" height="14" viewBox="0 0 13 14" fill="currentColor"><rect x="1" y="1" width="4" height="12" rx="1"/><rect x="8" y="1" width="4" height="12" rx="1"/></svg>
+  </button>
 </div>
 
 <div id="menu">
@@ -158,6 +193,10 @@
       <label for="in-server">Servidor (multijugador)</label>
       <input id="in-server" spellcheck="false" placeholder="ws://192.168.x.x:8787" />
     </div>
+    <button class="btn primary" id="btn-resume" style="display:none">
+      <svg width="13" height="13" viewBox="0 0 13 13" fill="currentColor"><path d="M2 1.5l9 5-9 5z"/></svg>
+      Reanudar
+    </button>
     <button class="btn primary" id="btn-practice">
       <svg width="13" height="13" viewBox="0 0 13 13" fill="currentColor"><path d="M2 1.5l9 5-9 5z"/></svg>
       Práctica
@@ -166,11 +205,48 @@
       <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="5"/><path d="M1.5 6.5h10M6.5 1.5c-3 3.4-3 6.6 0 10M6.5 1.5c3 3.4 3 6.6 0 10"/></svg>
       Multijugador
     </button>
+    <button class="btn" id="btn-controls">
+      <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="2"/><path d="M6.5 1v2M6.5 10v2M1 6.5h2M10 6.5h2M2.6 2.6l1.4 1.4M9 9l1.4 1.4M10.4 2.6L9 4M4 9l-1.4 1.4"/></svg>
+      Controles
+    </button>
     <div id="net-status"></div>
     <div class="menu-note">
-      <b>WASD</b> mover · <b>Shift</b> roadie run · <b>Espacio</b> cover / evadir<br/>
-      <b>Click der</b> apuntar · <b>Click izq</b> disparar · <b>R</b> recargar · <b>Q</b> arma<br/>
-      <b>F9</b> invertir Y (ON) · <b>F10</b> tuning · <b>M</b> silencio · <b>Esc</b> menú
+      <b>WASD</b> mover · <b>Shift</b> roadie · <b>Espacio</b> cover / evadir · <b>Click der/izq</b> apuntar / disparar<br/>
+      <b>Control:</b> sticks mover / cámara · <b>A</b> cover (mantener = roadie) · <b>LT/RT</b> apuntar / disparar<br/>
+      <b>F9</b> invertir Y · <b>F10</b> tuning · <b>M</b> silencio · <b>Esc / MENU</b> pausa
+    </div>
+  </div>
+
+  <div class="menu-card" id="controls-card">
+    <div class="logo" style="font-size:24px">CONTROLES</div>
+    <div class="tag">click en un binding y presiona la tecla o botón</div>
+    <div class="cols">
+      <div class="col">
+        <div class="col-title">Teclado</div>
+        <div id="kb-rows"></div>
+      </div>
+      <div class="col">
+        <div class="col-title">Control</div>
+        <div id="pad-rows"></div>
+        <div id="pad-status">SIN CONTROL DETECTADO</div>
+      </div>
+    </div>
+    <div class="slider-row">
+      <label for="sl-mouse">Sens. ratón</label>
+      <input type="range" id="sl-mouse" min="0.01" max="0.12" step="0.005" />
+      <span class="val" id="sl-mouse-v"></span>
+    </div>
+    <div class="slider-row">
+      <label for="sl-pad">Sens. stick</label>
+      <input type="range" id="sl-pad" min="60" max="320" step="10" />
+      <span class="val" id="sl-pad-v"></span>
+    </div>
+    <div class="chk-row">
+      <label><input type="checkbox" id="chk-invert" /> Eje Y invertido (F9)</label>
+    </div>
+    <div style="display:flex; gap:10px; margin-top:18px">
+      <button class="btn" id="btn-reset-binds" style="margin-top:0">Restablecer</button>
+      <button class="btn primary" id="btn-back" style="margin-top:0">Volver</button>
     </div>
   </div>
 </div>

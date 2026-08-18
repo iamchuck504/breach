@@ -35,7 +35,18 @@ Para LAN, usar el server local es lo más simple.
 | R / Q | Recargar / cambiar Lancer↔Gnasher |
 | F9 | Invertir eje Y (default: invertido) |
 | F10 | Panel de tuning en vivo (lil-gui) |
-| M / Esc | Silencio / menú |
+| M / Esc | Silencio / pausa |
+
+**Gamepad (layout Xbox, Gamepad API):** stick izq mover, stick der cámara
+(curva cuadrática, sens en °/s), **A** cover/evadir y **mantenida = roadie run**,
+LT apuntar, RT disparar, X recargar, Y cambiar arma, MENU pausa. Vibración en
+disparo/daño/cover si el control lo soporta.
+
+**Pausa y configuración:** Esc, botón MENU del control, o el ícono ⏸ del HUD.
+Desde ahí → **Controles**: rebinding de teclado y de botones del control
+(click en el binding y presiona la tecla/botón), sensibilidad de ratón y stick,
+e invert Y. Todo persiste en localStorage. En práctica la pausa congela el
+juego; en línea la partida sigue.
 
 ## Wallbounce
 
