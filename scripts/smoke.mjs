@@ -71,11 +71,23 @@ try {
   });
   await page.waitForTimeout(400);
   const padOn = await page.evaluate(() => window.BREACH_INPUT.pad.connected);
+  // a campo abierto (fuera de cover) para medir movimiento libre
+  await page.evaluate(() => {
+    const P = window.BREACH.player;
+    P.cover = null; P.state = 'run'; P.pos.x = 0; P.pos.z = -6;
+  });
+  await page.waitForTimeout(150);
   const p0 = await page.evaluate(() => ({ x: window.BREACH.player.pos.x, z: window.BREACH.player.pos.z }));
   await page.waitForTimeout(1000);
   const p1 = await page.evaluate(() => ({ x: window.BREACH.player.pos.x, z: window.BREACH.player.pos.z }));
   const moved = Math.hypot(p1.x - p0.x, p1.z - p0.z);
-  console.log('PAD:', JSON.stringify({ connected: padOn, moved: +moved.toFixed(2) }));
+  const padCtx = await page.evaluate(() => ({
+    st: window.BREACH.player.state,
+    yaw: +window.BREACH.player.yaw.toFixed(2),
+    cam: +window.BREACH.player.cam.yaw.toFixed(2),
+    spd: +window.BREACH.player.speed.toFixed(2),
+  }));
+  console.log('PAD:', JSON.stringify({ connected: padOn, moved: +moved.toFixed(2), ...padCtx }));
   if (!padOn) errors.push('PAD: no detectado');
   if (moved < 0.4) errors.push('PAD: el stick no movió al jugador (moved=' + moved.toFixed(2) + ')');
   await page.evaluate(() => { window.__pad.axes[1] = 0; });

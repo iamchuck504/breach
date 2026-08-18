@@ -47,6 +47,26 @@ try {
   console.log('IDLE:', JSON.stringify(idle));
   if (idle.dot < 0.7) problems.push('idle: cañón no apunta al frente (dot=' + idle.dot + ')');
 
+  // el cuerpo debe seguir a la cámara en reposo, con la retícula cerca del centro
+  const track = await page.evaluate(() => {
+    const G = window.BREACH;
+    let d = G.player.cam.yaw - G.player.yaw;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    const el = document.getElementById('barrel-dot');
+    return {
+      yawDiff: +Math.abs(d).toFixed(3),
+      dotOn: el.classList.contains('on'),
+      dx: +(parseFloat(el.style.left) - innerWidth / 2).toFixed(0),
+      dy: +(parseFloat(el.style.top) - innerHeight / 2).toFixed(0),
+    };
+  });
+  console.log('TRACK:', JSON.stringify(track));
+  if (track.yawDiff > 0.15) problems.push('idle: el cuerpo no sigue a la cámara (yawDiff=' + track.yawDiff + ')');
+  if (!track.dotOn || Math.abs(track.dx) > 150 || Math.abs(track.dy) > 150) {
+    problems.push('retícula lejos del centro: ' + JSON.stringify(track));
+  }
+
   // ADS
   await page.mouse.down({ button: 'right' });
   await page.waitForTimeout(700);

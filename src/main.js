@@ -448,10 +448,10 @@ function falloff(def, dist) {
   return 1 - (dist - def.falloffStart) / (def.falloffEnd - def.falloffStart);
 }
 
-// Dirección de hipfire/blindfire: yaw del personaje + pitch de cámara.
-// (No usamos la orientación del mesh del arma: en poses de cover apunta al cielo.)
+// Dirección de hipfire/blindfire: paralela a la cámara, con ORIGEN en el cañón
+// (Gears 5: la mira sigue a la cámara; el personaje rota para acompañarla).
 function hipDir() {
-  const f = G.player.facing();
+  const f = shoulderCam.flatForward();
   const p = shoulderCam.pitch;
   const cp = Math.cos(p), sp = Math.sin(p);
   return new THREE.Vector3(f.x * cp, sp, f.z * cp).normalize();

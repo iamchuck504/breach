@@ -217,8 +217,9 @@ export class Rig {
       }
       case 'run': case 'idle': {
         const m = p.state === 'run' ? 1 : 0;
-        R(this.torso, -0.1 * m + Math.sin(ph * 0.4) * 0.015, 0, swing * 0.04 * m);
-        R(this.head, 0.05 * m, 0, 0);
+        const tw = p.twist ?? 0; // torso/cabeza giran hacia la cámara
+        R(this.torso, -0.1 * m + Math.sin(ph * 0.4) * 0.015, tw * 0.55, swing * 0.04 * m);
+        R(this.head, 0.05 * m, tw * 0.35, 0);
         R(this.legL.hip, swing * 0.75 * m, 0, 0); R(this.legL.knee, -(Math.max(0, -swing) * 1.1 + 0.1) * m, 0, 0);
         R(this.legR.hip, swing2 * 0.75 * m, 0, 0); R(this.legR.knee, -(Math.max(0, -swing2) * 1.1 + 0.1) * m, 0, 0);
         // ready: arma a la cadera apuntando al frente, mano izq. de soporte

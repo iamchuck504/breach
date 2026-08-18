@@ -65,11 +65,21 @@ export class Controller {
   }
 
   animParams() {
+    const st = this.animState();
+    // twist de torso hacia la cámara (upper-body aim al correr lateral)
+    let twist = 0;
+    if (!this.aim && (st === 'idle' || st === 'run')) {
+      let d = this.cam.yaw - this.yaw;
+      while (d > Math.PI) d -= Math.PI * 2;
+      while (d < -Math.PI) d += Math.PI * 2;
+      twist = Math.max(-0.9, Math.min(0.9, d));
+    }
     return {
-      state: this.animState(),
+      state: st,
       speed: Math.min(1, this.speed / TUNING.move.roadieSpeed),
       aim: this.aim,
       aimPitch: this.cam.pitch,
+      twist,
     };
   }
 
@@ -162,6 +172,9 @@ export class Controller {
         } else if (firing) {
           // hipfire parado: encarar hacia la cámara para disparar del cañón
           this.yaw = lerpAngle(this.yaw, this.cam.yaw, 1 - Math.exp(-M.aimTurnLerp * dt));
+        } else {
+          // Gears: en reposo el cuerpo (y la mira) siguen a la cámara
+          this.yaw = lerpAngle(this.yaw, this.cam.yaw, 1 - Math.exp(-9 * dt));
         }
 
         const want = hasInput || this.state === 'roadie';
