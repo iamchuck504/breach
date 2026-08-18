@@ -372,7 +372,7 @@ function startBots() {
   audio.ensure();
   teardown();
   G.name = saveName();
-  world.setLayout('arena');
+  world.setLayout('district'); // mapa grande también para el 4v4 vs bots
   G.mode = 'bots';
   spawnLocal('red', world.spawns.red[0]);
   G.selfHp = TUNING.combat.hp;
