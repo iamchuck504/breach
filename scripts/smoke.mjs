@@ -292,6 +292,25 @@ try {
   console.log('BOTS:', JSON.stringify(bots));
   if (bots.mode !== 'bots' || bots.bots !== 7) errors.push('BOTS: modo/bots mal (' + JSON.stringify(bots) + ')');
   if (bots.livesR !== 19 || bots.livesB > 19) errors.push('BOTS: vidas iniciales mal (' + bots.livesR + '/' + bots.livesB + ')');
+  // observar la IA: deben aparecer cover/rush/saltos/cambio a escopeta
+  const seen = { cover: false, rush: false, jump: false, shotgun: false };
+  for (let i = 0; i < 50; i++) {
+    await page.waitForTimeout(500);
+    const states = await page.evaluate(() =>
+      window.BREACH.botMatch.bots.map((b) => ({ st: b.state, y: b.y, w: b.wep })));
+    for (const b of states) {
+      if (b.st === 'cover') seen.cover = true;
+      if (b.st === 'rush') seen.rush = true;
+      if (b.y > 0.25) seen.jump = true;
+      if (b.w === 'shotgun') seen.shotgun = true;
+    }
+    if (seen.cover && seen.rush && seen.jump && seen.shotgun) break;
+  }
+  console.log('AI:', JSON.stringify(seen));
+  if (!seen.jump) errors.push('AI: ningún bot saltó');
+  if (!seen.shotgun && !seen.rush) errors.push('AI: nadie cambió a escopeta/rusheó');
+  if (!seen.cover) errors.push('AI: nadie se cubrió');
+
   await page.keyboard.down('Tab');
   await page.waitForTimeout(300);
   const sb = await page.evaluate(() => ({
