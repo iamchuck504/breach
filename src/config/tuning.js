@@ -54,7 +54,7 @@ export const TUNING = {
     rotLag: 0,            // reservado
     shoulder: 0.82,       // desplazamiento lateral (hombro derecho, estilo Gears)
     height: 1.62, dist: 2.7,
-    roadieHeight: 1.18, roadieDist: 3.1,
+    roadieHeight: 1.62, roadieDist: 2.7, // = cámara normal: correr NO mueve la cámara
     aimShoulder: 0.88, aimHeight: 1.58, aimDist: 1.8,
     coverDist: 3.0,
     shakeRoadie: 0,       // sin shake al correr (0 = apagado)
