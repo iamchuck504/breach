@@ -154,6 +154,7 @@ function startPractice() {
   hud.score(0, 0);
   hud.center('PRÁCTICA', 'blancos móviles en el lado azul', 2600);
   input.requestLock();
+  setTimeout(() => hud.hint('EJE Y: ' + (input.invertY ? 'INVERTIDO' : 'NORMAL') + ' — F9 CAMBIA', 3000), 3000);
 }
 
 async function startOnline() {
@@ -181,6 +182,7 @@ async function startOnline() {
     hud.center('EQUIPO ' + (welcome.team === 'red' ? 'ROJO' : 'AZUL'), 'primero a ' + TUNING.combat.killLimit, 2600);
     netStatus.textContent = '';
     input.requestLock();
+    setTimeout(() => hud.hint('EJE Y: ' + (input.invertY ? 'INVERTIDO' : 'NORMAL') + ' — F9 CAMBIA', 3000), 3000);
   } catch (e) {
     netStatus.textContent = 'Error: ' + e.message;
   }

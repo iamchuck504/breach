@@ -21,7 +21,9 @@ export class ShoulderCamera {
   }
 
   applyMouse(dx, dy, invertY) {
-    const s = TUNING.cam.sens * DEG;
+    // escala por FOV: al apuntar (FOV cerrado) la sensibilidad baja proporcionalmente,
+    // igual que gears-clone (sens * 0.55 al apuntar) pero derivado del zoom real
+    const s = TUNING.cam.sens * DEG * (this.fov / TUNING.cam.fovNormal);
     this.yaw -= dx * s;
     this.pitch += (invertY ? dy : -dy) * s;
     const c = TUNING.cam;
