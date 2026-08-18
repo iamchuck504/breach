@@ -48,7 +48,7 @@ export const TUNING = {
     sens: 0.045,          // sensibilidad ratón (deg por pixel; ~360° en 20cm a 1000dpi)
     padSens: 170,         // sensibilidad stick derecho (deg por segundo a full)
     pitchMin: -62, pitchMax: 55,
-    fovNormal: 57, fovRoadie: 66, fovAim: 41,
+    fovNormal: 57, fovRoadie: 61, fovAim: 41,
     fovLerp: 9,
     posLerp: 11,          // seguimiento de posición
     rotLag: 0,            // reservado
@@ -57,7 +57,7 @@ export const TUNING = {
     roadieHeight: 1.18, roadieDist: 3.1,
     aimShoulder: 0.88, aimHeight: 1.58, aimDist: 1.8,
     coverDist: 3.0,
-    shakeRoadie: 0.7,     // amplitud de shake en roadie
+    shakeRoadie: 0.3,     // amplitud de shake en roadie (sutil)
     shakeFire: 0.35,      // kick al disparar
     minDist: 0.5,
   },

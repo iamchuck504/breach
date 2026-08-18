@@ -63,6 +63,15 @@
   #weapon .ammo { font-size: 26px; font-weight: 600; margin-top: 2px; }
   #weapon .ammo .res { font-size: 14px; color: var(--dim); }
   #weapon .reload { font-size: 11px; color: var(--accent); letter-spacing: .12em; height: 14px; }
+  /* barra de munición por segmentos (ref. Gears) */
+  #wep-bar { display: flex; gap: 3px; justify-content: flex-end; margin-top: 7px; height: 7px; }
+  #wep-bar .seg { width: 12px; border-radius: 1.5px; background: #3a3d45; }
+  #wep-bar .seg.on { background: #e8e6e1; }
+  #wep-bar .cont { width: 150px; border-radius: 2px; background: #3a3d45; overflow: hidden; }
+  #wep-bar .cont .fill { height: 100%; background: #e8e6e1; }
+  #wep-bar.reloading .seg.on, #wep-bar.reloading .fill { background: var(--accent); }
+  #wep-bar.reloading { animation: relpulse 0.5s infinite; }
+  @keyframes relpulse { 50% { opacity: 0.55; } }
 
   #feed { top: 64px; right: 16px; display: flex; flex-direction: column; gap: 6px;
     align-items: flex-end; font-family: var(--mono); font-size: 12.5px; }
@@ -174,6 +183,7 @@
   <div id="weapon" class="hud-panel">
     <div class="name" id="wep-name">METRALLETA</div>
     <div class="ammo"><span id="wep-mag">50</span> <span class="res">/ <span id="wep-res">150</span></span></div>
+    <div id="wep-bar"></div>
     <div class="reload" id="wep-msg"></div>
   </div>
   <div id="feed"></div>

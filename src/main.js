@@ -653,7 +653,8 @@ function simStep(dt) {
   p.update(dt, input, (input.fireHeld || G.fireBuffer > 0) && stateOk);
   if (fired) fireShot();
 
-  if (input.reloadPressed && G.weapons.startReload()) audio.reload();
+  if (input.reloadPressed) G.weapons.startReload();
+  if (!wasReloading && G.weapons.reloading) audio.reload(); // incluye auto-recarga
   if (wasReloading && !G.weapons.reloading) audio.reloadDone();
   if (input.swapPressed && !p.dead && G.weapons.startSwap()) audio.reload();
 
@@ -718,7 +719,12 @@ function frame(now) {
     shoulderCam.update(dt, G.player);
     G.rig.setWeapon(G.weapons.cur); // el intercambio real ocurre a mitad del gesto
     G.rig.setTransform(G.player.pos.x, G.player.pos.z, G.player.yaw, G.player.y);
-    G.rig.update(dt, { ...G.player.animParams(), swapping: G.weapons.swapping });
+    G.rig.update(dt, {
+      ...G.player.animParams(),
+      swapping: G.weapons.swapping,
+      reloading: G.weapons.reloading,
+      reloadT: G.weapons.reloading ? 1 - G.weapons.st.reload / G.weapons.def.reloadTime : 0,
+    });
     for (const r of G.remotes.values()) r.update(dt);
 
     hud.ammo(G.weapons);

@@ -15,6 +15,7 @@ export class HUD {
       wepMag: document.getElementById('wep-mag'),
       wepRes: document.getElementById('wep-res'),
       wepMsg: document.getElementById('wep-msg'),
+      wepBar: document.getElementById('wep-bar'),
       feed: document.getElementById('feed'),
       center: document.getElementById('center-msg'),
       hint: document.getElementById('context-hint'),
@@ -31,7 +32,36 @@ export class HUD {
     this.el.wepName.textContent = w.def.name;
     this.el.wepMag.textContent = w.st.mag;
     this.el.wepRes.textContent = w.st.reserve;
-    this.el.wepMsg.textContent = w.reloading ? 'RECARGANDO' : (w.st.mag === 0 ? 'SIN MUNICIÓN — R' : '');
+    this.el.wepMsg.textContent = w.reloading ? 'RECARGANDO'
+      : (w.st.mag === 0 && w.st.reserve === 0 ? 'SIN MUNICIÓN' : '');
+
+    // barra de segmentos (ref. Gears): cargadores chicos = bloques discretos,
+    // grandes = barra continua; en recarga barre en naranja
+    const cap = w.def.mag;
+    const bar = this.el.wepBar;
+    if (this._barWep !== w.cur) {
+      this._barWep = w.cur;
+      bar.innerHTML = '';
+      if (cap <= 12) {
+        for (let i = 0; i < cap; i++) {
+          const s = document.createElement('div');
+          s.className = 'seg';
+          bar.append(s);
+        }
+      } else {
+        bar.innerHTML = '<div class="cont"><div class="fill"></div></div>';
+      }
+    }
+    const rel = w.reloading ? 1 - w.st.reload / w.def.reloadTime : null;
+    bar.classList.toggle('reloading', w.reloading);
+    if (cap <= 12) {
+      const filled = rel !== null ? Math.round(rel * cap) : w.st.mag;
+      const segs = bar.children;
+      for (let i = 0; i < segs.length; i++) segs[i].classList.toggle('on', i < filled);
+    } else {
+      const fill = bar.querySelector('.fill');
+      if (fill) fill.style.width = (((rel !== null ? rel : w.st.mag / cap)) * 100).toFixed(1) + '%';
+    }
   }
 
   score(r, b) {

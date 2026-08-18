@@ -50,6 +50,11 @@ export class Weapons {
     const s = this.st, d = this.def;
     s.cd = Math.max(0, s.cd - dt);
 
+    // auto-recarga al quedarse sin balas (sin esperar otro click)
+    if (s.mag === 0 && s.reload === 0 && this.swapT === 0 && s.reserve > 0) {
+      this.startReload();
+    }
+
     if (this.swapT > 0) {
       this.swapT -= dt;
       if (!this._swapped && this.swapT <= SWAP_TIME / 2) {

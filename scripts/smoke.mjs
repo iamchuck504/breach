@@ -177,6 +177,20 @@ try {
   await page.keyboard.press('q'); // volver a metralleta
   await page.waitForTimeout(700);
 
+  // recarga manual: barra en modo "reloading" + animación
+  await page.keyboard.press('r');
+  await page.waitForTimeout(350);
+  const rel = await page.evaluate(() => ({
+    reloading: window.BREACH.weapons.reloading,
+    barClass: document.getElementById('wep-bar').classList.contains('reloading'),
+  }));
+  console.log('RELOAD:', JSON.stringify(rel));
+  await page.screenshot({ path: path.join(root, 'scripts', 'shot-reload.png') });
+  if (!rel.reloading || !rel.barClass) errors.push('RELOAD: barra/estado de recarga no activo');
+  await page.waitForTimeout(1800);
+  const magFull = await page.evaluate(() => window.BREACH.weapons.st.mag);
+  if (magFull !== 50) errors.push('RELOAD: no rellenó el cargador (mag=' + magFull + ')');
+
   // ---- menú de pausa + panel de controles ----
   await page.keyboard.press('Escape');
   await page.waitForTimeout(300);

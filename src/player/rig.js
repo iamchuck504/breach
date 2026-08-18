@@ -50,6 +50,7 @@ function buildSMG(teamColor) {
   g.userData.muzzle = anchor(g, 0, 0.025, -0.52);
   g.userData.grip = anchor(g, 0, -0.09, 0.06);
   g.userData.forend = anchor(g, 0, -0.08, -0.16);
+  g.userData.mag = anchor(g, 0, -0.24, -0.03); // base del cargador (recarga)
   return g;
 }
 
@@ -66,6 +67,7 @@ function buildShotgun(teamColor) {
   g.userData.muzzle = anchor(g, 0, 0.04, -0.6);
   g.userData.grip = anchor(g, 0, -0.08, 0.09);
   g.userData.forend = anchor(g, 0, -0.06, -0.3);              // mano izq. EN la bomba
+  g.userData.mag = anchor(g, 0, -0.1, -0.06);                 // ventana de carga (recarga)
   return g;
 }
 
@@ -467,6 +469,12 @@ export class Rig {
       set(this.aimRig.rotation, 'x', 0);
     }
 
+    // recarga: el arma se inclina y la mano izquierda baja al cargador
+    if (p.reloading && p.state !== 'dead') {
+      set(this.gunMount.rotation, 'x', -0.12);
+      set(this.gunMount.rotation, 'z', 0.3);
+    }
+
     // recoil: empuja el conjunto brazos+arma hacia atrás
     this._recoil = Math.max(0, this._recoil - dt * 6);
     this.aimRig.position.z = this._recoil * 0.06;
@@ -504,9 +512,13 @@ export class Rig {
       const gun = this.activeGun;
       gun.userData.grip.getWorldPosition(TMP_A);
       this._ikArm(this.armR, 1, this.aimRig.worldToLocal(TMP_A));
-      if (leftOnGun) {
-        gun.userData.forend.getWorldPosition(TMP_B);
-        this._ikArm(this.armL, -1, this.aimRig.worldToLocal(TMP_B));
+      if (leftOnGun || p.reloading) {
+        // recargando: la mano izq. va al cargador y hace el gesto de meter/sacar
+        const a = p.reloading ? (gun.userData.mag ?? gun.userData.forend) : gun.userData.forend;
+        a.getWorldPosition(TMP_B);
+        const tgt = this.aimRig.worldToLocal(TMP_B);
+        if (p.reloading) tgt.y -= 0.16 * Math.sin(Math.PI * (p.reloadT ?? 0));
+        this._ikArm(this.armL, -1, tgt);
       }
     }
   }
