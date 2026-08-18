@@ -401,6 +401,7 @@ let acc = 0, last = performance.now();
 
 // handle de debug/testing
 window.BREACH = G;
+window.THREE = THREE;
 
 function simStep(dt) {
   const p = G.player;

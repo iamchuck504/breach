@@ -69,17 +69,19 @@ export class ShoulderCamera {
     this.pos.lerp(desired, k);
     this._first = false;
 
-    // shake
+    // shake POSICIONAL únicamente: nunca rota la puntería (eso se siente incontrolable)
     this.shakeT += dt * 30;
-    if (st.mode === 'roadie') this.shake = Math.max(this.shake, 0.28 * (c.shakeRoadie));
+    if (st.mode === 'roadie') this.shake = Math.max(this.shake, 0.25 * c.shakeRoadie);
     this.shake = Math.max(0, this.shake - dt * 3.2);
-    const shx = Math.sin(this.shakeT * 1.7) * this.shake * 0.03;
-    const shy = Math.cos(this.shakeT * 2.3) * this.shake * 0.025;
+    const shx = Math.sin(this.shakeT * 1.7) * this.shake * 0.045;
+    const shy = Math.cos(this.shakeT * 2.3) * this.shake * 0.035;
 
     this.camera.position.copy(this.pos);
     this.camera.rotation.set(0, 0, 0);
-    this.camera.rotateY(this.yaw + shx * 0.5);
-    this.camera.rotateX(this.pitch + shy * 0.5);
+    this.camera.rotateY(this.yaw);
+    this.camera.rotateX(this.pitch);
+    this.camera.translateX(shx);
+    this.camera.translateY(shy);
 
     this.fov += (fov - this.fov) * (1 - Math.exp(-c.fovLerp * dt));
     if (Math.abs(this.camera.fov - this.fov) > 0.01) {

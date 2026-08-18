@@ -33,7 +33,7 @@ export const TUNING = {
     lowHeight: 1.4,       // altura máxima que cuenta como cobertura baja (popover)
   },
   cam: {
-    sens: 0.115,          // sensibilidad ratón (deg por pixel)
+    sens: 0.045,          // sensibilidad ratón (deg por pixel; ~360° en 20cm a 1000dpi)
     pitchMin: -62, pitchMax: 55,
     fovNormal: 57, fovRoadie: 66, fovAim: 41,
     fovLerp: 9,
@@ -42,7 +42,7 @@ export const TUNING = {
     shoulder: 0.62,       // desplazamiento lateral (hombro derecho)
     height: 1.62, dist: 2.7,
     roadieHeight: 1.18, roadieDist: 3.1,
-    aimShoulder: 0.55, aimHeight: 1.52, aimDist: 1.35,
+    aimShoulder: 0.88, aimHeight: 1.58, aimDist: 1.8,
     coverDist: 3.0,
     shakeRoadie: 0.7,     // amplitud de shake en roadie
     shakeFire: 0.35,      // kick al disparar

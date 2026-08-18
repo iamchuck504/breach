@@ -188,98 +188,101 @@ export class Rig {
       set(grp.rotation, 'x', x); set(grp.rotation, 'y', y); set(grp.rotation, 'z', z);
     };
 
+    // Convenciones (el personaje mira a -Z local):
+    //   torso.x: − adelante, + atrás   |   head.x: + mirar arriba
+    //   shoulder/elbow.x: + brazo hacia adelante   |   knee.x: − doblar rodilla
+    //   pitch del arma ≈ shoulder.x + elbow.x + hand.x  (0 = horizontal al frente)
     let hipsY = 0.66, rootRotX = 0, damp = 12;
     const sp = p.speed; // 0..1
     this.phase += dt * (4.5 + sp * 8.5) * (sp > 0.02 ? 1 : 0);
     const ph = this.phase;
     const swing = Math.sin(ph), swing2 = Math.sin(ph + Math.PI);
     const bob = Math.abs(Math.cos(ph));
+    const pitch = p.aimPitch ?? 0;
 
     // pose base por estado
     switch (p.state) {
       case 'roadie': {
         damp = 10;
-        R(this.torso, 0.62, 0, Math.sin(ph * 0.5) * 0.04);
-        R(this.head, -0.45, 0, 0);
-        R(this.legL.hip, swing * 1.05, 0, 0); R(this.legL.knee, Math.max(0, -swing) * 1.5 + 0.2, 0, 0);
-        R(this.legR.hip, swing2 * 1.05, 0, 0); R(this.legR.knee, Math.max(0, -swing2) * 1.5 + 0.2, 0, 0);
-        R(this.armL.shoulder, swing2 * 0.9 - 0.3, 0, -0.25); R(this.armL.elbow, -1.3, 0, 0);
-        R(this.armR.shoulder, 0.55, 0, 0.3); R(this.armR.elbow, -0.5, 0, 0); // arma abajo al costado
-        R(this.armR.hand, 1.25, 0, 0);
+        R(this.torso, -0.55, 0, Math.sin(ph * 0.5) * 0.04);
+        R(this.head, 0.42, 0, 0);
+        R(this.legL.hip, swing * 1.05, 0, 0); R(this.legL.knee, -(Math.max(0, -swing) * 1.5 + 0.2), 0, 0);
+        R(this.legR.hip, swing2 * 1.05, 0, 0); R(this.legR.knee, -(Math.max(0, -swing2) * 1.5 + 0.2), 0, 0);
+        R(this.armL.shoulder, swing2 * 0.9 + 0.2, 0, -0.2); R(this.armL.elbow, 1.25, 0, 0);
+        R(this.armR.shoulder, 0.15, 0, 0.25); R(this.armR.elbow, 0.35, 0, 0);
+        R(this.armR.hand, -0.85, 0, 0); // arma abajo-adelante al costado
         R(this.aimRig, 0, 0, 0);
         hipsY = 0.58 + bob * 0.06;
         break;
       }
       case 'run': case 'idle': {
         const m = p.state === 'run' ? 1 : 0;
-        R(this.torso, 0.12 * m + Math.sin(ph * 0.4) * 0.015, 0, swing * 0.05 * m);
-        R(this.head, -0.08 * m, 0, 0);
-        R(this.legL.hip, swing * 0.75 * m, 0, 0); R(this.legL.knee, (Math.max(0, -swing) * 1.1 + 0.1) * m, 0, 0);
-        R(this.legR.hip, swing2 * 0.75 * m, 0, 0); R(this.legR.knee, (Math.max(0, -swing2) * 1.1 + 0.1) * m, 0, 0);
-        // arma en ready bajo, dos manos cerca
-        R(this.armL.shoulder, -0.5 + swing2 * 0.25 * m, 0.35, -0.15);
-        R(this.armL.elbow, -1.15, 0, 0);
-        R(this.armR.shoulder, -0.55 + swing * 0.12 * m, -0.12, 0.08);
-        R(this.armR.elbow, -0.85, 0, 0);
-        R(this.armR.hand, 0.25, 0, 0);
-        R(this.aimRig, 0, 0, 0);
+        R(this.torso, -0.1 * m + Math.sin(ph * 0.4) * 0.015, 0, swing * 0.04 * m);
+        R(this.head, 0.05 * m, 0, 0);
+        R(this.legL.hip, swing * 0.75 * m, 0, 0); R(this.legL.knee, -(Math.max(0, -swing) * 1.1 + 0.1) * m, 0, 0);
+        R(this.legR.hip, swing2 * 0.75 * m, 0, 0); R(this.legR.knee, -(Math.max(0, -swing2) * 1.1 + 0.1) * m, 0, 0);
+        // ready: arma a la cadera apuntando al frente, mano izq. de soporte
+        R(this.armR.shoulder, 0.5 + swing * 0.1 * m, -0.1, 0.05);
+        R(this.armR.elbow, 0.5, 0, 0);
+        R(this.armR.hand, -1.0, 0, 0);
+        R(this.armL.shoulder, 0.55 + swing2 * 0.15 * m, -0.45, -0.1);
+        R(this.armL.elbow, 0.8, 0, 0);
         hipsY = 0.66 + bob * 0.045 * m;
         break;
       }
       case 'dive': {
         damp = 16;
-        R(this.torso, 0.85, 0, 0);
-        R(this.head, -0.5, 0, 0);
-        R(this.legL.hip, 1.0, 0, 0); R(this.legL.knee, 1.5, 0, 0);
-        R(this.legR.hip, 0.7, 0, 0); R(this.legR.knee, 1.3, 0, 0);
-        R(this.armL.shoulder, -1.4, 0, -0.5); R(this.armL.elbow, -0.4, 0, 0);
-        R(this.armR.shoulder, 0.4, 0, 0.4); R(this.armR.elbow, -0.6, 0, 0);
+        R(this.torso, -0.8, 0, 0);
+        R(this.head, 0.3, 0, 0);
+        R(this.legL.hip, 0.9, 0, 0); R(this.legL.knee, -1.4, 0, 0);
+        R(this.legR.hip, 0.6, 0, 0); R(this.legR.knee, -1.2, 0, 0);
+        R(this.armL.shoulder, 0.6, 0, -0.45); R(this.armL.elbow, 0.4, 0, 0);
+        R(this.armR.shoulder, 0.6, 0, 0.45); R(this.armR.elbow, 0.4, 0, 0);
         hipsY = 0.45;
         break;
       }
       case 'slide': {
         damp = 16;
-        R(this.torso, -0.18, 0, 0.12);
-        R(this.head, 0.1, 0, 0);
-        R(this.legL.hip, -1.15, 0, 0); R(this.legL.knee, 0.35, 0, 0); // pierna extendida
-        R(this.legR.hip, -0.5, 0, 0); R(this.legR.knee, 1.35, 0, 0);  // pierna doblada
-        R(this.armL.shoulder, 0.9, 0, -0.7); R(this.armL.elbow, -0.3, 0, 0); // brazo atrás
-        R(this.armR.shoulder, -0.9, 0, 0.2); R(this.armR.elbow, -1.0, 0, 0);
+        R(this.torso, 0.2, 0, 0.1);
+        R(this.head, -0.05, 0, 0);
+        R(this.legL.hip, 1.2, 0, 0); R(this.legL.knee, -0.3, 0, 0);   // pierna extendida
+        R(this.legR.hip, 0.55, 0, 0); R(this.legR.knee, -1.3, 0, 0);  // pierna doblada
+        R(this.armL.shoulder, -0.6, 0, -0.5); R(this.armL.elbow, 0.3, 0, 0); // brazo atrás
+        R(this.armR.shoulder, 0.8, 0, 0.1); R(this.armR.elbow, 0.4, 0, 0);
+        R(this.armR.hand, -1.2, 0, 0);
         hipsY = 0.38;
         break;
       }
-      case 'cover_low': {
-        R(this.torso, 0.16, 0, 0);
-        R(this.head, -0.05, 0, 0);
-        R(this.legL.hip, -1.35 + swing * 0.2 * sp, 0, 0); R(this.legL.knee, 1.8, 0, 0);
-        R(this.legR.hip, -1.2 + swing2 * 0.2 * sp, 0, 0); R(this.legR.knee, 1.75, 0, 0);
+      case 'cover_low': case 'cover_high': {
+        const low = p.state === 'cover_low';
+        R(this.torso, low ? -0.15 : -0.05, 0, 0);
+        R(this.head, 0.05, 0, 0);
+        if (low) {
+          R(this.legL.hip, 1.3 + swing * 0.15 * sp, 0, 0); R(this.legL.knee, -1.7, 0, 0);
+          R(this.legR.hip, 1.15 + swing2 * 0.15 * sp, 0, 0); R(this.legR.knee, -1.65, 0, 0);
+          hipsY = 0.34;
+        } else {
+          R(this.legL.hip, -0.08, 0, 0); R(this.legL.knee, -0.2, 0, 0);
+          R(this.legR.hip, 0.08, 0, 0); R(this.legR.knee, -0.12, 0, 0);
+          hipsY = 0.6;
+        }
         // arma vertical al pecho (icónico)
-        R(this.armL.shoulder, -0.45, 0.5, -0.2); R(this.armL.elbow, -1.5, 0, 0);
-        R(this.armR.shoulder, -1.75, 0, 0.15); R(this.armR.elbow, -1.55, 0, 0);
-        R(this.armR.hand, -0.4, 0, 0);
-        hipsY = 0.34;
-        break;
-      }
-      case 'cover_high': {
-        R(this.torso, 0.06, 0, 0);
-        R(this.legL.hip, -0.15, 0, 0); R(this.legL.knee, 0.25, 0, 0);
-        R(this.legR.hip, 0.1, 0, 0); R(this.legR.knee, 0.15, 0, 0);
-        R(this.armL.shoulder, -0.45, 0.5, -0.2); R(this.armL.elbow, -1.5, 0, 0);
-        R(this.armR.shoulder, -1.75, 0, 0.15); R(this.armR.elbow, -1.55, 0, 0);
-        R(this.armR.hand, -0.4, 0, 0);
-        hipsY = 0.6;
+        R(this.armR.shoulder, 0.4, 0, 0.1); R(this.armR.elbow, 1.8, 0, 0);
+        R(this.armR.hand, -0.63, 0, 0); // 0.4 + 1.8 − 0.63 ≈ π/2 → cañón hacia arriba
+        R(this.armL.shoulder, 0.5, -0.6, -0.15); R(this.armL.elbow, 1.5, 0, 0);
         break;
       }
       case 'blind_over': {
         damp = 15;
-        R(this.torso, -0.12, 0, 0);
-        R(this.head, 0.35, 0, 0);
-        R(this.legL.hip, -1.3, 0, 0); R(this.legL.knee, 1.75, 0, 0);
-        R(this.legR.hip, -1.15, 0, 0); R(this.legR.knee, 1.7, 0, 0);
-        R(this.armL.shoulder, -0.6, 0.4, -0.3); R(this.armL.elbow, -1.2, 0, 0);
-        R(this.armR.shoulder, -2.5, 0, 0.1); R(this.armR.elbow, -0.15, 0, 0); // brazo estirado sobre el cover
-        R(this.armR.hand, Math.PI / 2 - 0.15, 0, 0);
-        hipsY = 0.4;
+        R(this.torso, -0.05, 0, 0);
+        R(this.head, 0.25, 0, 0);
+        R(this.legL.hip, 1.3, 0, 0); R(this.legL.knee, -1.7, 0, 0);
+        R(this.legR.hip, 1.15, 0, 0); R(this.legR.knee, -1.65, 0, 0);
+        // brazo estirado por encima del cover, arma horizontal al frente
+        R(this.armR.shoulder, 2.35, 0, 0.1); R(this.armR.elbow, 0.15, 0, 0);
+        R(this.armR.hand, -2.5, 0, 0); // 2.35 + 0.15 − 2.5 = 0 → horizontal
+        R(this.armL.shoulder, 0.5, -0.5, -0.15); R(this.armL.elbow, 1.4, 0, 0);
+        hipsY = 0.42;
         break;
       }
       case 'dead': {
@@ -287,7 +290,7 @@ export class Rig {
         this._deadT += dt;
         rootRotX = -Math.min(1, this._deadT * 4) * Math.PI / 2;
         R(this.torso, 0, 0, 0); R(this.head, 0, 0, 0.3);
-        R(this.armL.shoulder, -0.4, 0, -0.9); R(this.armR.shoulder, -0.3, 0, 0.9);
+        R(this.armL.shoulder, 0.4, 0, -0.9); R(this.armR.shoulder, 0.3, 0, 0.9);
         R(this.legL.hip, 0.2, 0, 0); R(this.legR.hip, -0.1, 0, 0);
         hipsY = 0.66;
         break;
@@ -295,21 +298,22 @@ export class Rig {
     }
     if (p.state !== 'dead') this._deadT = 0;
 
-    // apuntar: pisa la pose de brazos con arma al hombro + pitch
+    // ADS: pisa brazos/torso con arma al hombro; aimRig aplica el pitch completo
     if (p.aim && p.state !== 'dead' && p.state !== 'dive' && p.state !== 'slide') {
       damp = 18;
-      const pitch = p.aimPitch ?? 0;
-      R(this.aimRig, -pitch, 0, 0);
-      R(this.torso, 0.08 + get(this.torso.rotation, 'x') * 0.3, -0.12, 0);
-      R(this.head, -pitch * 0.4, 0, 0);
-      R(this.armR.shoulder, -1.32, -0.1, 0.12); R(this.armR.elbow, -0.28, 0, 0);
-      R(this.armR.hand, -0.18, 0, 0);
-      R(this.armL.shoulder, -1.15, 0.55, -0.1); R(this.armL.elbow, -0.75, 0, 0);
+      R(this.aimRig, pitch, 0, 0);
+      R(this.torso, -0.12, -0.15, 0);
+      R(this.head, pitch * 0.25, 0, 0);
+      R(this.armR.shoulder, 1.0, -0.05, 0.08); R(this.armR.elbow, 0.55, 0, 0);
+      R(this.armR.hand, -1.55, 0, 0); // 1.0 + 0.55 − 1.55 = 0 → horizontal + pitch del rig
+      R(this.armL.shoulder, 0.8, -0.55, -0.05); R(this.armL.elbow, 0.95, 0, 0);
+      R(this.armL.hand, -0.4, 0, 0);
       if (p.state === 'cover_low') hipsY = 0.56; // popover: se levanta
     } else if (p.state !== 'dead') {
-      // hipfire: el torso sigue un poco el pitch para poder disparar "del cañón"
-      const pitch = (p.aimPitch ?? 0) * 0.45;
-      set(this.aimRig.rotation, 'x', -pitch);
+      // hipfire/blindfire: el conjunto de brazos sigue parte del pitch de cámara
+      const hipPitch = p.state === 'blind_over' ? pitch * 0.8
+        : (p.state === 'idle' || p.state === 'run') ? pitch * 0.45 : 0;
+      set(this.aimRig.rotation, 'x', hipPitch);
     }
 
     // recoil

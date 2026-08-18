@@ -40,7 +40,15 @@ export class Input {
     });
   }
 
-  requestLock() { this.canvas.requestPointerLock(); }
+  // unadjustedMovement: sin aceleración de mouse del OS (si el navegador lo soporta)
+  requestLock() {
+    try {
+      const p = this.canvas.requestPointerLock({ unadjustedMovement: true });
+      if (p && p.catch) p.catch(() => this.canvas.requestPointerLock());
+    } catch {
+      this.canvas.requestPointerLock();
+    }
+  }
   releaseLock() { if (this.locked) document.exitPointerLock(); }
 
   _key(e, down) {

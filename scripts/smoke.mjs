@@ -53,6 +53,12 @@ try {
   await page.waitForTimeout(400);
   await page.screenshot({ path: path.join(root, 'scripts', 'shot-fire.png') });
 
+  // ADS
+  await page.mouse.down({ button: 'right' });
+  await page.waitForTimeout(600);
+  await page.screenshot({ path: path.join(root, 'scripts', 'shot-aim.png') });
+  await page.mouse.up({ button: 'right' });
+
   // estado del juego para verificación
   const state = await page.evaluate(() => ({
     hudOn: document.getElementById('hud').classList.contains('on'),
