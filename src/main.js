@@ -313,7 +313,7 @@ function spawnLocal(team, spawn) {
   G.player = new Controller(world, shoulderCam, ctrlEvents);
   G.player.respawn(spawn);
   G.weapons.reset();
-  G.rig.setWeapon('lancer');
+  G.rig.setWeapon('smg');
 }
 
 function startPractice() {
@@ -398,8 +398,8 @@ function bindNet(net) {
     if (m.id === net.id) return;
     const o = new THREE.Vector3(...m.o), p = new THREE.Vector3(...m.p);
     effects.tracer(o, p);
-    effects.muzzleFlash(o, m.w === 'gnasher');
-    if (m.w === 'gnasher') audio.gnasher(); else audio.lancer();
+    effects.muzzleFlash(o, m.w === 'shotgun');
+    if (m.w === 'shotgun') audio.shotgun(); else audio.smg();
     const r = G.remotes.get(m.id);
     if (r) r.firing = 0.45;
   });
@@ -429,7 +429,7 @@ function bindNet(net) {
       G.selfHp = TUNING.combat.hp;
       G.player.respawn(m.spawn);
       G.weapons.reset();
-      G.rig.setWeapon('lancer');
+      G.rig.setWeapon('smg');
       hud.centerOff();
     } else {
       const r = G.remotes.get(m.id);
@@ -535,9 +535,9 @@ function fireShot() {
   }
 
   // feedback de disparo
-  effects.muzzleFlash(muzzle, w.cur === 'gnasher');
-  if (w.cur === 'gnasher') { audio.gnasher(); input.pad.rumble(90, 0.5, 0.9); }
-  else { audio.lancer(); input.pad.rumble(45, 0.2, 0.4); }
+  effects.muzzleFlash(muzzle, w.cur === 'shotgun');
+  if (w.cur === 'shotgun') { audio.shotgun(); input.pad.rumble(90, 0.5, 0.9); }
+  else { audio.smg(); input.pad.rumble(45, 0.2, 0.4); }
   G.rig.kick(def.recoil * 0.5);
   shoulderCam.addShake(def.recoil * TUNING.cam.shakeFire);
   shoulderCam.pitch += def.recoil * 0.006;
@@ -547,7 +547,7 @@ function fireShot() {
   for (const [id, e] of dmgByTarget) {
     if (e.dmg <= 0) continue;
     hitSomeone = true;
-    const gib = w.cur === 'gnasher' && e.dist <= TUNING.weapons.gnasher.gibRange;
+    const gib = w.cur === 'shotgun' && e.dist <= TUNING.weapons.shotgun.gibRange;
     if (G.mode === 'practice') {
       effects.blood(e.point, TEAM_HEX.blue);
       const killed = G.dummies.damage(id, e.dmg, (d) => {
@@ -627,7 +627,7 @@ function simStep(dt) {
   const aligned = Math.abs(angDiff(shoulderCam.yaw, p.yaw)) < maxA;
   const canFire = stateOk && aligned;
   // bufferear el click si el cuerpo aún gira O el arma está en cooldown
-  // (la Gnasher se comía clicks entre bombazos)
+  // (la Escopeta se comía clicks entre bombazos)
   if (input.firePressed && stateOk && (!aligned || G.weapons.st.cd > 0)) G.fireBuffer = 0.3;
   G.fireBuffer = Math.max(0, G.fireBuffer - dt);
   const wasReloading = G.weapons.reloading;
@@ -639,11 +639,7 @@ function simStep(dt) {
 
   if (input.reloadPressed && G.weapons.startReload()) audio.reload();
   if (wasReloading && !G.weapons.reloading) audio.reloadDone();
-  if (input.swapPressed && !p.dead) {
-    G.weapons.swap();
-    G.rig.setWeapon(G.weapons.cur);
-    audio.reload();
-  }
+  if (input.swapPressed && !p.dead && G.weapons.startSwap()) audio.reload();
 
   // pasos: por distancia recorrida
   if ((p.state === 'run' || p.state === 'roadie') && p.speed > 1) {
@@ -704,8 +700,9 @@ function frame(now) {
     }
 
     shoulderCam.update(dt, G.player);
+    G.rig.setWeapon(G.weapons.cur); // el intercambio real ocurre a mitad del gesto
     G.rig.setTransform(G.player.pos.x, G.player.pos.z, G.player.yaw, G.player.y);
-    G.rig.update(dt, G.player.animParams());
+    G.rig.update(dt, { ...G.player.animParams(), swapping: G.weapons.swapping });
     for (const r of G.remotes.values()) r.update(dt);
 
     hud.ammo(G.weapons);

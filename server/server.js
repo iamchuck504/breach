@@ -73,7 +73,7 @@ wss.on('connection', (ws) => {
         ws, id, team,
         name: String(msg.name || 'ANON').slice(0, 14).toUpperCase(),
         x: spawn.x, z: spawn.z, yaw: spawn.yaw,
-        st: 'idle', aim: 0, p: 0, w: 'lancer', sp: 0,
+        st: 'idle', aim: 0, p: 0, w: 'smg', sp: 0,
         hp: HP, alive: true, lastDamage: 0, respawnAt: 0,
         kills: 0, deaths: 0,
       };
@@ -91,7 +91,7 @@ wss.on('connection', (ws) => {
     if (msg.t === 's') {
       me.x = num(msg.x); me.z = num(msg.z); me.y = num(msg.y); me.yaw = num(msg.yaw);
       me.st = String(msg.st || 'idle'); me.aim = msg.aim ? 1 : 0;
-      me.p = num(msg.p); me.w = msg.w === 'gnasher' ? 'gnasher' : 'lancer';
+      me.p = num(msg.p); me.w = msg.w === 'shotgun' ? 'shotgun' : 'smg';
       me.sp = num(msg.sp);
       return;
     }

@@ -62,14 +62,14 @@ export const TUNING = {
     minDist: 0.5,
   },
   weapons: {
-    lancer: {
-      name: 'LANCER', rpm: 620, dmg: 10, headMult: 1.6,
+    smg: {
+      name: 'METRALLETA', rpm: 620, dmg: 10, headMult: 1.6,
       mag: 50, reserve: 150, reloadTime: 1.9,
       spreadAim: 0.9, spreadHip: 3.4, spreadBlind: 5.2,   // grados
       recoil: 0.35, range: 80, pellets: 1, auto: true,
     },
-    gnasher: {
-      name: 'GNASHER', rpm: 95, dmg: 13, headMult: 1.0,
+    shotgun: {
+      name: 'ESCOPETA', rpm: 95, dmg: 13, headMult: 1.0,
       mag: 8, reserve: 24, reloadTime: 2.1,
       spreadAim: 4.6, spreadHip: 6.4, spreadBlind: 8.0,
       recoil: 1.6, range: 24, pellets: 8, auto: false,

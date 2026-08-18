@@ -42,8 +42,12 @@ export class RemotePlayer {
       this.y = (s1.y ?? 0) + ((s2.y ?? 0) - (s1.y ?? 0)) * k;
       this.yaw = lerpAngle(s1.yaw, s2.yaw, k);
       this.st = s2.st; this.aim = !!s2.aim; this.pitch = s2.p ?? 0; this.sp = s2.sp ?? 0;
-      this.rig.setWeapon(s2.w ?? 'lancer');
+      const w = s2.w ?? 'smg';
+      if (this._lastW && w !== this._lastW) this.swapAnim = 0.5; // gesto de cambio
+      this._lastW = w;
+      this.rig.setWeapon(w);
     }
+    this.swapAnim = Math.max(0, (this.swapAnim ?? 0) - dt);
     this.firing = Math.max(0, this.firing - dt);
     // flip remoto: progreso local aproximado mientras el estado sea 'flip'
     this.flipT = this.st === 'flip' ? Math.min(1, (this.flipT ?? 0) + dt / 0.72) : 0;
@@ -56,6 +60,7 @@ export class RemotePlayer {
       firing: this.firing > 0,
       flipT: this.flipT,
       flipDir: 1,
+      swapping: this.swapAnim > 0,
     });
   }
 

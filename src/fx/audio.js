@@ -62,8 +62,8 @@ export class Audio {
     o.start(t); o.stop(t + dec + 0.05);
   }
 
-  lancer() { this._noiseShot(0.5, 0.09, 3200, 900); this._tone('square', 190, 90, 0.12, 0.06); }
-  gnasher() { this._noiseShot(0.85, 0.28, 1600, 220, 2); this._tone('sine', 130, 45, 0.55, 0.22); }
+  smg() { this._noiseShot(0.5, 0.09, 3200, 900); this._tone('square', 190, 90, 0.12, 0.06); }
+  shotgun() { this._noiseShot(0.85, 0.28, 1600, 220, 2); this._tone('sine', 130, 45, 0.55, 0.22); }
   reload() { this._tone('square', 700, 500, 0.07, 0.04); }
   reloadDone() { this._tone('square', 900, 1200, 0.08, 0.05); }
   hit() { this._tone('sine', 1150, 900, 0.14, 0.045); }

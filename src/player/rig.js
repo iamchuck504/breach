@@ -34,28 +34,38 @@ function anchor(parent, x, y, z) {
   return o;
 }
 
-function buildLancer(teamColor) {
+// METRALLETA: subfusil compacto — cuerpo corto, riel superior, cargador
+// largo con base de color, bocacha ancha y culata plegable.
+function buildSMG(teamColor) {
   const g = new THREE.Group();
-  g.add(box(0.075, 0.13, 0.58, DARK, 0, 0, -0.14));          // cuerpo
-  g.add(box(0.05, 0.05, 0.34, MID, 0, 0.02, -0.48));          // cañón
-  g.add(box(0.06, 0.1, 0.07, teamColor, 0, 0.09, -0.28));     // detalle equipo
-  g.add(box(0.05, 0.12, 0.06, DARK, 0, -0.11, 0.02));         // grip
-  g.add(box(0.055, 0.16, 0.05, MID, 0, -0.12, -0.22));        // cargador
-  g.userData.muzzle = anchor(g, 0, 0.02, -0.66);
-  g.userData.grip = anchor(g, 0, -0.1, 0.03);
-  g.userData.forend = anchor(g, 0, -0.09, -0.18);
+  g.add(box(0.085, 0.14, 0.36, DARK, 0, 0, -0.06));           // cuerpo compacto
+  g.add(box(0.06, 0.045, 0.2, MID, 0, 0.095, -0.1));          // riel superior
+  g.add(box(0.05, 0.05, 0.2, MID, 0, 0.025, -0.33));          // cañón corto
+  g.add(box(0.08, 0.08, 0.1, DARK, 0, 0.025, -0.45));         // bocacha ancha
+  g.add(box(0.055, 0.2, 0.075, MID, 0, -0.17, -0.03));        // cargador largo
+  g.add(box(0.06, 0.06, 0.09, teamColor, 0, -0.29, -0.03));   // base del cargador
+  g.add(box(0.05, 0.11, 0.05, DARK, 0, -0.1, 0.08));          // empuñadura
+  g.add(box(0.028, 0.07, 0.16, MID, 0, 0.02, 0.2));           // culata plegable
+  g.add(box(0.062, 0.09, 0.06, teamColor, 0, 0.04, -0.19));   // detalle equipo
+  g.userData.muzzle = anchor(g, 0, 0.025, -0.52);
+  g.userData.grip = anchor(g, 0, -0.09, 0.06);
+  g.userData.forend = anchor(g, 0, -0.08, -0.16);
   return g;
 }
 
-function buildGnasher(teamColor) {
+// ESCOPETA: pump-action — cañón + tubo de carga, bomba y culata de madera.
+function buildShotgun(teamColor) {
+  const WOOD = 0x8a5a32;
   const g = new THREE.Group();
-  g.add(box(0.09, 0.14, 0.46, DARK, 0, 0, -0.08));
-  g.add(box(0.065, 0.065, 0.26, MID, 0, 0.03, -0.38));
-  g.add(box(0.07, 0.1, 0.08, teamColor, 0, 0.08, -0.16));
-  g.add(box(0.05, 0.13, 0.06, DARK, 0, -0.11, 0.06));
-  g.userData.muzzle = anchor(g, 0, 0.03, -0.52);
-  g.userData.grip = anchor(g, 0, -0.1, 0.06);
-  g.userData.forend = anchor(g, 0, -0.09, -0.14);
+  g.add(box(0.085, 0.13, 0.3, DARK, 0, 0, 0.0));              // receptor
+  g.add(box(0.058, 0.058, 0.44, MID, 0, 0.04, -0.36));        // cañón
+  g.add(box(0.05, 0.05, 0.4, DARK, 0, -0.035, -0.33));        // tubo de carga
+  g.add(box(0.085, 0.085, 0.16, WOOD, 0, -0.035, -0.3));      // bomba (pump)
+  g.add(box(0.075, 0.13, 0.2, WOOD, 0, -0.02, 0.22));         // culata de madera
+  g.add(box(0.062, 0.1, 0.06, teamColor, 0, 0.075, 0.02));    // detalle equipo
+  g.userData.muzzle = anchor(g, 0, 0.04, -0.6);
+  g.userData.grip = anchor(g, 0, -0.08, 0.09);
+  g.userData.forend = anchor(g, 0, -0.06, -0.3);              // mano izq. EN la bomba
   return g;
 }
 
@@ -139,17 +149,21 @@ export class Rig {
     this.legL = mkLeg('L');
     this.legR = mkLeg('R');
 
-    // arma montada al pecho; las manos la alcanzan por IK
+    // arma activa montada al pecho (las manos la alcanzan por IK);
+    // la otra va cargada a la ESPALDA en diagonal
     this.gunMount = new THREE.Group();
     this.aimRig.add(this.gunMount);
-    this.gunLancer = buildLancer(tc);
-    this.gunGnasher = buildGnasher(tc);
+    this.backMount = new THREE.Group();
+    this.backMount.position.set(-0.06, 0.3, 0.26);
+    this.backMount.rotation.set(Math.PI / 2, 0, 0.4);
+    this.torso.add(this.backMount);
+    this.gunSMG = buildSMG(tc);
+    this.gunShotgun = buildShotgun(tc);
     // armas sobredimensionadas (estilo Ratchet/Gears): leen desde atrás
-    this.gunLancer.scale.set(1.3, 1.3, 1.35);
-    this.gunGnasher.scale.set(1.35, 1.35, 1.4);
-    this.gunMount.add(this.gunLancer);
-    this.gunMount.add(this.gunGnasher);
-    this.gunGnasher.visible = false;
+    this.gunSMG.scale.set(1.3, 1.3, 1.35);
+    this.gunShotgun.scale.set(1.35, 1.35, 1.4);
+    this._wep = null;
+    this.setWeapon('smg');
 
     if (name) this._addNameTag(name, tc);
 
@@ -175,11 +189,19 @@ export class Rig {
   }
 
   setWeapon(wep) {
-    this.gunLancer.visible = wep === 'lancer';
-    this.gunGnasher.visible = wep === 'gnasher';
+    if (this._wep === wep) return;
+    this._wep = wep;
+    const act = wep === 'smg' ? this.gunSMG : this.gunShotgun;
+    const back = wep === 'smg' ? this.gunShotgun : this.gunSMG;
+    this.gunMount.add(act);
+    act.position.set(0, 0, 0);
+    act.rotation.set(0, 0, 0);
+    this.backMount.add(back);
+    back.position.set(0, 0, 0);
+    back.rotation.set(0, 0, 0);
   }
 
-  get activeGun() { return this.gunLancer.visible ? this.gunLancer : this.gunGnasher; }
+  get activeGun() { return this._wep === 'smg' ? this.gunSMG : this.gunShotgun; }
 
   muzzleWorld(out) {
     this.root.updateWorldMatrix(true, true);
@@ -436,6 +458,13 @@ export class Rig {
       } else if (p.state === 'cover_low' || p.state === 'cover_high') {
         set(this.aimRig.rotation, 'x', 0);
       }
+    }
+
+    // cambio de arma: el arma barre hacia el hombro/espalda y regresa
+    // (el modelo se intercambia a mitad del gesto, en Weapons.update)
+    if (p.swapping && p.state !== 'dead') {
+      M(0.15, 0.28, 0.05, 1.5, 0, 0.35);
+      set(this.aimRig.rotation, 'x', 0);
     }
 
     // recoil: empuja el conjunto brazos+arma hacia atrás

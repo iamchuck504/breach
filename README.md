@@ -33,7 +33,7 @@ Para LAN, usar el server local es lo más simple.
 | Click derecho | Apuntar (precisión) |
 | Click izquierdo | Disparar — sin apuntar dispara **desde el cañón** (retícula naranja proyectada) |
 | F | Saltar — contra una pared alta hace **vuelta de gato** (wall jump estilo Ratchet) |
-| R / Q | Recargar / cambiar Lancer↔Gnasher |
+| R / Q | Recargar / cambiar Metralleta↔Escopeta (con animación; la otra va a la espalda) |
 | F9 | Invertir eje Y (default: invertido) |
 | F10 | Panel de tuning en vivo (lil-gui) |
 | M / Esc | Silencio / pausa |
@@ -81,7 +81,9 @@ la siguiente cobertura. Cada rebote encadenado suma `chainSpeedBonus`.
 - `src/fx/` — tracers/gibs/polvo + audio WebAudio procedural
 - `src/net/client.js` + `server/server.js` — protocolo JSON, snapshots 20 Hz,
   interpolación 120 ms; el server es autoridad de hp/muertes/respawn/score
-- Reglas: TDM a 25 bajas, respawn 4 s, regen estilo Gears, gib de Gnasher a corta distancia
+- Armas: **Metralleta** (auto, subfusil compacto) y **Escopeta** (pump con madera,
+  8 perdigones, falloff, gib a corta distancia); ids internos `smg`/`shotgun`
+- Reglas: TDM a 25 bajas, respawn 4 s, regen estilo Gears
 
 ## Deploy
 
