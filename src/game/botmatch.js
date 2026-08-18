@@ -59,8 +59,31 @@ class Bot {
     this.cover = null;   // {x, z, tx, tz, low}
     this.coverPhase = 'hide'; this.coverT = 0; this.peekDir = 1;
     this.aggro = Math.random(); // personalidad por vida: >0.55 = rushea con escopeta
+    this.stuckT = 0; this.avoidSide = 0;
+    this._px = this.pos.x; this._pz = this.pos.z;
     this.rig.setWeapon('smg');
     this.rig.setVisible(true);
+  }
+
+  // Steering: si el frente está bloqueado (y no es saltable), desviarse hacia
+  // el lado más libre. avoidSide es pegajoso para no oscilar contra la pared.
+  _steer(dx, dz) {
+    _v1.set(this.pos.x, 0.7, this.pos.z);
+    _v2.set(dx, 0, dz);
+    if (this.world.raycast(_v1, _v2, 1.3) === null) { this.avoidSide = 0; return { x: dx, z: dz }; }
+    // si lo alto está libre es un obstáculo saltable: _jumpIfBlocked se encarga
+    _v1.y = 1.6;
+    if (this.world.raycast(_v1, _v2, 1.6) === null) return { x: dx, z: dz };
+    _v1.y = 0.7;
+    if (!this.avoidSide) this.avoidSide = Math.random() < 0.5 ? 1 : -1;
+    for (const ang of [0.85 * this.avoidSide, -0.85 * this.avoidSide,
+                       1.6 * this.avoidSide, -1.6 * this.avoidSide]) {
+      const c = Math.cos(ang), s = Math.sin(ang);
+      const nx = dx * c - dz * s, nz = dx * s + dz * c;
+      _v2.set(nx, 0, nz);
+      if (this.world.raycast(_v1, _v2, 1.3) === null) return { x: nx, z: nz };
+    }
+    return { x: -dx, z: -dz }; // encajonado: salir hacia atrás
   }
 
   _face(tx, tz, dt, rate = 8) {
@@ -198,16 +221,33 @@ class Bot {
       }
     }
 
-    // ---- mover + salto de obstáculos + física vertical ----
+    // ---- mover (con steering) + salto de obstáculos + física vertical ----
     const spd = this.state === 'rush' ? 5.2 : this.state === 'engage' ? 3.2 : 4.2;
     const mlen = Math.hypot(mx, mz);
     if (mlen > 0.05) {
-      this._jumpIfBlocked(mx / mlen, mz / mlen);
-      this.pos.x += (mx / mlen) * spd * dt;
-      this.pos.z += (mz / mlen) * spd * dt;
+      const d = this._steer(mx / mlen, mz / mlen);
+      this._jumpIfBlocked(d.x, d.z);
+      this.pos.x += d.x * spd * dt;
+      this.pos.z += d.z * spd * dt;
       this.speed = spd;
     } else this.speed = 0;
     this.world.resolveCircle(this.pos, 0.38, this.y);
+
+    // detector de atasco: si no avanza lo esperado, replantear el plan
+    if (mlen > 0.05 && this.grounded) {
+      const moved = Math.hypot(this.pos.x - this._px, this.pos.z - this._pz);
+      if (moved < spd * dt * 0.3) this.stuckT += dt;
+      else this.stuckT = Math.max(0, this.stuckT - dt * 2);
+      if (this.stuckT > 0.9) {
+        this.stuckT = 0;
+        this.wp = null; this.repathT = 0;
+        this.avoidSide = -(this.avoidSide || 1);
+        this.strafeDir *= -1;
+        if (this.state === 'cover') { this.state = 'advance'; this.cover = null; }
+        if (Math.random() < 0.5) this._jump();
+      }
+    } else this.stuckT = 0;
+    this._px = this.pos.x; this._pz = this.pos.z;
     this.vy -= 15 * dt;
     this.y += this.vy * dt;
     const ground = this.world.groundHeight(this.pos, 0.38, this.y);

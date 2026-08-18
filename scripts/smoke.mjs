@@ -292,24 +292,34 @@ try {
   console.log('BOTS:', JSON.stringify(bots));
   if (bots.mode !== 'bots' || bots.bots !== 7) errors.push('BOTS: modo/bots mal (' + JSON.stringify(bots) + ')');
   if (bots.livesR !== 19 || bots.livesB > 19) errors.push('BOTS: vidas iniciales mal (' + bots.livesR + '/' + bots.livesB + ')');
-  // observar la IA: deben aparecer cover/rush/saltos/cambio a escopeta
+  // observar la IA: conductas (cover/rush/salto/escopeta) + que nadie se atasque
   const seen = { cover: false, rush: false, jump: false, shotgun: false };
+  const walked = [0, 0, 0, 0, 0, 0, 0];
+  let prevPos = null;
+  let samples = 0;
   for (let i = 0; i < 50; i++) {
     await page.waitForTimeout(500);
+    samples++;
     const states = await page.evaluate(() =>
-      window.BREACH.botMatch.bots.map((b) => ({ st: b.state, y: b.y, w: b.wep })));
+      window.BREACH.botMatch.bots.map((b) => ({ st: b.state, y: b.y, w: b.wep, x: b.pos.x, z: b.pos.z })));
+    if (prevPos) {
+      states.forEach((b, j) => { walked[j] += Math.hypot(b.x - prevPos[j].x, b.z - prevPos[j].z); });
+    }
+    prevPos = states;
     for (const b of states) {
       if (b.st === 'cover') seen.cover = true;
       if (b.st === 'rush') seen.rush = true;
       if (b.y > 0.25) seen.jump = true;
       if (b.w === 'shotgun') seen.shotgun = true;
     }
-    if (seen.cover && seen.rush && seen.jump && seen.shotgun) break;
+    if (seen.cover && seen.rush && seen.jump && seen.shotgun && samples >= 16) break;
   }
-  console.log('AI:', JSON.stringify(seen));
+  const minWalk = Math.min(...walked.map((w) => +w.toFixed(1)));
+  console.log('AI:', JSON.stringify({ ...seen, minWalk, secs: samples / 2 }));
   if (!seen.jump) errors.push('AI: ningún bot saltó');
   if (!seen.shotgun && !seen.rush) errors.push('AI: nadie cambió a escopeta/rusheó');
   if (!seen.cover) errors.push('AI: nadie se cubrió');
+  if (minWalk < 1.5) errors.push('AI: hay un bot atascado (recorrió ' + minWalk + 'm en ' + samples / 2 + 's)');
 
   await page.keyboard.down('Tab');
   await page.waitForTimeout(300);
