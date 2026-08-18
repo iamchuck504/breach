@@ -191,6 +191,27 @@ try {
   const magFull = await page.evaluate(() => window.BREACH.weapons.st.mag);
   if (magFull !== 50) errors.push('RELOAD: no rellenó el cargador (mag=' + magFull + ')');
 
+  // disparar en el aire saltando DESDE roadie run (cancela el sprint y tira)
+  await page.evaluate(() => { const P = window.BREACH.player; P.pos.x = 0; P.pos.z = -8; });
+  await page.keyboard.down('Shift');
+  await page.keyboard.down('w');
+  await page.waitForTimeout(400);
+  await page.keyboard.press('f');
+  await page.waitForTimeout(120);
+  const rjAmmo0 = await page.evaluate(() => window.BREACH.weapons.st.mag);
+  await page.mouse.down();
+  await page.waitForTimeout(220);
+  await page.mouse.up();
+  const rj = await page.evaluate(() => ({
+    mag: window.BREACH.weapons.st.mag,
+    y: +window.BREACH.player.y.toFixed(2),
+  }));
+  await page.keyboard.up('w');
+  await page.keyboard.up('Shift');
+  console.log('ROADIEJUMP-FIRE:', JSON.stringify({ antes: rjAmmo0, despues: rj.mag, y: rj.y }));
+  if (rj.mag >= rjAmmo0) errors.push('ROADIEJUMP-FIRE: no disparó en el aire tras saltar desde roadie');
+  await page.waitForTimeout(600);
+
   // ---- menú de pausa + panel de controles ----
   await page.keyboard.press('Escape');
   await page.waitForTimeout(300);

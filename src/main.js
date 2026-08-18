@@ -642,15 +642,17 @@ function simStep(dt) {
   const maxA = TUNING.combat.fireAlignMaxDeg * Math.PI / 180;
   const aligned = Math.abs(angDiff(shoulderCam.yaw, p.yaw)) < maxA;
   const canFire = stateOk && aligned;
-  // bufferear el click si el cuerpo aún gira O el arma está en cooldown
-  // (la Escopeta se comía clicks entre bombazos)
-  if (input.firePressed && stateOk && (!aligned || G.weapons.st.cd > 0)) G.fireBuffer = 0.3;
+  // cualquier click que no pueda salir YA (roadie, cuerpo girando, cooldown,
+  // dive/slide) queda bufereado y sale en cuanto se pueda
+  if (input.firePressed && !p.dead && (!canFire || G.weapons.st.cd > 0)) G.fireBuffer = 0.3;
   G.fireBuffer = Math.max(0, G.fireBuffer - dt);
   const wasReloading = G.weapons.reloading;
 
   const fired = G.weapons.update(dt, input.fireHeld, input.firePressed || G.fireBuffer > 0, canFire);
   if (fired) G.fireBuffer = 0;
-  p.update(dt, input, (input.fireHeld || G.fireBuffer > 0) && stateOk);
+  // la intención de disparo SIEMPRE llega al controller: cancela el roadie
+  // (en tierra o en el aire) y gira el cuerpo para disparar
+  p.update(dt, input, (input.fireHeld || G.fireBuffer > 0) && !p.dead);
   if (fired) fireShot();
 
   if (input.reloadPressed) G.weapons.startReload();
