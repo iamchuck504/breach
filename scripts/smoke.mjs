@@ -5,6 +5,7 @@ import { chromium } from 'playwright-core';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { clearClip } from './lib-clip.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
@@ -27,7 +28,7 @@ try {
     if (m.type() === 'error') errors.push('CONSOLE: ' + m.text());
   });
 
-  await page.goto('http://localhost:8791/', { waitUntil: 'networkidle' });
+  await page.goto('http://localhost:8791/?nolock=1', { waitUntil: 'networkidle' });
   await page.waitForTimeout(800);
   await page.screenshot({ path: path.join(root, 'scripts', 'shot-menu.png') });
 
@@ -363,7 +364,7 @@ try {
   const ctx2 = await browser.newContext({ viewport: { width: 960, height: 540 } });
   const p2 = await ctx2.newPage();
   p2.on('pageerror', (e) => errors.push('P2 PAGEERROR: ' + e.message));
-  await p2.goto('http://localhost:8791/', { waitUntil: 'networkidle' });
+  await p2.goto('http://localhost:8791/?nolock=1', { waitUntil: 'networkidle' });
   for (const pg of [page, p2]) {
     // si el juego está corriendo, abrir el menú con Esc primero
     const menuOff = await pg.evaluate(() => document.getElementById('menu').classList.contains('off'));
@@ -392,6 +393,7 @@ try {
 } finally {
   await browser?.close();
   server.kill();
+  clearClip(); // que la suite JAMÁS deje el mouse físico confinado
 }
 
 if (errors.length) {

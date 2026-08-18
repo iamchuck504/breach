@@ -25,6 +25,10 @@ export class Input {
     this.invertYPad = localStorage.getItem('breach.invertYPad') !== 'false'; // control
     this.kbLocked = false;  // main: true si navigator.keyboard.lock fue CONCEDIDO
     this.rebinding = false; // main: true durante un rebind (Esc/botón pausa no actúan)
+    // ?nolock=1 (suites headless): JAMÁS pedir pointer lock — MEDIDO: hasta un
+    // Chromium headless SIN lock concedido pone un ClipCursor REAL en Windows
+    // y confina el mouse físico de quien esté usando la máquina
+    this.lockDisabled = new URLSearchParams(location.search).has('nolock');
     this.onToggleTuning = null;
     this.onToggleMute = null;
     this.onEscape = null;
@@ -33,7 +37,8 @@ export class Input {
     window.addEventListener('keydown', (e) => this._key(e, true));
     window.addEventListener('keyup', (e) => this._key(e, false));
     canvas.addEventListener('mousedown', (e) => {
-      if (!this.locked) { this.requestLock(); return; }
+      // con ?nolock el juego opera SIN lock: el click va directo al gameplay
+      if (!this.locked && !this.lockDisabled) { this.requestLock(); return; }
       // el cursor virtual del menú consume el click (pausa con lock activo)
       if (this.onLockedMouseDown?.(e.button)) return;
       if (e.button === 0) { this._mouseFire = true; this.firePressed = true; }
@@ -45,7 +50,7 @@ export class Input {
       if (e.button === 2) this._mouseAim = false;
     });
     window.addEventListener('mousemove', (e) => {
-      if (!this.locked) return;
+      if (!this.locked && !this.lockDisabled) return;
       this.mouseDX += e.movementX;
       this.mouseDY += e.movementY;
     });
@@ -85,11 +90,19 @@ export class Input {
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') onFocusLoss();
     });
+    // cerrar/navegar la pestaña con el lock puesto era un exit sucio SIN
+    // reparación posible (la página muere y nadie sanea): soltar antes, limpio
+    const onUnload = () => {
+      if (this.locked) { try { document.exitPointerLock(); } catch { /* ok */ } }
+    };
+    window.addEventListener('pagehide', onUnload);
+    window.addEventListener('beforeunload', onUnload);
   }
 
   // Siempre pointer lock PLANO: el modo raw input (unadjustedMovement) se
   // eliminó por completo — es el camino con el bug de ClipCursor en Windows.
   requestLock() {
+    if (this.lockDisabled) return;
     try {
       const q = this.canvas.requestPointerLock();
       if (q && q.catch) q.catch(() => {});
@@ -113,7 +126,7 @@ export class Input {
       return;
     }
     if (e.target && e.target.tagName === 'INPUT') return; // escribiendo en el menú
-    if (c === BINDS.kb.score && this.locked) e.preventDefault(); // Tab no cicla el foco
+    if (c === BINDS.kb.score && (this.locked || this.lockDisabled)) e.preventDefault(); // Tab no cicla el foco
     if (down) {
       if (c === 'F9') {
         e.preventDefault();
@@ -126,7 +139,7 @@ export class Input {
       if (c === 'KeyM') { this.onToggleMute?.(); }
       // (Escape ya se atendió arriba con return: NO repetir onEscape aquí,
       // duplicarlo togglearía el menú dos veces en el mismo keydown)
-      if (!this.locked) return;
+      if (!this.locked && !this.lockDisabled) return;
       this.keys.add(c);
       if (c === BINDS.kb.evade) this.evadePressed = true;
       if (c === BINDS.kb.jump) this.jumpPressed = true;
@@ -158,7 +171,7 @@ export class Input {
     if (this.suppress) return false;
     return this.keys.has(BINDS.kb.sprint) || this.keys.has('ShiftRight') || this.pad.sprintHeld;
   }
-  get anyDevice() { return this.locked || this.pad.connected; }
+  get anyDevice() { return this.locked || this.lockDisabled || this.pad.connected; }
   get scoreHeld() {
     return this.keys.has(BINDS.kb.score) || this.pad.pressed.has(BINDS.pad.score);
   }

@@ -4,6 +4,7 @@ import { chromium } from 'playwright-core';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { clearClip } from './lib-clip.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
@@ -19,7 +20,7 @@ let browser;
 try {
   browser = await chromium.launch({ executablePath: CHROME, headless: true });
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
-  await page.goto('http://localhost:8793/', { waitUntil: 'networkidle' });
+  await page.goto('http://localhost:8793/?nolock=1', { waitUntil: 'networkidle' });
   await page.click('#btn-practice');
   await page.waitForTimeout(600);
 
@@ -58,5 +59,6 @@ try {
   console.log('SINTETICO dy=+200 (abajo):  ', JSON.stringify(await syn(0, 200)));
 } finally {
   await browser?.close();
+  clearClip();
   server.kill();
 }

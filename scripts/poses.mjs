@@ -4,6 +4,7 @@ import { chromium } from 'playwright-core';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { clearClip } from './lib-clip.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
@@ -39,7 +40,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   page.on('pageerror', (e) => problems.push('PAGEERROR: ' + e.message));
 
-  await page.goto('http://localhost:8792/', { waitUntil: 'networkidle' });
+  await page.goto('http://localhost:8792/?nolock=1', { waitUntil: 'networkidle' });
   await page.click('#btn-practice');
   await page.waitForTimeout(800);
 
@@ -145,6 +146,7 @@ try {
   problems.push('FATAL: ' + e.message);
 } finally {
   await browser?.close();
+  clearClip();
   server.kill();
 }
 

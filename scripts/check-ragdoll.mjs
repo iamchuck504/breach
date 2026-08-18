@@ -4,6 +4,7 @@ import { chromium } from 'playwright-core';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { clearClip } from './lib-clip.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
@@ -17,7 +18,7 @@ await new Promise((r) => setTimeout(r, 900));
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 page.on('pageerror', (e) => console.log('PAGEERROR:', e.message));
-await page.goto('http://localhost:8796/', { waitUntil: 'networkidle' });
+await page.goto('http://localhost:8796/?nolock=1', { waitUntil: 'networkidle' });
 await page.evaluate(() => document.getElementById('btn-bots').click());
 await page.waitForTimeout(1500);
 await page.screenshot({ path: path.join(root, 'scripts', 'shot-outline.png') });
@@ -69,4 +70,5 @@ if (first && last) {
   console.log('desplazamiento total del cadáver:', d.toFixed(2) + 'm');
 }
 await browser.close();
+clearClip();
 server.kill();

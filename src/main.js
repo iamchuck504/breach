@@ -294,6 +294,7 @@ document.addEventListener('pointerlockchange', () => {
 document.addEventListener('pointerlockerror', () => { sanitizing = false; sanitizeReqAt = 0; });
 
 function sanitizeClip() {
+  if (input.lockDisabled) return; // ?nolock: ni el saneo pide lock
   if (!lockUsed || !needSanitize || sanitizing || input.locked || !G.mode) return;
   if (!document.hasFocus() || performance.now() - sanitizeAt < 1500) return;
   sanitizeAt = performance.now();
@@ -1211,7 +1212,7 @@ function frame(now) {
 
   if (G.mode && G.player) {
     if (!menuOpen) {
-      if (input.locked) shoulderCam.applyMouse(input.mouseDX, input.mouseDY, input.invertY);
+      if (input.locked || input.lockDisabled) shoulderCam.applyMouse(input.mouseDX, input.mouseDY, input.invertY);
       if (input.pad.connected) shoulderCam.applyStick(input.pad.camX, input.pad.camY, dt, input.invertYPad);
       // keeper: jugando sin lock (cooldown de Esc, despausa con gamepad,
       // lock post-await) → reintentar captura periódicamente

@@ -4,6 +4,7 @@ import { chromium } from 'playwright-core';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { clearClip } from './lib-clip.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
@@ -17,7 +18,7 @@ await new Promise((r) => setTimeout(r, 900));
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 page.on('pageerror', (e) => console.log('PAGEERROR:', e.message));
-await page.goto('http://localhost:8795/', { waitUntil: 'networkidle' });
+await page.goto('http://localhost:8795/?nolock=1', { waitUntil: 'networkidle' });
 await page.click('#btn-practice');
 await page.waitForTimeout(600);
 
@@ -44,6 +45,7 @@ console.log('LEAN:', JSON.stringify(res));
 await page.screenshot({ path: path.join(root, 'scripts', 'shot-lean.png') });
 await page.mouse.up({ button: 'right' });
 await browser.close();
+clearClip();
 server.kill();
 if (res.st !== 'cover' || !res.aim || res.camSide > -0.5) {
   console.log('PROBLEMA: swap de hombro no ocurrió');
