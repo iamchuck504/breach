@@ -428,7 +428,9 @@ function updateCharSel() {
   for (const b of charSlots.children) b.classList.toggle('sel', +b.dataset.v === G.charVariant);
 }
 
-// previews 3D: se renderizan UNA vez con un renderer pequeño y quedan como imágenes
+// Previews 3D: pose neutral sin armas para que casco, peto y proporciones se
+// lean completos. Una sola cámara/escala para las cinco variantes: el selector
+// no falsea el tamaño relativo de ningún soldado.
 function renderCharPreviews() {
   const pr = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   pr.setSize(176, 224);
@@ -440,14 +442,22 @@ function renderCharPreviews() {
   const fill = new THREE.DirectionalLight(0xdfe8f0, 0.9); // relleno hacia la cara
   fill.position.set(2.2, 1.4, -1.4);
   ps.add(fill);
-  const pc = new THREE.PerspectiveCamera(32, 176 / 224, 0.1, 10);
-  pc.position.set(0.95, 1.55, -2.05); // 3/4 derecho: el arma cruzada no tapa la cara
-  pc.lookAt(-0.05, 0.92, 0);
+  const pc = new THREE.PerspectiveCamera(30, 176 / 224, 0.1, 10);
+  pc.position.set(0.52, 1.47, -2.75);
+  pc.lookAt(0, 0.84, 0);
   for (let v = 0; v < 5; v++) {
     const r = new Rig(ps, 'red', null, v);
-    // asentar la pose idle (manos al arma por IK, damping)
+    // Asentar piernas/torso y luego aplicar una pose de exhibición simétrica.
     for (let i = 0; i < 40; i++) r.update(1 / 30, { state: 'idle', speed: 0, aim: false, aimPitch: 0 });
-    r.root.rotation.y = -0.45; // hacia la cámara (yaw+ gira hacia -x, lejos)
+    r.gunMount.visible = false;
+    r.backMount.visible = false;
+    r.aimRig.rotation.set(0, 0, 0);
+    r.armL.shoulder.rotation.set(0, 0, -0.13);
+    r.armR.shoulder.rotation.set(0, 0, 0.13);
+    r.armL.elbow.rotation.set(0, 0, 0);
+    r.armR.elbow.rotation.set(0, 0, 0);
+    r.root.rotation.y = -0.18;
+    r.root.updateWorldMatrix(true, true);
     pr.render(ps, pc);
     const img = charSlots.querySelector(`button[data-v="${v}"] img`);
     if (img) img.src = pr.domElement.toDataURL();

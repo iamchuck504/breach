@@ -191,17 +191,36 @@
   #pad-status.on { color: var(--accent); }
 
   /* ---------- selección de personaje ---------- */
-  #char-card { width: 620px; display: none; }
-  #char-slots { display: flex; gap: 10px; margin-top: 18px; }
-  .char-slot { flex: 1; background: #101114; border: 1px solid var(--line);
-    border-radius: 10px; padding: 10px 6px 9px; cursor: pointer; display: flex;
+  #char-card { width: min(700px, calc(100vw - 24px)); display: none; padding: 28px; }
+  #char-card .tag { margin-bottom: 16px; }
+  #char-slots { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 9px; }
+  .char-slot { min-width: 0; background: #101114; border: 1px solid var(--line);
+    border-radius: 10px; padding: 9px 6px 8px; cursor: pointer; display: flex;
     flex-direction: column; align-items: center; gap: 7px; font-family: var(--mono);
     font-size: 9.5px; letter-spacing: .13em; color: var(--dim);
     text-transform: uppercase; transition: all .12s; }
-  .char-slot img { width: 88px; height: 112px; border-radius: 6px; background: #14161a; }
+  .char-slot img { display: block; width: 100%; max-width: 104px; height: auto;
+    aspect-ratio: 11 / 14; object-fit: contain; border-radius: 6px; background: #14161a; }
   .char-slot:hover, .char-slot.vhover { border-color: var(--accent); color: var(--accent); }
   .char-slot.sel { border-color: var(--accent); color: var(--accent);
     box-shadow: inset 0 0 0 1px var(--accent); }
+  #btn-char-back { margin-top: 18px; }
+
+  /* En ventanas bajas (browser embebido / landscape), el selector conserva
+     aire alrededor de los modelos sin empujar el botón fuera de pantalla. */
+  @media (max-height: 520px) {
+    #char-card { padding: 16px 20px; }
+    #char-card .logo { font-size: 23px !important; }
+    #char-card .tag { margin-bottom: 10px; font-size: 10px; letter-spacing: .22em; }
+    #char-slots { gap: 8px; }
+    .char-slot { padding: 6px 5px; gap: 5px; }
+    .char-slot img { max-width: 94px; max-height: min(120px, calc(100vh - 205px)); }
+    #btn-char-back { margin-top: 12px; padding: 10px; }
+  }
+
+  @media (max-width: 540px) {
+    #char-slots { overflow-x: auto; grid-template-columns: repeat(5, 96px); padding-bottom: 4px; }
+  }
 </style>
 </head>
 <body>
@@ -304,7 +323,7 @@
     <div class="logo" style="font-size:24px">PERSONAJE</div>
     <div class="tag">elige tu soldado — solo estética, mismo hitbox</div>
     <div id="char-slots"></div>
-    <button class="btn primary" id="btn-char-back" style="margin-top:20px">Volver</button>
+    <button class="btn primary" id="btn-char-back">Volver</button>
   </div>
 
   <div class="menu-card" id="controls-card">
