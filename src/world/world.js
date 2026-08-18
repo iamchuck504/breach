@@ -70,6 +70,7 @@ export class World {
       sc.left = -r; sc.right = r; sc.top = r; sc.bottom = -r;
       sc.updateProjectionMatrix();
     }
+    this._applyEnvironment(layout);
   }
 
   // ---------- texturas procedurales (canvas nítido — cero blur/filtros) ----------
@@ -79,6 +80,8 @@ export class World {
       stoneTop: this._stoneCanvas(3, 3, true), // losas planas para los topes
       floor: this._floorCanvas(),
       banner: this._bannerCanvas(),
+      gate: this._gateCanvas(),                 // portón de madera/hierro
+      crack: this._crackCanvas(),               // daño mural (alphaTest)
       ivy: this._ivyCanvas(),                  // hiedra colgante (alphaTest)
       grass: this._grassCanvas(),              // mata de pasto (alphaTest)
     };
@@ -171,6 +174,57 @@ export class World {
     return cv;
   }
 
+  _gateCanvas() {
+    const w = 256, h = 192;
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    const g = cv.getContext('2d');
+    const grd = g.createLinearGradient(0, 0, 0, h);
+    grd.addColorStop(0, '#65452f'); grd.addColorStop(1, '#35271f');
+    g.fillStyle = grd; g.fillRect(0, 0, w, h);
+    // tablones y veta gruesa: legibles desde media cancha
+    for (let x = 0; x <= w; x += 32) {
+      g.fillStyle = 'rgba(25,18,14,.58)'; g.fillRect(x, 0, 4, h);
+      g.fillStyle = 'rgba(255,220,165,.10)'; g.fillRect(x + 4, 0, 2, h);
+    }
+    for (let y = 18; y < h; y += 44) {
+      g.strokeStyle = 'rgba(28,19,14,.28)'; g.lineWidth = 2;
+      g.beginPath(); g.moveTo(8, y); g.bezierCurveTo(70, y - 8, 170, y + 9, 248, y - 3); g.stroke();
+    }
+    // bandas y remaches de hierro
+    g.fillStyle = '#25272a';
+    g.fillRect(0, 24, w, 12); g.fillRect(0, h - 38, w, 12);
+    g.fillRect(w / 2 - 7, 0, 14, h);
+    for (let x = 16; x < w; x += 28) {
+      for (const y of [30, h - 32]) {
+        g.fillStyle = '#77746c'; g.beginPath(); g.arc(x, y, 3, 0, Math.PI * 2); g.fill();
+      }
+    }
+    return cv;
+  }
+
+  _crackCanvas() {
+    const s = 128;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = s;
+    const g = cv.getContext('2d');
+    g.clearRect(0, 0, s, s);
+    g.strokeStyle = 'rgba(35,30,25,.82)';
+    g.lineCap = 'round';
+    const branch = (x, y, len, a, width, depth) => {
+      const ex = x + Math.cos(a) * len, ey = y + Math.sin(a) * len;
+      g.lineWidth = width; g.beginPath(); g.moveTo(x, y); g.lineTo(ex, ey); g.stroke();
+      if (depth <= 0) return;
+      branch(ex, ey, len * 0.62, a - 0.45, width * 0.68, depth - 1);
+      branch(ex, ey, len * 0.52, a + 0.52, width * 0.62, depth - 1);
+    };
+    branch(63, 18, 28, 1.45, 4, 2);
+    branch(65, 47, 22, 2.25, 2.5, 1);
+    g.fillStyle = 'rgba(45,38,30,.38)';
+    for (let i = 0; i < 12; i++) g.fillRect(36 + Math.random() * 56, 86 + Math.random() * 25, 4, 3);
+    return cv;
+  }
+
   // Hiedra: guías que cuelgan desde arriba con hojas en rombos nítidos.
   _ivyCanvas() {
     const s = 256;
@@ -243,8 +297,8 @@ export class World {
   // Agrega un quad al batch. Los UV pueden exceder 1: la textura usa RepeatWrapping.
   _batchQuad(batch, verts, normal, uv, color) {
     const base = batch.count;
-    const c = new THREE.Color(color);
     for (let i = 0; i < 4; i++) {
+      const c = new THREE.Color(Array.isArray(color) ? color[i] : color);
       batch.pos.push(...verts[i]);
       batch.norm.push(...normal);
       batch.uv.push(...uv[i]);
@@ -260,19 +314,24 @@ export class World {
     const S = 1.7;
     const uw = w / S, ud = d / S, vh = h / S;
     const b = this._boxBatch;
+    // AO falso gratis: zócalo oscuro y borde superior claro dentro del mismo
+    // atributo de color; no agrega geometría, materiales ni draw calls.
+    const bottom = new THREE.Color(sideColor).multiplyScalar(0.74).getHex();
+    const upper = new THREE.Color(sideColor).multiplyScalar(1.07).getHex();
+    const sideGradient = [bottom, upper, upper, bottom];
 
     this._batchQuad(b.sides,
       [[x1, 0, z0], [x1, h, z0], [x1, h, z1], [x1, 0, z1]],
-      [1, 0, 0], [[0, 0], [0, vh], [ud, vh], [ud, 0]], sideColor);
+      [1, 0, 0], [[0, 0], [0, vh], [ud, vh], [ud, 0]], sideGradient);
     this._batchQuad(b.sides,
       [[x0, 0, z1], [x0, h, z1], [x0, h, z0], [x0, 0, z0]],
-      [-1, 0, 0], [[0, 0], [0, vh], [ud, vh], [ud, 0]], sideColor);
+      [-1, 0, 0], [[0, 0], [0, vh], [ud, vh], [ud, 0]], sideGradient);
     this._batchQuad(b.sides,
       [[x1, 0, z1], [x1, h, z1], [x0, h, z1], [x0, 0, z1]],
-      [0, 0, 1], [[0, 0], [0, vh], [uw, vh], [uw, 0]], sideColor);
+      [0, 0, 1], [[0, 0], [0, vh], [uw, vh], [uw, 0]], sideGradient);
     this._batchQuad(b.sides,
       [[x0, 0, z0], [x0, h, z0], [x1, h, z0], [x1, 0, z0]],
-      [0, 0, -1], [[0, 0], [0, vh], [uw, vh], [uw, 0]], sideColor);
+      [0, 0, -1], [[0, 0], [0, vh], [uw, vh], [uw, 0]], sideGradient);
     this._batchQuad(b.tops,
       [[x0, h, z0], [x0, h, z1], [x1, h, z1], [x1, h, z0]],
       [0, 1, 0], [[0, 0], [0, ud], [uw, ud], [uw, 0]], topColor);
@@ -302,8 +361,10 @@ export class World {
 
   _buildLights() {
     const hemi = new THREE.HemisphereLight(0xd9e6f0, 0x97876e, 1.55);
+    this.hemi = hemi;
     this.scene.add(hemi);
     const amb = new THREE.AmbientLight(0xfff4e2, 0.25);
+    this.amb = amb;
     this.scene.add(amb);
     // sol de media tarde: cálido, sombras largas y nítidas
     const sun = new THREE.DirectionalLight(0xffe9c4, 2.3);
@@ -317,19 +378,56 @@ export class World {
     sun.shadow.bias = -0.0004;
     this.sun = sun;
     this.scene.add(sun);
-    // cielo: degradado vertical azul → horizonte dorado (canvas, no niebla:
-    // nada de "blur" atmosférico, geometría nítida a toda distancia)
+
+    this._setSky([
+      [0, '#6d9bc2'], [0.55, '#a7c0d2'], [1, '#e0cda9'],
+    ]);
+  }
+
+  _setSky(stops) {
+    if (this._skyTex) this._skyTex.dispose();
     const cv = document.createElement('canvas');
     cv.width = 2; cv.height = 256;
     const g = cv.getContext('2d');
     const grad = g.createLinearGradient(0, 0, 0, 256);
-    grad.addColorStop(0, '#6d9bc2');
-    grad.addColorStop(0.55, '#a7c0d2');
-    grad.addColorStop(1, '#e0cda9');
+    for (const [at, color] of stops) grad.addColorStop(at, color);
     g.fillStyle = grad; g.fillRect(0, 0, 2, 256);
     const sky = new THREE.CanvasTexture(cv);
     sky.colorSpace = THREE.SRGBColorSpace;
+    this._skyTex = sky;
     this.scene.background = sky;
+  }
+
+  _applyEnvironment(layout) {
+    if (layout === 'fortaleza') {
+      // Hora dorada: contraste cálido/frío para separar piedra y jugadores.
+      this.hemi.color.setHex(0x8fb4d0);
+      this.hemi.groundColor.setHex(0x7a634b);
+      this.hemi.intensity = 1.48;
+      this.amb.color.setHex(0xffd8aa);
+      this.amb.intensity = 0.24;
+      this.sun.color.setHex(0xffc77f);
+      this.sun.intensity = 2.15;
+      this.sun.position.set(-18, 20, -11);
+      this._setSky([
+        [0, '#435f7d'], [0.47, '#7f9bb0'], [0.78, '#c7a27f'], [1, '#e7b36f'],
+      ]);
+      // Empieza fuera de los carriles jugables; solo integra paisaje lejano.
+      this.scene.fog = new THREE.Fog(0x91a0a3, 46, 118);
+    } else {
+      this.hemi.color.setHex(0xd9e6f0);
+      this.hemi.groundColor.setHex(0x97876e);
+      this.hemi.intensity = 1.55;
+      this.amb.color.setHex(0xfff4e2);
+      this.amb.intensity = 0.25;
+      this.sun.color.setHex(0xffe9c4);
+      this.sun.intensity = 2.3;
+      this.sun.position.set(14, 22, 8);
+      this._setSky([
+        [0, '#6d9bc2'], [0.55, '#a7c0d2'], [1, '#e0cda9'],
+      ]);
+      this.scene.fog = null;
+    }
   }
 
   _buildFloor() {
@@ -337,7 +435,10 @@ export class World {
     const tex = this._tex('floor', this.fx * 2 / 2.6, this.fz * 2 / 2.6);
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(this.fx * 2, this.fz * 2),
-      new THREE.MeshLambertMaterial({ map: tex })
+      new THREE.MeshLambertMaterial({
+        map: tex,
+        color: this.layout === 'fortaleza' ? 0xc3b79f : 0xffffff,
+      })
     );
     floor.rotation.x = -Math.PI / 2;
     floor.receiveShadow = true;
@@ -484,10 +585,12 @@ export class World {
   // geometría jugable de siempre (simetría rotacional, LOW/MID/HIGH).
   _buildFortaleza() {
     const { LOW, MID, HIGH } = BLOCK;
-    const lowOpts = { color: 0xa89f8f, top: 0xcdc5b2 };
-    const midOpts = { color: 0x9e968a, top: 0xbfb8a9 };
-    const highOpts = { color: 0xa19a8e, top: 0xb3aca0 };
-    const wallOpts = { mirror: false, color: 0x968f83, top: 0xa59e92 };
+    // Jerarquía tonal: tapas claras = superficies jugables; muros altos más
+    // oscuros = fondo. El jugador reconoce la altura antes de leer el patrón.
+    const lowOpts = { color: 0x968b79, top: 0xcbbd9f };
+    const midOpts = { color: 0x81786b, top: 0xb5a790 };
+    const highOpts = { color: 0x817970, top: 0xa69b89 };
+    const wallOpts = { mirror: false, color: 0x787168, top: 0x9a907f };
 
     // perímetro
     this._box(0, -this.fz - 0.4, this.fx * 2 + 2, 0.8, HIGH, wallOpts);
@@ -539,8 +642,8 @@ export class World {
   // braseros y torreones lejanos de silueta.
   _decorFortaleza() {
     const { HIGH } = BLOCK;
-    const stoneMat = new THREE.MeshLambertMaterial({ color: 0x9b9488, map: this._tex('stone', 1, 0.5) });
-    const towerMat = new THREE.MeshLambertMaterial({ color: 0x9b9488, map: this._tex('stone', 8, 5) });
+    const stoneMat = new THREE.MeshLambertMaterial({ color: 0x898176, map: this._tex('stone', 1, 0.5) });
+    const towerMat = new THREE.MeshLambertMaterial({ color: 0x827b72, map: this._tex('stone', 8, 5) });
 
     // --- almenas: muralla perimetral + escudos de spawn + coronas de torreón
     const pts = [];
@@ -637,7 +740,7 @@ export class World {
     // torreones lejanos flotaban contra el cielo)
     const land = new THREE.Mesh(
       new THREE.PlaneGeometry(320, 320),
-      new THREE.MeshLambertMaterial({ color: 0x8b9166 })
+      new THREE.MeshLambertMaterial({ color: 0x687153 })
     );
     land.rotation.x = -Math.PI / 2;
     land.position.y = -0.04;
@@ -645,16 +748,17 @@ export class World {
     this.mapGroup.add(land);
 
     // --- torreones lejanos (el "resto" del castillo), en piedra y con techo
-    for (const [x, z, r, h] of [[-30, -16, 3.4, 11], [32, 9, 4, 13], [-28, 20, 3, 9], [29, -22, 3.6, 10]]) {
+    const farTowers = [[-30, -16, 3.4, 11], [32, 9, 4, 13], [-28, 20, 3, 9], [29, -22, 3.6, 10]];
+    for (const [x, z, r, h] of farTowers) {
       const t = new THREE.Mesh(
         new THREE.CylinderGeometry(r * 0.88, r, h, 10),
-        new THREE.MeshLambertMaterial({ color: 0x958f88, map: this._tex('stone', 10, 6) })
+        new THREE.MeshLambertMaterial({ color: 0x77736d, map: this._tex('stone', 10, 6) })
       );
       t.position.set(x, h / 2 - 0.5, z);
       this.mapGroup.add(t);
       const cap = new THREE.Mesh(
         new THREE.ConeGeometry(r * 1.05, r * 1.3, 10),
-        new THREE.MeshLambertMaterial({ color: 0x8a5f43 })
+        new THREE.MeshLambertMaterial({ color: 0x704632 })
       );
       cap.position.set(x, h - 0.5 + r * 0.6, z);
       this.mapGroup.add(cap);
@@ -662,6 +766,167 @@ export class World {
 
     this._vegetation(towers);
     this._props(towers);
+    this._detailFortaleza(towers, farTowers);
+  }
+
+  // Landmarks y capas de lectura. Todo vive fuera del sistema de colliders:
+  // mejora orientación/atmósfera sin cambiar una sola ruta de combate.
+  _detailFortaleza(towers, farTowers) {
+    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
+    const p = new THREE.Vector3(), s = new THREE.Vector3();
+
+    // Portones de cada facción: gran ancla visual detrás de los estandartes.
+    const gate = new THREE.InstancedMesh(
+      new THREE.PlaneGeometry(4.6, 2.45),
+      new THREE.MeshLambertMaterial({ map: this._tex('gate'), color: 0xa47a56 }), 2);
+    for (const [i, z, ry] of [[0, -20.385, 0], [1, 20.385, Math.PI]]) {
+      q.setFromEuler(e.set(0, ry, 0));
+      m4.compose(p.set(0, 1.23, z), q, s.set(1, 1, 1));
+      gate.setMatrixAt(i, m4);
+    }
+    gate.receiveShadow = true;
+    this.mapGroup.add(gate);
+
+    // Grietas grandes en muros: una sola geometría instanciada.
+    const crackSpots = [
+      [-20.95, 1.45, -5, Math.PI / 2, 1.2], [-20.95, 1.35, 13, Math.PI / 2, 0.9],
+      [20.95, 1.4, 4, -Math.PI / 2, 1.1], [20.95, 1.3, -15, -Math.PI / 2, 0.85],
+      [-12, 1.45, -26.55, 0, 1.15], [10, 1.3, -26.55, 0, 0.9],
+      [14, 1.45, 26.55, Math.PI, 1.1], [-7, 1.35, 26.55, Math.PI, 0.85],
+    ];
+    const crackMat = new THREE.MeshBasicMaterial({
+      map: this._tex('crack'), transparent: true, alphaTest: 0.12,
+      depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2,
+    });
+    const cracks = new THREE.InstancedMesh(new THREE.PlaneGeometry(1.5, 1.35), crackMat, crackSpots.length);
+    crackSpots.forEach(([x, y, z, ry, sc], i) => {
+      q.setFromEuler(e.set(0, ry, 0));
+      m4.compose(p.set(x, y, z), q, s.set(sc, sc, sc));
+      cracks.setMatrixAt(i, m4);
+    });
+    this.mapGroup.add(cracks);
+
+    // Manchas suaves en esquinas: rompen el mosaico sin crear decal por objeto.
+    const stains = [
+      [-18, -22, 2.3, 1.2], [-19, -8, 1.7, 1], [-18, 10, 2.1, 1.2],
+      [18, 19, 2.3, 1.2], [19, 7, 1.7, 1], [18, -12, 2.1, 1.2],
+      [-9, -25, 1.5, 0.8], [8, 25, 1.5, 0.8], [-2.5, 2.5, 1.1, 0.65], [3, -3, 1.1, 0.65],
+    ];
+    const stainMat = new THREE.MeshBasicMaterial({
+      color: 0x4b3d2f, transparent: true, opacity: 0.12, depthWrite: false,
+    });
+    const stainMesh = new THREE.InstancedMesh(new THREE.CircleGeometry(1, 18), stainMat, stains.length);
+    stains.forEach(([x, z, sx, sz], i) => {
+      q.setFromEuler(e.set(-Math.PI / 2, 0, (x + z) * 0.13));
+      m4.compose(p.set(x, 0.018, z), q, s.set(sx, sz, 1));
+      stainMesh.setMatrixAt(i, m4);
+    });
+    this.mapGroup.add(stainMesh);
+
+    // Ventanas negras en torreones cercanos y lejanos: escala arquitectónica.
+    const windowData = [];
+    const addTowerWindows = (x, z, r, ys) => {
+      const len = Math.hypot(x, z) || 1;
+      const nx = -x / len, nz = -z / len;
+      const ry = Math.atan2(nx, nz);
+      for (const y of ys) windowData.push([x + nx * (r + 0.035), y, z + nz * (r + 0.035), ry]);
+    };
+    for (const [x, z] of towers) addTowerWindows(x, z, 2.18, [3.1, 5.2]);
+    for (const [x, z, r, h] of farTowers) addTowerWindows(x, z, r * 0.91, [h * 0.42, h * 0.66]);
+    const windows = new THREE.InstancedMesh(
+      new THREE.PlaneGeometry(0.52, 0.9),
+      new THREE.MeshBasicMaterial({ color: 0x1c2225 }), windowData.length);
+    windowData.forEach(([x, y, z, ry], i) => {
+      q.setFromEuler(e.set(0, ry, 0));
+      m4.compose(p.set(x, y, z), q, s.set(1, 1, 1));
+      windows.setMatrixAt(i, m4);
+    });
+    this.mapGroup.add(windows);
+
+    // Horizonte low-poly con color atmosférico; la niebla lo funde al cielo.
+    const mountainData = [
+      [-82, -56, 23, 12, 16], [-48, -82, 28, 15, 18], [8, -94, 32, 17, 19],
+      [66, -70, 25, 13, 16], [92, -18, 31, 16, 20], [84, 55, 28, 14, 18],
+      [24, 94, 34, 18, 21], [-43, 88, 27, 14, 18], [-91, 39, 30, 16, 19],
+    ];
+    const mountains = new THREE.InstancedMesh(
+      new THREE.IcosahedronGeometry(1, 1),
+      new THREE.MeshLambertMaterial({ color: 0x596a72, flatShading: true }), mountainData.length);
+    mountainData.forEach(([x, z, sx, sy, sz], i) => {
+      q.setFromEuler(e.set(0, i * 0.71, 0));
+      m4.compose(p.set(x, sy * 0.42 - 2.2, z), q, s.set(sx, sy, sz));
+      mountains.setMatrixAt(i, m4);
+    });
+    this.mapGroup.add(mountains);
+
+    const sunDisk = new THREE.Mesh(
+      new THREE.SphereGeometry(3.2, 14, 8),
+      new THREE.MeshBasicMaterial({ color: 0xffca78, fog: false }));
+    sunDisk.position.set(-58, 28, -76);
+    this.mapGroup.add(sunDisk);
+
+    // Carril de asedio (este): cajas al pie de la muralla, fuera de la ruta.
+    const crateData = [
+      [20.05, -18, 0.8, 0], [20.1, -10, 0.65, 0.2], [20.0, -2, 0.75, -0.15],
+      [20.05, 7, 0.7, 0.25], [20.05, 15, 0.85, -0.2], [19.55, -17.7, 0.55, 0.4],
+    ];
+    const siegeWood = new THREE.MeshLambertMaterial({ color: 0x735239 });
+    const crates = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(0.75, 0.68, 0.75),
+      siegeWood, crateData.length);
+    crateData.forEach(([x, z, sc, ry], i) => {
+      q.setFromEuler(e.set(0, ry, 0));
+      m4.compose(p.set(x, 0.34 * sc, z), q, s.set(sc, sc, sc));
+      crates.setMatrixAt(i, m4);
+    });
+    crates.castShadow = true;
+    this.mapGroup.add(crates);
+
+    // Andamio del carril de asedio: silueta de madera pegada a la muralla.
+    const beamData = [
+      [20.52, 1.25, -2.2, 0, 0.13, 2.5, 0.13],
+      [20.52, 1.25, 2.2, 0, 0.13, 2.5, 0.13],
+      [20.52, 0.55, 0, 0, 0.13, 0.13, 4.6],
+      [20.52, 1.9, 0, 0, 0.13, 0.13, 4.6],
+      [20.49, 1.23, 0, -0.34, 0.1, 0.1, 4.5],
+    ];
+    const beams = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), siegeWood, beamData.length);
+    beamData.forEach(([x, y, z, rx, sx, sy, sz], i) => {
+      q.setFromEuler(e.set(rx, 0, 0));
+      m4.compose(p.set(x, y, z), q, s.set(sx, sy, sz));
+      beams.setMatrixAt(i, m4);
+    });
+    beams.castShadow = true;
+    this.mapGroup.add(beams);
+
+    // Faro central sobre el pilar: visible desde cualquier carril, sin luz real.
+    const metal = new THREE.MeshLambertMaterial({ color: 0x302c29 });
+    const plinth = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.78, 0.24, 8), stoneMatFor(0x867d6f));
+    plinth.position.set(0, BLOCK.HIGH + 0.12, 0);
+    this.mapGroup.add(plinth);
+    const supports = new THREE.InstancedMesh(new THREE.BoxGeometry(0.08, 0.72, 0.08), metal, 4);
+    [[-0.34, -0.34], [0.34, -0.34], [-0.34, 0.34], [0.34, 0.34]].forEach(([x, z], i) => {
+      m4.compose(p.set(x, BLOCK.HIGH + 0.49, z), q.identity(), s.set(1, 1, 1));
+      supports.setMatrixAt(i, m4);
+    });
+    this.mapGroup.add(supports);
+    const bowl = new THREE.Mesh(new THREE.CylinderGeometry(0.46, 0.3, 0.2, 10), metal);
+    bowl.position.set(0, BLOCK.HIGH + 0.88, 0);
+    this.mapGroup.add(bowl);
+    const flame = new THREE.Mesh(
+      new THREE.ConeGeometry(0.27, 0.78, 7),
+      new THREE.MeshBasicMaterial({ color: 0xff8a3d }));
+    flame.position.set(0, BLOCK.HIGH + 1.35, 0);
+    this.mapGroup.add(flame);
+    const core = new THREE.Mesh(
+      new THREE.ConeGeometry(0.12, 0.46, 7),
+      new THREE.MeshBasicMaterial({ color: 0xffe0a0 }));
+    core.position.set(0, BLOCK.HIGH + 1.27, -0.01);
+    this.mapGroup.add(core);
+
+    function stoneMatFor(color) {
+      return new THREE.MeshLambertMaterial({ color });
+    }
   }
 
   // Vegetación: hiedra en muros, matas de pasto entre las losas, arbustos
@@ -673,6 +938,9 @@ export class World {
     // [x, z, giroY, ancho, alto, yCentro] — caras que miran al campo
     const ivies = [
       [-20.95, -8, Math.PI / 2, 2.6, 2.6, 1.55],   // muralla oeste
+      [-20.95, -19, Math.PI / 2, 2.1, 2.2, 1.4],   // carril jardín (oeste)
+      [-20.95, 5, Math.PI / 2, 3.4, 2.8, 1.55],
+      [-20.95, 18, Math.PI / 2, 2.3, 2.4, 1.45],
       [20.95, 8, -Math.PI / 2, 2.6, 2.6, 1.55],
       [-14, -this.fz + 0.05, 0, 3.0, 2.7, 1.5],    // muralla norte/sur (cara interna)
       [14, this.fz - 0.05, Math.PI, 3.0, 2.7, 1.5],
@@ -795,13 +1063,13 @@ export class World {
       }
     }
 
-    // banderines triangulares: torreones (color del lado) + pilar central
+    // banderines triangulares en torreones (color del lado). El centro usa
+    // ahora el faro de fuego como landmark y no necesita otra silueta.
     const flagGeo = new THREE.ShapeGeometry(new THREE.Shape([
       new THREE.Vector2(0, 0), new THREE.Vector2(0.85, 0.22), new THREE.Vector2(0, 0.44),
     ]));
     const poleMat = new THREE.MeshLambertMaterial({ color: 0x4a4038 });
     const spots = towers.map(([tx, tz]) => [tx, 8.0, tz, tz < 0 ? 0xd94f3f : 0x4f8de0]);
-    spots.push([0, BLOCK.HIGH, 0, 0xff8a3d]); // pilar central, acento
     for (const [x, base, z, color] of spots) {
       const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 1.7, 5), poleMat);
       pole.position.set(x, base + 0.85, z);
