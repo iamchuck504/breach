@@ -140,6 +140,21 @@ document.getElementById('btn-online').addEventListener('click', () => startOnlin
 btnResume.addEventListener('click', () => closeMenu());
 document.getElementById('btn-pause').addEventListener('click', () => openMenu());
 
+// pantalla completa (botón del menú + ícono del HUD)
+function toggleFullscreen() {
+  try {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen();
+  } catch { /* sin soporte */ }
+}
+document.getElementById('btn-fullscreen').addEventListener('click', () => toggleFullscreen());
+document.getElementById('btn-fs').addEventListener('click', () => toggleFullscreen());
+document.addEventListener('fullscreenchange', () => {
+  const on = !!document.fullscreenElement;
+  document.getElementById('btn-fullscreen').lastChild.textContent = on
+    ? ' Salir de pantalla completa' : ' Pantalla completa';
+});
+
 input.onEscape = () => {
   if (!G.mode) return;
   if (menuIsOpen()) closeMenu(); else openMenu();
