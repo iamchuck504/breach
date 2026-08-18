@@ -6,7 +6,7 @@ import { BINDS, KB_LABELS, PAD_LABELS, keyLabel, padBtnName, loadBinds, saveBind
 import { Input } from './core/input.js';
 import { ShoulderCamera } from './core/camera.js';
 import { World } from './world/world.js';
-import { Rig } from './player/rig.js';
+import { Rig, CHAR_NAMES } from './player/rig.js';
 import { Controller, PLAYER_R } from './player/controller.js';
 import { RemotePlayer } from './player/remote.js';
 import { Dummies } from './player/practice.js';
@@ -68,6 +68,10 @@ const G = {
   scores: { red: 0, blue: 0 },
   team: 'red',
   name: 'CHUCK',
+  charVariant: (() => {
+    const v = parseInt(localStorage.getItem('breach.character'), 10);
+    return v >= 0 && v <= 4 ? v : 0;
+  })(),
   footAcc: 0,
 };
 
@@ -361,6 +365,7 @@ let rebinding = null; // { cancel() }
 function showControls(on) {
   mainCard.style.display = on ? 'none' : 'block';
   controlsCard.style.display = on ? 'block' : 'none';
+  charCard.style.display = 'none';
   if (on) {
     renderBinds();
     slMouse.value = TUNING.cam.sens;
@@ -372,6 +377,76 @@ function showControls(on) {
 }
 document.getElementById('btn-controls').addEventListener('click', () => showControls(true));
 document.getElementById('btn-back').addEventListener('click', () => showControls(false));
+
+// ---------- selección de personaje ----------
+const charCard = document.getElementById('char-card');
+const charSlots = document.getElementById('char-slots');
+
+function showChar(on) {
+  mainCard.style.display = on ? 'none' : 'block';
+  controlsCard.style.display = 'none';
+  charCard.style.display = on ? 'block' : 'none';
+  if (on) buildCharUI();
+}
+document.getElementById('btn-character').addEventListener('click', () => showChar(true));
+document.getElementById('btn-char-back').addEventListener('click', () => showChar(false));
+
+function buildCharUI() {
+  if (!charSlots.children.length) {
+    for (let v = 0; v < 5; v++) {
+      const b = document.createElement('button');
+      b.className = 'char-slot';
+      b.dataset.v = v;
+      b.innerHTML = `<img alt="${CHAR_NAMES[v]}"><span>${CHAR_NAMES[v]}</span>`;
+      b.addEventListener('click', () => {
+        G.charVariant = v;
+        localStorage.setItem('breach.character', String(v));
+        updateCharSel();
+        // en partida: el cambio aplica al instante (rig nuevo en el sitio)
+        if (G.rig && G.player && G.mode) {
+          G.rig.dispose(scene);
+          G.rig = new Rig(scene, G.team, null, v);
+          G.rig.groundFn = (x, z, y) => world.groundHeight({ x, z }, PLAYER_R, y);
+          G.rig.setWeapon(G.weapons.cur);
+        }
+      });
+      charSlots.append(b);
+    }
+    renderCharPreviews();
+  }
+  updateCharSel();
+}
+function updateCharSel() {
+  for (const b of charSlots.children) b.classList.toggle('sel', +b.dataset.v === G.charVariant);
+}
+
+// previews 3D: se renderizan UNA vez con un renderer pequeño y quedan como imágenes
+function renderCharPreviews() {
+  const pr = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  pr.setSize(176, 224);
+  const ps = new THREE.Scene();
+  ps.add(new THREE.HemisphereLight(0xd9e6f0, 0x97876e, 2.2));
+  const dl = new THREE.DirectionalLight(0xffe9c4, 1.6);
+  dl.position.set(2, 3, -2.5);
+  ps.add(dl);
+  const fill = new THREE.DirectionalLight(0xdfe8f0, 0.9); // relleno hacia la cara
+  fill.position.set(2.2, 1.4, -1.4);
+  ps.add(fill);
+  const pc = new THREE.PerspectiveCamera(32, 176 / 224, 0.1, 10);
+  pc.position.set(0.95, 1.55, -2.05); // 3/4 derecho: el arma cruzada no tapa la cara
+  pc.lookAt(-0.05, 0.92, 0);
+  for (let v = 0; v < 5; v++) {
+    const r = new Rig(ps, 'red', null, v);
+    // asentar la pose idle (manos al arma por IK, damping)
+    for (let i = 0; i < 40; i++) r.update(1 / 30, { state: 'idle', speed: 0, aim: false, aimPitch: 0 });
+    r.root.rotation.y = -0.45; // hacia la cámara (yaw+ gira hacia -x, lejos)
+    pr.render(ps, pc);
+    const img = charSlots.querySelector(`button[data-v="${v}"] img`);
+    if (img) img.src = pr.domElement.toDataURL();
+    r.dispose(ps);
+  }
+  pr.dispose();
+}
 document.getElementById('btn-reset-binds').addEventListener('click', () => { resetBinds(); renderBinds(); });
 
 function updateSliderLabels() {
@@ -533,7 +608,7 @@ function teardown() {
 
 function spawnLocal(team, spawn) {
   G.team = team;
-  G.rig = new Rig(scene, team);
+  G.rig = new Rig(scene, team, null, G.charVariant);
   G.rig.groundFn = (x, z, y) => world.groundHeight({ x, z }, PLAYER_R, y);
   G.player = new Controller(world, shoulderCam, ctrlEvents);
   G.player.respawn(spawn);
@@ -663,7 +738,7 @@ async function startOnline() {
   bindNet(net);
   const mySeq = ++startSeq;
   try {
-    const welcome = await net.connect(url, G.name);
+    const welcome = await net.connect(url, G.name, G.charVariant);
     // si durante el await el usuario arrancó OTRA partida (vs bots, práctica),
     // este welcome tardío no debe secuestrarla
     if (startSeq !== mySeq) { net.close(); return; }
@@ -705,7 +780,7 @@ function saveName() {
 function addRemote(p) {
   const prev = G.remotes.get(p.id);
   if (prev) prev.dispose(scene); // id repetido: no dejar rigs huérfanos
-  const r = new RemotePlayer(scene, p.id, p.name, p.team);
+  const r = new RemotePlayer(scene, p.id, p.name, p.team, p.v | 0);
   r.rig.groundFn = (x, z, y) => world.groundHeight({ x, z }, PLAYER_R, y);
   r.alive = p.alive !== false;
   // posición real desde el welcome: sin ella nacían apilados en (0,0)
@@ -1180,7 +1255,7 @@ function frame(now) {
     vcursorEl.style.top = vc.y + 'px';
     if (vDrag) vDragUpdate();
     const el = document.elementFromPoint(vc.x, vc.y);
-    const target = el?.closest?.('.btn, .bind-btn, #btn-resume') ?? null;
+    const target = el?.closest?.('.btn, .bind-btn, .char-slot, #btn-resume') ?? null;
     if (vHover !== target) {
       vHover?.classList.remove('vhover');
       target?.classList.add('vhover');

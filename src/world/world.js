@@ -46,7 +46,9 @@ export class World {
     this.colliders = []; // {minx,minz,maxx,maxz,h}
     this.faces = [];     // caras de cobertura {n:{x,z}, a:{x,z}, b:{x,z}, h}
     this.spawns = { red: [], blue: [] };
-    const dims = { arena: [11, 13], fortaleza: [21, 25], foundry: [FIELD_X, FIELD_Z] };
+    // fz de fortaleza 26.6: bolsillo de spawn de 3.2m (spawns fijos en ±23.4)
+    // — la cámara (dist 2.7) ya no choca con la muralla y no hace zoom forzado
+    const dims = { arena: [11, 13], fortaleza: [21, 26.6], foundry: [FIELD_X, FIELD_Z] };
     [this.fx, this.fz] = dims[layout] ?? dims.foundry;
 
     this._buildFloor();
@@ -439,7 +441,8 @@ export class World {
     this._box(this.fx + 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
 
     // --- base (lado rojo; el espejo crea el azul)
-    this._box(0, -22.8, 8, 1, HIGH, highOpts);             // escudo de spawn
+    // escudo a 2m del spawn (en -22.8 quedaba a 0.6m: nacías mirando pared)
+    this._box(0, -20.9, 8, 1, HIGH, highOpts);             // escudo de spawn
     this._box(-6, -20.2, 2.6, 0.9, LOW, lowOpts);          // salidas flanqueadas
     this._box(6, -20.2, 2.6, 0.9, LOW, lowOpts);
     this._box(-8.5, -16, 5, 1, MID, midOpts);              // muro mediano de base
@@ -495,9 +498,9 @@ export class World {
       pts.push([-this.fx - 0.4, z, Math.PI / 2, HIGH]);
       pts.push([this.fx + 0.4, z, Math.PI / 2, HIGH]);
     }
-    for (let x = -3.2; x <= 3.3; x += 1.6) { // escudos de spawn (z ∓22.8)
-      pts.push([x, -22.8, 0, HIGH]);
-      pts.push([-x, 22.8, 0, HIGH]);
+    for (let x = -3.2; x <= 3.3; x += 1.6) { // escudos de spawn (z ∓20.9)
+      pts.push([x, -20.9, 0, HIGH]);
+      pts.push([-x, 20.9, 0, HIGH]);
     }
     const towers = [[1, 1], [1, -1], [-1, 1], [-1, -1]]
       .map(([sx, sz]) => [sx * (this.fx + 2.6), sz * (this.fz + 2.6)]);
@@ -529,8 +532,8 @@ export class World {
 
     // --- estandartes de equipo colgados del escudo de spawn, mirando al campo
     for (const [team, color, z, ry] of [
-      ['red', 0xd94f3f, -22.8 + 0.54, 0],
-      ['blue', 0x4f8de0, 22.8 - 0.54, Math.PI],
+      ['red', 0xd94f3f, -20.9 + 0.54, 0],
+      ['blue', 0x4f8de0, 20.9 - 0.54, Math.PI],
     ]) {
       for (const x of [-2.4, 2.4]) {
         const b = new THREE.Mesh(
@@ -616,8 +619,8 @@ export class World {
     const ivies = [
       [-20.95, -8, Math.PI / 2, 2.6, 2.6, 1.55],   // muralla oeste
       [20.95, 8, -Math.PI / 2, 2.6, 2.6, 1.55],
-      [-14, -24.95, 0, 3.0, 2.7, 1.5],             // muralla norte/sur
-      [14, 24.95, Math.PI, 3.0, 2.7, 1.5],
+      [-14, -this.fz + 0.05, 0, 3.0, 2.7, 1.5],    // muralla norte/sur (cara interna)
+      [14, this.fz - 0.05, Math.PI, 3.0, 2.7, 1.5],
       [-8.5, -15.47, 0, 2.2, 1.7, 0.95],           // muro mediano de base
       [8.5, 15.47, Math.PI, 2.2, 1.7, 0.95],
       [9.5, -9.97, 0, 2.2, 2.4, 1.6],              // forma en L
@@ -671,7 +674,7 @@ export class World {
     ];
     const bushes = [
       [-20.2, -22, 1.1], [20.2, 22, 1.1], [-19.8, 3.4, 0.9], [19.8, -3.4, 0.9],
-      [-12.9, -24.3, 0.8], [12.9, 24.3, 0.8], [6.3, -24.3, 1.0], [-6.3, 24.3, 1.0],
+      [-12.9, -25.9, 0.8], [12.9, 25.9, 0.8], [6.3, -25.9, 1.0], [-6.3, 25.9, 1.0],
       [18.2, -10.6, 0.75], [-18.2, 10.6, 0.75], [-15.2, -15.8, 0.85], [15.2, 15.8, 0.85],
     ];
     for (const [x, z, s] of bushes) {
@@ -719,7 +722,7 @@ export class World {
     const bandMat = new THREE.MeshLambertMaterial({ color: 0x4a4038 });
     const barrels = [
       [-19.9, -18.5, 0], [19.9, 18.5, 0], [-19.5, -17.6, 0], [19.5, 17.6, 0],
-      [10.3, -24.2, 0], [-10.3, 24.2, 0], [10.3, -24.2, 0.78], [-10.3, 24.2, 0.78],
+      [10.3, -25.9, 0], [-10.3, 25.9, 0], [10.3, -25.9, 0.78], [-10.3, 25.9, 0.78],
       [-20.6, -6.2, 0], [20.6, 6.2, 0],
     ];
     for (const [x, z, y] of barrels) {
@@ -756,7 +759,9 @@ export class World {
   }
 
   _buildSpawns() {
-    const z = this.fz - 1.6;
+    // fortaleza: spawns FIJOS en ±23.4 (el server los espeja) con la muralla
+    // más atrás; otros mapas, pegados al muro como siempre
+    const z = this.layout === 'fortaleza' ? 23.4 : this.fz - 1.6;
     for (let i = 0; i < 4; i++) {
       const x = -3.6 + i * 2.4;
       // convención: facing = (-sin yaw, -cos yaw) → yaw π mira a +z, yaw 0 a -z

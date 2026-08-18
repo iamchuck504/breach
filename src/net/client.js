@@ -15,7 +15,7 @@ export class NetClient {
 
   on(type, cb) { this.handlers[type] = cb; }
 
-  connect(url, name) {
+  connect(url, name, variant = 0) {
     return new Promise((resolve, reject) => {
       let settled = false;
       try { this.ws = new WebSocket(url); }
@@ -24,7 +24,7 @@ export class NetClient {
         if (!settled) { settled = true; this.ws.close(); reject(new Error('timeout')); }
       }, 6000);
       this.ws.onopen = () => {
-        this.send({ t: 'join', name });
+        this.send({ t: 'join', name, v: variant });
       };
       this.ws.onmessage = (ev) => {
         if (this.dead) return; // sesión desechada: los mensajes bufereados

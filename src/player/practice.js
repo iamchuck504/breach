@@ -17,7 +17,7 @@ export class Dummies {
       id: 'dummy' + i,
       name: 'DUMMY-' + (i + 1),
       team: 'blue',
-      rig: new Rig(scene, 'blue', 'DUMMY-' + (i + 1)),
+      rig: new Rig(scene, 'blue', 'DUMMY-' + (i + 1), (Math.random() * 5) | 0),
       path, seg: 0, u: Math.random(),
       x: path[0].x, z: path[0].z, yaw: 0,
       hp: TUNING.combat.hp, alive: true, respawnT: 0,

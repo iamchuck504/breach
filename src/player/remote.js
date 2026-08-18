@@ -12,11 +12,11 @@ const lerpAngle = (a, b, k) => {
 };
 
 export class RemotePlayer {
-  constructor(scene, id, name, team) {
+  constructor(scene, id, name, team, variant = 0) {
     this.id = id;
     this.name = name;
     this.team = team;
-    this.rig = new Rig(scene, team, name);
+    this.rig = new Rig(scene, team, name, variant);
     this.buf = []; // {rt, x, z, yaw, st, aim, p, w, sp}
     this.alive = true;
     this.x = 0; this.z = 0; this.yaw = 0;

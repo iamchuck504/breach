@@ -11,6 +11,13 @@ import * as THREE from 'three';
 
 const TEAM_COLORS = { red: 0xd94f3f, blue: 0x4f8de0 };
 const DARK = 0x33363c, MID = 0x565b63, VISOR = 0x15171c;
+const SKIN = 0xc9a077, HAIR = 0x4a3524;
+
+// 5 variantes de soldado por equipo — SOLO estética: mismas proporciones,
+// mismo hitbox (la cápsula de ballistics es analítica, independiente del
+// modelo) y el pecho SIEMPRE del color del equipo. Ningún accesorio sale
+// más de ~3cm de la silueta base.
+export const CHAR_NAMES = ['RECLUTA', 'CENTINELA', 'EXPLORADOR', 'PESADO', 'FANTASMA'];
 
 const L1 = 0.28, L2 = 0.36; // largo húmero / antebrazo (pivotes)
 
@@ -83,8 +90,9 @@ const TMP_A = new THREE.Vector3(), TMP_B = new THREE.Vector3();
 const clamp01 = (v) => Math.min(1, Math.max(-1, v));
 
 export class Rig {
-  constructor(scene, team, name = null) {
+  constructor(scene, team, name = null, variant = 0) {
     this.team = team;
+    this.variant = variant = Math.min(4, Math.max(0, variant | 0));
     const tc = TEAM_COLORS[team];
 
     this.root = new THREE.Group();
@@ -106,9 +114,7 @@ export class Rig {
     this.head = new THREE.Group();
     this.head.position.set(0, 0.66, 0);
     this.torso.add(this.head);
-    this.head.add(ball(0.185, MID, 0, 0.14, 0, 1, 1.05, 1));        // casco
-    this.head.add(box(0.24, 0.09, 0.06, VISOR, 0, 0.14, -0.16));    // visor
-    this.head.add(box(0.06, 0.05, 0.05, tc, 0, 0.3, 0));            // cresta
+    this._buildHead(tc, variant);
 
     // aimRig: pivote a la altura del pecho; contiene brazos + arma para
     // inclinar todo el conjunto con el pitch de la cámara.
@@ -150,6 +156,7 @@ export class Rig {
     };
     this.legL = mkLeg('L');
     this.legR = mkLeg('R');
+    this._variantExtras(tc, variant);
 
     // arma activa montada al pecho (las manos la alcanzan por IK);
     // la otra va cargada a la ESPALDA en diagonal
@@ -174,6 +181,57 @@ export class Rig {
     this._deadT = 0;
     this.rag = null; // estado del ragdoll de muerte
     this.groundFn = null; // (x,z,y)->alturaSuelo — lo inyecta quien tiene el world
+  }
+
+  // Cabeza por variante — todas dentro del mismo volumen del casco base.
+  _buildHead(tc, v) {
+    const h = this.head;
+    // los rasgos frontales sobresalen ~2cm del casco: a ras de la esfera la
+    // curvatura los ocultaba desde casi todos los ángulos
+    if (v === 1) {          // CENTINELA: casco cerrado, visor panorámico
+      h.add(ball(0.185, DARK, 0, 0.14, 0, 1, 1.05, 1));
+      h.add(box(0.3, 0.12, 0.06, VISOR, 0, 0.13, -0.185));
+      h.add(box(0.2, 0.04, 0.28, tc, 0, 0.31, 0));                  // franja superior
+    } else if (v === 2) {   // EXPLORADOR: sin casco — pelo y goggles en la frente
+      h.add(ball(0.175, SKIN, 0, 0.13, 0, 1, 1.06, 1));
+      h.add(box(0.3, 0.12, 0.3, HAIR, 0, 0.28, 0.03));              // pelo
+      h.add(box(0.26, 0.07, 0.07, DARK, 0, 0.23, -0.165));          // goggles arriba
+      h.add(box(0.3, 0.05, 0.06, tc, 0, 0.08, -0.175));             // pañuelo del equipo
+    } else if (v === 3) {   // PESADO: casco con placas laterales y mentonera
+      h.add(ball(0.185, MID, 0, 0.14, 0, 1, 1.05, 1));
+      h.add(box(0.24, 0.09, 0.06, VISOR, 0, 0.14, -0.19));
+      h.add(box(0.05, 0.13, 0.16, DARK, -0.175, 0.12, 0));
+      h.add(box(0.05, 0.13, 0.16, DARK, 0.175, 0.12, 0));
+      h.add(box(0.16, 0.06, 0.06, DARK, 0, 0.02, -0.18));           // mentonera
+    } else if (v === 4) {   // FANTASMA: pasamontañas oscuro, goggles del equipo
+      h.add(ball(0.183, DARK, 0, 0.14, 0, 1, 1.05, 1));
+      h.add(box(0.24, 0.06, 0.06, tc, 0, 0.16, -0.19));             // goggles finos
+      h.add(box(0.1, 0.05, 0.05, VISOR, 0, 0.03, -0.185));          // máscara
+    } else {                // RECLUTA: el clásico
+      h.add(ball(0.185, MID, 0, 0.14, 0, 1, 1.05, 1));
+      h.add(box(0.24, 0.09, 0.06, VISOR, 0, 0.14, -0.19));
+      h.add(box(0.06, 0.05, 0.05, tc, 0, 0.3, 0));                  // cresta
+    }
+  }
+
+  // Detalles de pecho/extremidades por variante (≤3cm sobre la silueta).
+  _variantExtras(tc, v) {
+    const t = this.torso;
+    if (v === 1) {
+      t.add(box(0.2, 0.2, 0.03, MID, 0, 0.44, -0.195));             // placa central
+    } else if (v === 2) {
+      const strap = box(0.08, 0.42, 0.03, DARK, 0, 0.44, -0.2);     // correa cruzada
+      strap.rotation.z = 0.65;
+      t.add(strap);
+    } else if (v === 3) {
+      t.add(box(0.44, 0.06, 0.03, DARK, 0, 0.5, -0.2));             // listones de blindaje
+      t.add(box(0.44, 0.06, 0.03, DARK, 0, 0.38, -0.2));
+      this.legL.knee.add(ball(0.07, tc, 0, -0.06, -0.09));          // rodilleras
+      this.legR.knee.add(ball(0.07, tc, 0, -0.06, -0.09));
+    } else if (v === 4) {
+      this.armR.shoulder.add(box(0.125, 0.06, 0.125, tc, 0, -0.09, 0)); // banda al brazo
+      t.add(box(0.3, 0.05, 0.03, DARK, 0, 0.35, -0.2));             // cincho bajo
+    }
   }
 
   // Impulso y pose de desparrame aleatorios para esta muerte.

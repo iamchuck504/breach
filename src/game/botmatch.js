@@ -37,7 +37,7 @@ class Bot {
   constructor(scene, world, id, name, team, spawn) {
     this.id = id; this.name = name; this.team = team;
     this.world = world;
-    this.rig = new Rig(scene, team, name);
+    this.rig = new Rig(scene, team, name, (Math.random() * 5) | 0); // soldado random
     this.rig.groundFn = (x, z, y) => world.groundHeight({ x, z }, 0.38, y);
     this.respawn(spawn);
   }

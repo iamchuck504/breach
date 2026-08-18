@@ -15,7 +15,7 @@ const CRATE_RESPAWN = 30;
 const CRATES = [{ x: 7, z: 0, up: true, t: 0 }, { x: -7, z: 0, up: true, t: 0 }];
 const TICK_HZ = 20;
 
-// espejo de world.js (mapa 'fortaleza', fz 25 → spawns en ±23.4)
+// espejo de world.js (mapa 'fortaleza': spawns fijos en ±23.4)
 const SPAWNS = { red: [], blue: [] };
 for (let i = 0; i < 4; i++) {
   const x = -3.6 + i * 2.4;
@@ -78,6 +78,8 @@ wss.on('connection', (ws) => {
       me = {
         ws, id, team,
         name: String(msg.name || 'ANON').slice(0, 14).toUpperCase(),
+        v: Math.min(4, Math.max(0, Math.round(num(msg.v)))), // variante de soldado
+
         x: spawn.x, z: spawn.z, yaw: spawn.yaw,
         st: 'idle', aim: 0, p: 0, w: 'smg', sp: 0,
         hp: HP, alive: true, lastDamage: 0, respawnAt: 0,
@@ -91,7 +93,7 @@ wss.on('connection', (ws) => {
         crates: CRATES.map((c) => (c.up ? 1 : 0)),
         drops: [...drops.entries()].map(([id, d]) => ({ id, wep: d.wep, x: d.x, z: d.z, y: d.y, team: d.team, t: d.t })),
       });
-      broadcast({ t: 'joined', id, name: me.name, team });
+      broadcast({ t: 'joined', id, name: me.name, team, v: me.v });
       console.log(`+ ${me.name} (${team}) — ${players.size}/${MAX_PLAYERS}`);
       return;
     }
@@ -223,7 +225,7 @@ function endRound(team) {
 
 function pub(p) {
   // x/z: sin ellos los remotos nacían apilados en (0,0) hasta el primer snap
-  return { id: p.id, name: p.name, team: p.team, alive: p.alive, hp: p.hp, x: p.x, z: p.z };
+  return { id: p.id, name: p.name, team: p.team, alive: p.alive, hp: p.hp, x: p.x, z: p.z, v: p.v };
 }
 function num(v) { return typeof v === 'number' && isFinite(v) ? v : 0; }
 function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, num(v))); }
