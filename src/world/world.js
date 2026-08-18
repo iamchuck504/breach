@@ -7,6 +7,13 @@ import * as THREE from 'three';
 
 const FIELD_X = 15, FIELD_Z = 18; // semiancho / semilargo
 
+// REGLA DE DISEÑO (Chuck): solo existen TRES alturas de bloque/pared.
+//   LOW  (1.1): saltable por encima; agachado, la cabeza NO sobresale (tope 1.02)
+//   MID  (1.9): cubre al personaje DE PIE completo (cabeza ~1.63); no saltable
+//   HIGH (3.0): inalcanzable incluso saltando; muros y estructuras
+// Ninguna pieza de mapa puede usar otra altura.
+export const BLOCK = { LOW: 1.1, MID: 1.9, HIGH: 3.0 };
+
 export class World {
   constructor(scene, layout = 'foundry') {
     this.scene = scene;
@@ -144,20 +151,20 @@ export class World {
   }
 
   _buildMap() {
-    const LOW = 1.05, HIGH = 2.4;
+    const { LOW, HIGH } = BLOCK;
     const lowOpts = { color: 0x9c968c, top: 0xc6c1b5 };
     const highOpts = { color: 0x969188, top: 0xaba69d };
 
     // --- muros perimetrales (no espejar, cover en cara interna solamente por geometría)
     const wallOpts = { mirror: false, color: 0x8a857d, top: 0x9a958c };
-    this._box(0, -this.fz - 0.4, this.fx * 2 + 2, 0.8, 3.2, wallOpts);
-    this._box(0, this.fz + 0.4, this.fx * 2 + 2, 0.8, 3.2, wallOpts);
-    this._box(-this.fx - 0.4, 0, 0.8, this.fz * 2 + 2, 3.2, wallOpts);
-    this._box(this.fx + 0.4, 0, 0.8, this.fz * 2 + 2, 3.2, wallOpts);
+    this._box(0, -this.fz - 0.4, this.fx * 2 + 2, 0.8, HIGH, wallOpts);
+    this._box(0, this.fz + 0.4, this.fx * 2 + 2, 0.8, HIGH, wallOpts);
+    this._box(-this.fx - 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
+    this._box(this.fx + 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
 
     // --- base (lado rojo; espejo crea el lado azul)
     // escudo de spawn con salidas a los lados
-    this._box(0, -14.6, 7, 0.9, 2.3, highOpts);
+    this._box(0, -14.6, 7, 0.9, HIGH, highOpts);
     // coberturas bajas flanqueando las salidas
     this._box(-5.4, -12.2, 2.4, 0.9, LOW, lowOpts);
     this._box(5.4, -12.2, 2.4, 0.9, LOW, lowOpts);
@@ -172,7 +179,7 @@ export class World {
     this._box(-1.8, -4.5, 2.6, 0.9, LOW, lowOpts);
 
     // --- pilar alto de flanco + cover vertical oeste
-    this._box(6.8, -4.2, 1.2, 1.2, 2.5, highOpts);
+    this._box(6.8, -4.2, 1.2, 1.2, HIGH, highOpts);
     this._box(-7.4, -6.0, 0.9, 2.6, LOW, lowOpts);
 
     // --- cover del carril lateral
@@ -182,7 +189,7 @@ export class World {
     this._box(4.2, -1.6, 3.0, 0.9, LOW, lowOpts);
 
     // --- centro (auto-simétrico): pilar contestado + flancos bajos
-    this._box(0, 0, 1.5, 1.5, 2.7, { ...highOpts, mirror: false, top: 0xffb075 });
+    this._box(0, 0, 1.5, 1.5, HIGH, { ...highOpts, mirror: false, top: 0xffb075 });
     this._box(-4.8, 0.2, 0.9, 2.2, LOW, lowOpts); // el espejo crea (4.8,-0.2)
 
     // --- siluetas decorativas fuera del campo (sin colisión)
@@ -199,19 +206,19 @@ export class World {
   // Mapa "Arena": compacto (22×26), para el modo 4v4 vs bots — cadena corta
   // de coberturas al centro, pilares de flanco y carriles laterales rápidos.
   _buildArena() {
-    const LOW = 1.05, HIGH = 2.4;
+    const { LOW, HIGH } = BLOCK;
     const lowOpts = { color: 0x9c968c, top: 0xc6c1b5 };
     const highOpts = { color: 0x969188, top: 0xaba69d };
     const wallOpts = { mirror: false, color: 0x8a857d, top: 0x9a958c };
 
     // perímetro
-    this._box(0, -this.fz - 0.4, this.fx * 2 + 2, 0.8, 3.2, wallOpts);
-    this._box(0, this.fz + 0.4, this.fx * 2 + 2, 0.8, 3.2, wallOpts);
-    this._box(-this.fx - 0.4, 0, 0.8, this.fz * 2 + 2, 3.2, wallOpts);
-    this._box(this.fx + 0.4, 0, 0.8, this.fz * 2 + 2, 3.2, wallOpts);
+    this._box(0, -this.fz - 0.4, this.fx * 2 + 2, 0.8, HIGH, wallOpts);
+    this._box(0, this.fz + 0.4, this.fx * 2 + 2, 0.8, HIGH, wallOpts);
+    this._box(-this.fx - 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
+    this._box(this.fx + 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
 
     // escudo de spawn con salidas laterales
-    this._box(0, -10.6, 5, 0.9, 2.3, highOpts);
+    this._box(0, -10.6, 5, 0.9, HIGH, highOpts);
     // bajas flanqueando las salidas
     this._box(-4.4, -8.4, 2.2, 0.9, LOW, lowOpts);
     this._box(4.4, -8.4, 2.2, 0.9, LOW, lowOpts);
@@ -223,7 +230,7 @@ export class World {
     // cover del carril lateral
     this._box(9.2, -5.6, 0.9, 2.2, LOW, lowOpts);
     // centro: pilar contestado + baja lateral (el espejo crea el par)
-    this._box(0, 0, 1.3, 1.3, 2.6, { ...highOpts, mirror: false, top: 0xffb075 });
+    this._box(0, 0, 1.3, 1.3, HIGH, { ...highOpts, mirror: false, top: 0xffb075 });
     this._box(-4.6, 0.4, 0.9, 2.0, LOW, lowOpts);
   }
 
@@ -232,28 +239,27 @@ export class World {
   // muros medios (1.5), plataformas pisables (0.6), formas en L, pilares
   // y cuartos laterales con corredores CQC.
   _buildDistrict() {
-    const LOW = 1.05, MID = 1.5, SLAB = 0.6, HIGH = 2.4;
+    const { LOW, MID, HIGH } = BLOCK;
     const lowOpts = { color: 0x9c968c, top: 0xc6c1b5 };
     const midOpts = { color: 0x928d84, top: 0xb5b0a5 };
-    const slabOpts = { color: 0xa39e93, top: 0xcfcabf };
     const highOpts = { color: 0x969188, top: 0xaba69d };
     const wallOpts = { mirror: false, color: 0x8a857d, top: 0x9a958c };
 
     // perímetro
-    this._box(0, -this.fz - 0.4, this.fx * 2 + 2, 0.8, 3.2, wallOpts);
-    this._box(0, this.fz + 0.4, this.fx * 2 + 2, 0.8, 3.2, wallOpts);
-    this._box(-this.fx - 0.4, 0, 0.8, this.fz * 2 + 2, 3.2, wallOpts);
-    this._box(this.fx + 0.4, 0, 0.8, this.fz * 2 + 2, 3.2, wallOpts);
+    this._box(0, -this.fz - 0.4, this.fx * 2 + 2, 0.8, HIGH, wallOpts);
+    this._box(0, this.fz + 0.4, this.fx * 2 + 2, 0.8, HIGH, wallOpts);
+    this._box(-this.fx - 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
+    this._box(this.fx + 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
 
     // --- base (lado rojo; el espejo crea el azul)
-    this._box(0, -22.8, 8, 1, 2.3, highOpts);              // escudo de spawn
+    this._box(0, -22.8, 8, 1, HIGH, highOpts);             // escudo de spawn
     this._box(-6, -20.2, 2.6, 0.9, LOW, lowOpts);          // salidas flanqueadas
     this._box(6, -20.2, 2.6, 0.9, LOW, lowOpts);
-    this._box(-8.5, -16, 5, 1, MID, midOpts);              // muro medio de base
-    this._box(5.5, -17, 3, 3, SLAB, slabOpts);             // plataforma pisable
+    this._box(-8.5, -16, 5, 1, MID, midOpts);              // muro mediano de base
+    this._box(5.5, -17, 3, 3, LOW, lowOpts);               // plataforma saltable
 
     // --- cuartos laterales (corredores CQC)
-    this._box(-14.5, -12, 1, 6.5, 2.6, highOpts);
+    this._box(-14.5, -12, 1, 6.5, HIGH, highOpts);
     this._box(-17.5, -8.5, 1.8, 0.9, LOW, lowOpts);
     // forma en L
     this._box(11.5, -12.5, 1, 5, HIGH, highOpts);
@@ -265,19 +271,19 @@ export class World {
     this._box(-1.5, -6, 2.6, 0.9, LOW, lowOpts);
 
     // --- pilares de flanco
-    this._box(7, -6, 1.2, 1.2, 2.5, highOpts);
-    this._box(-11, -5, 1.2, 1.2, 2.5, highOpts);
+    this._box(7, -6, 1.2, 1.2, HIGH, highOpts);
+    this._box(-11, -5, 1.2, 1.2, HIGH, highOpts);
 
     // --- carriles laterales
     this._box(-19, -3.5, 1.6, 0.9, LOW, lowOpts);
     this._box(18.5, -6, 0.9, 2.4, LOW, lowOpts);
 
-    // --- media cancha: muro medio + losa pisable
+    // --- media cancha: muro mediano + plataforma saltable
     this._box(5, -2.5, 3.2, 0.9, MID, midOpts);
-    this._box(-8.5, -1.5, 2.4, 2.4, SLAB, slabOpts);
+    this._box(-8.5, -1.5, 2.4, 2.4, LOW, lowOpts);
 
     // --- centro (auto-simétrico): gran pilar + flancos bajos
-    this._box(0, 0, 1.8, 1.8, 3, { ...highOpts, mirror: false, top: 0xffb075 });
+    this._box(0, 0, 1.8, 1.8, HIGH, { ...highOpts, mirror: false, top: 0xffb075 });
     this._box(-5.5, 0.6, 0.9, 2.4, LOW, lowOpts);
 
     // --- siluetas decorativas

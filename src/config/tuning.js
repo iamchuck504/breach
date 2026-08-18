@@ -26,7 +26,7 @@ export const TUNING = {
     chainMax: 5,
   },
   jump: {
-    vel: 6.0,          // impulso vertical (apex ~1.2m: pasa coberturas bajas)
+    vel: 6.2,          // impulso vertical (apex ~1.28m: pasa bloques LOW de 1.1)
     gravity: 15,
     wallVel: 5.4,      // impulso del salto de pared
     wallPush: 3.8,     // empuje horizontal alejándose de la pared

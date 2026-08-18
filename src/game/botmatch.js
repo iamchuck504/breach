@@ -100,7 +100,7 @@ class Bot {
 
   _jump() {
     if (!this.grounded || this.jumpCd > 0) return;
-    this.vy = 5.6;
+    this.vy = 6.2; // mismo apex que el jugador: pasa bloques LOW (1.1)
     this.grounded = false;
     this.jumpCd = 1.2;
   }

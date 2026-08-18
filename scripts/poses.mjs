@@ -72,7 +72,8 @@ try {
   });
   console.log('TRACK:', JSON.stringify(track));
   if (track.yawDiff > 0.15) problems.push('idle: el cuerpo no sigue a la cámara (yawDiff=' + track.yawDiff + ')');
-  if (!track.dotOn || Math.abs(track.dx) > 150 || Math.abs(track.dy) > 150) {
+  // el paralaje del punto crece cuando el ray pega en geometría cercana
+  if (!track.dotOn || Math.abs(track.dx) > 230 || Math.abs(track.dy) > 230) {
     problems.push('retícula lejos del centro: ' + JSON.stringify(track));
   }
 
@@ -96,14 +97,14 @@ try {
   await page.screenshot({ path: path.join(root, 'scripts', 'pose-roadie.png') });
   await page.keyboard.up('a'); await page.keyboard.up('Shift');
 
-  // cover contra el bloque central bajo
+  // cover contra un bloque LOW (1.1) del mapa District
   await page.evaluate(() => {
     const G = window.BREACH;
-    G.player.pos.x = -1.8; G.player.pos.z = -3.2;
-    G.player.cam.yaw = Math.PI * 0.65;
+    G.player.pos.x = -1.5; G.player.pos.z = -4.4;
+    G.player.cam.yaw = 0.2; G.player.yaw = 0.2;
   });
   await page.keyboard.down('w');
-  await page.waitForTimeout(200);
+  await page.waitForTimeout(250);
   await page.keyboard.press(' ');
   await page.keyboard.up('w');
   await page.waitForTimeout(700);
@@ -117,7 +118,7 @@ try {
   })()`);
   console.log('COVER:', JSON.stringify(cover));
   if (cover.anim === 'cover_low' && cover.headTop > 1.08) {
-    problems.push('cover bajo: la cabeza asoma sobre el bloque (top=' + cover.headTop + 'm vs 1.05)');
+    problems.push('cover bajo: la cabeza asoma sobre el bloque LOW (top=' + cover.headTop + 'm vs 1.1)');
   }
 } catch (e) {
   problems.push('FATAL: ' + e.message);
