@@ -649,8 +649,14 @@ function simStep(dt) {
   const aligned = Math.abs(angDiff(shoulderCam.yaw, p.yaw)) < maxA;
   const canFire = stateOk && aligned;
   // cualquier click que no pueda salir YA (roadie, cuerpo girando, cooldown,
-  // dive/slide) queda bufereado y sale en cuanto se pueda
-  if (input.firePressed && !p.dead && (!canFire || G.weapons.st.cd > 0)) G.fireBuffer = 0.3;
+  // dive/slide, final de recarga) queda bufereado — y el buffer dura AL MENOS
+  // lo que falta de cooldown/recarga, para que el tiro encolado nunca se pierda
+  const wst = G.weapons.st;
+  const relRemain = G.weapons.reloading ? wst.reload : 0;
+  if (input.firePressed && !p.dead &&
+      (!canFire || wst.cd > 0 || (relRemain > 0 && relRemain < 0.45))) {
+    G.fireBuffer = Math.max(0.3, wst.cd + 0.06, relRemain + 0.06);
+  }
   G.fireBuffer = Math.max(0, G.fireBuffer - dt);
   const wasReloading = G.weapons.reloading;
 
@@ -664,6 +670,13 @@ function simStep(dt) {
   if (input.reloadPressed) G.weapons.startReload();
   if (!wasReloading && G.weapons.reloading) audio.reload(); // incluye auto-recarga
   if (wasReloading && !G.weapons.reloading) audio.reloadDone();
+
+  // práctica = munición de reserva infinita (nunca te quedas sin disparar)
+  if (G.mode === 'practice') {
+    for (const k of ['smg', 'shotgun']) {
+      G.weapons.state[k].reserve = TUNING.weapons[k].reserve;
+    }
+  }
   if (input.swapPressed && !p.dead && G.weapons.startSwap()) audio.reload();
 
   // pasos: por distancia recorrida

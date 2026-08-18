@@ -191,6 +191,22 @@ try {
   const magFull = await page.evaluate(() => window.BREACH.weapons.st.mag);
   if (magFull !== 50) errors.push('RELOAD: no rellenó el cargador (mag=' + magFull + ')');
 
+  // cadencia de escopeta: clicks rápidos → un bombazo por cooldown, sin comerse clicks
+  await page.keyboard.press('q');
+  await page.waitForTimeout(750);
+  const sg0 = await page.evaluate(() => window.BREACH.weapons.st.mag);
+  for (let i = 0; i < 9; i++) {
+    await page.mouse.down(); await page.waitForTimeout(40); await page.mouse.up();
+    await page.waitForTimeout(210);
+  }
+  await page.waitForTimeout(300);
+  const sg1 = await page.evaluate(() => ({ mag: window.BREACH.weapons.st.mag, wep: window.BREACH.weapons.cur }));
+  console.log('SHOTGUN-RATE:', JSON.stringify({ antes: sg0, despues: sg1.mag, wep: sg1.wep }));
+  // 2.25s de clicks con cd 0.63s → deben salir al menos 3 bombazos
+  if (sg0 - sg1.mag < 3) errors.push('SHOTGUN-RATE: salieron ' + (sg0 - sg1.mag) + ' tiros, esperaba >= 3');
+  await page.keyboard.press('q');
+  await page.waitForTimeout(750);
+
   // disparar en el aire saltando DESDE roadie run (cancela el sprint y tira)
   await page.evaluate(() => { const P = window.BREACH.player; P.pos.x = 0; P.pos.z = -8; });
   await page.keyboard.down('Shift');
