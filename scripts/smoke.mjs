@@ -113,7 +113,7 @@ try {
     padRows: document.getElementById('pad-rows').children.length,
   }));
   console.log('CONTROLS:', JSON.stringify(ctrls));
-  if (ctrls.kbRows !== 8 || ctrls.padRows !== 6) errors.push('CONTROLS: filas esperadas 8/6, got ' + ctrls.kbRows + '/' + ctrls.padRows);
+  if (ctrls.kbRows !== 8 || ctrls.padRows !== 7) errors.push('CONTROLS: filas esperadas 8/7, got ' + ctrls.kbRows + '/' + ctrls.padRows);
   await page.screenshot({ path: path.join(root, 'scripts', 'shot-controls.png') });
   await page.evaluate(() => document.getElementById('btn-back').click());
   await page.evaluate(() => document.getElementById('btn-resume').click());

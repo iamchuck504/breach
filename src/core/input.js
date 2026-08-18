@@ -16,7 +16,9 @@ export class Input {
     this.reloadPressed = false;
     this.swapPressed = false;
     this.locked = false;
-    this.invertY = localStorage.getItem('breach.invertY') !== 'false'; // default ON
+    // invert Y separado por dispositivo (ambos default ON, preferencia de Chuck)
+    this.invertY = localStorage.getItem('breach.invertY') !== 'false';       // ratón (F9)
+    this.invertYPad = localStorage.getItem('breach.invertYPad') !== 'false'; // control
     this.onToggleTuning = null;
     this.onToggleMute = null;
     this.onEscape = null;

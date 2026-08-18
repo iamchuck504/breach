@@ -4,7 +4,7 @@ const KB_DEFAULT = {
   sprint: 'ShiftLeft', evade: 'Space', reload: 'KeyR', swap: 'KeyQ',
 };
 // Índices estándar de Gamepad API (layout Xbox)
-const PAD_DEFAULT = { evade: 0, reload: 2, swap: 3, aim: 6, fire: 7, pause: 9 };
+const PAD_DEFAULT = { evade: 0, sprint: 10, reload: 2, swap: 3, aim: 6, fire: 7, pause: 9 };
 
 export const BINDS = { kb: { ...KB_DEFAULT }, pad: { ...PAD_DEFAULT } };
 
@@ -13,7 +13,7 @@ export const KB_LABELS = {
   sprint: 'Roadie run', evade: 'Cover / Evadir', reload: 'Recargar', swap: 'Cambiar arma',
 };
 export const PAD_LABELS = {
-  evade: 'Cover / Evadir', aim: 'Apuntar', fire: 'Disparar',
+  evade: 'Cover / Evadir', sprint: 'Roadie run', aim: 'Apuntar', fire: 'Disparar',
   reload: 'Recargar', swap: 'Cambiar arma', pause: 'Pausa',
 };
 

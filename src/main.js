@@ -45,6 +45,7 @@ resize();
 
 // ---------- estado de juego ----------
 const G = {
+  fireBuffer: 0,       // click de disparo pendiente mientras el cuerpo gira
   mode: null,          // null | 'practice' | 'online'
   rig: null,           // rig local
   player: null,        // controller local
@@ -129,7 +130,7 @@ input.onToggleMute = () => {
   hud.hint(m ? 'AUDIO OFF' : 'AUDIO ON', 900);
 };
 input.onInvertChanged = (inv) => {
-  hud.hint('EJE Y ' + (inv ? 'INVERTIDO' : 'NORMAL'), 1200);
+  hud.hint('EJE Y RATÓN: ' + (inv ? 'INVERTIDO' : 'NORMAL'), 1200);
   chkInvert.checked = inv;
 };
 
@@ -142,6 +143,7 @@ const slMouseV = document.getElementById('sl-mouse-v');
 const slPad = document.getElementById('sl-pad');
 const slPadV = document.getElementById('sl-pad-v');
 const chkInvert = document.getElementById('chk-invert');
+const chkInvertPad = document.getElementById('chk-invert-pad');
 let rebinding = null; // { cancel() }
 
 function showControls(on) {
@@ -152,6 +154,7 @@ function showControls(on) {
     slMouse.value = TUNING.cam.sens;
     slPad.value = TUNING.cam.padSens;
     chkInvert.checked = input.invertY;
+    chkInvertPad.checked = input.invertYPad;
     updateSliderLabels();
   } else cancelRebind();
 }
@@ -176,6 +179,10 @@ slPad.addEventListener('input', () => {
 chkInvert.addEventListener('change', () => {
   input.invertY = chkInvert.checked;
   localStorage.setItem('breach.invertY', String(input.invertY));
+});
+chkInvertPad.addEventListener('change', () => {
+  input.invertYPad = chkInvertPad.checked;
+  localStorage.setItem('breach.invertYPad', String(input.invertYPad));
 });
 
 function cancelRebind() {
@@ -572,16 +579,31 @@ window.BREACH = G;
 window.BREACH_INPUT = input;
 window.THREE = THREE;
 
+function angDiff(a, b) {
+  let d = a - b;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}
+
 function simStep(dt) {
   const p = G.player;
   if (!p) return;
 
-  const canFire = !p.dead && p.state !== 'dive' && p.state !== 'slide' &&
+  const stateOk = !p.dead && p.state !== 'dive' && p.state !== 'slide' &&
     p.state !== 'roadie' && input.anyDevice;
+  // giro brusco: el tiro NO sale hasta que el cuerpo esté alineado con la
+  // cámara (el trigger fuerza el giro rápido; nunca dispara "por la espalda")
+  const maxA = TUNING.combat.fireAlignMaxDeg * Math.PI / 180;
+  const aligned = Math.abs(angDiff(shoulderCam.yaw, p.yaw)) < maxA;
+  const canFire = stateOk && aligned;
+  if (input.firePressed && stateOk && !aligned) G.fireBuffer = 0.3;
+  G.fireBuffer = Math.max(0, G.fireBuffer - dt);
   const wasReloading = G.weapons.reloading;
 
-  const fired = G.weapons.update(dt, input.fireHeld, input.firePressed, canFire);
-  p.update(dt, input, input.fireHeld && canFire);
+  const fired = G.weapons.update(dt, input.fireHeld, input.firePressed || G.fireBuffer > 0, canFire);
+  if (fired) G.fireBuffer = 0;
+  p.update(dt, input, (input.fireHeld || G.fireBuffer > 0) && stateOk);
   if (fired) fireShot();
 
   if (input.reloadPressed && G.weapons.startReload()) audio.reload();
@@ -637,7 +659,7 @@ function frame(now) {
   if (G.mode && G.player) {
     if (!menuOpen) {
       if (input.locked) shoulderCam.applyMouse(input.mouseDX, input.mouseDY, input.invertY);
-      if (input.pad.connected) shoulderCam.applyStick(input.pad.camX, input.pad.camY, dt, input.invertY);
+      if (input.pad.connected) shoulderCam.applyStick(input.pad.camX, input.pad.camY, dt, input.invertYPad);
     }
 
     // pausa real en práctica; online la partida sigue

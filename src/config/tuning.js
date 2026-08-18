@@ -66,6 +66,7 @@ export const TUNING = {
     },
   },
   combat: {
+    fireAlignMaxDeg: 60,  // el tiro de cadera espera a que el cuerpo esté así de alineado con la cámara
     hp: 100,
     regenDelay: 3.6, regenRate: 48,
     respawnTime: 4,

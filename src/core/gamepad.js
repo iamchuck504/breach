@@ -66,15 +66,13 @@ export class PadInput {
 
     this.fireHeld = now.has(BINDS.pad.fire);
     this.aimHeld = now.has(BINDS.pad.aim);
-    this._evadeHeldT = now.has(BINDS.pad.evade) ? this._evadeHeldT + dt : 0;
-    this.sprintHeld = this._evadeHeldT > 0.28;
+    this.sprintHeld = now.has(BINDS.pad.sprint); // botón dedicado (default L3)
   }
 
   _reset() {
     this.moveX = 0; this.moveZ = 0; this.camX = 0; this.camY = 0;
     this.pressed.clear(); this.justPressed.clear();
     this.fireHeld = false; this.aimHeld = false; this.sprintHeld = false;
-    this._evadeHeldT = 0;
   }
 
   rumble(ms, weak, strong) {

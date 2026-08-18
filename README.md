@@ -38,9 +38,14 @@ Para LAN, usar el server local es lo más simple.
 | M / Esc | Silencio / pausa |
 
 **Gamepad (layout Xbox, Gamepad API):** stick izq mover, stick der cámara
-(curva cuadrática, sens en °/s), **A** cover/evadir y **mantenida = roadie run**,
+(curva cuadrática, sens en °/s), **A** cover/evadir, **L3** roadie run,
 LT apuntar, RT disparar, X recargar, Y cambiar arma, MENU pausa. Vibración en
-disparo/daño/cover si el control lo soporta.
+disparo/daño/cover si el control lo soporta. La config del control (bindings,
+sensibilidad, invert Y) es independiente de la de teclado/ratón.
+
+El disparo de cadera exige alineación cuerpo-cámara (`fireAlignMaxDeg`): en un
+giro brusco el trigger fuerza el giro rápido y el tiro sale al alinearse
+(nunca dispara "por la espalda"); el click queda bufereado 0.3 s.
 
 **Pausa y configuración:** Esc, botón MENU del control, o el ícono ⏸ del HUD.
 Desde ahí → **Controles**: rebinding de teclado y de botones del control
