@@ -86,11 +86,18 @@ export class Controller {
       while (d < -Math.PI) d += Math.PI * 2;
       twist = Math.max(-0.9, Math.min(0.9, d));
     }
+    // error de yaw cuerpo-cámara: el ARMA lo compensa al disparar para que
+    // el cañón visual apunte a la línea de tiro real aunque el cuerpo gire
+    let yawErr = this.cam.yaw - this.yaw;
+    while (yawErr > Math.PI) yawErr -= Math.PI * 2;
+    while (yawErr < -Math.PI) yawErr += Math.PI * 2;
+    yawErr = Math.max(-0.7, Math.min(0.7, yawErr));
     return {
       state: st,
       speed: Math.min(1, this.speed / TUNING.move.roadieSpeed),
       aim: this.aim,
       aimPitch: this.cam.pitch,
+      aimYawErr: yawErr,
       twist,
       firing: this.firingBlind > 0,
       flipT: this.flip ? Math.min(1, this.flip.t / this.flip.dur) : 0,
@@ -167,7 +174,7 @@ export class Controller {
     this.evadeCooldown = Math.max(0, this.evadeCooldown - dt);
     this.bounceWindow = Math.max(0, this.bounceWindow - dt);
     this.firingBlind = Math.max(0, this.firingBlind - dt);
-    if (firing && !this.aim) this.firingBlind = 0.45;
+    if (firing && !this.aim) this.firingBlind = 0.7; // sostiene la postura de tiro
 
     if (this.dead) { this.aim = false; return; }
 

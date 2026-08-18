@@ -90,6 +90,27 @@ try {
   }
   await page.mouse.up({ button: 'right' });
 
+  // hipfire: DISPARANDO, el cañón debe ser colineal con la línea de tiro real
+  await page.evaluate(() => {
+    const P = window.BREACH.player;
+    P.pos.x = 0; P.pos.z = -6; P.cam.pitch = -0.3;
+  });
+  await page.mouse.down();
+  await page.waitForTimeout(400);
+  const fireAlign = await page.evaluate(`(() => {
+    const G = window.BREACH;
+    const v = new window.THREE.Vector3();
+    G.rig.gunForward(v);
+    const yaw = G.player.cam.yaw, p = G.player.cam.pitch;
+    const d = new window.THREE.Vector3(
+      -Math.sin(yaw) * Math.cos(p), Math.sin(p), -Math.cos(yaw) * Math.cos(p));
+    return +v.dot(d).toFixed(3);
+  })()`);
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+  console.log('FIREALIGN:', JSON.stringify({ dot: fireAlign }));
+  if (fireAlign < 0.96) problems.push('hipfire: el cañón no es colineal con el tiro (dot=' + fireAlign + ')');
+
   // roadie (perfil)
   await page.keyboard.down('Shift');
   await page.keyboard.down('a');

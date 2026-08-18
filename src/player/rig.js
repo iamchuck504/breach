@@ -343,8 +343,9 @@ export class Rig {
         R(this.legR.hip, swing2 * 0.75 * m, 0, 0); R(this.legR.knee, -(Math.max(0, -swing2) * 1.1 + 0.1) * m, 0, 0);
         leftOnGun = true;
         if (p.firing) {
-          // blindfire de cadera: postura de apunte MODERADA (arma al frente, pecho)
-          M(0.14, -0.12, -0.26, 0, 0.06, 0);
+          // blindfire de cadera: arma al frente SIN canteo, colineal al tiro
+          damp = 18;
+          M(0.15, -0.1, -0.26, 0, 0, 0);
         } else {
           // low-ready diagonal (Gears): cruzada e inclinada, el cañón asoma
           // sobre el hombro izquierdo visto desde atrás
@@ -374,8 +375,9 @@ export class Rig {
         R(this.legL.hip, 1.25, 0, 0.15); R(this.legL.knee, -1.7, 0, 0);
         R(this.legR.hip, 1.05, 0, -0.15); R(this.legR.knee, -1.5, 0, 0);
         leftOnGun = true;
-        M(0.13, -0.12, -0.24, 0, 0.05, 0);
-        set(this.aimRig.rotation, 'x', pitch * 0.85); // apunta con la cámara en el aire
+        M(0.13, -0.12, -0.24, 0, 0, 0);
+        set(this.aimRig.rotation, 'x', pitch); // apunta con la cámara en el aire
+        set(this.aimRig.rotation, 'y', p.aimYawErr ?? 0);
         hipsY = 0.72;
         break;
       }
@@ -427,12 +429,12 @@ export class Rig {
           hipsY = 0.62 + (stepping ? Math.abs(Math.cos(ph * 1.5)) * 0.02 : 0);
         }
         // arma al pecho: vertical relajada, o al frente si está disparando
+        // (el pitch/yaw del tiro lo aplica el bloque post-switch del aimRig)
         if (p.firing) {
-          M(0.14, -0.12, -0.26, 0, 0.06, 0);
-          set(this.aimRig.rotation, 'x', pitch * 0.85);
+          damp = 16;
+          M(0.15, -0.1, -0.26, 0, 0, 0);
         } else {
           M(0.07, -0.06, -0.2, 1.25, 0, 0.06);
-          R(this.aimRig, 0, 0, 0);
         }
         break;
       }
@@ -474,7 +476,7 @@ export class Rig {
       damp = 18;
       leftOnGun = true;
       const lean = p.coverLean ?? 0; // asomarse en la orilla de pared alta
-      R(this.aimRig, pitch, 0, lean * 0.1);
+      R(this.aimRig, pitch, (p.aimYawErr ?? 0) * 0.9, lean * 0.1);
       R(this.torso, -0.12, -0.15, -lean * 0.22);
       R(this.head, pitch * 0.25, 0, lean * 0.08);
       // arma al hombro derecho, a la altura de la mejilla (pronunciada)
@@ -486,13 +488,19 @@ export class Rig {
         R(this.legR.hip, 0, 0, -0.1 + lean * 0.12);
       }
     } else if (p.state !== 'dead') {
-      // hipfire/blindfire: postura moderada — el conjunto sigue parte del pitch
-      const hipPitch = p.state === 'blind_over' ? pitch * 0.8
-        : (p.state === 'idle' || p.state === 'run') ? pitch * (p.firing ? 0.85 : 0.5) : 0;
-      if (p.state !== 'roadie' && !(p.state === 'cover_low' || p.state === 'cover_high')) {
-        set(this.aimRig.rotation, 'x', hipPitch);
+      // hipfire/blindfire: al DISPARAR, el arma apunta EXACTAMENTE a la línea
+      // de tiro (pitch completo + corrección de yaw mientras el cuerpo gira);
+      // relajado, solo sigue la mitad del pitch (ready natural)
+      const yawErr = p.aimYawErr ?? 0;
+      if (p.state === 'blind_over') {
+        set(this.aimRig.rotation, 'x', pitch);
+        set(this.aimRig.rotation, 'y', yawErr);
+      } else if (p.state === 'idle' || p.state === 'run' || p.state === 'jump') {
+        set(this.aimRig.rotation, 'x', pitch * (p.firing ? 1 : 0.5));
+        set(this.aimRig.rotation, 'y', p.firing ? yawErr : 0);
       } else if (p.state === 'cover_low' || p.state === 'cover_high') {
-        set(this.aimRig.rotation, 'x', 0);
+        set(this.aimRig.rotation, 'x', p.firing ? pitch : 0);
+        set(this.aimRig.rotation, 'y', p.firing ? yawErr : 0);
       }
     }
 
