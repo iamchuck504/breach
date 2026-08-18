@@ -205,6 +205,67 @@ input.onEscape = () => {
   if (!G.mode) return;
   if (menuIsOpen()) closeMenu(); else openMenu();
 };
+
+// ---------- saneamiento del ClipCursor (bug de Chromium/Windows con escala) ----------
+// Un exit "sucio" del pointer lock (blur, Esc del navegador) puede dejar el
+// cursor confinado a nivel de OS. Reparación 100% desde la página: un ciclo
+// lock→exit CON FOCO fija un clip fresco y lo limpia por el camino sano.
+// Se dispara al recuperar el foco o al primer click tras un unlock.
+let lockUsed = false;      // hubo al menos un lock en esta sesión
+let needSanitize = false;  // hubo un unlock que pudo dejar clip sucio
+let sanitizing = false;
+let sanitizeAt = 0;
+
+document.addEventListener('pointerlockchange', () => {
+  if (document.pointerLockElement === canvas) {
+    lockUsed = true;
+    if (sanitizing && performance.now() - sanitizeAt < 600) {
+      // lock fresco del ciclo de saneamiento: salir ya, por el camino limpio
+      setTimeout(() => {
+        if (document.pointerLockElement === canvas && sanitizing) {
+          document.exitPointerLock();
+        }
+        sanitizing = false;
+        needSanitize = false;
+      }, 30);
+    } else {
+      // lock legítimo del jugador: el clip queda fresco, nada que sanear
+      sanitizing = false;
+      needSanitize = false;
+    }
+  } else {
+    needSanitize = true; // cualquier unlock puede haber dejado el clip pegado
+  }
+});
+
+function sanitizeClip() {
+  if (!lockUsed || !needSanitize || sanitizing || input.locked || !G.mode) return;
+  if (!document.hasFocus() || performance.now() - sanitizeAt < 1500) return;
+  sanitizeAt = performance.now();
+  sanitizing = true;
+  try {
+    const p = canvas.requestPointerLock();
+    if (p && p.catch) p.catch(() => { sanitizing = false; });
+  } catch { sanitizing = false; }
+}
+window.addEventListener('focus', () => setTimeout(sanitizeClip, 120));
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') setTimeout(sanitizeClip, 120);
+});
+// fallback con gesto: primer click tras un unlock (por si el saneamiento
+// sin gesto fue denegado por el navegador)
+document.addEventListener('pointerdown', () => { setTimeout(sanitizeClip, 80); }, true);
+
+// pantalla completa automática al iniciar partida: con Keyboard Lock activo
+// ni Esc suelta el pointer lock → sin salidas sucias durante el juego
+function enterFullscreen() {
+  try {
+    if (!document.fullscreenElement) {
+      const p = document.documentElement.requestFullscreen();
+      if (p && p.catch) p.catch(() => {});
+    }
+  } catch { /* sin soporte */ }
+}
 // alt-tab / cambio de ventana: soltar el mouse y abrir la pausa
 input.onFocusLost = () => {
   if (G.mode && !menuIsOpen()) openMenu();
@@ -431,6 +492,7 @@ function damagePlayerLocal(dmg) {
 
 function startBots() {
   audio.ensure();
+  enterFullscreen();
   teardown();
   G.name = saveName();
   world.setLayout('district'); // mapa grande también para el 4v4 vs bots
@@ -480,6 +542,7 @@ function startBots() {
 
 function startPractice() {
   audio.ensure();
+  enterFullscreen();
   teardown();
   G.name = saveName();
   world.setLayout('district'); // el mapa grande, para explorarlo con dummies
@@ -498,6 +561,7 @@ function startPractice() {
 
 async function startOnline() {
   audio.ensure();
+  enterFullscreen();
   G.name = saveName();
   const url = inServer.value.trim();
   if (!url) { netStatus.textContent = 'Escribe la URL del servidor (npm run server)'; return; }
