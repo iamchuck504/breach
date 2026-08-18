@@ -69,7 +69,6 @@ const G = {
   team: 'red',
   name: 'CHUCK',
   footAcc: 0,
-  wasReloading: false,
 };
 
 // ---------- eventos del controller (feel: sonido + polvo + shake) ----------
@@ -148,6 +147,12 @@ function closeMenu() {
   vDrag = null;
   document.activeElement?.blur?.(); // el foco en un input no debe comerse teclas
   if (!input.locked) input.requestLock();
+  // reanudar con Esc: el exitPointerLock del MISMO keydown aún no aterrizó,
+  // así que input.locked sigue true aquí y el requestLock de arriba no corre
+  // — sin este reintento el mouse quedaba muerto hasta el keeper (1.6 s)
+  setTimeout(() => {
+    if (G.mode && !menuIsOpen() && !input.locked && document.hasFocus()) input.requestLock();
+  }, 60);
 }
 
 // ---------- cursor virtual (menú en pausa con pointer lock activo) ----------
@@ -213,18 +218,19 @@ document.addEventListener('fullscreenchange', () => {
   // en fullscreen, capturar Esc (Keyboard Lock API): ni Esc suelta el pointer
   // lock → el bug de ClipCursor no tiene forma de dispararse jugando.
   // Registramos si fue CONCEDIDO: si falla, Esc mantiene el exit programático.
-  try {
-    if (on) {
+  if (on) {
+    try {
       const kp = navigator.keyboard?.lock?.(['Escape']);
       if (kp && kp.then) kp.then(() => { input.kbLocked = true; }).catch(() => { input.kbLocked = false; });
-    } else {
-      input.kbLocked = false;
-      navigator.keyboard?.unlock?.();
-      // salir de fullscreen con el lock puesto: soltarlo limpio y pausar
-      if (input.locked) input.releaseLock();
-      if (G.mode && !menuIsOpen()) openMenu();
-    }
-  } catch { input.kbLocked = false; }
+    } catch { input.kbLocked = false; }
+  } else {
+    input.kbLocked = false;
+    try { navigator.keyboard?.unlock?.(); } catch { /* ok */ }
+    // FUERA del try: si unlock() lanzara, saldríamos de fullscreen con el
+    // lock puesto y sin pausar (la salida sucia que queremos eliminar)
+    if (input.locked) input.releaseLock();
+    if (G.mode && !menuIsOpen()) openMenu();
+  }
 });
 
 input.onEscape = () => {
@@ -242,17 +248,27 @@ let needSanitize = false;   // hubo un unlock que pudo dejar clip sucio
 let sanitizing = false;
 let sanitizeExiting = false; // el próximo unlock es NUESTRO exit del saneo
 let sanitizeAt = 0;
+let sanitizeGen = 0;        // generación: cancelar invalida timeouts en vuelo
+let sanitizeReqAt = 0;      // última petición de lock DEL SANEO (aunque el
+                            // rescate ya haya soltado el flag, si el lock
+                            // llega tarde sigue siendo un lock de saneo)
 
-function cancelSanitize() { sanitizing = false; }
+function cancelSanitize() { sanitizing = false; sanitizeGen++; sanitizeReqAt = 0; }
 
 document.addEventListener('pointerlockchange', () => {
   if (document.pointerLockElement === canvas) {
     lockUsed = true;
-    if (sanitizing) {
-      // lock del ciclo de saneamiento: salir SIEMPRE, ya, por el camino limpio
-      // (sin importar menú ni ventana de tiempo — el propósito es el ciclo)
+    // también cuenta como saneo un lock que llegó tarde (>500ms, con el
+    // rescate ya disparado): tratarlo como legítimo re-capturaba el mouse
+    // solo y dejaba el clip sin sanear (recaída bajo carga de CPU)
+    if (sanitizing || performance.now() - sanitizeReqAt < 2500) {
+      sanitizeReqAt = 0;
+      const gen = ++sanitizeGen;
+      // lock del ciclo de saneamiento: salir por el camino limpio, salvo que
+      // el jugador reanude en estos 30ms (cancelSanitize invalida la gen)
       setTimeout(() => {
         sanitizing = false;
+        if (gen !== sanitizeGen) return;
         needSanitize = false;
         if (document.pointerLockElement === canvas) {
           sanitizeExiting = true;
@@ -275,14 +291,17 @@ document.addEventListener('pointerlockchange', () => {
 // si el navegador DENIEGA el lock del saneo por la vía del evento (no todas
 // las denegaciones rechazan la promesa), liberar el flag — si se quedara
 // pegado, TODOS los clicks se consumirían y no se podría disparar nunca más
-document.addEventListener('pointerlockerror', () => { sanitizing = false; });
+document.addEventListener('pointerlockerror', () => { sanitizing = false; sanitizeReqAt = 0; });
 
 function sanitizeClip() {
   if (!lockUsed || !needSanitize || sanitizing || input.locked || !G.mode) return;
   if (!document.hasFocus() || performance.now() - sanitizeAt < 1500) return;
   sanitizeAt = performance.now();
   sanitizing = true;
-  // rescate: si en 500ms no llegó ni lock ni error, soltar el flag
+  sanitizeReqAt = performance.now();
+  // rescate: si en 500ms no llegó ni lock ni error, soltar el flag (los
+  // clicks vuelven a funcionar); sanitizeReqAt sigue marcando la petición
+  // en vuelo por si el lock aterriza tarde
   setTimeout(() => { if (sanitizing && !input.locked) sanitizing = false; }, 500);
   try {
     const p = canvas.requestPointerLock();
@@ -381,6 +400,7 @@ localStorage.removeItem('breach.rawInput');
 
 function cancelRebind() {
   if (rebinding) { rebinding.cancel(); rebinding = null; }
+  input.rebinding = false;
 }
 
 function renderBinds() {
@@ -417,11 +437,13 @@ function startRebindKb(action, btn) {
   cancelRebind();
   btn.textContent = '· · ·';
   btn.classList.add('listening');
+  input.rebinding = true; // Esc cancela el rebind SIN soltar el pointer lock
   const h = (e) => {
     e.preventDefault();
     e.stopPropagation();
     window.removeEventListener('keydown', h, true);
     rebinding = null;
+    input.rebinding = false;
     if (e.code !== 'Escape') { BINDS.kb[action] = e.code; saveBinds(); }
     renderBinds();
   };
@@ -433,6 +455,7 @@ function startRebindPad(action, btn) {
   cancelRebind();
   btn.textContent = '· · ·';
   btn.classList.add('listening');
+  input.rebinding = true; // el botón de pausa actual no debe cerrar el menú
   const startPressed = new Set(input.pad.pressed);
   const t0 = performance.now();
   const iv = setInterval(() => {
@@ -440,6 +463,7 @@ function startRebindPad(action, btn) {
       if (!startPressed.has(b)) {
         clearInterval(iv);
         rebinding = null;
+        input.rebinding = false;
         BINDS.pad[action] = b;
         saveBinds();
         renderBinds();
@@ -447,15 +471,17 @@ function startRebindPad(action, btn) {
       }
     }
     for (const b of startPressed) if (!input.pad.pressed.has(b)) startPressed.delete(b);
-    if (performance.now() - t0 > 6000) { clearInterval(iv); rebinding = null; renderBinds(); }
+    if (performance.now() - t0 > 6000) { clearInterval(iv); rebinding = null; input.rebinding = false; renderBinds(); }
   }, 30);
   rebinding = { cancel: () => clearInterval(iv) };
 }
 
 // ---------- panel de tuning (F10) ----------
 let gui = null;
+let lockSuspended = false; // F10 abierto: el keeper NO debe recapturar el mouse
 input.onToggleTuning = () => {
-  if (gui) { gui.destroy(); gui = null; return; }
+  if (gui) { gui.destroy(); gui = null; lockSuspended = false; return; }
+  lockSuspended = true;
   gui = new GUI({ title: 'BREACH TUNING' });
   const addRec = (obj, folder) => {
     for (const k in obj) {
@@ -475,6 +501,8 @@ function deepCopy(src, dst) {
 }
 
 // ---------- ciclo de vida de partida ----------
+let startSeq = 0; // n° de arranque de partida: invalida continuaciones tardías
+
 function teardown() {
   if (G.rig) { G.rig.dispose(scene); G.rig = null; }
   if (G.dummies) { G.dummies.dispose(); G.dummies = null; }
@@ -497,11 +525,15 @@ function teardown() {
   G.scores = { red: 0, blue: 0 };
   G.selfHp = TUNING.combat.hp;
   G.selfAlive = true;
+  G.dropSeq = 0;
+  G.playerLastHit = 99;
+  G.footAcc = 0;
 }
 
 function spawnLocal(team, spawn) {
   G.team = team;
   G.rig = new Rig(scene, team);
+  G.rig.groundFn = (x, z, y) => world.groundHeight({ x, z }, PLAYER_R, y);
   G.player = new Controller(world, shoulderCam, ctrlEvents);
   G.player.respawn(spawn);
   G.weapons.reset();
@@ -537,7 +569,8 @@ function damagePlayerLocal(dmg) {
     // el arma en mano cae junto al cuerpo con las balas restantes
     G.drops?.spawn('p' + G.dropSeq++, G.weapons.cur,
       G.player.pos.x, G.player.pos.z, 'red',
-      G.weapons.st.mag, G.weapons.st.reserve);
+      G.weapons.st.mag, G.weapons.st.reserve, undefined,
+      world.groundHeight(G.player.pos, PLAYER_R, G.player.y));
     return true;
   }
   return false;
@@ -546,6 +579,7 @@ function damagePlayerLocal(dmg) {
 function startBots() {
   audio.ensure();
   enterFullscreen();
+  startSeq++;
   teardown();
   G.name = saveName();
   world.setLayout('district'); // mapa grande también para el 4v4 vs bots
@@ -559,12 +593,13 @@ function startBots() {
   G.botMatch = new BotMatch(scene, world, {
     effects, audio, hud,
     playerName: G.name,
-    dropWeapon: (wep, x, z, team) => {
+    dropWeapon: (wep, x, z, team, y = 0) => {
       // los bots no llevan contador de balas: sueltan un remanente plausible
       const def = TUNING.weapons[wep];
       G.drops?.spawn('b' + G.dropSeq++, wep, x, z, team,
         Math.ceil(def.mag * (0.2 + Math.random() * 0.6)),
-        Math.ceil(def.reserve * Math.random() * 0.4));
+        Math.ceil(def.reserve * Math.random() * 0.4), undefined,
+        world.groundHeight({ x, z }, PLAYER_R, y));
     },
     player: () => ({ x: G.player.pos.x, z: G.player.pos.z, y: G.player.y, alive: G.selfAlive }),
     damagePlayer: (dmg) => damagePlayerLocal(dmg),
@@ -577,11 +612,13 @@ function startBots() {
       grantSpawnProtection();
     },
     onMatchEnd: () => {
-      setTimeout(() => {
-        if (G.mode !== 'bots') return;
+      const bm = G.botMatch; // identidad, no modo: el string 'bots' también
+      setTimeout(() => {     // es cierto para una partida NUEVA (la mataba)
+        if (!bm || G.botMatch !== bm) return;
         G.mode = null;
         teardown();
         hud.show(false);
+        input.releaseLock(); // en el menú principal el cursor queda libre
         openMenu();
       }, 6500);
     },
@@ -596,6 +633,7 @@ function startBots() {
 function startPractice() {
   audio.ensure();
   enterFullscreen();
+  startSeq++;
   teardown();
   G.name = saveName();
   world.setLayout('district'); // el mapa grande, para explorarlo con dummies
@@ -622,8 +660,12 @@ async function startOnline() {
   netStatus.textContent = 'Conectando…';
   const net = new NetClient();
   bindNet(net);
+  const mySeq = ++startSeq;
   try {
     const welcome = await net.connect(url, G.name);
+    // si durante el await el usuario arrancó OTRA partida (vs bots, práctica),
+    // este welcome tardío no debe secuestrarla
+    if (startSeq !== mySeq) { net.close(); return; }
     teardown();
     world.setLayout('district'); // mapa grande de multijugador
     G.net = net;
@@ -632,7 +674,7 @@ async function startOnline() {
     G.crates = new AmmoCrates(scene, true); // online: el server manda
     if (welcome.crates) welcome.crates.forEach((up, i) => G.crates.setState(i, !!up));
     G.drops = new WeaponDrops(scene);
-    if (welcome.drops) for (const d of welcome.drops) G.drops.spawn(d.id, d.wep, d.x, d.z, d.team, 0, 0, d.t);
+    if (welcome.drops) for (const d of welcome.drops) G.drops.spawn(d.id, d.wep, d.x, d.z, d.team, 0, 0, d.t, d.y || 0);
     grantSpawnProtection();
     G.scores = welcome.scores;
     for (const p of welcome.players) {
@@ -663,7 +705,10 @@ function addRemote(p) {
   const prev = G.remotes.get(p.id);
   if (prev) prev.dispose(scene); // id repetido: no dejar rigs huérfanos
   const r = new RemotePlayer(scene, p.id, p.name, p.team);
+  r.rig.groundFn = (x, z, y) => world.groundHeight({ x, z }, PLAYER_R, y);
   r.alive = p.alive !== false;
+  // posición real desde el welcome: sin ella nacían apilados en (0,0)
+  if (typeof p.x === 'number') { r.x = p.x; r.z = p.z; }
   G.remotes.set(p.id, r);
 }
 
@@ -683,7 +728,9 @@ function bindNet(net) {
     if (!alive()) return;
     for (const p of m.ps) {
       if (p.id === net.id) {
-        if (p.hp < G.selfHp) { audio.hurt(); shoulderCam.addShake(0.4); input.pad.rumble(140, 0.5, 0.7); }
+        // G.selfAlive: el golpe mortal ya sonó con 'death' — sin el guard
+        // sonaba hurt + shake + rumble sobre un jugador ya muerto
+        if (p.hp < G.selfHp && G.selfAlive) { audio.hurt(); shoulderCam.addShake(0.4); input.pad.rumble(140, 0.5, 0.7); }
         G.selfHp = p.hp;
         continue;
       }
@@ -730,17 +777,31 @@ function bindNet(net) {
       audio.kill();
     }
   });
-  net.on('crate', (m) => { if (alive()) G.crates?.setState(m.i, !!m.up); });
-  net.on('dropA', (m) => { if (alive()) G.drops?.spawn(m.id, m.wep, m.x, m.z, m.team, 0, 0, m.t); });
+  net.on('crate', (m) => {
+    if (!alive()) return;
+    G.crates?.setState(m.i, !!m.up);
+    // el refill llega SOLO con la confirmación del server (rellenar al pisar
+    // la caja + reintento de 1.5s daba munición infinita si otro la ganó)
+    if (!m.up && m.by === net.id && G.weapons) {
+      G.weapons.refill();
+      audio.reloadDone();
+      hud.hint('MUNICIÓN COMPLETA', 1400);
+      input.pad.rumble(60, 0.2, 0.3);
+    }
+  });
+  // la vida viaja en 'life': 't' es el discriminador del protocolo (usarlo
+  // de 8º argumento dejaba d.t = 'dropA' → NaN → arma invisible en online)
+  net.on('dropA', (m) => { if (alive()) G.drops?.spawn(m.id, m.wep, m.x, m.z, m.team, 0, 0, m.life ?? 8, m.y || 0); });
   net.on('dropR', (m) => { if (alive()) G.drops?.remove(m.id); });
   net.on('dropGive', (m) => {
     if (!alive()) return;
     const def = TUNING.weapons[m.wep];
     const s = G.weapons.state[m.wep];
     const total = (m.mag || 0) + (m.res || 0);
-    s.reserve = Math.min(def.reserve, s.reserve + total);
+    const gained = Math.min(def.reserve, s.reserve + total) - s.reserve;
+    s.reserve += gained;
     audio.reloadDone();
-    hud.hint('+' + total + ' BALAS DE ' + def.name, 1500);
+    hud.hint('+' + gained + ' BALAS DE ' + def.name, 1500);
   });
   net.on('respawn', (m) => {
     if (!alive() || !G.player || !G.rig) return;
@@ -777,7 +838,7 @@ function bindNet(net) {
       G.mode = null;
       teardown(); // limpiar escena completa (rigs remotos, drops, cajas)
       hud.show(false);
-      hud.showMenu(true);
+      openMenu(); // (no showMenu directo: dejaba visible un REANUDAR muerto)
       netStatus.textContent = 'Desconectado del servidor';
       input.releaseLock();
     }
@@ -977,9 +1038,10 @@ window.BREACH_INPUT = input;
 window.THREE = THREE;
 
 function angDiff(a, b) {
-  let d = a - b;
-  while (d > Math.PI) d -= Math.PI * 2;
-  while (d < -Math.PI) d += Math.PI * 2;
+  // módulo, no while: un delta gigante (dato corrupto) colgaba el bucle
+  let d = (a - b) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
   return d;
 }
 
@@ -1008,9 +1070,11 @@ function simStep(dt) {
   G.fireBuffer = Math.max(0, G.fireBuffer - dt);
   const wasReloading = G.weapons.reloading;
 
-  // sin balas por ningún lado, el gatillo no debe forzar pose de tiro
-  // (mantenía blind_over y bloqueaba el roadie con el cargador seco)
-  const hasAmmo = G.weapons.st.mag > 0 || G.weapons.st.reserve > 0 || G.weapons.reloading;
+  // sin poder disparar YA, el gatillo no debe forzar pose de tiro: ni seco
+  // total (mantenía blind_over y bloqueaba el roadie) ni RECARGANDO (un click
+  // latcheaba la pose los ~2s de recarga, asomándote expuesto sobre el cover)
+  const hasAmmo = !G.weapons.reloading &&
+    (G.weapons.st.mag > 0 || G.weapons.st.reserve > 0);
   const fired = p.dead ? false
     : G.weapons.update(dt, input.fireHeld, input.firePressed || G.fireBuffer > 0, canFire);
   if (fired) G.fireBuffer = 0;
@@ -1056,21 +1120,27 @@ function simStep(dt) {
         G.net?.send({ t: 'takeDrop', id });
         return;
       }
-      const total = d.mag + d.res;
-      s.reserve = Math.min(def.reserve, s.reserve + total);
+      // anunciar lo GANADO real (el clamp de reserva podía comerse la mayoría)
+      const gained = Math.min(def.reserve, s.reserve + d.mag + d.res) - s.reserve;
+      s.reserve += gained;
       G.drops.remove(id);
       audio.reloadDone();
-      hud.hint('+' + total + ' BALAS DE ' + def.name, 1500);
+      hud.hint('+' + gained + ' BALAS DE ' + def.name, 1500);
       input.pad.rumble(50, 0.15, 0.25);
     });
   }
   if (G.crates) {
     G.crates.update(dt, p.pos.x, p.pos.z, p.y, G.selfAlive && !p.dead, (i) => {
+      if (G.net) {
+        // online: solo reclamar; el refill llega con la confirmación del
+        // server (rellenar aquí + reintento de 1.5s = munición infinita)
+        G.net.send({ t: 'crate', i });
+        return;
+      }
       G.weapons.refill();
       audio.reloadDone();
       hud.hint('MUNICIÓN COMPLETA', 1400);
       input.pad.rumble(60, 0.2, 0.3);
-      if (G.net) G.net.send({ t: 'crate', i });
     });
   }
 
@@ -1144,7 +1214,10 @@ function frame(now) {
       if (input.pad.connected) shoulderCam.applyStick(input.pad.camX, input.pad.camY, dt, input.invertYPad);
       // keeper: jugando sin lock (cooldown de Esc, despausa con gamepad,
       // lock post-await) → reintentar captura periódicamente
-      if (!input.locked && document.hasFocus() && !sanitizing && now - lastKeep > 1600) {
+      // lockSuspended (F10): sin él, el keeper robaba el mouse al panel de
+      // tuning y cada click al canvas disparaba el arma
+      if (!input.locked && document.hasFocus() && !sanitizing && !lockSuspended &&
+          now - lastKeep > 1600) {
         lastKeep = now;
         input.requestLock();
       }
@@ -1172,8 +1245,10 @@ function frame(now) {
 
     hud.ammo(G.weapons);
     hud.health(G.mode === 'online' || G.mode === 'bots' ? G.selfHp / TUNING.combat.hp : 1);
-    // countdown grande de reaparición
-    if (!G.selfAlive && G.respawnT > 0 && G.botMatch?.phase !== 'over') {
+    // countdown grande de reaparición (no en fin de ronda/partida: ahí la
+    // cola de respawns se vació y el contador mentía, pisando "ROUND PARA…")
+    const bmPhase = G.botMatch?.phase;
+    if (!G.selfAlive && G.respawnT > 0 && bmPhase !== 'over' && bmPhase !== 'intermission') {
       hud.respawnTick(Math.ceil(G.respawnT));
     } else {
       hud.respawnTick(null);

@@ -173,6 +173,7 @@ export class Rig {
     this._recoil = 0;
     this._deadT = 0;
     this.rag = null; // estado del ragdoll de muerte
+    this.groundFn = null; // (x,z,y)->alturaSuelo — lo inyecta quien tiene el world
   }
 
   // Impulso y pose de desparrame aleatorios para esta muerte.
@@ -188,6 +189,12 @@ export class Rig {
     this.rag = {
       bx: this.root.position.x, bz: this.root.position.z, byaw: yaw,
       by: this.root.position.y, vyy: 0, // caída vertical real (muerte en el aire)
+      // suelo REAL bajo el cadáver: clavar a y=0 enterraba el cuerpo dentro
+      // del bloque si moría parado sobre uno (groundFn lo inyecta quien
+      // tiene el world: main / botmatch / addRemote)
+      floorY: this.groundFn
+        ? this.groundFn(this.root.position.x, this.root.position.z, this.root.position.y)
+        : 0,
       ox: 0, oz: 0, oy: 0,
       vx: (back.x + right.x * lat * 0.8) * spd,
       vz: (back.z + right.z * lat * 0.8) * spd,
@@ -485,8 +492,11 @@ export class Rig {
     }
     if (p.state !== 'dead') this._deadT = 0;
 
-    // ADS: postura pronunciada — arma al hombro, pitch completo de cámara
-    if (p.aim && p.state !== 'dead' && p.state !== 'dive' && p.state !== 'slide') {
+    // ADS: postura pronunciada — arma al hombro, pitch completo de cámara.
+    // roadie/blind_over excluidos: su brazo izq. es pose Euler y el IK de
+    // aquí peleaba con ella (temblor) si un remoto llegaba con st+aim juntos
+    if (p.aim && p.state !== 'dead' && p.state !== 'dive' && p.state !== 'slide' &&
+        p.state !== 'roadie' && p.state !== 'blind_over') {
       damp = 18;
       leftOnGun = true;
       const lean = p.coverLean ?? 0; // asomarse en la orilla de pared alta
@@ -526,15 +536,23 @@ export class Rig {
       set(this.aimRig.rotation, 'z', 0);
     }
 
+    // recarga solo en posturas con el arma al frente (en dive/slide/roadie/
+    // blind_over el gunMount/brazo izq. tienen pose propia: pisarla inclinaba
+    // el arma fuera de la mano) — misma whitelist que el IK de recarga
+    const reloadPose = p.reloading &&
+      (p.state === 'idle' || p.state === 'run' || p.state === 'jump' ||
+       p.state === 'cover_low' || p.state === 'cover_high');
+
     // cambio de arma: el arma barre hacia el hombro/espalda y regresa
     // (el modelo se intercambia a mitad del gesto, en Weapons.update)
     if (p.swapping && p.state !== 'dead') {
       M(0.15, 0.28, 0.05, 1.5, 0, 0.35);
       set(this.aimRig.rotation, 'x', 0);
+      set(this.aimRig.rotation, 'y', 0); // sin guiño lateral heredado del latch de tiro
     }
 
     // recarga: el arma se inclina y la mano izquierda baja al cargador
-    if (p.reloading && p.state !== 'dead') {
+    if (reloadPose && p.state !== 'dead') {
       set(this.gunMount.rotation, 'x', -0.12);
       set(this.gunMount.rotation, 'z', 0.3);
     }
@@ -578,9 +596,17 @@ export class Rig {
       const fr = Math.exp(-6 * dt);
       r.vx *= fr; r.vz *= fr;
       r.ox += r.vx * dt; r.oz += r.vz * dt;
+      // el desplome de rodillas solo progresa CERCA del suelo: muriendo en el
+      // aire el cuerpo apenas se ladea mientras cae y colapsa al aterrizar
+      // (antes completaba el flop en el aire y bajaba rígido el resto)
+      const onGround = r.by <= r.floorY + 0.08;
       if (r.ang < 1) {
-        r.ang = Math.min(1, r.ang + dt * (0.9 + r.ang * 7.5)); // cae acelerando
-        if (r.ang >= 1 && !r.hit) { r.hit = true; r.flopT = 0; }
+        if (onGround) {
+          r.ang = Math.min(1, r.ang + dt * (0.9 + r.ang * 7.5)); // cae acelerando
+          if (r.ang >= 1 && !r.hit) { r.hit = true; r.flopT = 0; }
+        } else {
+          r.ang = Math.min(0.35, r.ang + dt * 0.6);
+        }
       } else if (r.hit) {
         r.flopT += dt;
       }
@@ -590,10 +616,10 @@ export class Rig {
       else { this.hips.rotation.z = a; this.hips.rotation.x = r.tilt * fall; }
       // rodillas que ceden: la cadera baja con la caída (golpe, no flotación)
       this.hips.position.y = 0.66 - 0.37 * fall;
-      // el cuerpo cae con gravedad hasta el suelo (muerte en el aire incluida)
-      if (r.by > 0) {
+      // gravedad hasta el suelo REAL bajo el cadáver (bloques incluidos)
+      if (r.by > r.floorY) {
         r.vyy -= 22 * dt;
-        r.by = Math.max(0, r.by + r.vyy * dt);
+        r.by = Math.max(r.floorY, r.by + r.vyy * dt);
       }
       this.root.position.set(r.bx + r.ox, r.by, r.bz + r.oz);
       this.root.rotation.y = r.byaw + r.spin * fall;
@@ -613,11 +639,8 @@ export class Rig {
       gun.userData.grip.getWorldPosition(TMP_A);
       this._ikArm(this.armR, 1, this.aimRig.worldToLocal(TMP_A));
       // el gesto de recarga solo aplica en posturas con el arma al frente
-      // (en dive/slide/roadie el brazo izq. tiene pose propia: IK + Euler a
-      // la vez producían temblor)
-      const reloadIk = p.reloading &&
-        (p.state === 'idle' || p.state === 'run' || p.state === 'jump' ||
-         p.state === 'cover_low' || p.state === 'cover_high');
+      // (misma whitelist que reloadPose, calculada arriba)
+      const reloadIk = reloadPose;
       if (leftOnGun || reloadIk) {
         const a = reloadIk ? (gun.userData.mag ?? gun.userData.forend) : gun.userData.forend;
         a.getWorldPosition(TMP_B);

@@ -149,12 +149,17 @@ export class HUD {
   }
 
   center(text, sub = '', ms = 2200) {
+    // center() manda: suelta el estado del countdown de respawn (comparten
+    // #center-msg — sin esto, respawnTick(null) del mismo frame borraba
+    // "SIN VIDAS"/"DERROTA" recién pintados, y la clase 'big' quedaba pegada)
+    this._resp = false;
+    this.el.center.classList.remove('big');
     this.el.center.innerHTML = esc(text) + (sub ? `<div class="sub">${esc(sub)}</div>` : '');
     this.el.center.classList.add('on');
     clearTimeout(this._centerT);
     if (ms > 0) this._centerT = setTimeout(() => this.el.center.classList.remove('on'), ms);
   }
-  centerOff() { clearTimeout(this._centerT); this.el.center.classList.remove('on', 'big'); }
+  centerOff() { clearTimeout(this._centerT); this._resp = false; this.el.center.classList.remove('on', 'big'); }
 
   clearFeed() { this.el.feed.innerHTML = ''; }
 

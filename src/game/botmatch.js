@@ -27,8 +27,9 @@ const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vect
 
 const lerpYaw = (a, b, k) => {
   let d = b - a;
-  while (d > Math.PI) d -= Math.PI * 2;
-  while (d < -Math.PI) d += Math.PI * 2;
+  d = d % (Math.PI * 2); // módulo, no while: un delta gigante colgaba el bucle
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
   return a + d * k;
 };
 
@@ -37,6 +38,7 @@ class Bot {
     this.id = id; this.name = name; this.team = team;
     this.world = world;
     this.rig = new Rig(scene, team, name);
+    this.rig.groundFn = (x, z, y) => world.groundHeight({ x, z }, 0.38, y);
     this.respawn(spawn);
   }
 
@@ -52,6 +54,7 @@ class Bot {
     this.strafeDir = Math.random() < 0.5 ? -1 : 1;
     this.strafeT = 0;
     this.burstT = 0; this.pauseT = 1 + Math.random();
+    this.muzzleT = 0; // pose de fogonazo de la escopeta (separado de burstT)
     this.shotCd = 0;
     this.lastDamage = 99; this.recentHit = 99;
     this.wep = 'smg';
@@ -133,6 +136,7 @@ class Bot {
     // ráfaga/pausa SIEMPRE decrementan: si el bot pierde al enemigo a mitad
     // de ráfaga, la pose de disparo no debe quedarse congelada
     this.burstT = Math.max(0, this.burstT - dt);
+    this.muzzleT = Math.max(0, this.muzzleT - dt);
     if (this.burstT === 0 && this.pauseT > 0) this.pauseT -= dt;
     if (this.lastDamage > TUNING.combat.regenDelay && this.hp < TUNING.combat.hp) {
       this.hp = Math.min(TUNING.combat.hp, this.hp + TUNING.combat.regenRate * dt);
@@ -145,12 +149,13 @@ class Bot {
       : Infinity;
 
     // ---- decidir estado ----
-    if (this.state !== 'cover' && this.hp < 38 && enemy) {
-      const spot = match.findCoverSpot(this, enemy);
-      if (spot) {
-        this.cover = spot; this.state = 'cover';
-        this.coverPhase = 'go'; this.coverT = 0; this.coverPhaseT = 0;
-      }
+    // sin spot disponible se sigue a las ramas de combate: antes el if vacío
+    // congelaba estado Y arma del bot herido hasta que regeneraba
+    const spot = this.state !== 'cover' && this.hp < 38 && enemy
+      ? match.findCoverSpot(this, enemy) : null;
+    if (spot) {
+      this.cover = spot; this.state = 'cover';
+      this.coverPhase = 'go'; this.coverT = 0; this.coverPhaseT = 0;
     } else if (this.state === 'cover') {
       this.coverT += dt;
       this.coverPhaseT = (this.coverPhaseT ?? 0) + dt;
@@ -277,7 +282,7 @@ class Bot {
       speed: Math.min(1, this.speed / TUNING.move.roadieSpeed),
       aim: aiming && !animOverride,
       aimPitch: 0,
-      firing: this.burstT > 0,
+      firing: this.burstT > 0 || this.muzzleT > 0,
       swapping: this.swapAnim > 0,
     });
     // protección de spawn: highlight sutil del color del equipo
@@ -291,7 +296,9 @@ class Bot {
     if (this.wep === 'shotgun') {
       if (this.shotCd <= 0 && dist < 20) {
         this.shotCd = (60 / TUNING.weapons.shotgun.rpm) * 1.5;
-        this.burstT = 0.15;
+        // muzzleT, NO burstT: usar burstT congelaba pauseT y contaminaba el
+        // ritmo de ráfagas al volver a la metralleta
+        this.muzzleT = 0.15;
         match.botShoot(this, enemy);
       }
       return;
@@ -304,6 +311,11 @@ class Bot {
     } else if (this.pauseT <= 0) {
       this.burstT = 0.4 + Math.random() * 0.5;
       this.pauseT = 0.5 + Math.random() * 0.9;
+      // primer tiro de la ráfaga en el MISMO frame que se arma
+      if (this.shotCd <= 0) {
+        this.shotCd = (60 / TUNING.weapons.smg.rpm) * 1.6;
+        match.botShoot(this, enemy);
+      }
     }
   }
 
@@ -503,7 +515,7 @@ export class BotMatch {
     // el arma del bot cae junto a su cuerpo (la del jugador la suelta main)
     if (victimId !== 'player') {
       const b = this.bots.find((x) => x.id === victimId);
-      if (b) this.cb.dropWeapon?.(b.wep, b.pos.x, b.pos.z, b.team);
+      if (b) this.cb.dropWeapon?.(b.wep, b.pos.x, b.pos.z, b.team, b.y);
     }
     if (v && k) this.cb.hud.kill(k.name, k.team, v.name, v.team);
     if (killerId === 'player') { this.cb.audio.kill(); this.cb.hud.hitmarker(); }
@@ -563,7 +575,13 @@ export class BotMatch {
     if (this.phase === 'over') return;
     if (this.phase === 'intermission') {
       this.phaseT -= dt;
-      if (this.phaseT <= 0) this._startRound();
+      if (this.phaseT <= 0) { this._startRound(); return; }
+      // los ragdolls siguen desplomándose y los vivos respiran en idle
+      // (el return seco congelaba estatuas a mitad de la caída 4 s)
+      for (const b of this.bots) {
+        if (!b.alive) b.update(dt, this);
+        else b.rig.update(dt, { state: 'idle', speed: 0, aim: false, aimPitch: 0 });
+      }
       return;
     }
     this.timer -= dt;

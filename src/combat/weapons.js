@@ -87,7 +87,7 @@ export class Weapons {
     }
     const trigger = d.auto ? wantsFire : wantsFirePressed;
     if (!trigger || !canFire || s.cd > 0) return false;
-    if (s.mag <= 0) { this.startReload(); return false; }
+    if (s.mag <= 0) return false; // seco total (la auto-recarga ya corrió arriba)
     s.mag--;
     s.cd = 60 / d.rpm;
     return true;

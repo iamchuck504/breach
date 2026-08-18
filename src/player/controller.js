@@ -142,7 +142,7 @@ export class Controller {
 
   kill() {
     this.dead = true;
-    this.state = 'idle';
+    this._setState('idle'); // resetea stateT (directo dejaba el valor pre-muerte)
     this.cover = null; this.slide = null; this.dive = null; this.flip = null;
     this.aim = false;
     this.vel = { x: 0, z: 0 };
@@ -158,7 +158,9 @@ export class Controller {
 
   _setState(s) { this.state = s; this.stateT = 0; }
 
-  // Busca cobertura y entra en slide, o hace dive. Devuelve true si hizo algo.
+  // Busca cobertura y entra en slide, o hace dive. Devuelve 'slide' | 'dive'
+  // | false — SOLO 'slide' cuenta como rebote (chain/SFX/bonus); el fallback
+  // de dive devolvía true y un rebote al vacío sumaba cadena igual.
   _tryEvade(dir, range) {
     const T = TUNING.evade;
     if (this.evadeCooldown > 0) return false;
@@ -177,7 +179,7 @@ export class Controller {
       this._setState('slide');
       this.evadeCooldown = T.bounceCooldown;
       this.ev.onSlideStart?.(this.chain);
-      return true;
+      return 'slide';
     }
     // sin cobertura: dive en la dirección pedida
     this.dive = { dir };
@@ -186,7 +188,7 @@ export class Controller {
     this._setState('dive');
     this.evadeCooldown = T.bounceCooldown;
     this.ev.onDive?.();
-    return true;
+    return 'dive';
   }
 
   update(dt, input, firing) {
@@ -283,10 +285,15 @@ export class Controller {
         this.yaw = lerpAngle(this.yaw, yawFromDir(dx, dz), 1 - Math.exp(-18 * dt));
         if (this.stateT > 0.9) {
           // target inalcanzable (colisión lo empuja fuera): NUNCA deslizarse
-          // para siempre — rescate a run
+          // para siempre — rescate a run, frenando a velocidad de carrera
           this.slide = null;
           this._setState('run');
           this.chain = 0;
+          const sp = Math.hypot(this.vel.x, this.vel.z);
+          if (sp > M.runSpeed) {
+            const k = M.runSpeed / sp;
+            this.vel.x *= k; this.vel.z *= k;
+          }
         } else if (d < Math.max(0.16, spd * dt)) {
           this._enterCover(s.face, s.target);
         } else {
@@ -296,8 +303,8 @@ export class Controller {
             const ndir = mw.mag > 0.1 ? { x: mw.x, z: mw.z } : null;
             if (ndir) {
               this.chain++;
-              if (this._tryEvade(ndir, E.bounceRange)) this.ev.onBounce?.(this.chain);
-              else this.chain--; // sin rebote real, sin bonus ni SFX
+              if (this._tryEvade(ndir, E.bounceRange) === 'slide') this.ev.onBounce?.(this.chain);
+              else this.chain--; // dive al vacío o nada: sin bonus ni SFX
             }
           }
         }
@@ -314,7 +321,7 @@ export class Controller {
         if (input.evadePressed && t > E.diveCancelPct && this.chain < E.chainMax) {
           const ndir = mw.mag > 0.1 ? { x: mw.x, z: mw.z } : this.dive.dir;
           this.chain++;
-          if (this._tryEvade(ndir, E.bounceRange)) this.ev.onBounce?.(this.chain);
+          if (this._tryEvade(ndir, E.bounceRange) === 'slide') this.ev.onBounce?.(this.chain);
           else this.chain--;
         } else if (t >= 1) {
           this._setState(hasInput ? 'run' : 'idle');
@@ -388,7 +395,7 @@ export class Controller {
           if (into < 0.5) { // no re-entrar al mismo cover
             const chained = this.bounceWindow > 0 && this.chain < E.chainMax;
             if (chained) this.chain++; else this.chain = 0;
-            if (this._tryEvade(dir, E.bounceRange)) {
+            if (this._tryEvade(dir, E.bounceRange) === 'slide') {
               if (chained) this.ev.onBounce?.(this.chain);
             } else if (chained) this.chain--;
           }

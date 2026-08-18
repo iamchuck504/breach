@@ -23,7 +23,8 @@ export class Input {
     // invert Y separado por dispositivo (ambos default ON, preferencia de Chuck)
     this.invertY = localStorage.getItem('breach.invertY') !== 'false';       // ratón (F9)
     this.invertYPad = localStorage.getItem('breach.invertYPad') !== 'false'; // control
-    this.kbLocked = false; // main lo pone en true si navigator.keyboard.lock fue CONCEDIDO
+    this.kbLocked = false;  // main: true si navigator.keyboard.lock fue CONCEDIDO
+    this.rebinding = false; // main: true durante un rebind (Esc/botón pausa no actúan)
     this.onToggleTuning = null;
     this.onToggleMute = null;
     this.onEscape = null;
@@ -67,7 +68,8 @@ export class Input {
     window.addEventListener('keydown', (e) => {
       // salir programáticamente ANTES que el navegador (camino limpio medido),
       // salvo en fullscreen con keyboard.lock CONFIRMADO (ahí Esc es nuestro)
-      if (e.code === 'Escape' && this.locked &&
+      // o durante un rebind (Esc solo cancela el rebind, no suelta el lock)
+      if (e.code === 'Escape' && this.locked && !this.rebinding &&
           !(document.fullscreenElement && this.kbLocked)) {
         this.cleanExitAt = performance.now();
         try { document.exitPointerLock(); } catch { /* ok */ }
@@ -85,7 +87,6 @@ export class Input {
     });
   }
 
-  // unadjustedMovement: sin aceleración de mouse del OS (si el navegador lo soporta)
   // Siempre pointer lock PLANO: el modo raw input (unadjustedMovement) se
   // eliminó por completo — es el camino con el bug de ClipCursor en Windows.
   requestLock() {
@@ -123,7 +124,8 @@ export class Input {
       }
       if (c === 'F10') { e.preventDefault(); this.onToggleTuning?.(); return; }
       if (c === 'KeyM') { this.onToggleMute?.(); }
-      if (c === 'Escape') { this.onEscape?.(); }
+      // (Escape ya se atendió arriba con return: NO repetir onEscape aquí,
+      // duplicarlo togglearía el menú dos veces en el mismo keydown)
       if (!this.locked) return;
       this.keys.add(c);
       if (c === BINDS.kb.evade) this.evadePressed = true;
@@ -140,7 +142,8 @@ export class Input {
   pollPad(dt, gameplay) {
     const wasFire = this.pad.fireHeld;
     this.pad.poll(dt);
-    if (this.pad.justPressed.has(BINDS.pad.pause)) this.onEscape?.();
+    // durante un rebind, el botón de pausa actual no debe cerrar el menú
+    if (!this.rebinding && this.pad.justPressed.has(BINDS.pad.pause)) this.onEscape?.();
     if (!gameplay) return;
     if (this.pad.justPressed.has(BINDS.pad.evade)) this.evadePressed = true;
     if (this.pad.justPressed.has(BINDS.pad.jump)) this.jumpPressed = true;

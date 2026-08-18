@@ -1,5 +1,70 @@
 # Sanity check completo — 2026-08-18
 
+## Segunda pasada (re-auditoría de verificación, mismo día)
+
+Tres revisores frescos verificaron los ~45 fixes de la primera pasada y
+cazaron regresiones. Veredicto: fixes principales bien aplicados (raw input,
+`sanitizing`, guards `alive()`, `G.player=null` sin null-derefs, timers de
+bots, cooldowns). **Corregido en esta pasada:**
+
+**Mouse/input:**
+- Esc-para-reanudar dejaba el mouse muerto ~1.6 s (el `exitPointerLock` del
+  mismo keydown es asíncrono y `input.locked` seguía true en `closeMenu`) →
+  reintento de lock a los 60 ms.
+- El keeper robaba el mouse al panel F10 y cada click disparaba → flag
+  `lockSuspended`.
+- `cancelSanitize` no cancelaba el timeout del ciclo ya programado →
+  token de generación (`sanitizeGen`).
+- Rescate de 500 ms: un lock de saneo que llegaba tarde (CPU cargada — la
+  recaída de Chuck durante el audit) se trataba como lock legítimo y el clip
+  no se saneaba nunca → `sanitizeReqAt` (ventana de 2.5 s).
+- Fin de match dejaba el pointer lock puesto en el menú principal → release.
+- `fullscreenchange`: release/pausa estaban dentro de un try ajeno → fuera.
+- Esc durante rebind soltaba el lock; rebindear el botón de pausa del pad
+  cerraba el menú a mitad → flag `input.rebinding`.
+- Rama muerta de Escape en `_key` eliminada (trampa de doble toggle).
+
+**Red/server (2 P0):**
+- `yaw` sin clamp: un `{yaw:1e300}` congelaba la pestaña de TODOS los demás
+  (bucle infinito en `lerpAngle`) → clamp en server + lerpAngle por módulo
+  (también en main y botmatch).
+- `dropA` pisaba el campo `t` (vida) con el discriminador del protocolo →
+  drops invisibles en online → la vida viaja en `life`.
+- Munición infinita: refill local + reintento de 1.5 s aunque el server
+  rechazara la caja → el refill llega SOLO con la confirmación (`by`).
+- Timer de `endRound` sobrevivía a la sala vacía; `crate` sin `me.alive`;
+  `hit` no rompía la protección del atacante; `pub()` sin x/z (remotos
+  nacían en 0,0); clamp de posición ±100 → ±40.
+- onMatchEnd usaba el modo (string) y mataba la partida SIGUIENTE → identidad.
+- `startOnline` no revalidaba tras el await (secuestraba la partida que
+  empezaras mientras conectaba) → `startSeq`.
+- Doble feedback del golpe mortal (hurt sobre muerto); "Desconectado" dejaba
+  un REANUDAR muerto.
+
+**Gameplay/HUD:**
+- "SIN VIDAS"/"DERROTA"/"ROUND PARA…" se borraban el mismo frame (estado
+  compartido de `#center-msg`) → `center()` resetea `_resp` y `big`; countdown
+  oculto también en intermission.
+- Recargando, un click latcheaba la pose de tiro ~2 s (te asomaba expuesto
+  sobre el cover) → `hasAmmo` excluye recarga.
+- Cadáver enterrado al morir sobre un bloque → `groundFn` (suelo real);
+  el desplome ya no se completa en el aire.
+- Rebote al vacío contaba cadena/SFX (`_tryEvade` devolvía true en el dive
+  fallback) → distingue 'slide'/'dive'.
+- Bot herido sin cover disponible se congelaba (estado y arma) → fallthrough
+  a combate. Escopeta contaminaba el ritmo de ráfagas (`burstT` compartido)
+  → `muzzleT`. Intermission congelaba ragdolls a mitad de caída → siguen.
+- Drops a nivel del piso al morir sobre un bloque → viaja `y`; recogida por
+  altura RELATIVA; posición determinista (online: mismo punto en todas las
+  pantallas); hint de balas anuncia lo ganado real (post-clamp).
+- Rescate del slide salía patinando a 9.4 m/s → frena a velocidad de carrera.
+- `kill()` con `_setState` (stateT); swap sin guiño lateral heredado;
+  recarga con whitelist también en gunMount; ADS excluye roadie/blind_over
+  remotos (IK vs Euler).
+
+Suites tras la pasada: SMOKE OK (19 checks), POSES OK, ragdoll 0.14 m,
+server syntax OK.
+
 Auditoría de todo el juego con 3 revisores paralelos (pipeline de mouse,
 lógica de gameplay, red/server/UI) + trazado propio. **~80 hallazgos**,
 ~45 corregidos en esta pasada, el resto documentado abajo.

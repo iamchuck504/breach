@@ -89,7 +89,7 @@ wss.on('connection', (ws) => {
         t: 'welcome', id, team, spawn, scores,
         players: [...players.values()].map(pub),
         crates: CRATES.map((c) => (c.up ? 1 : 0)),
-        drops: [...drops.entries()].map(([id, d]) => ({ id, wep: d.wep, x: d.x, z: d.z, team: d.team, t: d.t })),
+        drops: [...drops.entries()].map(([id, d]) => ({ id, wep: d.wep, x: d.x, z: d.z, y: d.y, team: d.team, t: d.t })),
       });
       broadcast({ t: 'joined', id, name: me.name, team });
       console.log(`+ ${me.name} (${team}) — ${players.size}/${MAX_PLAYERS}`);
@@ -98,8 +98,10 @@ wss.on('connection', (ws) => {
     if (!me) return;
 
     if (msg.t === 's') {
-      me.x = clamp(msg.x, -100, 100); me.z = clamp(msg.z, -100, 100);
-      me.y = clamp(msg.y, 0, 20); me.yaw = num(msg.yaw);
+      me.x = clamp(msg.x, -40, 40); me.z = clamp(msg.z, -40, 40);
+      // yaw SIN clamp era fatal: un valor como 1e300 rebotado en el snap
+      // metía el lerpAngle de todos los demás clientes en un bucle infinito
+      me.y = clamp(msg.y, 0, 20); me.yaw = clamp(msg.yaw, -10, 10);
       let st = String(msg.st || 'idle');
       if (!VALID_STATES.has(st)) st = 'idle';
       if (st === 'dead' && me.alive) st = 'idle'; // sin "cadáveres falsos" que disparan
@@ -130,17 +132,20 @@ wss.on('connection', (ws) => {
     }
     if (msg.t === 'crate') {
       const c = CRATES[msg.i];
-      if (!c || !c.up) return;
+      if (!c || !c.up || !me.alive || resetting) return;
       if (Math.hypot(me.x - c.x, me.z - c.z) > 3) return; // validación laxa
       c.up = false;
       c.t = CRATE_RESPAWN;
-      broadcast({ t: 'crate', i: msg.i, up: 0 });
+      // by: solo quien la reclamó con éxito recibe el refill (el cliente ya
+      // no rellena por su cuenta — eso permitía munición infinita reintentando)
+      broadcast({ t: 'crate', i: msg.i, up: 0, by: me.id });
       return;
     }
     if (msg.t === 'hit') {
       const target = players.get(msg.target);
       if (!target || !target.alive || !me.alive || target.team === me.team || resetting) return;
       if (target.prot > Date.now() / 1000) return; // protección de spawn
+      me.prot = 0; // atacar rompe la protección (no solo el 'fire' cosmético)
       const dmg = Math.min(120, Math.max(0, num(msg.dmg)));
       target.hp -= dmg;
       target.lastDamage = Date.now() / 1000;
@@ -158,10 +163,12 @@ wss.on('connection', (ws) => {
         // el arma del muerto cae con sus balas restantes (8s para recogerla)
         const did = 'd' + nextDropId++;
         drops.set(did, {
-          wep: target.w, x: target.x, z: target.z, team: target.team,
+          wep: target.w, x: target.x, z: target.z, y: target.y || 0, team: target.team,
           mag: target.am || 0, res: target.ar || 0, t: DROP_LIFE,
         });
-        broadcast({ t: 'dropA', id: did, wep: target.w, x: target.x, z: target.z, team: target.team });
+        // vida en 'life' (NO 't': ese campo es el discriminador del protocolo
+        // — pisarlo dejaba el drop con t='dropA' → NaN → arma invisible)
+        broadcast({ t: 'dropA', id: did, wep: target.w, x: target.x, z: target.z, y: target.y || 0, team: target.team, life: DROP_LIFE });
         broadcast({ t: 'score', ...scores });
         if (scores[me.team] >= KILL_LIMIT) endRound(me.team);
       }
@@ -182,14 +189,19 @@ wss.on('connection', (ws) => {
       drops.clear();
       for (const c of CRATES) { c.up = true; c.t = 0; }
       resetting = false;
+      // el timer del reinicio de ronda no debe disparar sobre la sala nueva
+      // (teleportaba y reseteaba el arma del primer jugador en entrar)
+      if (endTimer) { clearTimeout(endTimer); endTimer = null; }
     }
   });
 });
 
+let endTimer = null;
 function endRound(team) {
   resetting = true;
   broadcast({ t: 'win', team });
-  setTimeout(() => {
+  endTimer = setTimeout(() => {
+    endTimer = null;
     scores = { red: 0, blue: 0 };
     // partida nueva: sin drops viejos, cajas arriba, stats a cero
     for (const id of [...drops.keys()]) { drops.delete(id); broadcast({ t: 'dropR', id }); }
@@ -210,7 +222,8 @@ function endRound(team) {
 }
 
 function pub(p) {
-  return { id: p.id, name: p.name, team: p.team, alive: p.alive, hp: p.hp };
+  // x/z: sin ellos los remotos nacían apilados en (0,0) hasta el primer snap
+  return { id: p.id, name: p.name, team: p.team, alive: p.alive, hp: p.hp, x: p.x, z: p.z };
 }
 function num(v) { return typeof v === 'number' && isFinite(v) ? v : 0; }
 function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, num(v))); }

@@ -2,10 +2,12 @@
 import { TUNING } from '../config/tuning.js';
 import { Rig } from './rig.js';
 
+// módulo, NO bucle while: con un delta enorme (dato remoto corrupto) el
+// while nunca terminaba por precisión float y congelaba la pestaña entera
 const lerpAngle = (a, b, k) => {
-  let d = b - a;
-  while (d > Math.PI) d -= Math.PI * 2;
-  while (d < -Math.PI) d += Math.PI * 2;
+  let d = (b - a) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
   return a + d * k;
 };
 
