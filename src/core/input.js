@@ -60,8 +60,10 @@ export class Input {
     // correctamente; el camino interno del navegador (Esc real / blur) es el
     // que a veces lo deja pegado con la escala 125%. Estrategia: salir
     // SIEMPRE nosotros primero, por el camino limpio.
+    this.cleanExitAt = 0; // marca de exits limpios (con foco): no necesitan saneo
     window.addEventListener('keydown', (e) => {
       if (e.code === 'Escape' && this.locked && !document.fullscreenElement) {
+        this.cleanExitAt = performance.now();
         try { document.exitPointerLock(); } catch { /* ok */ }
       }
     }, true);

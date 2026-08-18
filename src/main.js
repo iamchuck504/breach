@@ -161,6 +161,7 @@ function vDragUpdate() {
 }
 
 input.onLockedMouseDown = (btn) => {
+  if (sanitizing) return true; // lock transitorio del saneo: ignorar el click
   if (!menuIsOpen()) return false; // jugando: el click es disparo/apuntar
   if (btn === 0) {
     const el = document.elementFromPoint(vc.x, vc.y);
@@ -211,9 +212,10 @@ input.onEscape = () => {
 // cursor confinado a nivel de OS. Reparación 100% desde la página: un ciclo
 // lock→exit CON FOCO fija un clip fresco y lo limpia por el camino sano.
 // Se dispara al recuperar el foco o al primer click tras un unlock.
-let lockUsed = false;      // hubo al menos un lock en esta sesión
-let needSanitize = false;  // hubo un unlock que pudo dejar clip sucio
+let lockUsed = false;       // hubo al menos un lock en esta sesión
+let needSanitize = false;   // hubo un unlock que pudo dejar clip sucio
 let sanitizing = false;
+let sanitizeExiting = false; // el próximo unlock es NUESTRO exit del saneo
 let sanitizeAt = 0;
 
 document.addEventListener('pointerlockchange', () => {
@@ -222,11 +224,13 @@ document.addEventListener('pointerlockchange', () => {
     if (sanitizing && performance.now() - sanitizeAt < 600) {
       // lock fresco del ciclo de saneamiento: salir ya, por el camino limpio
       setTimeout(() => {
-        if (document.pointerLockElement === canvas && sanitizing) {
-          document.exitPointerLock();
-        }
         sanitizing = false;
         needSanitize = false;
+        // si el jugador reanudó mientras tanto, el lock ya es legítimo: se queda
+        if (document.pointerLockElement === canvas && menuIsOpen()) {
+          sanitizeExiting = true;
+          document.exitPointerLock();
+        }
       }, 30);
     } else {
       // lock legítimo del jugador: el clip queda fresco, nada que sanear
@@ -234,7 +238,11 @@ document.addEventListener('pointerlockchange', () => {
       needSanitize = false;
     }
   } else {
-    needSanitize = true; // cualquier unlock puede haber dejado el clip pegado
+    // unlock: sospechoso de dejar clip pegado, SALVO que sea nuestro propio
+    // exit del saneo (evita re-armarse en loop) o un Esc limpio con foco
+    const cleanEsc = performance.now() - input.cleanExitAt < 300;
+    needSanitize = !sanitizeExiting && !cleanEsc;
+    sanitizeExiting = false;
   }
 });
 
