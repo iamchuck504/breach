@@ -55,6 +55,19 @@ Desde ahí → **Controles**: rebinding de teclado y de botones del control
 e invert Y. Todo persiste en localStorage. En práctica la pausa congela el
 juego; en línea la partida sigue.
 
+## Regla de diseño de mapas (dura)
+
+Solo existen **tres alturas** de bloque/pared, definidas en `world.js` (`BLOCK`):
+
+| Tamaño | Altura | Propiedades |
+|---|---|---|
+| **LOW** | 1.1 | Saltable por encima (apex 1.28); agachado en cover la cabeza NO asoma (tope 1.02) |
+| **MID** | 1.9 | Cubre al personaje DE PIE completo (cabeza ~1.63); no saltable |
+| **HIGH** | 3.0 | Inalcanzable incluso saltando; muros, pilares y perímetro |
+
+Ninguna pieza de mapa puede usar otra altura. Toda cobertura debe cumplir su
+promesa: si te cubres, estás cubierto.
+
 ## Salto
 
 Salto arcade con gravedad (`TUNING.jump`): pasa por encima de coberturas bajas
