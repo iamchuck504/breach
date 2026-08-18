@@ -17,6 +17,7 @@ import { Audio } from './fx/audio.js';
 import { HUD } from './ui/hud.js';
 import { NetClient } from './net/client.js';
 import { BotMatch } from './game/botmatch.js';
+import { AmmoCrates } from './game/crates.js';
 
 const TEAM_HEX = { red: 0xd94f3f, blue: 0x4f8de0 };
 
@@ -53,6 +54,8 @@ const G = {
   weapons: new Weapons(),
   dummies: null,
   botMatch: null,
+  crates: null,
+  spawnProt: 0,        // protección de spawn (5s, se rompe al disparar)
   playerLastHit: 99,
   remotes: new Map(),  // id -> RemotePlayer
   net: null,
@@ -368,6 +371,8 @@ function teardown() {
   if (G.rig) { G.rig.dispose(scene); G.rig = null; }
   if (G.dummies) { G.dummies.dispose(); G.dummies = null; }
   if (G.botMatch) { G.botMatch.dispose(); G.botMatch = null; }
+  if (G.crates) { G.crates.dispose(); G.crates = null; }
+  G.spawnProt = 0;
   hud.timer(null);
   hud.roundPips(null);
   hud.scoreboard(null);
@@ -388,8 +393,14 @@ function spawnLocal(team, spawn) {
   G.rig.setWeapon('smg');
 }
 
+function grantSpawnProtection() {
+  G.spawnProt = TUNING.combat.spawnProtection;
+  hud.hint('PROTECCIÓN DE SPAWN — SE ROMPE AL DISPARAR', 2200);
+}
+
 function damagePlayerLocal(dmg) {
   if (!G.selfAlive) return false;
+  if (G.spawnProt > 0) return false; // protegido: sin daño
   G.selfHp -= dmg;
   G.playerLastHit = 0;
   audio.hurt();
@@ -417,6 +428,7 @@ function startBots() {
   G.selfHp = TUNING.combat.hp;
   G.selfAlive = true;
   G.playerLastHit = 99;
+  G.crates = new AmmoCrates(scene);
   G.botMatch = new BotMatch(scene, world, {
     effects, audio, hud,
     playerName: G.name,
@@ -427,6 +439,7 @@ function startBots() {
       G.selfHp = TUNING.combat.hp;
       G.player.respawn(spawn);
       G.weapons.reset();
+      grantSpawnProtection();
     },
     onMatchEnd: () => {
       setTimeout(() => {
@@ -453,6 +466,7 @@ function startPractice() {
   G.mode = 'practice';
   spawnLocal('red', world.spawns.red[1]);
   G.dummies = new Dummies(scene);
+  G.crates = new AmmoCrates(scene);
   hud.showMenu(false);
   showControls(false);
   hud.show(true);
@@ -478,6 +492,9 @@ async function startOnline() {
     G.net = net;
     G.mode = 'online';
     spawnLocal(welcome.team, welcome.spawn);
+    G.crates = new AmmoCrates(scene);
+    if (welcome.crates) welcome.crates.forEach((up, i) => G.crates.setState(i, !!up));
+    grantSpawnProtection();
     G.scores = welcome.scores;
     for (const p of welcome.players) {
       if (p.id !== net.id) addRemote(p);
@@ -554,6 +571,7 @@ function bindNet(net) {
       audio.kill();
     }
   });
+  net.on('crate', (m) => { G.crates?.setState(m.i, !!m.up); });
   net.on('respawn', (m) => {
     if (m.id === net.id) {
       G.selfAlive = true;
@@ -561,6 +579,7 @@ function bindNet(net) {
       G.player.respawn(m.spawn);
       G.weapons.reset();
       G.rig.setWeapon('smg');
+      grantSpawnProtection();
       hud.centerOff();
     } else {
       const r = G.remotes.get(m.id);
@@ -676,6 +695,9 @@ function fireShot() {
       dmgByTarget.set(hit.id, e);
     }
   }
+
+  // disparar rompe la protección de spawn
+  if (G.spawnProt > 0) { G.spawnProt = 0; hud.hint('PROTECCIÓN ROTA', 900); }
 
   // feedback de disparo
   effects.muzzleFlash(muzzle, w.cur === 'shotgun');
@@ -830,6 +852,19 @@ function simStep(dt) {
   }
 
   if (G.dummies) G.dummies.update(dt);
+
+  // protección de spawn + cajas de munición
+  G.spawnProt = Math.max(0, G.spawnProt - dt);
+  if (G.crates) {
+    G.crates.update(dt, p.pos.x, p.pos.z, G.selfAlive && !p.dead, (i) => {
+      G.weapons.refill();
+      audio.reloadDone();
+      hud.hint('MUNICIÓN COMPLETA', 1400);
+      input.pad.rumble(60, 0.2, 0.3);
+      if (G.net) G.net.send({ t: 'crate', i });
+    });
+  }
+
   if (G.botMatch) {
     G.botMatch.update(dt);
     // regen del jugador (igual que online, pero local)
@@ -908,6 +943,8 @@ function frame(now) {
 
     shoulderCam.update(dt, G.player);
     G.rig.setWeapon(G.weapons.cur); // el intercambio real ocurre a mitad del gesto
+    // protección de spawn: el personaje parpadea
+    G.rig.root.visible = G.spawnProt <= 0 || Math.floor(now / 130) % 2 === 0;
     G.rig.setTransform(G.player.pos.x, G.player.pos.z, G.player.yaw, G.player.y);
     G.rig.update(dt, {
       ...G.player.animParams(),

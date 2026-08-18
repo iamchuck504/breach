@@ -292,6 +292,31 @@ try {
   console.log('BOTS:', JSON.stringify(bots));
   if (bots.mode !== 'bots' || bots.bots !== 7) errors.push('BOTS: modo/bots mal (' + JSON.stringify(bots) + ')');
   if (bots.livesR !== 19 || bots.livesB > 19) errors.push('BOTS: vidas iniciales mal (' + bots.livesR + '/' + bots.livesB + ')');
+  // protección de spawn: activa al nacer, se rompe al disparar
+  const prot0 = await page.evaluate(() => +window.BREACH.spawnProt.toFixed(1));
+  if (!(prot0 > 3)) errors.push('PROT: sin protección al nacer (' + prot0 + ')');
+  await page.mouse.down();
+  await page.waitForTimeout(250);
+  await page.mouse.up();
+  const afterFire = await page.evaluate(() => ({
+    prot: window.BREACH.spawnProt, mag: window.BREACH.weapons.st.mag,
+  }));
+  console.log('PROT:', JSON.stringify({ alNacer: prot0, trasDisparar: afterFire.prot }));
+  if (afterFire.prot !== 0) errors.push('PROT: no se rompió al disparar');
+
+  // caja de munición: recarga todo y se consume
+  await page.evaluate(() => {
+    const P = window.BREACH.player;
+    P.pos.x = 7; P.pos.z = 0; P.cover = null; P.state = 'idle';
+  });
+  await page.waitForTimeout(400);
+  const crate = await page.evaluate(() => ({
+    mag: window.BREACH.weapons.st.mag,
+    up: window.BREACH.crates.crates[0].up,
+  }));
+  console.log('CRATE:', JSON.stringify({ antesMag: afterFire.mag, despuesMag: crate.mag, up: crate.up }));
+  if (crate.mag !== 50 || crate.up) errors.push('CRATE: no recargó/consumió (' + JSON.stringify(crate) + ')');
+
   // observar la IA: conductas (cover/rush/salto/escopeta) + que nadie se atasque
   const seen = { cover: false, rush: false, jump: false, shotgun: false };
   const walked = [0, 0, 0, 0, 0, 0, 0];

@@ -106,7 +106,10 @@ la siguiente cobertura. Cada rebote encadenado suma `chainSpeedBonus`.
   interpolación 120 ms; el server es autoridad de hp/muertes/respawn/score
 - Armas: **Metralleta** (auto, subfusil compacto) y **Escopeta** (pump con madera,
   8 perdigones, falloff, gib a corta distancia); ids internos `smg`/`shotgun`
-- Reglas: TDM a 25 bajas, respawn 4 s, regen estilo Gears
+- Reglas: TDM a 25 bajas, respawn 4 s, regen estilo Gears,
+  **protección de spawn 5 s** (parpadeo; se rompe al disparar) y **2 cajas de
+  munición** en la línea media (recargan todo, reaparecen a los 30 s;
+  estado sincronizado por el server en online)
 
 ## Deploy
 

@@ -42,6 +42,7 @@ export class RemotePlayer {
       this.y = (s1.y ?? 0) + ((s2.y ?? 0) - (s1.y ?? 0)) * k;
       this.yaw = lerpAngle(s1.yaw, s2.yaw, k);
       this.st = s2.st; this.aim = !!s2.aim; this.pitch = s2.p ?? 0; this.sp = s2.sp ?? 0;
+      this.inv = !!s2.inv; // protección de spawn
       const w = s2.w ?? 'smg';
       if (this._lastW && w !== this._lastW) this.swapAnim = 0.5; // gesto de cambio
       this._lastW = w;
@@ -62,6 +63,8 @@ export class RemotePlayer {
       flipDir: 1,
       swapping: this.swapAnim > 0,
     });
+    // parpadeo de protección de spawn
+    this.rig.root.visible = !this.inv || Math.floor(performance.now() / 130) % 2 === 0;
   }
 
   dispose(scene) { this.rig.dispose(scene); }

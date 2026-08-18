@@ -61,6 +61,7 @@ class Bot {
     this.aggro = Math.random(); // personalidad por vida: >0.55 = rushea con escopeta
     this.stuckT = 0; this.avoidSide = 0;
     this._px = this.pos.x; this._pz = this.pos.z;
+    this.protT = TUNING.combat.spawnProtection; // invulnerable al nacer
     this.rig.setWeapon('smg');
     this.rig.setVisible(true);
   }
@@ -123,6 +124,7 @@ class Bot {
       return;
     }
     this.lastDamage += dt; this.recentHit += dt;
+    this.protT = Math.max(0, this.protT - dt);
     this.swapCd = Math.max(0, this.swapCd - dt);
     this.swapAnim = Math.max(0, this.swapAnim - dt);
     this.jumpCd = Math.max(0, this.jumpCd - dt);
@@ -265,6 +267,8 @@ class Bot {
       firing: this.burstT > 0,
       swapping: this.swapAnim > 0,
     });
+    // parpadeo de protección de spawn
+    this.rig.root.visible = this.protT <= 0 || Math.floor(performance.now() / 130) % 2 === 0;
   }
 
   // ráfagas (metralleta) o bombazos sueltos (escopeta)
@@ -425,6 +429,7 @@ export class BotMatch {
   }
 
   botShoot(bot, enemy) {
+    bot.protT = 0; // disparar rompe la protección de spawn
     const def = TUNING.weapons[bot.wep];
     _v1.set(bot.pos.x, bot.y + 1.35, bot.pos.z);
     _v3.set(enemy.x, (enemy.y ?? 0) + 1.0 + Math.random() * 0.4, enemy.z).sub(_v1).normalize();
@@ -464,6 +469,7 @@ export class BotMatch {
   damageBot(id, dmg, from, gib, silent = false) {
     const b = this.bots.find((x) => x.id === id);
     if (!b || !b.alive || this.phase !== 'playing') return false;
+    if (b.protT > 0) return false; // protección de spawn
     b.hp -= dmg;
     b.lastDamage = 0;
     b.recentHit = 0;

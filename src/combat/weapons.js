@@ -30,6 +30,15 @@ export class Weapons {
     this.swapT = 0;
   }
 
+  // caja de munición: rellena TODO (ambas armas) sin tocar el arma actual
+  refill() {
+    for (const k of ['smg', 'shotgun']) {
+      this.state[k].mag = TUNING.weapons[k].mag;
+      this.state[k].reserve = TUNING.weapons[k].reserve;
+    }
+    this.st.reload = 0;
+  }
+
   startSwap() {
     if (this.swapT > 0) return false;
     this.swapT = SWAP_TIME;

@@ -10,6 +10,9 @@ import { WebSocketServer } from 'ws';
 const PORT = process.env.PORT || 8787;
 const MAX_PLAYERS = 8;
 const HP = 100, REGEN_DELAY = 3.6, REGEN_RATE = 48, RESPAWN_TIME = 4, KILL_LIMIT = 25;
+const SPAWN_PROT = 5;    // seg de invulnerabilidad al nacer (se rompe al disparar)
+const CRATE_RESPAWN = 30;
+const CRATES = [{ x: 7, z: 0, up: true, t: 0 }, { x: -7, z: 0, up: true, t: 0 }];
 const TICK_HZ = 20;
 
 // espejo de world.js (mapa 'district', fz 25 → spawns en ±23.4)
@@ -75,12 +78,14 @@ wss.on('connection', (ws) => {
         x: spawn.x, z: spawn.z, yaw: spawn.yaw,
         st: 'idle', aim: 0, p: 0, w: 'smg', sp: 0,
         hp: HP, alive: true, lastDamage: 0, respawnAt: 0,
+        prot: Date.now() / 1000 + SPAWN_PROT,
         kills: 0, deaths: 0,
       };
       players.set(id, me);
       send(ws, {
         t: 'welcome', id, team, spawn, scores,
         players: [...players.values()].map(pub),
+        crates: CRATES.map((c) => (c.up ? 1 : 0)),
       });
       broadcast({ t: 'joined', id, name: me.name, team });
       console.log(`+ ${me.name} (${team}) — ${players.size}/${MAX_PLAYERS}`);
@@ -96,12 +101,23 @@ wss.on('connection', (ws) => {
       return;
     }
     if (msg.t === 'fire') {
+      me.prot = 0; // disparar rompe la protección de spawn
       broadcast({ t: 'fire', id: me.id, o: msg.o, p: msg.p, w: me.w });
+      return;
+    }
+    if (msg.t === 'crate') {
+      const c = CRATES[msg.i];
+      if (!c || !c.up) return;
+      if (Math.hypot(me.x - c.x, me.z - c.z) > 3) return; // validación laxa
+      c.up = false;
+      c.t = CRATE_RESPAWN;
+      broadcast({ t: 'crate', i: msg.i, up: 0 });
       return;
     }
     if (msg.t === 'hit') {
       const target = players.get(msg.target);
       if (!target || !target.alive || !me.alive || target.team === me.team || resetting) return;
+      if (target.prot > Date.now() / 1000) return; // protección de spawn
       const dmg = Math.min(120, Math.max(0, num(msg.dmg)));
       target.hp -= dmg;
       target.lastDamage = Date.now() / 1000;
@@ -139,6 +155,7 @@ function endRound(team) {
     scores = { red: 0, blue: 0 };
     for (const p of players.values()) {
       p.hp = HP; p.alive = true; p.respawnAt = 0;
+      p.prot = Date.now() / 1000 + SPAWN_PROT;
       const spawn = pickSpawn(p.team);
       p.x = spawn.x; p.z = spawn.z;
       broadcast({ t: 'respawn', id: p.id, spawn });
@@ -162,9 +179,18 @@ setInterval(() => {
     }
     if (!p.alive && p.respawnAt > 0 && now >= p.respawnAt && !resetting) {
       p.alive = true; p.hp = HP; p.respawnAt = 0;
+      p.prot = now + SPAWN_PROT;
       const spawn = pickSpawn(p.team);
       p.x = spawn.x; p.z = spawn.z;
       broadcast({ t: 'respawn', id: p.id, spawn });
+    }
+  }
+  // respawn de cajas de munición
+  for (let i = 0; i < CRATES.length; i++) {
+    const c = CRATES[i];
+    if (!c.up) {
+      c.t -= 1 / TICK_HZ;
+      if (c.t <= 0) { c.up = true; broadcast({ t: 'crate', i, up: 1 }); }
     }
   }
   if (players.size > 0) {
@@ -173,6 +199,7 @@ setInterval(() => {
       ps: [...players.values()].map((p) => ({
         id: p.id, x: p.x, z: p.z, y: p.y || 0, yaw: p.yaw, st: p.st, aim: p.aim,
         p: p.p, w: p.w, sp: p.sp, hp: Math.round(p.hp), alive: p.alive,
+        inv: p.prot > now ? 1 : 0,
       })),
     });
   }

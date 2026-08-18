@@ -78,6 +78,7 @@ export const TUNING = {
     },
   },
   combat: {
+    spawnProtection: 5,   // seg de invulnerabilidad al nacer (se rompe al disparar)
     fireAlignMaxDeg: 115, // el tiro de cadera solo espera si el cuerpo apunta casi de espaldas a la cámara
     hp: 100,
     regenDelay: 3.6, regenRate: 48,
