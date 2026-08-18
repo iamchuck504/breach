@@ -378,6 +378,8 @@ function bindNet(net) {
     effects.tracer(o, p);
     effects.muzzleFlash(o, m.w === 'gnasher');
     if (m.w === 'gnasher') audio.gnasher(); else audio.lancer();
+    const r = G.remotes.get(m.id);
+    if (r) r.firing = 0.45;
   });
   net.on('death', (m) => {
     const victim = m.target === net.id ? null : G.remotes.get(m.target);
@@ -541,9 +543,17 @@ function updateReticle() {
     p.state !== 'roadie' && p.state !== 'dive' && p.state !== 'slide';
   if (!canShow) { hud.reticle(false, null); return; }
   if (p.aim) { hud.reticle(true, null); return; }
-  const muzzle = _v1.copy(G.rig.muzzleWorld(_v2));
   const dir = hipDir();
-  if (p.state === 'cover') muzzle.addScaledVector(dir, 0.4);
+  // origen: el cañón real si está disparando / en cover; si está relajado
+  // (low-ready), el pecho — donde quedará el arma al levantar a postura de tiro
+  let muzzle;
+  if (p.firingBlind > 0 || p.state === 'cover') {
+    muzzle = _v1.copy(G.rig.muzzleWorld(_v2));
+    if (p.state === 'cover') muzzle.addScaledVector(dir, 0.4);
+  } else {
+    G.rig.root.updateWorldMatrix(true, true);
+    muzzle = G.rig.aimRig.getWorldPosition(_v1).addScaledVector(dir, 0.3);
+  }
   const hit = resolveShot(world, currentTargets(), muzzle, dir, 60, null);
   _v3.copy(hit.point).project(camera);
   if (_v3.z > 1) { hud.reticle(false, null); return; }

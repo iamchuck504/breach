@@ -17,10 +17,19 @@ await new Promise((r) => setTimeout(r, 900));
 
 const gunCheck = `(() => {
   const G = window.BREACH;
+  const R = G.rig;
   const v = new window.THREE.Vector3();
-  G.rig.gunForward(v);
+  R.gunForward(v);
   const f = G.player.facing();
-  return { dot: +(v.x * f.x + v.z * f.z).toFixed(3), y: +v.y.toFixed(3), state: G.player.animState() };
+  // distancia de cada mano a su ancla en el arma (deben estar EN el arma)
+  R.root.updateWorldMatrix(true, true);
+  const a = new window.THREE.Vector3(), b = new window.THREE.Vector3();
+  const gun = R.activeGun;
+  R.armR.hand.getWorldPosition(a); gun.userData.grip.getWorldPosition(b);
+  const handR = +a.distanceTo(b).toFixed(3);
+  R.armL.hand.getWorldPosition(a); gun.userData.forend.getWorldPosition(b);
+  const handL = +a.distanceTo(b).toFixed(3);
+  return { dot: +(v.x * f.x + v.z * f.z).toFixed(3), y: +v.y.toFixed(3), state: G.player.animState(), handR, handL };
 })()`;
 
 let browser;
@@ -74,6 +83,10 @@ try {
   const aim = await page.evaluate(gunCheck);
   console.log('AIM:', JSON.stringify(aim));
   if (aim.dot < 0.85) problems.push('aim: cañón no apunta al frente (dot=' + aim.dot + ')');
+  for (const [nm, st] of [['idle', idle], ['aim', aim]]) {
+    if (st.handR > 0.08) problems.push(nm + ': mano derecha fuera del arma (' + st.handR + 'm)');
+    if (st.handL > 0.14) problems.push(nm + ': mano izquierda fuera del arma (' + st.handL + 'm)');
+  }
   await page.mouse.up({ button: 'right' });
 
   // roadie (perfil)

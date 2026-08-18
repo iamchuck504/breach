@@ -80,6 +80,7 @@ export class Controller {
       aim: this.aim,
       aimPitch: this.cam.pitch,
       twist,
+      firing: this.firingBlind > 0,
     };
   }
 

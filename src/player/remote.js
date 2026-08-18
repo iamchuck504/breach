@@ -19,6 +19,7 @@ export class RemotePlayer {
     this.alive = true;
     this.x = 0; this.z = 0; this.yaw = 0;
     this.st = 'idle'; this.aim = false; this.pitch = 0; this.sp = 0;
+    this.firing = 0; // timer, lo activa el evento de fuego remoto
   }
 
   push(s) {
@@ -42,12 +43,14 @@ export class RemotePlayer {
       this.st = s2.st; this.aim = !!s2.aim; this.pitch = s2.p ?? 0; this.sp = s2.sp ?? 0;
       this.rig.setWeapon(s2.w ?? 'lancer');
     }
+    this.firing = Math.max(0, this.firing - dt);
     this.rig.setTransform(this.x, this.z, this.yaw);
     this.rig.update(dt, {
       state: this.alive ? this.st : 'dead',
       speed: this.sp,
       aim: this.aim,
       aimPitch: this.pitch,
+      firing: this.firing > 0,
     });
   }
 

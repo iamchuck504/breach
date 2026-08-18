@@ -40,7 +40,7 @@ export const TUNING = {
     fovLerp: 9,
     posLerp: 11,          // seguimiento de posición
     rotLag: 0,            // reservado
-    shoulder: 0.62,       // desplazamiento lateral (hombro derecho)
+    shoulder: 0.82,       // desplazamiento lateral (hombro derecho, estilo Gears)
     height: 1.62, dist: 2.7,
     roadieHeight: 1.18, roadieDist: 3.1,
     aimShoulder: 0.88, aimHeight: 1.58, aimDist: 1.8,
