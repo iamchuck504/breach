@@ -5,3 +5,4 @@ dist/
 scripts/shot-*.png
 
 .vercel
+scripts/pose-*.png
