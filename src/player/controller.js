@@ -90,6 +90,7 @@ export class Controller {
       firing: this.firingBlind > 0,
       flipT: this.flip ? Math.min(1, this.flip.t / this.flip.dur) : 0,
       flipDir: this.flip?.dir ?? 1,
+      flipAxis: this.flip?.axis ?? 'z',
       coverLean: this.coverLeanAnim ?? 0,
       latMove: this._latMove(),
     };
@@ -106,7 +107,7 @@ export class Controller {
   respawn(spawn) {
     this.pos = { x: spawn.x, z: spawn.z };
     this.vel = { x: 0, z: 0 };
-    this.y = 0; this.vy = 0; this.grounded = true; this.flip = null;
+    this.y = 0; this.vy = 0; this.grounded = true; this.flip = null; this.usedDouble = false;
     this.yaw = spawn.yaw;
     this.cam.yaw = spawn.yaw;
     this.cam.pitch = -0.12;
@@ -202,16 +203,18 @@ export class Controller {
         const want = hasInput || this.state === 'roadie';
         const tx = want ? dx * targetSpeed : 0;
         const tz = want ? dz * targetSpeed : 0;
-        const acc = (want ? M.accel : M.decel) * (this.grounded ? 1 : TUNING.jump.airControl);
+        // en el aire el momentum se respeta: sin input casi no frena
+        const acc = (want ? M.accel : M.decel * (this.grounded ? 1 : 0.06)) *
+          (this.grounded ? 1 : TUNING.jump.airControl);
         const k = 1 - Math.exp(-(acc / Math.max(targetSpeed, 1)) * dt);
         this.vel.x += (tx - this.vel.x) * k;
         this.vel.z += (tz - this.vel.z) * k;
 
-        // saltar: en el suelo salto normal; EN EL AIRE cerca de una pared,
-        // planta los pies y patea de regreso con giro lateral (Matrix)
+        // saltar: en el suelo salto normal; en el aire: wall kick si hay
+        // pared, si no doble salto = vuelta hacia la dirección presionada
         if (input.jumpPressed) {
           if (this.grounded) this._tryJump();
-          else this._tryWallKick();
+          else if (!this._tryWallKick() && !this.usedDouble && hasInput) this._airRoll(mw);
         }
 
         // evadir / cover (solo en el suelo)
@@ -228,10 +231,15 @@ export class Controller {
       }
 
       case 'flip': {
-        // patada de pared: el empuje del muro manda; el yaw sigue a la
-        // cámara para poder disparar en el aire (el roll es del modelo)
+        // vuelta en el aire: el impulso manda; el yaw sigue a la cámara
+        // para poder disparar (el giro es del modelo, no del control)
         this.flip.t += dt;
         this.yaw = lerpAngle(this.yaw, this.cam.yaw, 1 - Math.exp(-9 * dt));
+        if (this.flip.t >= this.flip.dur) {
+          // la vuelta terminó en el aire: recuperar control aéreo normal
+          this.flip = null;
+          this._setState('run');
+        }
         break;
       }
 
@@ -370,6 +378,7 @@ export class Controller {
         const wasAir = !this.grounded;
         const fallSpeed = -this.vy;
         this.y = ground; this.vy = 0; this.grounded = true;
+        this.usedDouble = false;
         if (this.state === 'flip') {
           this.flip = null;
           this._setState(hasInput ? 'run' : 'idle');
@@ -391,9 +400,10 @@ export class Controller {
   }
 
   // En el aire, cerca de una pared (hacia el movimiento o el facing):
-  // pies a la pared y patada de regreso con giro LATERAL estilo Matrix.
+  // pies a la pared y patada de regreso. Llegando de lado → giro lateral
+  // (Matrix); llegando de frente → backflip. Devuelve true si pateó.
   _tryWallKick() {
-    if (this.flip) return;
+    if (this.flip) return false;
     const J = TUNING.jump;
     const dirs = [];
     if (this.speed > 1) dirs.push({ x: this.vel.x / this.speed, z: this.vel.z / this.speed });
@@ -402,22 +412,47 @@ export class Controller {
       const wall = this.world.findCover(this.pos, d, 0.95, PLAYER_R, 0.3);
       if (!wall || wall.face.h < J.wallMinH || wall.face.h < this.y + 0.8 || wall.t > 0.85) continue;
       const n = wall.face.n;
-      // el sentido del giro lateral sigue el movimiento a lo largo de la pared
       const tx = -n.z, tz = n.x;
-      const lat = this.vel.x * tx + this.vel.z * tz;
+      const lat = this.vel.x * tx + this.vel.z * tz; // velocidad a lo largo de la pared
       this.vy = J.wallVel;
       this.vel.x = n.x * J.wallPush + tx * lat * 0.4;
       this.vel.z = n.z * J.wallPush + tz * lat * 0.4;
+      const lateral = Math.abs(lat) >= J.backflipLat;
       this.flip = {
         t: 0,
         dur: Math.max(0.4, (2 * J.wallVel / J.gravity) * 0.92),
-        dir: lat >= 0 ? 1 : -1,
+        axis: lateral ? 'z' : 'x',
+        dir: lateral ? (lat >= 0 ? 1 : -1) : 1, // frontal → backflip (atrás)
       };
       this.cover = null;
       this._setState('flip');
       this.ev.onWallJump?.();
-      return;
+      return true;
     }
+    return false;
+  }
+
+  // Doble salto: vuelta hacia la dirección presionada (sin ganar altura)
+  _airRoll(mw) {
+    const J = TUNING.jump;
+    const mag = Math.max(0.001, Math.hypot(mw.x, mw.z));
+    const d = { x: mw.x / mag, z: mw.z / mag };
+    const spd = Math.max(this.speed, TUNING.move.runSpeed) * J.dashMul;
+    this.vel.x = d.x * spd;
+    this.vel.z = d.z * spd;
+    this.vy = Math.max(this.vy, J.doubleVy);
+    this.usedDouble = true;
+    // eje del giro según la dirección relativa al personaje
+    const f = this.facing();
+    const rx = Math.cos(this.yaw), rz = -Math.sin(this.yaw);
+    const fwd = d.x * f.x + d.z * f.z;
+    const lat = d.x * rx + d.z * rz;
+    let axis, dir;
+    if (Math.abs(fwd) >= Math.abs(lat)) { axis = 'x'; dir = fwd >= 0 ? -1 : 1; } // adelante = front flip
+    else { axis = 'z'; dir = lat >= 0 ? 1 : -1; }
+    this.flip = { t: 0, dur: J.rollDur, axis, dir };
+    this._setState('flip');
+    this.ev.onDoubleJump?.();
   }
 
   _enterCover(face, target) {

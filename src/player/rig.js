@@ -453,10 +453,17 @@ export class Rig {
     this.hips.position.y += (hipsY - this.hips.position.y) * k;
     this.root.rotation.x += (rootRotX - this.root.rotation.x) * (1 - Math.exp(-10 * dt));
 
-    // patada de pared: giro completo LATERAL (roll) alrededor de la cadera
+    // vuelta en el aire alrededor de la cadera: eje según la dirección
+    // ('z' = giro lateral Matrix, 'x' = backflip/frontflip)
     if (p.state === 'flip') {
-      this.hips.rotation.z = -(p.flipDir ?? 1) * (p.flipT ?? 0) * Math.PI * 2;
-      this.hips.rotation.x = 0;
+      const ang = (p.flipT ?? 0) * Math.PI * 2;
+      if ((p.flipAxis ?? 'z') === 'x') {
+        this.hips.rotation.x = (p.flipDir ?? 1) * ang;
+        this.hips.rotation.z = 0;
+      } else {
+        this.hips.rotation.z = -(p.flipDir ?? 1) * ang;
+        this.hips.rotation.x = 0;
+      }
     } else {
       this.hips.rotation.z = 0; // 2π ≡ 0: aterriza limpio
       this.hips.rotation.x = 0;

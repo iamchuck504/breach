@@ -78,6 +78,10 @@ const ctrlEvents = {
   },
   onDive: () => { audio.whoosh(); },
   onJump: () => { audio.jump(); },
+  onDoubleJump: () => {
+    audio.whoosh();
+    input.pad.rumble(50, 0.2, 0.35);
+  },
   onWallJump: () => {
     audio.whoosh();
     audio.jump();
@@ -495,6 +499,19 @@ function fireShot() {
     origin = muzzle.clone();
     // desde cover el cañón puede estar dentro del collider: adelantar el origen
     if (inCover) origin.addScaledVector(baseDir, 0.4);
+    // pegado a una pared el cañón la atraviesa: disparar desde el punto de
+    // contacto (los impactos se ven en la pared en vez de "no disparar")
+    const chest = G.rig.aimRig.getWorldPosition(_v3);
+    const toM = origin.clone().sub(chest);
+    const mLen = toM.length();
+    if (mLen > 0.01) {
+      toM.normalize();
+      const tb = world.raycast(chest, toM, mLen);
+      if (tb !== null) {
+        origin.copy(chest).addScaledVector(toM, Math.max(0.05, tb - 0.03));
+        muzzle.copy(origin); // flash y tracer desde el punto visible
+      }
+    }
   }
 
   const targets = currentTargets();
@@ -609,7 +626,9 @@ function simStep(dt) {
   const maxA = TUNING.combat.fireAlignMaxDeg * Math.PI / 180;
   const aligned = Math.abs(angDiff(shoulderCam.yaw, p.yaw)) < maxA;
   const canFire = stateOk && aligned;
-  if (input.firePressed && stateOk && !aligned) G.fireBuffer = 0.3;
+  // bufferear el click si el cuerpo aún gira O el arma está en cooldown
+  // (la Gnasher se comía clicks entre bombazos)
+  if (input.firePressed && stateOk && (!aligned || G.weapons.st.cd > 0)) G.fireBuffer = 0.3;
   G.fireBuffer = Math.max(0, G.fireBuffer - dt);
   const wasReloading = G.weapons.reloading;
 

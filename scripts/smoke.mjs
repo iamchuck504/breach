@@ -139,6 +139,23 @@ try {
   if (ammoAfter >= ammoBefore) errors.push('AIRFIRE: no disparó durante el flip');
   await page.waitForTimeout(800); // aterrizar antes de seguir
 
+  // doble salto: salto + dirección + salto = vuelta hacia esa dirección
+  await page.evaluate(() => { const P = window.BREACH.player; P.pos.x = 0; P.pos.z = -6; });
+  await page.keyboard.press('f');
+  await page.waitForTimeout(180);
+  await page.keyboard.down('d');
+  await page.keyboard.press('f');
+  await page.waitForTimeout(100);
+  const dj = await page.evaluate(() => ({
+    st: window.BREACH.player.state,
+    axis: window.BREACH.player.flip?.axis,
+    used: window.BREACH.player.usedDouble,
+  }));
+  await page.keyboard.up('d');
+  console.log('DOUBLEJUMP:', JSON.stringify(dj));
+  if (dj.st !== 'flip' || !dj.used) errors.push('DOUBLEJUMP: no hizo la vuelta (' + JSON.stringify(dj) + ')');
+  await page.waitForTimeout(800);
+
   // ---- menú de pausa + panel de controles ----
   await page.keyboard.press('Escape');
   await page.waitForTimeout(300);

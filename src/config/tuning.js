@@ -31,7 +31,11 @@ export const TUNING = {
     wallVel: 5.4,      // impulso del salto de pared
     wallPush: 3.8,     // empuje horizontal alejándose de la pared
     airControl: 0.35,  // control de movimiento en el aire
-    wallMinH: 1.4,     // altura mínima de pared para vuelta de gato
+    wallMinH: 1.4,     // altura mínima de pared para el wall kick
+    doubleVy: 1.8,     // impulso vertical del doble salto (NO doble altura)
+    rollDur: 0.55,     // duración de la vuelta del doble salto
+    dashMul: 1.15,     // multiplicador de velocidad de la vuelta direccional
+    backflipLat: 1.1,  // bajo esta vel. lateral el wall kick es backflip, no giro lateral
   },
   cover: {
     snapRange: 1.7,       // distancia para engancharse a una cara de cobertura
@@ -65,7 +69,7 @@ export const TUNING = {
       recoil: 0.35, range: 80, pellets: 1, auto: true,
     },
     gnasher: {
-      name: 'GNASHER', rpm: 68, dmg: 13, headMult: 1.0,
+      name: 'GNASHER', rpm: 95, dmg: 13, headMult: 1.0,
       mag: 8, reserve: 24, reloadTime: 2.1,
       spreadAim: 4.6, spreadHip: 6.4, spreadBlind: 8.0,
       recoil: 1.6, range: 24, pellets: 8, auto: false,
