@@ -68,7 +68,7 @@ export class World {
     sun.shadow.bias = -0.0004;
     this.scene.add(sun);
     this.scene.background = new THREE.Color(0xb9c8d2);
-    this.scene.fog = new THREE.Fog(0xb9c8d2, 45, 95);
+    // sin niebla: nada de "blur" atmosférico, geometría nítida a toda distancia
   }
 
   _buildFloor() {
