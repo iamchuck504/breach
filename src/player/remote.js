@@ -63,8 +63,8 @@ export class RemotePlayer {
       flipDir: 1,
       swapping: this.swapAnim > 0,
     });
-    // parpadeo de protección de spawn
-    this.rig.root.visible = !this.inv || Math.floor(performance.now() / 130) % 2 === 0;
+    // protección de spawn: highlight sutil del color del equipo
+    this.rig.setProtected(!!this.inv);
   }
 
   dispose(scene) { this.rig.dispose(scene); }

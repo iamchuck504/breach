@@ -175,19 +175,22 @@ export class Rig {
     this.rag = null; // estado del ragdoll de muerte
   }
 
-  // Impulso y pose de desparrame aleatorios para esta muerte
+  // Impulso y pose de desparrame aleatorios para esta muerte.
+  // ANCLA la posición de muerte: el cadáver se queda ahí (desliza <40cm),
+  // peso muerto — nada de salir volando.
   _startRagdoll() {
     const yaw = this.root.rotation.y;
     const back = { x: Math.sin(yaw), z: Math.cos(yaw) };
     const right = { x: Math.cos(yaw), z: -Math.sin(yaw) };
     const lat = Math.random() * 2 - 1;
-    const spd = 1.6 + Math.random() * 1.1;
+    const spd = 0.6 + Math.random() * 0.6;
     const rnd = (a, b) => a + Math.random() * (b - a);
     this.rag = {
+      bx: this.root.position.x, bz: this.root.position.z, byaw: yaw,
       ox: 0, oz: 0, oy: 0,
       vx: (back.x + right.x * lat * 0.8) * spd,
       vz: (back.z + right.z * lat * 0.8) * spd,
-      vy: 1.3,
+      vy: 0,
       ang: 0,
       axis: Math.abs(lat) > 0.6 ? 'z' : 'x',
       angTarget: (Math.abs(lat) > 0.6 ? (lat > 0 ? -1 : 1) : 1) * (Math.PI / 2) * rnd(0.9, 1.05),
@@ -548,23 +551,19 @@ export class Rig {
       this.hips.rotation.x = 0;
     }
 
-    // física del ragdoll: caída pesada, sin rebote, fricción fuerte
+    // física del ragdoll: peso muerto — el cuerpo se desploma EN el lugar
+    // (posición absoluta anclada a la muerte, deslizamiento mínimo, sin rebote)
     if (p.state === 'dead' && this.rag) {
       const r = this.rag;
-      r.vy -= 22 * dt;
-      r.oy = Math.max(0, r.oy + r.vy * dt);
-      if (r.oy === 0) r.vy = 0;
-      const fr = Math.exp(-5.5 * dt);
+      const fr = Math.exp(-6 * dt);
       r.vx *= fr; r.vz *= fr;
       r.ox += r.vx * dt; r.oz += r.vz * dt;
-      r.ang = Math.min(1, r.ang + dt * 3.4);
-      const a = (1 - (1 - r.ang) ** 2) * r.angTarget; // ease-out: golpe seco
+      r.ang = Math.min(1, r.ang + dt * 4.2);
+      const a = (1 - (1 - r.ang) ** 2) * r.angTarget; // ease-out: colapso seco
       if (r.axis === 'x') { this.hips.rotation.x = a; this.hips.rotation.z = r.tilt * r.ang; }
       else { this.hips.rotation.z = a; this.hips.rotation.x = r.tilt * r.ang; }
-      this.root.position.x += r.ox;
-      this.root.position.y += r.oy;
-      this.root.position.z += r.oz;
-      this.root.rotation.y += r.spin * r.ang;
+      this.root.position.set(r.bx + r.ox, 0, r.bz + r.oz);
+      this.root.rotation.y = r.byaw + r.spin * r.ang;
     } else if (p.state !== 'dead') {
       this.rag = null;
     }
@@ -592,6 +591,19 @@ export class Rig {
   }
 
   setVisible(v) { this.root.visible = v; }
+
+  // Spawn protection: highlight SUTIL en el color del equipo (emissive suave)
+  setProtected(on) {
+    if (this._prot === on) return;
+    this._prot = on;
+    const c = on ? new THREE.Color(TEAM_COLORS[this.team]).multiplyScalar(0.32) : null;
+    this.root.traverse((o) => {
+      if (o.material && o.material.emissive) {
+        if (c) o.material.emissive.copy(c);
+        else o.material.emissive.setRGB(0, 0, 0);
+      }
+    });
+  }
 
   dispose(scene) {
     scene.remove(this.root);

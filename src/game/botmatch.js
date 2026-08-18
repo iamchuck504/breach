@@ -268,8 +268,8 @@ class Bot {
       firing: this.burstT > 0,
       swapping: this.swapAnim > 0,
     });
-    // parpadeo de protección de spawn
-    this.rig.root.visible = this.protT <= 0 || Math.floor(performance.now() / 130) % 2 === 0;
+    // protección de spawn: highlight sutil del color del equipo
+    this.rig.setProtected(this.protT > 0);
   }
 
   // ráfagas (metralleta) o bombazos sueltos (escopeta)

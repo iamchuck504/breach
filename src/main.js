@@ -948,8 +948,9 @@ function frame(now) {
 
     shoulderCam.update(dt, G.player);
     G.rig.setWeapon(G.weapons.cur); // el intercambio real ocurre a mitad del gesto
-    // protección de spawn: el personaje parpadea
-    G.rig.root.visible = G.spawnProt <= 0 || Math.floor(now / 130) % 2 === 0;
+    // protección de spawn: highlight sutil en el color del equipo
+    G.rig.root.visible = true;
+    G.rig.setProtected(G.spawnProt > 0);
     G.rig.setTransform(G.player.pos.x, G.player.pos.z, G.player.yaw, G.player.y);
     G.rig.update(dt, {
       ...G.player.animParams(),
