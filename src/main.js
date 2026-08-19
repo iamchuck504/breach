@@ -715,7 +715,7 @@ function startBots() {
   G.selfHp = TUNING.combat.hp;
   G.selfAlive = true;
   G.playerLastHit = 99;
-  G.crates = new AmmoCrates(scene);
+  G.crates = new AmmoCrates(scene, false, world.cratePos ?? undefined);
   G.drops = new WeaponDrops(scene);
   G.botMatch = new BotMatch(scene, world, {
     effects, audio, hud,
@@ -774,7 +774,7 @@ function startPractice() {
   G.mode = 'practice';
   spawnLocal('red', world.spawns.red[1]);
   G.dummies = new Dummies(scene);
-  G.crates = new AmmoCrates(scene);
+  G.crates = new AmmoCrates(scene, false, world.cratePos ?? undefined);
   hud.showMenu(false);
   showControls(false);
   hud.show(true);

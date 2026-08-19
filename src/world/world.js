@@ -58,6 +58,9 @@ export class World {
     [this.fx, this.fz] = dims[layout] ?? dims.foundry;
     // texturas del batch por mapa (piedra medieval vs concreto urbano)
     this._batchTexIds = layout === 'azoteas' ? ['concrete', 'concreteTop'] : ['stone', 'stoneTop'];
+    // cajas de munición por mapa: en azoteas van sobre el eje del helipuerto,
+    // libres de cover (las ±7,0 por defecto chocaban con el anillo)
+    this.cratePos = layout === 'azoteas' ? [{ x: 0, z: -8.8 }, { x: 0, z: 8.8 }] : null;
 
     this._buildFloor();
     if (layout === 'arena') this._buildArena();
@@ -1306,6 +1309,17 @@ export class World {
     this._box(-11.25, -2.7, 2.6, 2.6, LOW, acOpts);
     this._box(-7.5, 1.4, 1, 2.6, LOW, acOpts);             // borde del anillo
 
+    // --- relleno de diseño (análisis de flujo del ×1.5):
+    this._box(-27.5, 6.5, 2.6, 1, LOW, ventOpts);   // carril oeste mitad alta: corta
+    this._box(-22.5, 13.5, 1, 2.4, LOW, ventOpts);  //   la corrida descubierta de 25m
+    this._box(18, -26.5, 2.4, 1.2, LOW, acOpts);    // esquina tras el spawn: cover
+    this._box(26, -27.5, 1, 2.2, LOW, ventOpts);    //   de salida por el flanco
+    this._box(17.25, -17.3, 1, 2.6, MID, hutOpts);  // continúa el muro del carril
+                                                    //   (tronera de 1.5m, no pasillo)
+    this._box(8, -11.5, 2.4, 1, LOW, acOpts);       // escalón del acercamiento este
+    this._box(-15, -18.5, 2.4, 1, LOW, acOpts);     // puente tanque→muro mediano
+    this._box(-24.5, -21, 3, 3, LOW, glassOpts);    // segunda claraboya (oeste)
+
     // --- CENTRO: helipuerto DESPEJADO (regla de Chuck) — cero obstáculos ni
     // decoración dentro del pad; el cover vive en el anillo de media cancha
 
@@ -1389,7 +1403,7 @@ export class World {
     }
 
     // --- brillo de las claraboyas (vidrio iluminado desde adentro)
-    for (const [gx, gz] of [[11.25, -22.5], [-11.25, 22.5]]) {
+    for (const [gx, gz] of [[11.25, -22.5], [-11.25, 22.5], [-24.5, -21], [24.5, 21]]) {
       const glow = new THREE.Mesh(
         new THREE.PlaneGeometry(3.3, 3.3),
         new THREE.MeshBasicMaterial({ color: 0x9fc4ff, transparent: true, opacity: 0.32 })
@@ -1444,6 +1458,7 @@ export class World {
     const acSeed = [
       [-7.8, -27.6], [7.8, -27.6], [2.2, -24.5], [-4.5, -17.25],
       [2.25, -13.2], [-3, -9.3], [4.5, -7.2], [-11.25, -2.7], [-7.5, 1.4],
+      [18, -26.5], [8, -11.5], [-15, -18.5],
     ];
     const seen = new Set(), acUnits = [];
     for (const [x, z] of acSeed) {
@@ -1479,6 +1494,7 @@ export class World {
       [16.74, 1.34, -12, -Math.PI / 2, 1.3], [-16.74, 1.34, 12, Math.PI / 2, 1.3],
       [-19.04, 1.35, -15.75, Math.PI / 2, 1.0], [19.04, 1.35, 15.75, -Math.PI / 2, 1.0],
       [2.2, 1.5, -30.74, 0, 1.2], [-2.2, 1.5, 30.74, Math.PI, 1.2],
+      [16.74, 1.34, -17.3, -Math.PI / 2, 0.85], [-16.74, 1.34, 17.3, Math.PI / 2, 0.85],
     ];
     const hazards = new THREE.InstancedMesh(
       new THREE.PlaneGeometry(1.7, 0.22),
@@ -1582,6 +1598,32 @@ export class World {
       }
     });
     this.mapGroup.add(ladderParts);
+
+    // Tuberías al pie de los muros + escotillas de mantenimiento: textura de
+    // piso con intención industrial, sin colisión ni estorbo a los pickups.
+    const pipeMat = new THREE.MeshLambertMaterial({ color: 0x2b333e });
+    for (const [px, pz, len, axis] of [
+      [-31.02, -14, 16, 'z'], [31.02, 14, 16, 'z'],
+      [-12, -39.55, 14, 'x'], [12, 39.55, 14, 'x'],
+    ]) {
+      const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, len, 8), pipeMat);
+      pipe.position.set(px, 0.32, pz);
+      if (axis === 'z') pipe.rotation.x = Math.PI / 2; else pipe.rotation.z = Math.PI / 2;
+      this.mapGroup.add(pipe);
+    }
+    const hatchSpots = [
+      [-9, -31.5], [9, 31.5], [23, -5], [-23, 5],
+      [-5.5, 20], [5.5, -20], [28, -14], [-28, 14],
+    ];
+    const hatches = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(1.3, 0.03, 1.3),
+      new THREE.MeshLambertMaterial({ color: 0x232b36 }), hatchSpots.length);
+    hatchSpots.forEach(([hx, hz], i) => {
+      q.setFromEuler(e.set(0, (hx * 3 + hz) * 0.21, 0));
+      m4.compose(p.set(hx, 0.016, hz), q, s.set(1, 1, 1));
+      hatches.setMatrixAt(i, m4);
+    });
+    this.mapGroup.add(hatches);
 
     // Halos con sprites: dan sensación de emisión sin PointLights ni sombras.
     const haloMat = new THREE.SpriteMaterial({

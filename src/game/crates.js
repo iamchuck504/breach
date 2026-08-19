@@ -49,11 +49,13 @@ function buildCrate() {
 export class AmmoCrates {
   // authoritative=true (online): el server manda — sin auto-respawn local y
   // el pickup solo notifica (el estado visible lo fija el broadcast del server)
-  constructor(scene, authoritative = false) {
+  // positions: cada mapa coloca sus cajas (default: Foundry/Fortaleza) —
+  // las posiciones fijas ±7,0 hacían clipping con el cover de Azoteas
+  constructor(scene, authoritative = false, positions = CRATE_POS) {
     this.scene = scene;
     this.authoritative = authoritative;
     this.t = 0;
-    this.crates = CRATE_POS.map((p) => {
+    this.crates = positions.map((p) => {
       const mesh = buildCrate();
       mesh.position.set(p.x, 0.35, p.z);
       scene.add(mesh);
