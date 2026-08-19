@@ -1334,8 +1334,10 @@ export class World {
     // --- CENTRO: helipuerto DESPEJADO (regla de Chuck) — cero obstáculos ni
     // decoración dentro del pad; el cover vive en el anillo de media cancha
     this.surfaceZones.push({ kind: 'helipad', ...HELIPAD });
-    // La pared del propio octágono es el cover. Los lados norte/sur dejan un
-    // hueco central para las rampas; los otros seis lados son continuos.
+    // La pared y la baranda del propio octágono forman el cover. Los lados
+    // norte/sur dejan un hueco central para las rampas; los otros seis lados
+    // son continuos. El collider llega hasta la parte superior de la baranda,
+    // pero su altura táctica sigue siendo LOW medida desde la plataforma.
     const verts = Array.from({ length: 8 }, (_, i) => {
       const a = Math.PI / 8 + i * Math.PI / 4;
       return { x: Math.sin(a) * HELIPAD.radius, z: Math.cos(a) * HELIPAD.radius };
@@ -1346,7 +1348,7 @@ export class World {
       const len = Math.hypot(tx, tz);
       if (len < 0.05) return;
       const n = { x: -tz / len, z: tx / len }; // vértices en sentido horario
-      const wall = { a, b, n, half: 0.08, h: LOW };
+      const wall = { a, b, n, half: 0.08, h: HELIPAD.height + LOW, coverH: LOW };
       this._helipadSegments.push(wall);
       this.segmentColliders.push(wall);
       for (const side of [1, -1]) {
@@ -1356,7 +1358,7 @@ export class World {
           n: sn,
           a: { x: a.x + n.x * off, z: a.z + n.z * off },
           b: { x: b.x + n.x * off, z: b.z + n.z * off },
-          h: LOW,
+          h: wall.coverH,
         });
       }
     };
@@ -1495,6 +1497,10 @@ export class World {
     const steel = new THREE.MeshStandardMaterial({ color: 0x465967, metalness: 0.72, roughness: 0.5 });
     const dark = new THREE.MeshStandardMaterial({ color: 0x1d2933, metalness: 0.78, roughness: 0.45 });
     const casing = new THREE.MeshStandardMaterial({ color: 0x536b78, metalness: 0.62, roughness: 0.56 });
+    const craneYellow = new THREE.MeshStandardMaterial({
+      color: 0xd9a51c, emissive: 0x2a1900, emissiveIntensity: 0.14,
+      metalness: 0.58, roughness: 0.46,
+    });
     const cyan = new THREE.MeshBasicMaterial({ color: 0x54d9e4 });
     const red = new THREE.MeshBasicMaterial({ color: 0xff5749 });
     const beamAxis = new THREE.Vector3(0, 0, 1);
@@ -1557,7 +1563,7 @@ export class World {
     const towerBottom = BLOCK.HIGH + 0.16, towerH = 5.0, towerTop = towerBottom + towerH;
     for (const x of [-0.55, 0.55]) {
       for (const z of [-0.55, 0.55]) {
-        addBox(crane, 0.13, towerH, 0.13, x, towerBottom + towerH / 2, z, steel);
+        addBox(crane, 0.13, towerH, 0.13, x, towerBottom + towerH / 2, z, craneYellow);
       }
     }
     for (let i = 0; i <= 4; i++) {
@@ -1573,30 +1579,32 @@ export class World {
       for (const z of [-0.56, 0.56]) {
         addBeam(crane,
           new THREE.Vector3(-0.5 * flip, y0 + 0.08, z),
-          new THREE.Vector3(0.5 * flip, y1 - 0.08, z), 0.075, steel);
+          new THREE.Vector3(0.5 * flip, y1 - 0.08, z), 0.075, craneYellow);
       }
     }
 
     // Pluma orientada hacia el mapa, pero termina antes del anillo central.
     const boomLen = 13.5, boomY = towerTop - 0.12;
     for (const z of [-0.34, 0.34]) {
-      addBox(crane, boomLen, 0.12, 0.12, boomLen / 2, boomY, z, steel);
+      addBox(crane, boomLen, 0.12, 0.12, boomLen / 2, boomY, z, craneYellow);
       addBox(crane, boomLen, 0.1, 0.1, boomLen / 2, boomY - 0.62, z, dark);
       for (let i = 0; i < 6; i++) {
         const x0 = i * boomLen / 6, x1 = (i + 1) * boomLen / 6;
         const swap = i % 2 === 0;
         addBeam(crane,
           new THREE.Vector3(x0, swap ? boomY : boomY - 0.62, z),
-          new THREE.Vector3(x1, swap ? boomY - 0.62 : boomY, z), 0.065, steel);
+          new THREE.Vector3(x1, swap ? boomY - 0.62 : boomY, z), 0.065, craneYellow);
       }
     }
-    addBox(crane, 3.4, 0.15, 0.7, -1.7, boomY - 0.08, 0, steel);
+    addBox(crane, 3.4, 0.15, 0.7, -1.7, boomY - 0.08, 0, craneYellow);
     addBox(crane, 1.0, 0.7, 0.9, -3.15, boomY - 0.42, 0, dark);
     const cable = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 2.1, 6), dark);
     cable.position.set(10.8, boomY - 1.05, 0);
     crane.add(cable);
     addBox(crane, 0.34, 0.26, 0.34, 10.8, boomY - 2.16, 0, dark, false);
-    addBox(crane, 1.15, 0.08, 0.08, 0, BLOCK.MID + 0.18, 3.05, cyan, false);
+    // Indicador montado sobre la carcasa (antes quedaba separado de la base
+    // porque la decoración de la grúa está rotada respecto al cover AABB).
+    addBox(crane, 0.9, 0.08, 0.04, 0, BLOCK.MID + 0.42, 0.87, cyan, false);
     addBeacon(crane, 0, towerTop + 0.16, 0);
     addSteam(crane, -0.5, BLOCK.HIGH + 0.2, -0.45);
 
@@ -1604,7 +1612,9 @@ export class World {
     // compensan la masa visual de la grúa sin copiar su silueta.
     const generator = new THREE.Group();
     generator.position.set(spots.generator.x, 0, spots.generator.z);
-    generator.rotation.y = crane.rotation.y + Math.PI;
+    // La planta sigue los ejes de su plataforma rectangular; la rotación que
+    // orienta la pluma de la grúa la dejaba atravesada sobre el cover físico.
+    generator.rotation.y = 0;
     this.mapGroup.add(generator);
     addBox(generator, 1.7, BLOCK.HIGH - BLOCK.MID, 1.7,
       0, BLOCK.MID + (BLOCK.HIGH - BLOCK.MID) / 2, 0, casing);
@@ -1701,10 +1711,64 @@ export class World {
     const deck = new THREE.Mesh(
       new THREE.CylinderGeometry(HELIPAD.radius, HELIPAD.radius, HELIPAD.height, 8),
       [deckSide, deckTop, deckSide]);
+    deck.name = 'azoteas-helipad-deck';
     deck.position.y = HELIPAD.height / 2;
     deck.rotation.y = Math.PI / 8;
     deck.receiveShadow = true;
     this.mapGroup.add(deck);
+
+    // Baranda blindada exactamente sobre los segmentos físicos del octágono.
+    // El zócalo sólido protege al jugador agachado y los travesaños/postes
+    // comunican con claridad el límite jugable; las dos rampas quedan abiertas.
+    const railPanelMat = new THREE.MeshStandardMaterial({
+      color: 0x314753, metalness: 0.76, roughness: 0.42,
+    });
+    const railFrameMat = new THREE.MeshStandardMaterial({
+      color: 0x8298a3, metalness: 0.86, roughness: 0.3,
+    });
+    const railSegments = this._helipadSegments ?? [];
+    const railPanel = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(1, 1, 1), railPanelMat, railSegments.length);
+    const railBars = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(1, 1, 1), railFrameMat, railSegments.length * 2);
+    const postPoints = new Map();
+    railSegments.forEach((seg, i) => {
+      const tx = seg.b.x - seg.a.x, tz = seg.b.z - seg.a.z;
+      const len = Math.hypot(tx, tz);
+      const yaw = -Math.atan2(tz, tx);
+      q.setFromEuler(e.set(0, yaw, 0));
+      const cx = (seg.a.x + seg.b.x) * 0.5;
+      const cz = (seg.a.z + seg.b.z) * 0.5;
+      m4.compose(
+        p.set(cx, HELIPAD.height + 0.39, cz),
+        q, s.set(Math.max(0.08, len - 0.08), 0.78, 0.12));
+      railPanel.setMatrixAt(i, m4);
+      for (let bar = 0; bar < 2; bar++) {
+        m4.compose(
+          p.set(cx, HELIPAD.height + 0.86 + bar * 0.2, cz),
+          q, s.set(len + 0.08, 0.12, 0.16));
+        railBars.setMatrixAt(i * 2 + bar, m4);
+      }
+      for (const pt of [seg.a, seg.b]) {
+        postPoints.set(`${pt.x.toFixed(3)},${pt.z.toFixed(3)}`, pt);
+      }
+      if (len > 2.6) postPoints.set(`mid-${i}`, { x: cx, z: cz });
+    });
+    const railPosts = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(1, 1, 1), railFrameMat, postPoints.size);
+    let postIndex = 0;
+    for (const pt of postPoints.values()) {
+      m4.compose(
+        p.set(pt.x, HELIPAD.height + BLOCK.LOW * 0.5, pt.z),
+        q.identity(), s.set(0.16, BLOCK.LOW, 0.16));
+      railPosts.setMatrixAt(postIndex++, m4);
+    }
+    railPanel.name = 'azoteas-helipad-rail-panels';
+    railBars.name = 'azoteas-helipad-rail-bars';
+    railPosts.name = 'azoteas-helipad-rail-posts';
+    railPanel.castShadow = railBars.castShadow = railPosts.castShadow = true;
+    railPanel.receiveShadow = railBars.receiveShadow = railPosts.receiveShadow = true;
+    this.mapGroup.add(railPanel, railBars, railPosts);
 
     // Dos accesos anchos por el eje de los equipos. Los lados este/oeste
     // alojan barreras de cover y siguen siendo rodeables por sus extremos.
