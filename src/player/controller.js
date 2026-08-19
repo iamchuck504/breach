@@ -453,26 +453,34 @@ export class Controller {
         } else this.coverLeanAnim = 0;
 
         const away = hasInput ? (mw.x * n.x + mw.z * n.z) : 0;
+        // extremo en uso y cuánto apunta el stick MÁS ALLÁ de ese extremo
+        const eSign = nearB ? 1 : nearA ? -1 : 0;
+        const latOut = eSign !== 0 && hasInput ? (mw.x * ux + mw.z * uz) * eSign : 0;
 
-        // --- salida OFENSIVA por el extremo: adelante = soltarse YA con
-        // impulso y seguir corriendo (roadie si vas esprintando) — sin tener
-        // que "cancelar" el cover primero
-        if (!this.aim && hasInput && (nearA || nearB) && away > 0.3) {
+        // --- salida OFENSIVA por el extremo, dos intenciones claras:
+        //   · stick en diagonal hacia FUERA (componente frontal) → salir
+        //   · CORRER + stick más allá del extremo (lateral puro) → salir
+        //     corriendo (el sprint es la señal de intención; sin él, el
+        //     stick lateral sigue siendo desplazarse por la cobertura)
+        const exitFwd = away > 0.3;
+        const exitRun = input.sprintHeld && latOut > 0.5;
+        if (!this.aim && hasInput && eSign !== 0 && (exitFwd || exitRun)) {
           this.cover = null;
           this.chain = 0;
-          this._setState(input.sprintHeld ? 'roadie' : 'run');
           const im = Math.max(0.001, mw.mag);
+          const dx2 = mw.x / im, dz2 = mw.z / im;
+          this.yaw = yawFromDir(dx2, dz2); // el cuerpo sale hacia donde apuntas
+          this._setState(input.sprintHeld ? 'roadie' : 'run');
           const spd = M.runSpeed * C.edgeExitBoost;
-          this.vel.x = (mw.x / im) * spd;
-          this.vel.z = (mw.z / im) * spd;
+          this.vel.x = dx2 * spd;
+          this.vel.z = dz2 * spd;
           this.ev.onDetach?.();
           break;
         }
 
         // --- salto LATERAL por el extremo: saltar + dirección hacia fuera
         // despega del cover por ese lado (con chequeo de espacio libre)
-        if (input.jumpPressed && (nearA || nearB)) {
-          const eSign = nearB ? 1 : -1;             // qué extremo estoy usando
+        if (input.jumpPressed && eSign !== 0) {
           const ox = ux * eSign, oz = uz * eSign;   // hacia fuera por ese extremo
           const wantOut = hasInput ? (mw.x * ox + mw.z * oz) : 1;
           if (wantOut > 0.35) {
@@ -505,19 +513,29 @@ export class Controller {
           }
         } else this.detachT = 0;
 
-        // WALLBOUNCE desde cover, o MANTLE si empujas HACIA un cover bajo
+        // WALLBOUNCE desde cover, o MANTLE — con la intención bien separada
         if (input.evadePressed) {
           const dir = hasInput ? { x: mw.x, z: mw.z } : { x: n.x, z: n.z };
-          const into = -(dir.x * n.x + dir.z * n.z);
-          if (into < 0.5) { // no re-entrar al mismo cover
+          const im3 = Math.max(0.001, Math.hypot(dir.x, dir.z));
+          const into = -(dir.x * n.x + dir.z * n.z) / im3;
+          const latIn = Math.abs((dir.x * ux + dir.z * uz) / im3);
+          if (into < 0.5) {
+            // bounce (ventana encadenada) o evasión NUEVA — la nueva respeta
+            // la recuperación: spamear desde cover ya no encadena slides
             const chained = this.bounceWindow > 0 && this.chain < E.chainMax;
-            if (chained) this.chain++; else this.chain = 0;
-            this.evadeMom *= 0.45;
-            if (this._tryEvade(dir, E.bounceRange) === 'slide') {
-              if (chained) this.ev.onBounce?.(this.chain);
-            } else if (chained) this.chain--;
-          } else if (low) {
-            // cubierto + stick hacia el bloque bajo = subirse (vault corto)
+            if (chained || this.evadeRecovery <= 0) {
+              if (chained) this.chain++; else this.chain = 0;
+              this.evadeMom *= 0.45;
+              if (this._tryEvade(dir, E.bounceRange) === 'slide') {
+                if (chained) this.ev.onBounce?.(this.chain);
+              } else if (chained) this.chain--;
+            }
+          } else if (low && into >= 0.8 && latIn <= into * 0.6 &&
+                     (len < edgeDist * 2 + 0.5 || (!nearA && !nearB))) {
+            // MANTLE solo con intención FRONTAL clara (cono ±37°, poca
+            // componente lateral) y CENTRADO en la cara — en el extremo con
+            // stick diagonal, la intención es SALIR, no subirse. (Las caras
+            // cortas, tipo ducto, cuentan enteras como "centro".)
             this._tryMantle(f, n);
           }
         }
@@ -663,6 +681,11 @@ export class Controller {
     this.slide = null;
     this._setState('cover');
     this.bounceWindow = TUNING.evade.bounceWindow;
+    // anti-spam SIN lentitud: la ventana de bounce (0.3s) sigue permitiendo
+    // el rebote encadenado instantáneo; una evasión NUEVA espera a que el
+    // cuerpo se asiente (recovery). Agotar la cadena cuesta un respiro extra.
+    this.evadeRecovery = Math.max(this.evadeRecovery,
+      this.chain >= TUNING.evade.chainMax ? TUNING.evade.recovery * 1.6 : TUNING.evade.recovery);
     this.detachT = 0;
     this.ev.onCoverEnter?.(this.chain);
   }

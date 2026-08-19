@@ -27,7 +27,7 @@ export const TUNING = {
     momentumBoost: 0.22,  // % máx de impulso extra al evadir tras venir corriendo
     momentumRunTime: 0.45,// seg de carrera CONTINUA para el impulso pleno
     momentumRunDist: 3.2, // metros recorridos recientes para el pleno
-    recovery: 0.45,       // seg entre evasiones NUEVAS desde el suelo (anti-spam;
+    recovery: 0.35,       // seg entre evasiones NUEVAS (anti-spam, no lentitud;
                           // los rebotes encadenados usan sus propias ventanas)
   },
   mantle: {

@@ -203,6 +203,37 @@ try {
   await page.evaluate(() => { const P = window.BREACH.player; P.pos.x = 0; P.pos.z = -14; P.y = 0; });
   await page.waitForTimeout(400);
 
+  // ---- EDGE-EXIT: correr + stick más allá del extremo = salir corriendo ----
+  await page.evaluate(() => {
+    const G = window.BREACH, W = window.BREACH_WORLD;
+    const f = W.faces.find((c) => c.h <= 1.2 && c.n.z < -0.9);
+    const mx = (f.a.x + f.b.x) / 2, mz = (f.a.z + f.b.z) / 2;
+    const P = G.player;
+    P.pos.x = mx; P.pos.z = mz - 1.2; P.y = 0;
+    P.cam.yaw = Math.PI; P.yaw = Math.PI;
+    P.vel.x = 0; P.vel.z = 0; P.evadeRecovery = 0;
+  });
+  await page.waitForTimeout(250);
+  let edgeCover = '';
+  for (let i = 0; i < 3 && edgeCover !== 'cover'; i++) {
+    await page.keyboard.press('Space');
+    await page.waitForTimeout(300);
+    edgeCover = await page.evaluate(() => window.BREACH.player.state);
+  }
+  await page.keyboard.down('a');
+  await page.waitForTimeout(800);           // desplazarse hasta el extremo
+  await page.keyboard.down('Shift');        // correr + lateral hacia fuera
+  await page.waitForTimeout(400);
+  const edgeExit = await page.evaluate(() => window.BREACH.player.state);
+  await page.keyboard.up('a');
+  await page.keyboard.up('Shift');
+  console.log('EDGE-EXIT:', JSON.stringify({ edgeCover, edgeExit }));
+  if (edgeCover !== 'cover') errors.push('EDGE-EXIT: no entró a cover');
+  if (edgeExit !== 'roadie' && edgeExit !== 'run') {
+    errors.push('EDGE-EXIT: no salió corriendo del extremo (' + edgeExit + ')');
+  }
+  await page.waitForTimeout(400);
+
   // ---- EVADE-CD: spamear evadir no encadena dives inmediatos ----
   await page.evaluate(() => {
     const P = window.BREACH.player;
