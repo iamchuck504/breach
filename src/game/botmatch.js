@@ -16,7 +16,8 @@ import { Rig } from '../player/rig.js';
 import { resolveShot, applySpread } from '../combat/ballistics.js';
 
 const ROUND_TIME = 300;      // 5 minutos
-const RESPAWN_POOL = 15;     // respawns por equipo (además de las 4 vidas iniciales)
+const RESPAWN_POOL = 11;     // respawns por equipo (además de las 4 vidas
+                             // iniciales = 15 vidas totales, pedido de Chuck)
 const BOT_RESPAWN = 3;
 const PLAYER_RESPAWN = () => TUNING.combat.respawnTime;
 const BOT_NAMES = { red: ['REX', 'VOLT', 'JAZZ'], blue: ['NOVA', 'DUKE', 'BLITZ', 'PIXEL'] };
@@ -444,7 +445,8 @@ export class BotMatch {
       b.respawn(this.world.spawns[b.team][++i[b.team] % 4]);
     }
     this.cb.respawnPlayer(this.world.spawns.red[0]);
-    this.cb.hud.center('ROUND ' + this.round, 'primero en agotar las 19 vidas rivales', 3000);
+    this.cb.hud.center('ROUND ' + this.round,
+      'primero en agotar las ' + (RESPAWN_POOL + 4) + ' vidas rivales', 3000);
   }
 
   livesOf(team) {

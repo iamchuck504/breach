@@ -280,7 +280,7 @@ try {
   }));
   console.log('STATE:', JSON.stringify(state));
 
-  // ---- modo VS BOTS: mapa arena, 7 bots, vidas 19/19, scoreboard con Tab ----
+  // ---- modo VS BOTS: mapa arena, 7 bots, vidas 15/15, scoreboard con Tab ----
   await page.keyboard.press('Escape');
   await page.waitForTimeout(300);
   await page.evaluate(() => document.getElementById('btn-bots').click());
@@ -295,7 +295,7 @@ try {
   }));
   console.log('BOTS:', JSON.stringify(bots));
   if (bots.mode !== 'bots' || bots.bots !== 7) errors.push('BOTS: modo/bots mal (' + JSON.stringify(bots) + ')');
-  if (bots.livesR !== 19 || bots.livesB > 19) errors.push('BOTS: vidas iniciales mal (' + bots.livesR + '/' + bots.livesB + ')');
+  if (bots.livesR !== 15 || bots.livesB > 15) errors.push('BOTS: vidas iniciales mal (' + bots.livesR + '/' + bots.livesB + ')');
   // protección de spawn: activa al nacer, se rompe al disparar
   const prot0 = await page.evaluate(() => +window.BREACH.spawnProt.toFixed(1));
   if (!(prot0 > 3)) errors.push('PROT: sin protección al nacer (' + prot0 + ')');
