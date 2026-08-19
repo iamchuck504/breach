@@ -91,6 +91,29 @@ try {
   }
   await page.mouse.up({ button: 'right' });
 
+  // Cambio de arma: las hombreras deben acompañar al pivote animado del brazo.
+  await page.keyboard.press('q');
+  await page.waitForTimeout(220);
+  await page.screenshot({ path: path.join(root, 'scripts', 'pose-swap.png') });
+  const swap = await page.evaluate(() => {
+    const R = window.BREACH.rig;
+    const l = R.root.getObjectByName('pauldron-L');
+    const r = R.root.getObjectByName('pauldron-R');
+    return {
+      active: window.BREACH.weapons.swapping,
+      leftParent: l?.parent?.name,
+      rightParent: r?.parent?.name,
+    };
+  });
+  console.log('SWAP:', JSON.stringify(swap));
+  if (!swap.active || swap.leftParent !== 'shoulder-L' || swap.rightParent !== 'shoulder-R') {
+    problems.push('swap: las hombreras no siguen al pivote de los brazos (' + JSON.stringify(swap) + ')');
+  }
+  // Regresar al SMG y dejar concluir el gesto/damping antes de volver a medir.
+  await page.waitForTimeout(850);
+  await page.keyboard.press('q');
+  await page.waitForTimeout(1200);
+
   // hipfire: DISPARANDO, el cañón debe ser colineal con la línea de tiro real
   await page.evaluate(() => {
     const P = window.BREACH.player;

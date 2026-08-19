@@ -332,19 +332,6 @@ export class Rig {
     this.torso.add(box(0.055, 0.2, 0.04, METAL, 0.24, 0.48, -0.285));
     this.torso.add(box(0.25, 0.085, 0.035, tc, 0, 0.5, -0.31));    // placa de equipo
     this.torso.add(glowBox(0.13, 0.022, 0.02, tc, 0, 0.5, -0.333));
-    this.torso.add(ball(0.145, DARK, -0.38, 0.54, 0, 1, 1, 1));    // articulación bajo la placa
-    this.torso.add(ball(0.145, DARK, 0.38, 0.54, 0, 1, 1, 1));
-    const pauldronL = armorPlate(PAULDRON_GEO, 0.36, 0.25, 0.34, tc, -0.4, 0.58, -0.015);
-    const pauldronR = armorPlate(PAULDRON_GEO, 0.36, 0.25, 0.34, tc, 0.4, 0.58, -0.015);
-    pauldronL.rotation.z = -0.09;
-    pauldronR.rotation.z = 0.09;
-    this.torso.add(pauldronL, pauldronR);
-    this.torso.add(armorPlate(LIMB_GEO, 0.24, 0.06, 0.2, DARK, -0.4, 0.64, -0.025));
-    this.torso.add(armorPlate(LIMB_GEO, 0.24, 0.06, 0.2, DARK, 0.4, 0.64, -0.025));
-    this.torso.add(box(0.16, 0.035, 0.035, PLATE, -0.38, 0.58, -0.155));
-    this.torso.add(box(0.16, 0.035, 0.035, PLATE, 0.38, 0.58, -0.155));
-    this.torso.add(glowBox(0.105, 0.018, 0.02, tc, -0.38, 0.58, -0.18));
-    this.torso.add(glowBox(0.105, 0.018, 0.02, tc, 0.38, 0.58, -0.18));
     this.torso.add(box(0.3, 0.045, 0.025, VISOR, 0, 0.405, -0.31)); // respiradero
 
     // La cámara jugable ve principalmente la espalda: placa dorsal en capas,
@@ -372,8 +359,19 @@ export class Rig {
     const mkArm = (side) => {
       const s = side === 'L' ? -1 : 1;
       const shoulder = new THREE.Group();
+      shoulder.name = `shoulder-${side}`;
       shoulder.position.set(s * 0.36, 0, 0);
       this.aimRig.add(shoulder);
+      // Toda la hombrera pertenece al pivote del brazo. Así acompaña el gesto
+      // de guardar/sacar el arma en vez de quedarse clavada al torso y cortarlo.
+      shoulder.add(ball(0.145, DARK, s * 0.02, 0.04, 0, 1, 1, 1));
+      const pauldron = armorPlate(PAULDRON_GEO, 0.36, 0.25, 0.34, tc, s * 0.04, 0.08, -0.015);
+      pauldron.name = `pauldron-${side}`;
+      pauldron.rotation.z = s * 0.09;
+      shoulder.add(pauldron);
+      shoulder.add(armorPlate(LIMB_GEO, 0.24, 0.06, 0.2, DARK, s * 0.04, 0.14, -0.025));
+      shoulder.add(box(0.16, 0.035, 0.035, PLATE, s * 0.02, 0.08, -0.155));
+      shoulder.add(glowBox(0.105, 0.018, 0.02, tc, s * 0.02, 0.08, -0.18));
       shoulder.add(capsule(0.15, 0.28, 0.15, MID, 0, -0.14, 0));    // bíceps común
       shoulder.add(box(0.11, 0.18, 0.035, PLATE, 0, -0.14, -0.09));
       const elbow = new THREE.Group();
@@ -546,25 +544,26 @@ export class Rig {
       t.add(glowBox(0.04, 0.12, 0.02, tc, 0.12, 0.43, 0.4));
       t.add(rod(0.018, 0.35, METAL, 0.24, 0.76, 0.25));            // antena
       t.add(glowBox(0.045, 0.045, 0.045, tc, 0.24, 0.95, 0.25));
-      const scoutPauldron = armorPlate(PAULDRON_GEO, 0.25, 0.14, 0.13, DARK, -0.43, 0.59, -0.03);
+      const scoutPauldron = armorPlate(PAULDRON_GEO, 0.25, 0.14, 0.13, DARK, -0.07, 0.09, -0.03);
       scoutPauldron.rotation.z = -0.12;
-      t.add(scoutPauldron);
+      this.armL.shoulder.add(scoutPauldron);
     } else if (v === 3) {
       t.add(armorPlate(CHEST_GEO, 0.59, 0.18, 0.08, PLATE, 0, 0.54, -0.31));
       t.add(armorPlate(SHIELD_GEO, 0.32, 0.19, 0.055, tc, 0, 0.39, -0.335));
       t.add(box(0.19, 0.09, 0.025, DARK, 0, 0.39, -0.372));
       t.add(glowBox(0.12, 0.022, 0.016, tc, 0, 0.39, -0.39));
-      const heavyPauldronL = armorPlate(PAULDRON_GEO, 0.44, 0.3, 0.39, tc, -0.43, 0.59, -0.01);
-      const heavyPauldronR = armorPlate(PAULDRON_GEO, 0.44, 0.3, 0.39, tc, 0.43, 0.59, -0.01);
+      const heavyPauldronL = armorPlate(PAULDRON_GEO, 0.44, 0.3, 0.39, tc, -0.07, 0.09, -0.01);
+      const heavyPauldronR = armorPlate(PAULDRON_GEO, 0.44, 0.3, 0.39, tc, 0.07, 0.09, -0.01);
       heavyPauldronL.rotation.z = -0.1;
       heavyPauldronR.rotation.z = 0.1;
-      t.add(heavyPauldronL, heavyPauldronR);
-      t.add(armorPlate(LIMB_GEO, 0.3, 0.075, 0.22, DARK, -0.43, 0.66, -0.04));
-      t.add(armorPlate(LIMB_GEO, 0.3, 0.075, 0.22, DARK, 0.43, 0.66, -0.04));
-      t.add(box(0.17, 0.035, 0.025, PLATE, -0.43, 0.59, -0.17));
-      t.add(box(0.17, 0.035, 0.025, PLATE, 0.43, 0.59, -0.17));
-      t.add(glowBox(0.1, 0.016, 0.016, tc, -0.43, 0.59, -0.19));
-      t.add(glowBox(0.1, 0.016, 0.016, tc, 0.43, 0.59, -0.19));
+      this.armL.shoulder.add(heavyPauldronL);
+      this.armR.shoulder.add(heavyPauldronR);
+      this.armL.shoulder.add(armorPlate(LIMB_GEO, 0.3, 0.075, 0.22, DARK, -0.07, 0.16, -0.04));
+      this.armR.shoulder.add(armorPlate(LIMB_GEO, 0.3, 0.075, 0.22, DARK, 0.07, 0.16, -0.04));
+      this.armL.shoulder.add(box(0.17, 0.035, 0.025, PLATE, -0.07, 0.09, -0.17));
+      this.armR.shoulder.add(box(0.17, 0.035, 0.025, PLATE, 0.07, 0.09, -0.17));
+      this.armL.shoulder.add(glowBox(0.1, 0.016, 0.016, tc, -0.07, 0.09, -0.19));
+      this.armR.shoulder.add(glowBox(0.1, 0.016, 0.016, tc, 0.07, 0.09, -0.19));
       this.armL.elbow.add(armorPlate(LIMB_GEO, 0.24, 0.3, 0.23, PLATE, 0, -0.16, 0));
       this.armR.elbow.add(armorPlate(LIMB_GEO, 0.24, 0.3, 0.23, PLATE, 0, -0.16, 0));
       this.armL.elbow.add(glowBox(0.1, 0.025, 0.02, tc, 0, -0.14, -0.145));
