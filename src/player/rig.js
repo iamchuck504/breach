@@ -11,12 +11,22 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 
 const TEAM_COLORS = { red: 0xd94f3f, blue: 0x4f8de0 };
-const DARK = 0x25292f, MID = 0x464c55, LIGHT = 0xd5cfbf, VISOR = 0x111318;
+// Paleta Vanguard V2: grafito profundo + placas gunmetal. El color de equipo
+// funciona como identificación luminosa, no como una masa de plástico rojo/azul.
+const DARK = 0x171b20;
+const MID = 0x343e48;
+const PLATE = 0x596774;
+const METAL = 0x7d8991;
+const RUBBER = 0x0d1014;
+const COPPER = 0x895b3c;
+const VISOR = 0x07090c;
 
 // Primitivas y materiales compartidos por TODOS los rigs. Antes cada pieza de
 // cada personaje creaba su propio geometry/material: mucha memoria, uploads y
 // compilaciones repetidas para objetos visualmente idénticos.
-const BOX_GEO = new RoundedBoxGeometry(1, 1, 1, 2, 0.12);
+// Un solo segmento de bisel mantiene el perfil redondeado/chunky y evita gastar
+// polígonos en superficies pequeñas que nunca ocupan muchos píxeles en pantalla.
+const BOX_GEO = new RoundedBoxGeometry(1, 1, 1, 1, 0.12);
 const BALL_GEO = new THREE.SphereGeometry(1, 14, 10);
 const CAPSULE_GEO = new THREE.CapsuleGeometry(0.25, 0.5, 4, 8);
 const CYLINDER_GEO = new THREE.CylinderGeometry(0.5, 0.5, 1, 10);
@@ -41,6 +51,19 @@ function toonMaterial(color) {
     mat = new THREE.MeshToonMaterial({ color, gradientMap: TOON_GRADIENT });
     mat.userData.shared = true;
     MATERIALS.set(color, mat);
+  }
+  return mat;
+}
+
+// Los visores no crean luces reales: MeshBasicMaterial les da lectura nocturna
+// a coste constante y todos los rigs comparten únicamente dos materiales.
+const GLOW_MATERIALS = new Map();
+function glowMaterial(color) {
+  let mat = GLOW_MATERIALS.get(color);
+  if (!mat) {
+    mat = new THREE.MeshBasicMaterial({ color, toneMapped: false });
+    mat.userData.shared = true;
+    GLOW_MATERIALS.set(color, mat);
   }
   return mat;
 }
@@ -88,6 +111,19 @@ function rod(r, len, color, x = 0, y = 0, z = 0) {
   m.castShadow = true;
   return m;
 }
+function glowBox(w, h, d, color, x = 0, y = 0, z = 0) {
+  const m = new THREE.Mesh(BOX_GEO, glowMaterial(color));
+  m.position.set(x, y, z);
+  m.scale.set(w, h, d);
+  return m;
+}
+function glowTube(r, len, color, x = 0, y = 0, z = 0) {
+  const m = new THREE.Mesh(CYLINDER_GEO, glowMaterial(color));
+  m.position.set(x, y, z);
+  m.scale.set(r * 2, len, r * 2);
+  m.rotation.x = Math.PI / 2;
+  return m;
+}
 function anchor(parent, x, y, z) {
   const o = new THREE.Object3D();
   o.position.set(x, y, z);
@@ -99,19 +135,25 @@ function anchor(parent, x, y, z) {
 // largo con base de color, bocacha ancha y culata plegable.
 export function buildSMG(teamColor) {
   const g = new THREE.Group();
-  g.add(box(0.12, 0.16, 0.34, DARK, 0, 0, -0.05));            // receptor robusto
-  g.add(box(0.09, 0.05, 0.23, MID, 0, 0.105, -0.1));          // riel superior
-  g.add(tube(0.035, 0.24, MID, 0, 0.025, -0.34));              // cañón cilíndrico
-  g.add(tube(0.058, 0.1, DARK, 0, 0.025, -0.49));              // compensador ancho
-  const mag = box(0.08, 0.22, 0.09, MID, 0, -0.18, -0.015);   // cargador inclinado
+  g.add(box(0.13, 0.17, 0.34, DARK, 0, 0, -0.05));             // receptor robusto
+  g.add(box(0.115, 0.1, 0.24, MID, 0, 0.025, -0.08));          // carcasa gunmetal
+  g.add(box(0.09, 0.045, 0.25, PLATE, 0, 0.11, -0.1));         // riel superior
+  g.add(box(0.14, 0.035, 0.12, METAL, 0, 0.115, -0.13));       // dientes del riel
+  g.add(tube(0.035, 0.24, METAL, 0, 0.025, -0.34));            // cañón cilíndrico
+  g.add(tube(0.058, 0.1, RUBBER, 0, 0.025, -0.49));            // compensador ancho
+  g.add(box(0.075, 0.075, 0.07, MID, 0, 0.105, -0.31));        // mira frontal
+  g.add(glowBox(0.025, 0.025, 0.02, teamColor, 0, 0.14, -0.33));
+  const mag = box(0.085, 0.22, 0.1, MID, 0, -0.18, -0.015);    // cargador inclinado
   mag.rotation.x = -0.16;
   g.add(mag);
-  g.add(box(0.085, 0.065, 0.1, teamColor, 0, -0.3, 0.015));    // base del cargador
-  const grip = box(0.07, 0.13, 0.07, DARK, 0, -0.105, 0.09);
+  g.add(box(0.06, 0.13, 0.105, DARK, 0, -0.19, -0.02));        // nervio del cargador
+  g.add(glowBox(0.09, 0.055, 0.105, teamColor, 0, -0.3, 0.015));
+  const grip = box(0.07, 0.13, 0.07, RUBBER, 0, -0.105, 0.09);
   grip.rotation.x = -0.22;
   g.add(grip);
-  g.add(box(0.045, 0.09, 0.2, MID, 0, 0.015, 0.21));           // culata plegable
-  g.add(box(0.095, 0.1, 0.055, teamColor, 0, 0.045, -0.19));   // placa de facción
+  g.add(box(0.045, 0.09, 0.2, PLATE, 0, 0.015, 0.21));         // culata plegable
+  g.add(box(0.1, 0.105, 0.045, MID, 0, 0.04, -0.2));           // placa lateral
+  g.add(glowBox(0.065, 0.025, 0.02, teamColor, 0, 0.04, -0.225));
   g.userData.muzzle = anchor(g, 0, 0.025, -0.52);
   g.userData.grip = anchor(g, 0, -0.09, 0.06);
   g.userData.forend = anchor(g, 0, -0.08, -0.16);
@@ -119,19 +161,23 @@ export function buildSMG(teamColor) {
   return g;
 }
 
-// ESCOPETA: pump-action — cañón + tubo de carga, bomba y culata de madera.
+// ESCOPETA: pump-action — cañón + tubo de carga y bomba sobredimensionada.
 export function buildShotgun(teamColor) {
-  const WOOD = 0x8a5a32;
   const g = new THREE.Group();
-  g.add(box(0.13, 0.15, 0.31, DARK, 0, 0, 0));                // receptor pesado
-  g.add(tube(0.034, 0.48, MID, 0, 0.055, -0.38));              // cañón
+  g.add(box(0.14, 0.16, 0.31, DARK, 0, 0, 0));                 // receptor pesado
+  g.add(box(0.12, 0.1, 0.25, MID, 0, 0.025, -0.02));           // carcasa superior
+  g.add(tube(0.034, 0.48, METAL, 0, 0.055, -0.38));            // cañón
   g.add(tube(0.03, 0.43, DARK, 0, -0.035, -0.35));             // tubo de carga
-  g.add(box(0.12, 0.11, 0.19, WOOD, 0, -0.035, -0.31));       // bomba sobredimensionada
-  const stock = box(0.12, 0.17, 0.25, WOOD, 0, -0.015, 0.24);
+  g.add(tube(0.052, 0.09, RUBBER, 0, 0.055, -0.61));           // bocacha reforzada
+  g.add(box(0.125, 0.115, 0.19, COPPER, 0, -0.035, -0.31));    // bomba sobredimensionada
+  g.add(box(0.135, 0.04, 0.11, DARK, 0, -0.035, -0.31));       // banda de agarre
+  const stock = box(0.12, 0.17, 0.25, MID, 0, -0.015, 0.24);
   stock.rotation.x = -0.12;
   g.add(stock);
-  g.add(box(0.09, 0.115, 0.07, teamColor, 0, 0.08, 0.015));   // placa de facción
-  g.add(box(0.14, 0.04, 0.19, MID, 0, 0.105, -0.04));         // alza/cubierta superior
+  g.add(box(0.105, 0.12, 0.055, PLATE, 0, 0.075, 0.005));      // placa de facción
+  g.add(glowBox(0.06, 0.03, 0.02, teamColor, 0, 0.075, -0.03));
+  g.add(box(0.14, 0.04, 0.19, PLATE, 0, 0.105, -0.04));        // alza/cubierta superior
+  g.add(glowBox(0.025, 0.025, 0.02, teamColor, 0, 0.135, -0.09));
   g.userData.muzzle = anchor(g, 0, 0.04, -0.6);
   g.userData.grip = anchor(g, 0, -0.08, 0.09);
   g.userData.forend = anchor(g, 0, -0.06, -0.3);              // mano izq. EN la bomba
@@ -166,16 +212,23 @@ export class Rig {
 
     this.torso = new THREE.Group();
     this.hips.add(this.torso);
-    this.torso.add(box(0.46, 0.15, 0.3, DARK, 0, 0.02, 0.015));      // cinturón/pelvis
-    this.torso.add(box(0.49, 0.3, 0.31, MID, 0, 0.2, 0));            // abdomen común
-    this.torso.add(box(0.66, 0.34, 0.4, DARK, 0, 0.46, 0));          // coraza común
-    this.torso.add(box(0.48, 0.25, 0.055, tc, 0, 0.46, -0.225));     // panel de equipo
-    this.torso.add(box(0.54, 0.09, 0.42, MID, 0, 0.63, 0));         // collar común
-    this.torso.add(box(0.08, 0.19, 0.04, LIGHT, -0.24, 0.48, -0.24));
-    this.torso.add(box(0.08, 0.19, 0.04, LIGHT, 0.24, 0.48, -0.24));
-    this.torso.add(ball(0.18, tc, -0.38, 0.56, 0, 1.12, 0.82, 1));   // hombrera L común
-    this.torso.add(ball(0.18, tc, 0.38, 0.56, 0, 1.12, 0.82, 1));    // hombrera R común
-    this.torso.add(box(0.3, 0.045, 0.025, VISOR, 0, 0.42, -0.258));  // respiradero
+    this.torso.add(box(0.46, 0.15, 0.3, RUBBER, 0, 0.02, 0.015));   // cinturón/pelvis
+    this.torso.add(box(0.49, 0.3, 0.31, MID, 0, 0.2, 0));           // abdomen común
+    this.torso.add(box(0.35, 0.13, 0.045, PLATE, 0, 0.2, -0.18));   // placa abdominal
+    this.torso.add(box(0.66, 0.34, 0.4, DARK, 0, 0.46, 0));         // coraza común
+    this.torso.add(box(0.56, 0.25, 0.065, MID, 0, 0.47, -0.225));   // peto superpuesto
+    this.torso.add(box(0.39, 0.135, 0.04, PLATE, 0, 0.49, -0.275)); // placa frontal elevada
+    this.torso.add(box(0.52, 0.075, 0.42, MID, 0, 0.635, 0));       // collar común
+    this.torso.add(box(0.055, 0.2, 0.04, METAL, -0.24, 0.48, -0.285));
+    this.torso.add(box(0.055, 0.2, 0.04, METAL, 0.24, 0.48, -0.285));
+    this.torso.add(glowBox(0.22, 0.035, 0.025, tc, 0, 0.5, -0.31)); // identificador de equipo
+    this.torso.add(ball(0.18, DARK, -0.38, 0.56, 0, 1.12, 0.82, 1));
+    this.torso.add(ball(0.18, DARK, 0.38, 0.56, 0, 1.12, 0.82, 1));
+    this.torso.add(box(0.25, 0.09, 0.2, MID, -0.38, 0.58, -0.04));
+    this.torso.add(box(0.25, 0.09, 0.2, MID, 0.38, 0.58, -0.04));
+    this.torso.add(glowBox(0.15, 0.025, 0.025, tc, -0.38, 0.59, -0.155));
+    this.torso.add(glowBox(0.15, 0.025, 0.025, tc, 0.38, 0.59, -0.155));
+    this.torso.add(box(0.3, 0.045, 0.025, VISOR, 0, 0.405, -0.31)); // respiradero
 
     this.head = new THREE.Group();
     this.head.position.set(0, 0.66, 0);
@@ -194,15 +247,17 @@ export class Rig {
       shoulder.position.set(s * 0.36, 0, 0);
       this.aimRig.add(shoulder);
       shoulder.add(capsule(0.15, 0.28, 0.15, MID, 0, -0.14, 0));    // bíceps común
+      shoulder.add(box(0.11, 0.18, 0.035, PLATE, 0, -0.14, -0.09));
       const elbow = new THREE.Group();
       elbow.position.set(0, -L1, 0);
       shoulder.add(elbow);
-      elbow.add(box(0.18, 0.32, 0.18, DARK, 0, -0.16, 0));          // guantelete común
-      elbow.add(box(0.1, 0.16, 0.025, tc, 0, -0.14, -0.105));       // placa de equipo
+      elbow.add(box(0.18, 0.32, 0.18, DARK, 0, -0.16, 0));         // guantelete común
+      elbow.add(box(0.12, 0.2, 0.035, MID, 0, -0.14, -0.105));     // placa elevada
+      elbow.add(glowBox(0.07, 0.025, 0.02, tc, 0, -0.14, -0.13));  // placa de equipo
       const hand = new THREE.Group();
       hand.position.set(0, -L2, 0);
       elbow.add(hand);
-      hand.add(ball(0.115, DARK, 0, -0.01, 0, 1.05, 0.9, 1.05));   // mano común
+      hand.add(ball(0.115, RUBBER, 0, -0.01, 0, 1.05, 0.9, 1.05));// mano común
       return { shoulder, elbow, hand };
     };
     this.armL = mkArm('L');
@@ -214,13 +269,17 @@ export class Rig {
       hip.position.set(s * 0.15, 0.02, 0);
       this.hips.add(hip);
       hip.add(capsule(0.21, 0.31, 0.22, MID, 0, -0.155, 0));        // muslo común
+      hip.add(box(0.135, 0.2, 0.04, PLATE, 0, -0.15, -0.135));     // blindaje de muslo
       const knee = new THREE.Group();
       knee.position.set(0, -0.32, 0);
       hip.add(knee);
       knee.add(box(0.18, 0.25, 0.2, DARK, 0, -0.12, 0));            // canilla común
-      knee.add(box(0.15, 0.1, 0.035, tc, 0, -0.04, -0.12));         // rodillera de equipo
+      knee.add(box(0.125, 0.13, 0.04, MID, 0, -0.15, -0.125));     // placa de canilla
+      knee.add(box(0.15, 0.1, 0.04, PLATE, 0, -0.04, -0.13));      // rodillera
+      knee.add(glowBox(0.09, 0.025, 0.02, tc, 0, -0.04, -0.155));
       knee.add(box(0.23, 0.13, 0.34, DARK, 0, -0.31, -0.075));      // bota común
-      knee.add(box(0.19, 0.055, 0.07, LIGHT, 0, -0.29, -0.25));     // puntera clara
+      knee.add(box(0.19, 0.055, 0.07, MID, 0, -0.29, -0.25));      // puntera reforzada
+      knee.add(glowBox(0.08, 0.02, 0.02, tc, 0, -0.29, -0.29));
       return { hip, knee };
     };
     this.legL = mkLeg('L');
@@ -262,28 +321,37 @@ export class Rig {
     if (v === 1) {          // CENTINELA: carcasa torre + visor vertical
       h.add(box(0.38, 0.5, 0.38, DARK, 0, 0.23, 0));
       h.add(box(0.3, 0.42, 0.045, MID, 0, 0.23, -0.215));
-      h.add(box(0.055, 0.25, 0.025, tc, 0, 0.24, -0.245));
-      h.add(ball(0.065, LIGHT, -0.22, 0.17, 0, 0.72, 1, 1));
-      h.add(ball(0.065, LIGHT, 0.22, 0.17, 0, 0.72, 1, 1));
-      h.add(box(0.24, 0.06, 0.06, VISOR, 0, -0.015, -0.19));
+      h.add(box(0.115, 0.31, 0.025, PLATE, 0, 0.24, -0.245));
+      h.add(glowBox(0.038, 0.24, 0.02, tc, 0, 0.24, -0.267));
+      h.add(ball(0.065, METAL, -0.22, 0.17, 0, 0.72, 1, 1));
+      h.add(ball(0.065, METAL, 0.22, 0.17, 0, 0.72, 1, 1));
+      h.add(box(0.24, 0.06, 0.06, RUBBER, 0, -0.015, -0.19));
+      h.add(box(0.18, 0.045, 0.21, PLATE, 0, 0.49, 0));
     } else if (v === 2) {   // EXPLORADOR: casco compacto + goggles dobles
       h.add(ball(0.202, MID, 0, 0.14, 0, 1.03, 1.03, 1.02));
-      h.add(box(0.09, 0.07, 0.25, tc, 0, 0.33, 0));
-      h.add(tube(0.105, 0.055, DARK, -0.105, 0.16, -0.2));
-      h.add(tube(0.105, 0.055, DARK, 0.105, 0.16, -0.2));
-      h.add(tube(0.068, 0.028, tc, -0.105, 0.16, -0.24));
-      h.add(tube(0.068, 0.028, tc, 0.105, 0.16, -0.24));
-      h.add(box(0.31, 0.065, 0.075, tc, 0, 0.015, -0.18));         // pañuelo
-      h.add(ball(0.055, LIGHT, -0.205, 0.15, 0, 0.75, 1, 1));
-      h.add(ball(0.055, LIGHT, 0.205, 0.15, 0, 0.75, 1, 1));
+      h.add(box(0.1, 0.075, 0.25, PLATE, 0, 0.33, 0));
+      h.add(glowBox(0.045, 0.03, 0.06, tc, 0, 0.37, -0.11));
+      h.add(tube(0.105, 0.055, RUBBER, -0.105, 0.16, -0.2));
+      h.add(tube(0.105, 0.055, RUBBER, 0.105, 0.16, -0.2));
+      h.add(glowTube(0.066, 0.025, tc, -0.105, 0.16, -0.24));
+      h.add(glowTube(0.066, 0.025, tc, 0.105, 0.16, -0.24));
+      h.add(box(0.08, 0.04, 0.04, METAL, 0, 0.16, -0.25));
+      h.add(box(0.31, 0.065, 0.075, DARK, 0, 0.015, -0.18));       // pañuelo
+      h.add(glowBox(0.12, 0.025, 0.02, tc, 0, 0.015, -0.225));
+      h.add(ball(0.055, METAL, -0.205, 0.15, 0, 0.75, 1, 1));
+      h.add(ball(0.055, METAL, 0.205, 0.15, 0, 0.75, 1, 1));
     } else if (v === 3) {   // PESADO: casco cerrado; cuerpo interno idéntico
       h.add(ball(0.205, MID, 0, 0.14, 0, 1.06, 1.03, 1.04));
-      h.add(box(0.3, 0.12, 0.075, DARK, 0, 0.16, -0.205));
-      h.add(box(0.22, 0.045, 0.025, tc, 0, 0.18, -0.25));
+      h.add(box(0.31, 0.13, 0.075, RUBBER, 0, 0.16, -0.205));
+      h.add(box(0.25, 0.07, 0.025, VISOR, 0, 0.17, -0.25));
+      h.add(glowBox(0.19, 0.025, 0.02, tc, 0, 0.18, -0.275));
       h.add(box(0.09, 0.19, 0.2, DARK, -0.2, 0.12, 0));
       h.add(box(0.09, 0.19, 0.2, DARK, 0.2, 0.12, 0));
-      h.add(box(0.22, 0.09, 0.075, DARK, 0, 0.015, -0.19));
-      h.add(box(0.1, 0.055, 0.22, tc, 0, 0.34, 0));
+      h.add(box(0.055, 0.12, 0.19, PLATE, -0.215, 0.12, -0.015));
+      h.add(box(0.055, 0.12, 0.19, PLATE, 0.215, 0.12, -0.015));
+      h.add(box(0.22, 0.09, 0.075, RUBBER, 0, 0.015, -0.19));
+      h.add(box(0.1, 0.055, 0.22, PLATE, 0, 0.34, 0));
+      h.add(glowBox(0.045, 0.02, 0.08, tc, 0, 0.375, -0.06));
     } else if (v === 4) {   // FANTASMA: capucha facetada + respirador
       const hoodL = box(0.18, 0.42, 0.38, DARK, -0.13, 0.18, 0.025);
       const hoodR = box(0.18, 0.42, 0.38, DARK, 0.13, 0.18, 0.025);
@@ -291,19 +359,23 @@ export class Rig {
       hoodR.rotation.z = 0.16;
       h.add(hoodL, hoodR);
       h.add(box(0.11, 0.16, 0.34, MID, 0, 0.37, 0.015));           // cumbrera
-      h.add(box(0.11, 0.055, 0.03, tc, -0.07, 0.18, -0.225));      // ojos
-      h.add(box(0.11, 0.055, 0.03, tc, 0.07, 0.18, -0.225));
-      h.add(box(0.16, 0.12, 0.075, VISOR, 0, 0.055, -0.205));
-      h.add(tube(0.055, 0.05, LIGHT, -0.11, 0.045, -0.22));
-      h.add(tube(0.055, 0.05, LIGHT, 0.11, 0.045, -0.22));
+      h.add(box(0.25, 0.09, 0.055, VISOR, 0, 0.18, -0.205));
+      h.add(glowBox(0.085, 0.035, 0.02, tc, -0.065, 0.18, -0.24)); // ojos
+      h.add(glowBox(0.085, 0.035, 0.02, tc, 0.065, 0.18, -0.24));
+      h.add(box(0.18, 0.13, 0.075, RUBBER, 0, 0.055, -0.205));
+      h.add(tube(0.055, 0.05, METAL, -0.11, 0.045, -0.22));
+      h.add(tube(0.055, 0.05, METAL, 0.11, 0.045, -0.22));
+      h.add(box(0.045, 0.08, 0.035, COPPER, 0, 0.04, -0.25));
     } else {                // RECLUTA: casco redondo + visor panorámico
       h.add(ball(0.205, MID, 0, 0.14, 0, 1.04, 1.03, 1.04));
-      h.add(box(0.32, 0.16, 0.075, DARK, 0, 0.15, -0.205));
-      h.add(box(0.25, 0.105, 0.025, tc, 0, 0.15, -0.25));
-      h.add(box(0.085, 0.08, 0.24, tc, 0, 0.34, 0));               // cresta
-      h.add(ball(0.065, LIGHT, -0.205, 0.15, 0, 0.7, 1, 1));
-      h.add(ball(0.065, LIGHT, 0.205, 0.15, 0, 0.7, 1, 1));
-      h.add(box(0.2, 0.065, 0.065, DARK, 0, 0.02, -0.19));
+      h.add(box(0.33, 0.17, 0.075, RUBBER, 0, 0.15, -0.205));
+      h.add(box(0.28, 0.12, 0.025, VISOR, 0, 0.15, -0.25));
+      h.add(glowBox(0.23, 0.075, 0.02, tc, 0, 0.15, -0.275));
+      h.add(box(0.085, 0.08, 0.24, PLATE, 0, 0.34, 0));             // cresta
+      h.add(glowBox(0.035, 0.025, 0.08, tc, 0, 0.38, -0.06));
+      h.add(ball(0.065, METAL, -0.205, 0.15, 0, 0.7, 1, 1));
+      h.add(ball(0.065, METAL, 0.205, 0.15, 0, 0.7, 1, 1));
+      h.add(box(0.2, 0.065, 0.065, RUBBER, 0, 0.02, -0.19));
     }
   }
 
@@ -312,29 +384,37 @@ export class Rig {
   _variantExtras(tc, v) {
     const t = this.torso;
     if (v === 1) {
-      t.add(box(0.38, 0.3, 0.06, MID, 0, 0.46, -0.27));            // peto-escudo
-      t.add(box(0.06, 0.25, 0.025, LIGHT, -0.18, 0.46, -0.31));
-      t.add(box(0.06, 0.25, 0.025, LIGHT, 0.18, 0.46, -0.31));
-      t.add(box(0.22, 0.13, 0.025, tc, 0, 0.47, -0.315));
+      t.add(box(0.4, 0.3, 0.06, PLATE, 0, 0.46, -0.3));            // peto-escudo
+      t.add(box(0.055, 0.25, 0.025, METAL, -0.18, 0.46, -0.34));
+      t.add(box(0.055, 0.25, 0.025, METAL, 0.18, 0.46, -0.34));
+      t.add(box(0.23, 0.14, 0.025, DARK, 0, 0.47, -0.345));
+      t.add(glowBox(0.04, 0.115, 0.02, tc, 0, 0.47, -0.37));
     } else if (v === 2) {
-      const strap = box(0.07, 0.45, 0.035, DARK, 0, 0.43, -0.265); // correa cruzada
+      const strap = box(0.07, 0.45, 0.035, RUBBER, 0, 0.43, -0.315);// correa cruzada
       strap.rotation.z = 0.65;
       t.add(strap);
-      t.add(box(0.14, 0.13, 0.05, LIGHT, -0.16, 0.34, -0.28));     // bolsa frontal
+      t.add(box(0.14, 0.13, 0.05, MID, -0.16, 0.34, -0.34));       // bolsa frontal
+      t.add(box(0.06, 0.035, 0.02, COPPER, -0.16, 0.38, -0.375));
       t.add(box(0.3, 0.34, 0.14, DARK, 0, 0.42, 0.24));            // mochila
-      t.add(box(0.1, 0.22, 0.12, tc, 0.12, 0.43, 0.33));
-      t.add(rod(0.018, 0.35, MID, 0.24, 0.76, 0.25));              // antena
-      t.add(ball(0.035, tc, 0.24, 0.95, 0.25));
+      t.add(box(0.1, 0.22, 0.12, PLATE, 0.12, 0.43, 0.33));
+      t.add(glowBox(0.04, 0.12, 0.02, tc, 0.12, 0.43, 0.4));
+      t.add(rod(0.018, 0.35, METAL, 0.24, 0.76, 0.25));            // antena
+      t.add(glowBox(0.045, 0.045, 0.045, tc, 0.24, 0.95, 0.25));
       t.add(box(0.22, 0.12, 0.1, DARK, -0.42, 0.58, -0.03));       // hombrera asimétrica
     } else if (v === 3) {
-      t.add(box(0.58, 0.16, 0.08, MID, 0, 0.54, -0.27));           // peto superior
-      t.add(box(0.3, 0.18, 0.055, tc, 0, 0.39, -0.3));
-      t.add(ball(0.23, tc, -0.43, 0.57, 0, 1.2, 0.86, 1.08));      // carcasa hombro L
-      t.add(ball(0.23, tc, 0.43, 0.57, 0, 1.2, 0.86, 1.08));       // carcasa hombro R
-      this.armL.elbow.add(box(0.24, 0.3, 0.23, MID, 0, -0.16, 0)); // blindaje antebrazo
-      this.armR.elbow.add(box(0.24, 0.3, 0.23, MID, 0, -0.16, 0));
-      this.armL.elbow.add(box(0.13, 0.17, 0.025, tc, 0, -0.14, -0.135));
-      this.armR.elbow.add(box(0.13, 0.17, 0.025, tc, 0, -0.14, -0.135));
+      t.add(box(0.58, 0.16, 0.08, PLATE, 0, 0.54, -0.31));         // peto superior
+      t.add(box(0.31, 0.18, 0.055, MID, 0, 0.39, -0.335));
+      t.add(glowBox(0.18, 0.035, 0.02, tc, 0, 0.39, -0.37));
+      t.add(ball(0.23, DARK, -0.43, 0.57, 0, 1.2, 0.86, 1.08));    // carcasa hombro L
+      t.add(ball(0.23, DARK, 0.43, 0.57, 0, 1.2, 0.86, 1.08));
+      t.add(box(0.3, 0.1, 0.21, PLATE, -0.43, 0.6, -0.05));
+      t.add(box(0.3, 0.1, 0.21, PLATE, 0.43, 0.6, -0.05));
+      t.add(glowBox(0.15, 0.025, 0.02, tc, -0.43, 0.61, -0.17));
+      t.add(glowBox(0.15, 0.025, 0.02, tc, 0.43, 0.61, -0.17));
+      this.armL.elbow.add(box(0.24, 0.3, 0.23, PLATE, 0, -0.16, 0));// blindaje antebrazo
+      this.armR.elbow.add(box(0.24, 0.3, 0.23, PLATE, 0, -0.16, 0));
+      this.armL.elbow.add(glowBox(0.1, 0.025, 0.02, tc, 0, -0.14, -0.145));
+      this.armR.elbow.add(glowBox(0.1, 0.025, 0.02, tc, 0, -0.14, -0.145));
     } else if (v === 4) {
       t.add(box(0.4, 0.06, 0.05, MID, 0, 0.64, -0.18));            // cuello de capucha
       const skirtL = box(0.2, 0.38, 0.075, DARK, -0.13, -0.12, -0.1);
@@ -342,12 +422,16 @@ export class Rig {
       skirtL.rotation.z = -0.06;
       skirtR.rotation.z = 0.06;
       t.add(skirtL, skirtR);
-      this.armR.shoulder.add(box(0.16, 0.07, 0.16, tc, 0, -0.09, 0));
+      t.add(box(0.25, 0.045, 0.035, RUBBER, 0, 0.33, -0.35));
+      t.add(box(0.09, 0.07, 0.025, COPPER, 0, 0.02, -0.18));
+      this.armR.shoulder.add(box(0.17, 0.075, 0.16, PLATE, 0, -0.09, 0));
+      this.armR.shoulder.add(glowBox(0.09, 0.022, 0.02, tc, 0, -0.09, -0.095));
     } else {
-      t.add(box(0.34, 0.17, 0.055, MID, 0, 0.46, -0.275));         // placa recluta
-      t.add(box(0.13, 0.07, 0.025, tc, 0, 0.47, -0.31));
-      t.add(box(0.09, 0.07, 0.025, LIGHT, -0.17, 0.53, -0.31));
-      t.add(box(0.09, 0.07, 0.025, LIGHT, 0.17, 0.53, -0.31));
+      t.add(box(0.35, 0.18, 0.055, PLATE, 0, 0.46, -0.32));        // placa recluta
+      t.add(box(0.16, 0.08, 0.025, DARK, 0, 0.47, -0.355));
+      t.add(glowBox(0.1, 0.025, 0.02, tc, 0, 0.47, -0.38));
+      t.add(box(0.075, 0.065, 0.025, METAL, -0.17, 0.53, -0.355));
+      t.add(box(0.075, 0.065, 0.025, METAL, 0.17, 0.53, -0.355));
     }
   }
 
