@@ -1259,7 +1259,7 @@ export class World {
   // Mapa "Azoteas": techos de ciudad de noche. Misma simetría rotacional 180°
   // y las MISMAS tres alturas (LOW/MID/HIGH): unidades de A/C y claraboyas
   // como cobertura baja, casetas como muros, cuartos de máquinas altos.
-  // Spawns fijos en ±23.4 (idénticos a Fortaleza → compatible con el server).
+  // Spawns fijos en ±35.1. La cancha conserva sus 63 × 80 m originales.
   _buildAzoteas() {
     const { LOW, MID, HIGH } = BLOCK;
     // Familias tonales distintas: el jugador reconoce A/C, ductos, casetas y
@@ -1276,49 +1276,36 @@ export class World {
     this._box(-this.fx - 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
     this._box(this.fx + 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
 
-    // --- base (lado rojo; el espejo crea el azul) — posiciones ×1.5
-    this._box(0, -31.35, 8, 1.2, HIGH, hutOpts);           // caseta de acceso (escudo)
-    this._box(-7.8, -27.6, 2.4, 1.3, LOW, acOpts);         // A/C flanqueando salidas
-    this._box(7.8, -27.6, 2.4, 1.3, LOW, acOpts);
-    this._box(2.2, -24.5, 2.4, 1, LOW, acOpts);            // A/C puente (relleno)
-    this._box(11.25, -22.5, 3.6, 3.6, LOW, glassOpts);     // claraboya pisable
-    this._box(-12, -21.75, 5.5, 1, MID, hutOpts);          // muro mediano
+    // --- salida de base: dos anclas distintas en vez de A/C gemelos
+    this._box(0, -31.35, 8, 1.2, HIGH, hutOpts);           // caseta de acceso / escudo
+    this._box(-8.2, -27.7, 4, 2.2, LOW, acOpts);           // estación HVAC de ruta técnica
+    this._box(11.5, -22.8, 3.8, 3.8, LOW, glassOpts);      // claraboya: cruce expuesto
+    this._box(-12.2, -22.1, 5.6, 1.1, MID, hutOpts);       // mamparo: corta la LOS central
 
-    // --- caseta de elevador de flanco (el TANQUE DE AGUA vive encima)
-    this._box(-20.25, -15.75, 2.4, 2.4, HIGH, hutOpts);
+    // --- esquinas y anillo exterior: dos instalaciones reconocibles sustituyen
+    // cinco cajas aisladas. Conservan circulación posterior y dos contraángulos.
+    this._box(-26.3, -31.5, 6, 4, LOW, acOpts);            // planta HVAC de esquina
+    this._box(26, -31.5, 5.5, 2.6, MID, hutOpts);          // subestación eléctrica
+    this._box(-27, -23.5, 1.4, 5, LOW, ventOpts);          // ducto de planta a tanque
+    this._box(27, -23.2, 4, 1.4, LOW, ventOpts);           // manifold de subestación
 
-    // --- cadena de A/C bajos (ruta de wallbounce, ahora de 4 saltos)
-    this._box(-4.5, -17.25, 2.4, 1, LOW, acOpts);
-    this._box(2.25, -13.2, 2.4, 1, LOW, acOpts);
-    this._box(-3, -9.3, 2.4, 1, LOW, acOpts);
-    this._box(4.5, -7.2, 2.4, 1, LOW, acOpts);
+    // --- ruta técnica oeste: giros cerrados y posiciones de escopeta
+    this._box(-20.25, -15.75, 2.8, 2.8, HIGH, hutOpts);    // elevador + tanque landmark
+    this._box(-25, -6.8, 2.4, 6.2, MID, hutOpts);          // pantalla técnica / giro CQC
 
-    // --- carril derecho
-    this._box(17.25, -12, 1, 5, HIGH, hutOpts);
-    this._box(24.75, -18, 1, 2.6, LOW, ventOpts);
-    this._box(27.75, -7.5, 2.6, 1, LOW, ventOpts);
-    this._box(21.5, -2.5, 1, 2.4, LOW, ventOpts);          // ducto medio (relleno)
+    // --- aproximación central: una estación grande y un único bounce final
+    this._box(-2, -15.6, 5.5, 2.5, LOW, acOpts);           // estación HVAC central
+    this._box(-4, -9.5, 3.6, 1.4, LOW, acOpts);            // último apoyo antes del pad
 
-    // --- carril izquierdo
-    this._box(-27.75, -9.75, 2.6, 1, LOW, ventOpts);
-    this._box(-24, -3.75, 1, 3.6, MID, hutOpts);
-    this._box(-13.5, -6.5, 2.6, 1, LOW, ventOpts);         // ducto central-izq (relleno)
+    // --- ruta rápida este: corredor de roadie run con dos cortes de visión
+    this._box(18, -14, 1.1, 5.2, HIGH, hutOpts);           // cuarto técnico / duelo CQC
+    this._box(25.2, -17.2, 1.1, 3, LOW, ventOpts);         // opción exterior de riesgo
+    this._box(27.2, -7.2, 3, 1.1, LOW, ventOpts);          // pausa antes de media cancha
 
-    // --- media cancha (anillo del helipuerto)
-    this._box(8.25, -4.5, 3.8, 1, MID, hutOpts);
-    this._box(-11.25, -2.7, 2.6, 2.6, LOW, acOpts);
-    this._box(-7.5, 1.4, 1, 2.6, LOW, acOpts);             // borde del anillo
-
-    // --- relleno de diseño (análisis de flujo del ×1.5):
-    this._box(-27.5, 6.5, 2.6, 1, LOW, ventOpts);   // carril oeste mitad alta: corta
-    this._box(-22.5, 13.5, 1, 2.4, LOW, ventOpts);  //   la corrida descubierta de 25m
-    this._box(18, -26.5, 2.4, 1.2, LOW, acOpts);    // esquina tras el spawn: cover
-    this._box(26, -27.5, 1, 2.2, LOW, ventOpts);    //   de salida por el flanco
-    this._box(17.25, -17.3, 1, 2.6, MID, hutOpts);  // continúa el muro del carril
-                                                    //   (tronera de 1.5m, no pasillo)
-    this._box(8, -11.5, 2.4, 1, LOW, acOpts);       // escalón del acercamiento este
-    this._box(-15, -18.5, 2.4, 1, LOW, acOpts);     // puente tanque→muro mediano
-    this._box(-24.5, -21, 3, 3, LOW, glassOpts);    // segunda claraboya (oeste)
+    // --- anillo del helipuerto: dos anclas distintas por mitad. Sus huellas
+    // quedan fuera del pad de 12.75 m y dejan el centro totalmente abierto.
+    this._box(9.6, -4.3, 4.2, 1.1, MID, hutOpts);          // posición fuerte, flanqueable
+    this._box(-9.3, -5.2, 3, 2.6, LOW, acOpts);            // apoyo flexible de corto alcance
 
     // --- CENTRO: helipuerto DESPEJADO (regla de Chuck) — cero obstáculos ni
     // decoración dentro del pad; el cover vive en el anillo de media cancha
@@ -1385,7 +1372,7 @@ export class World {
     const poleMat = new THREE.MeshLambertMaterial({ color: 0x3a3f46 });
     const redMat = new THREE.MeshBasicMaterial({ color: 0xff5544 });
     for (const [ax, az, base] of [
-      [17.25, -12, HIGH], [-17.25, 12, HIGH],       // muros altos de carril
+      [18, -14, HIGH], [-18, 14, HIGH],             // cuartos técnicos de carril
       [-this.fx - 0.4, -21, HIGH], [this.fx + 0.4, 21, HIGH],
       [3, -31.35, HIGH], [-3, 31.35, HIGH],         // casetas de spawn
     ]) {
@@ -1403,7 +1390,7 @@ export class World {
     }
 
     // --- brillo de las claraboyas (vidrio iluminado desde adentro)
-    for (const [gx, gz] of [[11.25, -22.5], [-11.25, 22.5], [-24.5, -21], [24.5, 21]]) {
+    for (const [gx, gz] of [[11.5, -22.8], [-11.5, 22.8]]) {
       const glow = new THREE.Mesh(
         new THREE.PlaneGeometry(3.3, 3.3),
         new THREE.MeshBasicMaterial({ color: 0x9fc4ff, transparent: true, opacity: 0.32 })
@@ -1454,11 +1441,13 @@ export class World {
     roofMark.position.y = 0.024;
     this.mapGroup.add(roofMark);
 
-    // Ventiladores de los A/C. Dos meshes instanciados para todos los equipos.
+    // Los equipos grandes llevan varios ventiladores: así se leen como bancos
+    // HVAC completos y no como la misma caja pequeña repetida.
     const acSeed = [
-      [-7.8, -27.6], [7.8, -27.6], [2.2, -24.5], [-4.5, -17.25],
-      [2.25, -13.2], [-3, -9.3], [4.5, -7.2], [-11.25, -2.7], [-7.5, 1.4],
-      [18, -26.5], [8, -11.5], [-15, -18.5],
+      [-9, -27.7], [-7.4, -27.7],
+      [-28, -31.5], [-26.3, -31.5], [-24.6, -31.5],
+      [-3.6, -15.6], [-2, -15.6], [-0.4, -15.6],
+      [-4, -9.5], [-9.8, -5.2], [-8.8, -5.2],
     ];
     const seen = new Set(), acUnits = [];
     for (const [x, z] of acSeed) {
@@ -1489,12 +1478,54 @@ export class World {
     }
     this.mapGroup.add(blades);
 
+    // Tuberías gemelas sobre los ductos del anillo exterior. Además de darles
+    // lectura de azotea, dibujan visualmente la dirección de cada ruta.
+    const pipeRuns = [
+      [-27, -23.5, 5, 'z'], [27, 23.5, 5, 'z'],
+      [27, -23.2, 4, 'x'], [-27, 23.2, 4, 'x'],
+    ];
+    const roofPipes = new THREE.InstancedMesh(
+      new THREE.CylinderGeometry(0.085, 0.085, 1, 8),
+      new THREE.MeshLambertMaterial({ color: 0x536675 }), pipeRuns.length * 2);
+    let pipeI = 0;
+    for (const [x, z, len, axis] of pipeRuns) {
+      for (const off of [-0.24, 0.24]) {
+        q.setFromEuler(axis === 'x'
+          ? e.set(0, 0, Math.PI / 2)
+          : e.set(Math.PI / 2, 0, 0));
+        m4.compose(
+          p.set(x + (axis === 'z' ? off : 0), BLOCK.LOW + 0.13,
+            z + (axis === 'x' ? off : 0)),
+          q, s.set(1, len, 1));
+        roofPipes.setMatrixAt(pipeI++, m4);
+      }
+    }
+    roofPipes.castShadow = true;
+    this.mapGroup.add(roofPipes);
+
+    // Aisladores de la subestación: rompen su silueta rectangular y la
+    // distinguen de los cuartos de máquinas sin sumar colisión.
+    const transformerSpots = [
+      [24.5, -31.5], [26, -31.5], [27.5, -31.5],
+      [-24.5, 31.5], [-26, 31.5], [-27.5, 31.5],
+    ];
+    const transformers = new THREE.InstancedMesh(
+      new THREE.CylinderGeometry(0.19, 0.22, 0.62, 8),
+      new THREE.MeshLambertMaterial({ color: 0x495969 }), transformerSpots.length);
+    transformerSpots.forEach(([x, z], i) => {
+      m4.compose(p.set(x, BLOCK.MID + 0.31, z), q.identity(), s.set(1, 1, 1));
+      transformers.setMatrixAt(i, m4);
+    });
+    transformers.castShadow = true;
+    this.mapGroup.add(transformers);
+
     // Franjas ámbar: muros de carril, casetas de los tanques y escudos de spawn.
     const hazardSpots = [
-      [16.74, 1.34, -12, -Math.PI / 2, 1.3], [-16.74, 1.34, 12, Math.PI / 2, 1.3],
+      [17.44, 1.34, -14, -Math.PI / 2, 1.3], [-17.44, 1.34, 14, Math.PI / 2, 1.3],
       [-19.04, 1.35, -15.75, Math.PI / 2, 1.0], [19.04, 1.35, 15.75, -Math.PI / 2, 1.0],
       [2.2, 1.5, -30.74, 0, 1.2], [-2.2, 1.5, 30.74, Math.PI, 1.2],
-      [16.74, 1.34, -17.3, -Math.PI / 2, 0.85], [-16.74, 1.34, 17.3, Math.PI / 2, 0.85],
+      [26, 1.0, -30.19, 0, 1.5], [-26, 1.0, 30.19, Math.PI, 1.5],
+      [-23.79, 1.0, -6.8, Math.PI / 2, 1.2], [23.79, 1.0, 6.8, -Math.PI / 2, 1.2],
     ];
     const hazards = new THREE.InstancedMesh(
       new THREE.PlaneGeometry(1.7, 0.22),
