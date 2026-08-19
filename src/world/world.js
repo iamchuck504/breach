@@ -13,14 +13,14 @@ const FIELD_X = 15, FIELD_Z = 18; // semiancho / semilargo
 //   HIGH (3.0): inalcanzable incluso saltando; muros y estructuras
 // Ninguna pieza de mapa puede usar otra altura.
 export const BLOCK = { LOW: 1.1, MID: 1.9, HIGH: 3.0 };
-const HELIPAD_RADIUS = 7.2;
+const HELIPAD_RADIUS = 6.2;
 const HELIPAD = {
-  height: 0.22,
+  height: BLOCK.LOW,
   radius: HELIPAD_RADIUS,
   edge: HELIPAD_RADIUS * Math.cos(Math.PI / 8),
   diagonal: HELIPAD_RADIUS * (Math.cos(Math.PI / 8) + Math.sin(Math.PI / 8)),
-  rampLength: 2.8,
-  rampHalfWidth: 2.25,
+  rampLength: 5,
+  rampHalfWidth: 1.55,
 };
 
 export class World {
@@ -54,6 +54,7 @@ export class World {
     this.mapGroup = new THREE.Group();
     this.scene.add(this.mapGroup);
     this.colliders = []; // {minx,minz,maxx,maxz,h}
+    this.segmentColliders = []; // muros rotados delgados {a,b,n,half,h}
     this.faces = [];     // caras de cobertura {n:{x,z}, a:{x,z}, b:{x,z}, h}
     this.surfaceZones = []; // superficies transitables que elevan el suelo sin actuar como cover
     this.spawns = { red: [], blue: [] };
@@ -70,7 +71,7 @@ export class World {
     this._batchTexIds = layout === 'azoteas' ? ['concrete', 'concreteTop'] : ['stone', 'stoneTop'];
     // cajas de munición por mapa: en azoteas van sobre el eje del helipuerto,
     // libres de cover (las ±7,0 por defecto chocaban con el anillo)
-    this.cratePos = layout === 'azoteas' ? [{ x: 0, z: -10.1 }, { x: 0, z: 10.1 }] : null;
+    this.cratePos = layout === 'azoteas' ? [{ x: 0, z: -12.1 }, { x: 0, z: 12.1 }] : null;
 
     this._buildFloor();
     if (layout === 'arena') this._buildArena();
@@ -1320,19 +1321,44 @@ export class World {
     // --- CENTRO: helipuerto DESPEJADO (regla de Chuck) — cero obstáculos ni
     // decoración dentro del pad; el cover vive en el anillo de media cancha
     this.surfaceZones.push({ kind: 'helipad', ...HELIPAD });
-    this._helipadBarriers = [-1, 1].map((sign) => ({
-      x: sign * HELIPAD.edge, z: 0, w: 0.34, d: 4.8, h: LOW, sign,
-    }));
-    for (const b of this._helipadBarriers) {
-      const minx = b.x - b.w / 2, maxx = b.x + b.w / 2;
-      const minz = b.z - b.d / 2, maxz = b.z + b.d / 2;
-      this.colliders.push({ minx, minz, maxx, maxz, h: b.h });
-      this.faces.push(
-        { n: { x: 1, z: 0 }, a: { x: maxx, z: minz }, b: { x: maxx, z: maxz }, h: b.h },
-        { n: { x: -1, z: 0 }, a: { x: minx, z: minz }, b: { x: minx, z: maxz }, h: b.h },
-        { n: { x: 0, z: 1 }, a: { x: minx, z: maxz }, b: { x: maxx, z: maxz }, h: b.h },
-        { n: { x: 0, z: -1 }, a: { x: minx, z: minz }, b: { x: maxx, z: minz }, h: b.h },
-      );
+    // La pared del propio octágono es el cover. Los lados norte/sur dejan un
+    // hueco central para las rampas; los otros seis lados son continuos.
+    const verts = Array.from({ length: 8 }, (_, i) => {
+      const a = Math.PI / 8 + i * Math.PI / 4;
+      return { x: Math.sin(a) * HELIPAD.radius, z: Math.cos(a) * HELIPAD.radius };
+    });
+    this._helipadSegments = [];
+    const addSide = (a, b) => {
+      const tx = b.x - a.x, tz = b.z - a.z;
+      const len = Math.hypot(tx, tz);
+      if (len < 0.05) return;
+      const n = { x: -tz / len, z: tx / len }; // vértices en sentido horario
+      const wall = { a, b, n, half: 0.08, h: LOW };
+      this._helipadSegments.push(wall);
+      this.segmentColliders.push(wall);
+      for (const side of [1, -1]) {
+        const sn = { x: n.x * side, z: n.z * side };
+        const off = wall.half * side;
+        this.faces.push({
+          n: sn,
+          a: { x: a.x + n.x * off, z: a.z + n.z * off },
+          b: { x: b.x + n.x * off, z: b.z + n.z * off },
+          h: LOW,
+        });
+      }
+    };
+    for (let i = 0; i < verts.length; i++) {
+      const a = verts[i], b = verts[(i + 1) % verts.length];
+      const rampSide = Math.abs(a.z - b.z) < 0.01 && Math.abs(a.z) > HELIPAD.edge - 0.05;
+      if (!rampSide) { addSide(a, b); continue; }
+      const z = a.z;
+      if (a.x < b.x) {
+        addSide(a, { x: -HELIPAD.rampHalfWidth, z });
+        addSide({ x: HELIPAD.rampHalfWidth, z }, b);
+      } else {
+        addSide(a, { x: HELIPAD.rampHalfWidth, z });
+        addSide({ x: -HELIPAD.rampHalfWidth, z }, b);
+      }
     }
 
     this._decorAzoteas();
@@ -1489,47 +1515,8 @@ export class World {
       }
     }
 
-    // Barreras laterales de acero: el plinto ahora es cover real. El cuerpo
-    // nace sobre la cubierta y termina a LOW, con extremos abiertos al flank.
-    const barrierMat = new THREE.MeshStandardMaterial({
-      color: 0x526a78, metalness: 0.68, roughness: 0.52,
-    });
-    const barrierDark = new THREE.MeshStandardMaterial({
-      color: 0x263944, metalness: 0.78, roughness: 0.44,
-    });
-    for (const b of this._helipadBarriers) {
-      const bodyH = b.h - HELIPAD.height;
-      const body = new THREE.Mesh(new THREE.BoxGeometry(b.w, bodyH, b.d), barrierMat);
-      body.position.set(b.x, HELIPAD.height + bodyH / 2, b.z);
-      body.castShadow = true;
-      body.receiveShadow = true;
-      this.mapGroup.add(body);
-
-      for (const zOff of [-b.d / 2 + 0.18, b.d / 2 - 0.18]) {
-        const post = new THREE.Mesh(new THREE.BoxGeometry(0.48, bodyH + 0.14, 0.48), barrierDark);
-        post.position.set(b.x, HELIPAD.height + (bodyH + 0.14) / 2, zOff);
-        post.castShadow = true;
-        this.mapGroup.add(post);
-      }
-      const rail = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.085, 0.085, b.d - 0.35, 8), barrierDark);
-      rail.rotation.x = Math.PI / 2;
-      rail.position.set(b.x, b.h - 0.045, b.z);
-      rail.castShadow = true;
-      this.mapGroup.add(rail);
-
-      for (const faceSign of [-1, 1]) {
-        const warning = new THREE.Mesh(
-          new THREE.PlaneGeometry(2.8, 0.18),
-          new THREE.MeshBasicMaterial({ map: this._tex('hazard') }));
-        warning.position.set(b.x + faceSign * (b.w / 2 + 0.006), 0.7, b.z);
-        warning.rotation.y = faceSign * Math.PI / 2;
-        this.mapGroup.add(warning);
-      }
-    }
-
-    // Vigas del faldón y balizas cian: dan escala industrial desde cualquier
-    // carril y llenan el centro sin introducir obstáculos jugables.
+    // Vigas del faldón y balizas cian: hacen legible la pared-cover del propio
+    // octágono desde cualquier carril.
     const edgeLen = 2 * HELIPAD.radius * Math.sin(Math.PI / 8);
     const apothem = HELIPAD.radius * Math.cos(Math.PI / 8);
     const rim = new THREE.InstancedMesh(
@@ -1553,6 +1540,23 @@ export class World {
     }
     rim.castShadow = true;
     this.mapGroup.add(rim, deckLights);
+
+    // Las seis caras sin rampa llevan señalización: comunica que la pared
+    // octagonal es una cobertura continua y no una simple peana decorativa.
+    const markedSides = [1, 2, 3, 5, 6, 7];
+    const deckHazards = new THREE.InstancedMesh(
+      new THREE.PlaneGeometry(2.2, 0.18),
+      new THREE.MeshBasicMaterial({ map: this._tex('hazard') }), markedSides.length);
+    markedSides.forEach((side, i) => {
+      const a = side * Math.PI / 4;
+      q.setFromEuler(e.set(0, a, 0));
+      m4.compose(
+        p.set(Math.sin(a) * (apothem + 0.012), HELIPAD.height * 0.62,
+          Math.cos(a) * (apothem + 0.012)),
+        q, s.set(1, 1, 1));
+      deckHazards.setMatrixAt(i, m4);
+    });
+    this.mapGroup.add(deckHazards);
 
     // Helipuerto central DESPEJADO: solo la marca pintada, sin obstáculos ni
     // decoración encima (regla de Chuck). Escalado con el mapa.
@@ -1859,6 +1863,23 @@ export class World {
       }
       if (ok && tmin < maxDist && (best === null || tmin < best)) best = tmin;
     }
+    for (const c of this.segmentColliders) {
+      const denom = dir.x * c.n.x + dir.z * c.n.z;
+      if (Math.abs(denom) < 1e-8) continue;
+      const signed = (origin.x - c.a.x) * c.n.x + (origin.z - c.a.z) * c.n.z;
+      const slab = c.half + inflate;
+      for (const plane of [-slab, slab]) {
+        const t = (plane - signed) / denom;
+        if (t < 0 || t > maxDist || (best !== null && t >= best)) continue;
+        const hy = origin.y + dir.y * t;
+        if (hy < -0.1 - inflate || hy > c.h + inflate) continue;
+        const hx = origin.x + dir.x * t, hz = origin.z + dir.z * t;
+        const tx = c.b.x - c.a.x, tz = c.b.z - c.a.z;
+        const len = Math.hypot(tx, tz);
+        const along = ((hx - c.a.x) * tx + (hz - c.a.z) * tz) / len;
+        if (along >= -inflate && along <= len + inflate) best = t;
+      }
+    }
     return best;
   }
 
@@ -1909,6 +1930,29 @@ export class World {
           if (m === pl) p.x = c.minx - r; else if (m === pr) p.x = c.maxx + r;
           else if (m === pt) p.z = c.minz - r; else p.z = c.maxz + r;
         }
+        moved = true;
+      }
+      for (const c of this.segmentColliders) {
+        if (y >= c.h - 0.05) continue;
+        const tx = c.b.x - c.a.x, tz = c.b.z - c.a.z;
+        const len2 = tx * tx + tz * tz;
+        const u = Math.max(0, Math.min(1,
+          ((p.x - c.a.x) * tx + (p.z - c.a.z) * tz) / len2));
+        const cx = c.a.x + tx * u, cz = c.a.z + tz * u;
+        let dx = p.x - cx, dz = p.z - cz;
+        const rr = r + c.half;
+        const d2 = dx * dx + dz * dz;
+        if (d2 >= rr * rr) continue;
+        if (d2 > 1e-9) {
+          const d = Math.sqrt(d2);
+          dx /= d; dz /= d;
+        } else {
+          const signed = (p.x - c.a.x) * c.n.x + (p.z - c.a.z) * c.n.z;
+          const side = signed >= 0 ? 1 : -1;
+          dx = c.n.x * side; dz = c.n.z * side;
+        }
+        p.x = cx + dx * rr;
+        p.z = cz + dz * rr;
         moved = true;
       }
       if (!moved) break;
