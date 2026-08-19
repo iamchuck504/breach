@@ -9,7 +9,6 @@ export const TUNING = {
     decel: 34,            // frenado al soltar
     turnLerp: 15,         // giro del personaje hacia la dirección de movimiento
     roadieTurnLerp: 6.5,  // roadie gira más pesado (feel Gears)
-    aimTurnLerp: 30,      // giro hacia la cámara al apuntar/disparar
     coverStrafe: 3.5,     // velocidad lateral pegado a cobertura
   },
   evade: {
@@ -87,7 +86,13 @@ export const TUNING = {
   },
   combat: {
     spawnProtection: 5,   // seg de invulnerabilidad al nacer (se rompe al disparar)
-    fireAlignMaxDeg: 115, // el tiro de cadera solo espera si el cuerpo apunta casi de espaldas a la cámara
+    // Cámara, cuerpo y arma comparten este margen. Fuera de él el input queda
+    // bufereado mientras el cuerpo gira, en vez de disparar visualmente al revés.
+    fireAlignMaxDeg: 50,
+    visualAimMaxDeg: 52,  // giro máximo que compensa naturalmente el torso/arma
+    bodyTurnAimDeg: 600,  // velocidad angular máxima apuntando/disparando
+    bodyTurnBlindDeg: 420,// blindfire en cover: giro más pesado, nunca snap 180°
+    bodyTurnFollowDeg: 360,
     hp: 100,
     regenDelay: 3.6, regenRate: 48,
     respawnTime: 5,

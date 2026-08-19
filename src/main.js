@@ -1142,6 +1142,9 @@ function fireShot() {
   const inCover = G.player.state === 'cover';
   const spread = aiming ? def.spreadAim : (inCover ? def.spreadBlind : def.spreadHip);
 
+  // El controller ya pudo girar este frame; sincronizar el root antes de leer
+  // el muzzle evita lanzar el tracer desde la pose espacial anterior.
+  G.rig.setTransform(G.player.pos.x, G.player.pos.z, G.player.yaw, G.player.y);
   const muzzle = G.rig.muzzleWorld(_v1).clone();
   let baseDir, origin;
   if (aiming) {
@@ -1314,14 +1317,6 @@ window.BREACH_EFFECTS = effects;
 window.BREACH_RIG = Rig; // para tests visuales de poses/animaciones
 window.THREE = THREE;
 
-function angDiff(a, b) {
-  // módulo, no while: un delta gigante (dato corrupto) colgaba el bucle
-  let d = (a - b) % (Math.PI * 2);
-  if (d > Math.PI) d -= Math.PI * 2;
-  if (d < -Math.PI) d += Math.PI * 2;
-  return d;
-}
-
 function simStep(dt) {
   const p = G.player;
   if (!p) return;
@@ -1329,12 +1324,11 @@ function simStep(dt) {
   // (el flip Matrix SÍ permite disparar en el aire)
   const stateOk = !p.dead && p.state !== 'dive' && p.state !== 'slide' &&
     p.state !== 'roadie' && p.state !== 'mantle' && input.anyDevice;
-  // giro brusco: el tiro de CADERA espera solo si el cuerpo apunta casi de
-  // espaldas (el trigger fuerza el giro rápido). Apuntando (ADS) nunca se
-  // bloquea: la bala sale de la cámara.
-  const maxA = TUNING.combat.fireAlignMaxDeg * Math.PI / 180;
-  const aligned = p.aim || Math.abs(angDiff(shoulderCam.yaw, p.yaw)) < maxA;
-  const canFire = stateOk && aligned;
+  // Un giro grande se resuelve como rotación progresiva y buffer de disparo.
+  // ADS y blindfire usan el mismo criterio: la cámara manda, pero el cañón
+  // debe poder representarla visualmente antes de emitir el proyectil.
+  const aligned = p.fireAligned();
+  let canFire = stateOk && aligned;
   // cualquier click que no pueda salir YA (roadie, cuerpo girando, cooldown,
   // dive/slide, final de recarga) queda bufereado — y el buffer dura AL MENOS
   // lo que falta de cooldown/recarga, para que el tiro encolado nunca se pierda
@@ -1352,12 +1346,17 @@ function simStep(dt) {
   // latcheaba la pose los ~2s de recarga, asomándote expuesto sobre el cover)
   const hasAmmo = !G.weapons.reloading &&
     (G.weapons.st.mag > 0 || G.weapons.st.reserve > 0);
-  const fired = p.dead ? false
-    : G.weapons.update(dt, input.fireHeld, input.firePressed || G.fireBuffer > 0, canFire);
-  if (fired) G.fireBuffer = 0;
   // la intención de disparo SIEMPRE llega al controller: cancela el roadie
   // (en tierra o en el aire) y gira el cuerpo para disparar
   p.update(dt, input, (input.fireHeld || G.fireBuffer > 0) && !p.dead && hasAmmo);
+  // El controller puede haber recuperado control o terminado de alinearse en
+  // este mismo paso. Revalidar evita añadir un frame artificial de latencia.
+  const stateOkAfter = !p.dead && p.state !== 'dive' && p.state !== 'slide' &&
+    p.state !== 'roadie' && p.state !== 'mantle' && input.anyDevice;
+  canFire = stateOkAfter && p.fireAligned();
+  const fired = p.dead ? false
+    : G.weapons.update(dt, input.fireHeld, input.firePressed || G.fireBuffer > 0, canFire);
+  if (fired) G.fireBuffer = 0;
   if (fired) fireShot();
 
   if (input.reloadPressed) G.weapons.startReload();

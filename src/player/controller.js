@@ -12,6 +12,16 @@ const lerpAngle = (a, b, k) => {
   while (d < -Math.PI) d += Math.PI * 2;
   return a + d * k;
 };
+const angleDelta = (a, b) => {
+  let d = (b - a) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return d;
+};
+const approachAngle = (a, b, maxStep) => {
+  const d = angleDelta(a, b);
+  return a + Math.max(-maxStep, Math.min(maxStep, d));
+};
 
 export const PLAYER_R = 0.38;
 
@@ -50,6 +60,19 @@ export class Controller {
   get speed() { return Math.hypot(this.vel.x, this.vel.z); }
 
   facing() { return { x: -Math.sin(this.yaw), z: -Math.cos(this.yaw) }; }
+
+  cameraYawError() { return angleDelta(this.yaw, this.cam.yaw); }
+
+  fireAligned(maxDeg = TUNING.combat.fireAlignMaxDeg) {
+    return Math.abs(this.cameraYawError()) <= maxDeg * Math.PI / 180;
+  }
+
+  _turnToCamera(dt, blindfire = false) {
+    const degPerSec = blindfire
+      ? TUNING.combat.bodyTurnBlindDeg
+      : TUNING.combat.bodyTurnAimDeg;
+    this.yaw = approachAngle(this.yaw, this.cam.yaw, degPerSec * Math.PI / 180 * dt);
+  }
 
   camState() {
     if (this.dead) return { mode: 'normal' };
@@ -95,10 +118,9 @@ export class Controller {
     }
     // error de yaw cuerpo-cámara: el ARMA lo compensa al disparar para que
     // el cañón visual apunte a la línea de tiro real aunque el cuerpo gire
-    let yawErr = this.cam.yaw - this.yaw;
-    while (yawErr > Math.PI) yawErr -= Math.PI * 2;
-    while (yawErr < -Math.PI) yawErr += Math.PI * 2;
-    yawErr = Math.max(-0.7, Math.min(0.7, yawErr));
+    let yawErr = this.cameraYawError();
+    const visualMax = TUNING.combat.visualAimMaxDeg * Math.PI / 180;
+    yawErr = Math.max(-visualMax, Math.min(visualMax, yawErr));
     return {
       state: st,
       speed: Math.min(1, this.speed / TUNING.move.roadieSpeed),
@@ -213,7 +235,6 @@ export class Controller {
     this.evadeCooldown = Math.max(0, this.evadeCooldown - dt);
     this.bounceWindow = Math.max(0, this.bounceWindow - dt);
     this.firingBlind = Math.max(0, this.firingBlind - dt);
-    if (firing && !this.aim) this.firingBlind = 0.7; // sostiene la postura de tiro
 
     if (this.dead) { this.aim = false; return; }
 
@@ -222,6 +243,9 @@ export class Controller {
     const aimAllowed = this.state !== 'dive' && this.state !== 'slide' &&
       this.state !== 'roadie' && this.state !== 'flip' && this.state !== 'mantle';
     this.aim = input.aimHeld && aimAllowed;
+    // Evaluar contra el input de ESTE frame, no contra this.aim anterior.
+    // Así mantener fuego al soltar ADS entra a blindfire sin un frame ambiguo.
+    if (firing && !this.aim) this.firingBlind = 0.7;
 
     // momentum GANADO corriendo: tiempo continuo + distancia reciente en el
     // suelo. Se pierde al instante al dejar de correr — un toque de carrera
@@ -263,13 +287,15 @@ export class Controller {
           dx = f.x; dz = f.z;
         } else if (this.aim || firing) {
           // DISPARAR MANDA sobre correr: el cuerpo encara a la cámara aunque
-          // te muevas hacia atrás o de lado (las piernas strafean)
-          this.yaw = lerpAngle(this.yaw, this.cam.yaw, 1 - Math.exp(-M.aimTurnLerp * dt));
+          // te muevas hacia atrás o de lado (las piernas strafean). El límite
+          // angular evita que un delta grande se convierta en un snap de 180°.
+          this._turnToCamera(dt);
         } else if (hasInput) {
           this.yaw = lerpAngle(this.yaw, yawFromDir(dx, dz), 1 - Math.exp(-M.turnLerp * dt));
         } else {
           // Gears: en reposo el cuerpo (y la mira) siguen a la cámara
-          this.yaw = lerpAngle(this.yaw, this.cam.yaw, 1 - Math.exp(-9 * dt));
+          this.yaw = approachAngle(this.yaw, this.cam.yaw,
+            TUNING.combat.bodyTurnFollowDeg * Math.PI / 180 * dt);
         }
 
         const want = hasInput || this.state === 'roadie';
@@ -440,6 +466,8 @@ export class Controller {
 
         // en pared alta solo se puede apuntar asomándose en una orilla
         if (!low && this.aim && !nearA && !nearB) this.aim = false;
+        // La restricción contextual pudo convertir ADS en blindfire este frame.
+        if (firing && !this.aim) this.firingBlind = 0.7;
         let leanSide = 0; // -1 = orilla A, +1 = orilla B (en frame del tangente)
         if (!low && this.aim) leanSide = nearA && (!nearB || u < len - u) ? -1 : 1;
 
@@ -453,11 +481,14 @@ export class Controller {
         this.pos.z = f.a.z + uz * u + n.z * PLAYER_R;
         this.vel.x = lat * ux * M.coverStrafe; this.vel.z = lat * uz * M.coverStrafe;
 
-        // orientación: DE ESPALDAS a la pared; al apuntar/disparar → cámara
+        // orientación: DE ESPALDAS a la pared; al apuntar/disparar → cámara.
+        // Blindfire gira más pesado para conservar la lectura del cover y no
+        // invertir cuerpo/cañón de un frame al siguiente.
         if (this.aim || this.firingBlind > 0) {
-          this.yaw = lerpAngle(this.yaw, this.cam.yaw, 1 - Math.exp(-M.aimTurnLerp * dt));
+          this._turnToCamera(dt, !this.aim);
         } else {
-          this.yaw = lerpAngle(this.yaw, yawFromDir(n.x, n.z), 1 - Math.exp(-10 * dt));
+          this.yaw = approachAngle(this.yaw, yawFromDir(n.x, n.z),
+            TUNING.combat.bodyTurnFollowDeg * Math.PI / 180 * dt);
         }
 
         // señal de lean para la animación, en el frame del personaje

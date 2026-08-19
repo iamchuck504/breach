@@ -110,7 +110,15 @@ export class ShoulderCamera {
   // Ray desde el centro de pantalla (para apuntar)
   aimRay() {
     const origin = this.camera.position.clone();
-    const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+    // No leer el quaternion renderizado del frame anterior: input, simulación
+    // y disparo ocurren antes de update(). La dirección se deriva del mismo
+    // yaw/pitch actual que usa flatForward(), así ADS y blindfire coinciden.
+    const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
+    const dir = new THREE.Vector3(
+      -Math.sin(this.yaw) * cp,
+      sp,
+      -Math.cos(this.yaw) * cp,
+    ).normalize();
     return { origin, dir };
   }
 }

@@ -10,9 +10,10 @@
     "server": "node server/server.js",
     "check:controller": "node scripts/check-controller.mjs",
     "check:bot-stuck": "node scripts/check-bot-stuck.mjs",
+    "check:combat-orientation": "node scripts/check-combat-orientation.mjs",
     "check:impacts": "node scripts/check-impacts.mjs",
     "check:movement": "node scripts/check-movement.mjs",
-    "test": "npm run check:controller && npm run check:impacts"
+    "test": "npm run check:controller && npm run check:combat-orientation && npm run check:impacts"
   },
   "dependencies": {
     "lil-gui": "^0.20.0",
