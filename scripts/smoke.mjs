@@ -171,7 +171,6 @@ try {
     G.player.cam.yaw = Math.PI; // mirando a +z (hacia el bloque)
     G.player.yaw = Math.PI;     // el cuerpo ya girado (el lerp tarda ~0.4s)
     G.player.vel.x = 0; G.player.vel.z = 0;
-    G.player.evadeRecovery = 0;
   });
   await page.waitForTimeout(250);
   // snap al cover pegado (reintento: el primer edge a veces cae en un frame
@@ -211,7 +210,7 @@ try {
     const P = G.player;
     P.pos.x = mx; P.pos.z = mz - 1.2; P.y = 0;
     P.cam.yaw = Math.PI; P.yaw = Math.PI;
-    P.vel.x = 0; P.vel.z = 0; P.evadeRecovery = 0;
+    P.vel.x = 0; P.vel.z = 0;
   });
   await page.waitForTimeout(250);
   let edgeCover = '';
@@ -234,29 +233,44 @@ try {
   }
   await page.waitForTimeout(400);
 
-  // ---- EVADE-CD: spamear evadir no encadena dives inmediatos ----
+  // ---- EVADE-READY: bloqueado durante el dive, listo al recuperar control ----
   await page.evaluate(() => {
     const P = window.BREACH.player;
-    P.pos.x = 0; P.pos.z = -10; P.cam.yaw = Math.PI; P.evadeRecovery = 0; P.chain = 0;
+    P.pos.x = 0; P.pos.z = -10; P.y = 0;
+    P.cam.yaw = Math.PI; P.yaw = Math.PI;
+    P.vel.x = 0; P.vel.z = 0; P.vy = 0; P.grounded = true;
+    P.cover = null; P.slide = null; P.dive = null; P.mantle = null;
+    P.state = 'idle'; P.stateT = 0; P.chain = 0; P.evadeCooldown = 0;
+    window.__evadeFindCover = P.world.findCover;
+    P.world.findCover = () => null;
   });
   await page.keyboard.down('s'); // alejándose de coberturas (dive al vacío)
   await page.waitForTimeout(80);
   await page.keyboard.press('Space');
-  await page.waitForTimeout(500); // el dive (0.36s) terminó → recovery activa
+  await page.waitForTimeout(40);
+  const firstState = await page.evaluate(() => window.BREACH.player.state);
+  await page.waitForTimeout(40);
+  await page.keyboard.press('Space'); // durante el dive: no debe reiniciarlo
+  await page.waitForTimeout(80);
+  const activeState = await page.evaluate(() => window.BREACH.player.state);
+  await page.waitForTimeout(240); // >0.36s total: ya recuperó control
   await page.keyboard.press('Space');
-  await page.waitForTimeout(120);
-  const cdBlocked = await page.evaluate(() => window.BREACH.player.state);
-  await page.waitForTimeout(600); // recovery vencida
-  await page.keyboard.press('Space');
-  await page.waitForTimeout(120);
-  const cdReady = await page.evaluate(() => window.BREACH.player.state);
+  await page.waitForTimeout(80);
+  const immediateReady = await page.evaluate(() => window.BREACH.player.state);
   await page.keyboard.up('s');
-  console.log('EVADE-CD:', JSON.stringify({ trasSpam: cdBlocked, trasEspera: cdReady }));
-  if (cdBlocked === 'dive' || cdBlocked === 'slide') {
-    errors.push('EVADE-CD: el spam encadenó otra evasión inmediata');
+  await page.evaluate(() => {
+    const P = window.BREACH.player;
+    if (window.__evadeFindCover) {
+      P.world.findCover = window.__evadeFindCover;
+      delete window.__evadeFindCover;
+    }
+  });
+  console.log('EVADE-READY:', JSON.stringify({ inicio: firstState, durante: activeState, siguiente: immediateReady }));
+  if (firstState !== 'dive' || activeState !== 'dive') {
+    errors.push('EVADE-READY: perdió el dive activo (' + firstState + '/' + activeState + ')');
   }
-  if (cdReady !== 'dive' && cdReady !== 'slide' && cdReady !== 'cover') {
-    errors.push('EVADE-CD: tras la recuperación la evasión no salió (' + cdReady + ')');
+  if (immediateReady !== 'dive' && immediateReady !== 'slide' && immediateReady !== 'cover') {
+    errors.push('EVADE-READY: la siguiente pulsación no salió inmediatamente (' + immediateReady + ')');
   }
   await page.waitForTimeout(700);
 

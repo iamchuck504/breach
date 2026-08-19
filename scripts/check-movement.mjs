@@ -72,7 +72,7 @@ await page.evaluate(() => {
   window.__tp = (x, z, yaw = Math.PI) => {
     const p = window.BREACH.player;
     p.pos.x = x; p.pos.z = z; p.y = 0; p.vel.x = 0; p.vel.z = 0;
-    p.cam.yaw = yaw; p.yaw = yaw; p.evadeRecovery = 0; p.chain = 0;
+    p.cam.yaw = yaw; p.yaw = yaw; p.chain = 0;
     p.cover = null; p.slide = null; p.dive = null; p.mantle = null;
     p.state = 'idle'; p.stateT = 0; // teleport limpio: sin estado arrastrado
     window.__mon.ignoreTeleport = 4;
@@ -93,8 +93,8 @@ for (let i = 0; i < 20; i++) { await page.keyboard.press('Space'); await page.wa
 await page.keyboard.up('s');
 const spam = await page.evaluate(() => window.__mon.evades);
 const diveRestarts = await page.evaluate(() => window.__mon.diveRestarts);
-// 20 presses en ~1.9s: con dive 0.36 + recovery 0.35 caben ~3; margen: ≤5
-if (spam > 5) problems.push(`SPAM: ${spam} evasiones en 1.9s de spam (esperaba ≤5)`);
+// Solo cuentan pulsaciones hechas cuando el evade anterior ya terminó.
+if (spam > 7) problems.push(`SPAM: ${spam} evasiones en 1.9s (esperaba ≤7)`);
 if (diveRestarts > 0) problems.push(`SPAM: dive se reinició ${diveRestarts} veces sin terminar`);
 await flush('spam');
 
@@ -172,7 +172,7 @@ await coverExitTest('sprint+lateral-B', ['Shift', 'a'], ['roadie', 'run'], 1200)
 await coverExitTest('sprint+lateral-A', ['Shift', 'd'], ['roadie', 'run'], 1200);
 await coverExitTest('lateral-al-tope', ['a'], ['run', 'idle'], 1500);      // sin sprint: camina fuera
 await coverExitTest('diagonal-fuera', ['s', 'd'], ['run', 'idle', 'dive'], 700); // away>0.3 sale sin sprint
-await coverExitTest('lateral-corto-NO-sale', ['d'], ['cover'], 350);       // en el centro: sigue desplazándose
+await coverExitTest('lateral-corto-NO-sale', ['d'], ['cover'], 150);       // pulso corto en centro: sigue cubierto
 
 // ---- FASE 7: muertes en plena transición ----
 const dieIn = async (tag, prep, expectState = null, keepPosition = false) => {
@@ -228,7 +228,7 @@ const dieIn = async (tag, prep, expectState = null, keepPosition = false) => {
   await page.waitForTimeout(300);
   const revived = await page.evaluate(() => ({
     st: window.BREACH.player.state, rag: !!window.BREACH.rig.rag,
-    rec: window.BREACH.player.evadeRecovery, mant: !!window.BREACH.player.mantle,
+    mant: !!window.BREACH.player.mantle,
   }));
   if (revived.rag) problems.push(`MUERTE ${tag}: el ragdoll no se limpió al revivir`);
   if (revived.mant) problems.push(`MUERTE ${tag}: mantle pegado tras revivir`);

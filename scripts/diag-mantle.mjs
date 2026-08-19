@@ -32,7 +32,7 @@ const setup = await page.evaluate(() => {
   G.player.pos.x = mx; G.player.pos.z = mz - 1.2;
   G.player.cam.yaw = Math.PI; G.player.yaw = Math.PI;
   G.player.vel.x = 0; G.player.vel.z = 0;
-  G.player.evadeRecovery = 0; G.player.y = 0;
+  G.player.y = 0;
   return { face: { mx: +mx.toFixed(2), mz: +mz.toFixed(2), h: f.h }, mode: G.mode };
 });
 console.log('SETUP:', JSON.stringify(setup));
@@ -44,7 +44,7 @@ const pre = await page.evaluate(() => {
   const snap = W.findCover(P.pos, dir, 1.7, 0.38, 0.3);
   return {
     pos: [+P.pos.x.toFixed(2), +P.pos.z.toFixed(2)], yaw: +P.yaw.toFixed(2),
-    grounded: P.grounded, rec: P.evadeRecovery, state: P.state,
+    grounded: P.grounded, state: P.state,
     snap: snap ? { d: +snap.dist.toFixed(2), h: snap.face.h } : null,
     suppress: window.BREACH_INPUT.suppress, menu: !document.getElementById('menu').classList.contains('off'),
   };

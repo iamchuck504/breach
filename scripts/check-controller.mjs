@@ -89,7 +89,37 @@ function putAtCoverEdge(controller, h = 1.1) {
     input.endFrame();
   }
   check(restarts === 0, `spam reinició dive ${restarts} veces`);
-  check(dives() <= 8, `spam inició ${dives()} evasiones en 5 s`);
+  // Pulsos cada 200 ms: como cada dive dura 360 ms, solo uno de cada dos
+  // puede iniciar otro; no existe espera adicional después de terminar.
+  check(dives() >= 12 && dives() <= 14, `spam inició ${dives()} evasiones en 5 s`);
+}
+
+// Al recuperar control, la siguiente pulsación funciona en el primer frame.
+{
+  const { controller, dives } = makeController();
+  const input = new TestInput();
+  input.mv = { x: 0, z: 1 };
+  input.evadePressed = true;
+  frame(controller, input);
+  let guard = 0;
+  while (controller.state === 'dive' && guard++ < 60) frame(controller, input);
+  check(controller.state === 'run', `evade no devolvió control (${controller.state})`);
+  input.evadePressed = true;
+  frame(controller, input);
+  check(controller.state === 'dive' && dives() === 2,
+    `segunda pulsación inmediata no inició evade (${controller.state}, ${dives()})`);
+}
+
+// Mantener el botón no genera otro edge al terminar la animación.
+{
+  const { controller, dives } = makeController();
+  const input = new TestInput();
+  input.mv = { x: 0, z: 1 };
+  input.evadePressed = true; // único keydown válido
+  frame(controller, input);
+  input.evadeHeld = true;    // el controlador deliberadamente no consume held
+  frame(controller, input, 120);
+  check(dives() === 1, `botón mantenido inició ${dives()} evasiones`);
 }
 
 // Un input opuesto durante dive no invierte la velocidad instantáneamente.

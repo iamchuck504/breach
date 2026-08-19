@@ -37,7 +37,6 @@ export class Controller {
     this.chain = 0;         // rebotes encadenados
     this.bounceWindow = 0;
     this.evadeCooldown = 0;
-    this.evadeRecovery = 0; // cooldown entre evasiones NUEVAS desde el suelo
     this.runT = 0;          // carrera continua (momentum ganado)
     this.runDist = 0;
     this.evadeMom = 0;      // impulso ganado aplicado a la evasión en curso
@@ -130,7 +129,6 @@ export class Controller {
     this.coverLeanAnim = 0;
     this.detachT = 0;
     this.evadeCooldown = 0;
-    this.evadeRecovery = 0;
     this.runT = 0;
     this.runDist = 0;
     this.evadeMom = 0;
@@ -213,7 +211,6 @@ export class Controller {
     const M = TUNING.move, E = TUNING.evade, C = TUNING.cover;
     this.stateT += dt;
     this.evadeCooldown = Math.max(0, this.evadeCooldown - dt);
-    this.evadeRecovery = Math.max(0, this.evadeRecovery - dt);
     this.bounceWindow = Math.max(0, this.bounceWindow - dt);
     this.firingBlind = Math.max(0, this.firingBlind - dt);
     if (firing && !this.aim) this.firingBlind = 0.7; // sostiene la postura de tiro
@@ -292,9 +289,9 @@ export class Controller {
           else if (!this._tryWallKick() && !this.usedDouble && hasInput) this._airRoll(mw, input.moveVec());
         }
 
-        // evadir / cover (solo en el suelo, con recuperación anti-spam:
-        // la siguiente evasión NUEVA espera a que la anterior "aterrice")
-        if (input.evadePressed && this.grounded && this.evadeRecovery <= 0) {
+        // Nueva pulsación válida en el suelo: si el estado anterior ya terminó,
+        // evade vuelve a estar disponible sin una espera artificial adicional.
+        if (input.evadePressed && this.grounded) {
           this.chain = 0;
           const dir = hasInput ? { x: mw.x, z: mw.z } : this.facing();
           // impulso ganado: solo si venía corriendo un tramo REAL y la
@@ -376,7 +373,7 @@ export class Controller {
           this._setState('run');
           this.chain = 0;
           this.evadeMom = 0;
-          this.evadeRecovery = E.recovery;
+          this.evadeCooldown = 0;
           const sp = Math.hypot(this.vel.x, this.vel.z);
           if (sp > M.runSpeed) {
             const k = M.runSpeed / sp;
@@ -418,7 +415,7 @@ export class Controller {
           this._setState(hasInput ? 'run' : 'idle');
           this.chain = 0;
           this.evadeMom = 0;
-          this.evadeRecovery = E.recovery; // la siguiente evasión espera el "aterrizaje"
+          this.evadeCooldown = 0;
         }
         break;
       }
@@ -516,14 +513,12 @@ export class Controller {
             if (this._tryMantle(f, n)) break;
           } else if (wantsEvade) {
             const chained = this.bounceWindow > 0 && this.chain < E.chainMax;
-            if (chained || this.evadeRecovery <= 0) {
-              if (chained) this.chain++; else this.chain = 0;
-              this.evadeMom *= 0.45;
-              const result = this._tryEvade(dir, E.bounceRange);
-              if (result === 'slide' && chained) this.ev.onBounce?.(this.chain);
-              else if (result !== 'slide' && chained) this.chain--;
-              if (this.state !== 'cover') break;
-            }
+            if (chained) this.chain++; else this.chain = 0;
+            this.evadeMom *= 0.45;
+            const result = this._tryEvade(dir, E.bounceRange);
+            if (result === 'slide' && chained) this.ev.onBounce?.(this.chain);
+            else if (result !== 'slide' && chained) this.chain--;
+            if (this.state !== 'cover') break;
           }
         }
 
@@ -715,11 +710,9 @@ export class Controller {
     this.slide = null;
     this._setState('cover');
     this.bounceWindow = TUNING.evade.bounceWindow;
-    // anti-spam SIN lentitud: la ventana de bounce (0.3s) sigue permitiendo
-    // el rebote encadenado instantáneo; una evasión NUEVA espera a que el
-    // cuerpo se asiente (recovery). Agotar la cadena cuesta un respiro extra.
-    this.evadeRecovery = Math.max(this.evadeRecovery,
-      this.chain >= TUNING.evade.chainMax ? TUNING.evade.recovery * 1.6 : TUNING.evade.recovery);
+    // Llegar al cover termina el slide: una NUEVA pulsación ya es válida.
+    // evadeCooldown solo protege la acción mientras está activa.
+    this.evadeCooldown = 0;
     this.detachT = 0;
     this.ev.onCoverEnter?.(this.chain);
   }
