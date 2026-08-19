@@ -92,6 +92,10 @@ export class World {
       concreteTop: this._concreteCanvas(true),
       roofFloor: this._roofFloorCanvas(),      // grava/brea de azotea
       windows: this._windowsCanvas(),          // fachadas nocturnas iluminadas
+      roofMark: this._roofMarkCanvas(),        // marca técnica del centro
+      hazard: this._hazardCanvas(),            // franjas de seguridad
+      billboard: this._billboardCanvas(),      // anuncio del skyline
+      glow: this._glowCanvas(),                // halos sin luces dinámicas
     };
     this._texCache = new Map(); // compartidas por (canvas, repeat): pocas subidas a GPU
   }
@@ -353,6 +357,76 @@ export class World {
     return cv;
   }
 
+  // Marca de mantenimiento: aro incompleto, H y coordenadas de sector.
+  _roofMarkCanvas() {
+    const s = 256;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = s;
+    const g = cv.getContext('2d');
+    g.clearRect(0, 0, s, s);
+    g.strokeStyle = 'rgba(92,196,224,.58)';
+    g.lineWidth = 8;
+    g.setLineDash([38, 15]);
+    g.beginPath(); g.arc(s / 2, s / 2, 91, 0, Math.PI * 2); g.stroke();
+    g.setLineDash([]);
+    g.strokeStyle = 'rgba(160,222,238,.46)';
+    g.lineWidth = 11;
+    g.beginPath();
+    g.moveTo(91, 82); g.lineTo(91, 174);
+    g.moveTo(165, 82); g.lineTo(165, 174);
+    g.moveTo(91, 128); g.lineTo(165, 128);
+    g.stroke();
+    g.fillStyle = 'rgba(169,222,234,.62)';
+    g.font = 'bold 14px monospace';
+    g.textAlign = 'center';
+    g.fillText('SECTOR 09', 128, 226);
+    return cv;
+  }
+
+  _hazardCanvas() {
+    const w = 256, h = 64;
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    const g = cv.getContext('2d');
+    g.fillStyle = '#d79a32'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#262a31';
+    for (let x = -64; x < w + 64; x += 64) {
+      g.beginPath();
+      g.moveTo(x, h); g.lineTo(x + 28, h); g.lineTo(x + 64, 0); g.lineTo(x + 36, 0);
+      g.closePath(); g.fill();
+    }
+    g.fillStyle = 'rgba(255,255,255,.14)'; g.fillRect(0, 0, w, 3);
+    return cv;
+  }
+
+  _billboardCanvas() {
+    const w = 512, h = 192;
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    const g = cv.getContext('2d');
+    g.fillStyle = '#091018'; g.fillRect(0, 0, w, h);
+    g.strokeStyle = '#4fc7df'; g.lineWidth = 10; g.strokeRect(7, 7, w - 14, h - 14);
+    g.fillStyle = '#eb9f45'; g.fillRect(32, 32, 14, h - 64);
+    g.fillStyle = '#d9edf2'; g.font = 'bold 64px monospace';
+    g.textAlign = 'left'; g.fillText('NOVA', 72, 92);
+    g.fillStyle = '#58c8df'; g.font = 'bold 25px monospace';
+    g.fillText('SECTOR 09 // EN LÍNEA', 74, 142);
+    return cv;
+  }
+
+  _glowCanvas() {
+    const s = 128;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = s;
+    const g = cv.getContext('2d');
+    const grad = g.createRadialGradient(64, 64, 2, 64, 64, 62);
+    grad.addColorStop(0, 'rgba(255,255,255,.95)');
+    grad.addColorStop(0.18, 'rgba(255,255,255,.48)');
+    grad.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = grad; g.fillRect(0, 0, s, s);
+    return cv;
+  }
+
   _tex(id, rx = 1, ry = 1) {
     const key = id + ':' + rx.toFixed(2) + ':' + ry.toFixed(2);
     let t = this._texCache.get(key);
@@ -495,18 +569,19 @@ export class World {
       // Noche urbana: luna fría, ambiente azul y resplandor cálido de la
       // ciudad en el horizonte. Los acentos emisivos (ventanas, neón,
       // luces de antena) ponen el color.
-      this.hemi.color.setHex(0x3a4866);
-      this.hemi.groundColor.setHex(0x20232c);
-      this.hemi.intensity = 1.12;
-      this.amb.color.setHex(0x39415a);
-      this.amb.intensity = 0.62;
+      this.hemi.color.setHex(0x6683ad);
+      this.hemi.groundColor.setHex(0x222a36);
+      this.hemi.intensity = 1.34;
+      this.amb.color.setHex(0x52647f);
+      this.amb.intensity = 0.54;
       this.sun.color.setHex(0xc3d5f2); // luna
-      this.sun.intensity = 1.15;
+      this.sun.intensity = 1.52;
       this.sun.position.set(20, 26, -14);
       this._setSky([
-        [0, '#070b18'], [0.5, '#101a30'], [0.82, '#28273f'], [1, '#54394a'],
+        [0, '#060b17'], [0.5, '#10203a'], [0.82, '#283a55'], [1, '#624553'],
       ]);
-      this.scene.fog = null;
+      // Profundidad urbana: inicia fuera del combate y funde el skyline.
+      this.scene.fog = new THREE.Fog(0x111a2a, 52, 128);
     } else {
       this.hemi.color.setHex(0xd9e6f0);
       this.hemi.groundColor.setHex(0x97876e);
@@ -1183,11 +1258,13 @@ export class World {
   // Spawns fijos en ±23.4 (idénticos a Fortaleza → compatible con el server).
   _buildAzoteas() {
     const { LOW, MID, HIGH } = BLOCK;
-    const acOpts = { color: 0xaeb6be, top: 0xc4cad0 };    // A/C metálicos
-    const ventOpts = { color: 0xa2a7ae, top: 0xb8bdc3 };  // ductos
-    const hutOpts = { color: 0xb2aea4, top: 0xc2beb4 };   // casetas de concreto
-    const glassOpts = { color: 0x6f7d8a, top: 0x89a6c0 }; // claraboyas
-    const wallOpts = { mirror: false, color: 0xa39f97, top: 0xb3afa7 };
+    // Familias tonales distintas: el jugador reconoce A/C, ductos, casetas y
+    // vidrio antes de acercarse, aun con la iluminación nocturna.
+    const acOpts = { color: 0x8796a5, top: 0xb9c7d2 };    // A/C metálicos
+    const ventOpts = { color: 0x71808e, top: 0xa6b2bc };  // ductos
+    const hutOpts = { color: 0x727b86, top: 0x9ba5ae };   // casetas de concreto
+    const glassOpts = { color: 0x38677c, top: 0x67b6d0 }; // claraboyas
+    const wallOpts = { mirror: false, color: 0x59636f, top: 0x7e8994 };
 
     // perímetro: parapetos / fachadas de los edificios vecinos
     this._box(0, -this.fz - 0.4, this.fx * 2 + 2, 0.8, HIGH, wallOpts);
@@ -1250,12 +1327,15 @@ export class World {
       [-12, -37, 10, 12], [8, -39, 12, 18], [14, 37, 10, 11],
       [-8, 39, 11, 20], [24, 33, 8, 9], [-24, -33, 9, 8],
     ];
+    const skylineRoofMat = new THREE.MeshBasicMaterial({ color: 0x111826 });
     for (const [x, z, w, h] of bldgs) {
+      const facade = new THREE.MeshBasicMaterial({
+        map: this._tex('windows', Math.max(1, Math.round(w / 6)), Math.max(1, Math.round(h / 12))),
+        color: 0xa7b4c5,
+      });
       const b = new THREE.Mesh(
         new THREE.BoxGeometry(w, h, w * 0.85),
-        new THREE.MeshBasicMaterial({
-          map: this._tex('windows', Math.max(1, Math.round(w / 6)), Math.max(1, Math.round(h / 12))),
-        })
+        [facade, facade, skylineRoofMat, skylineRoofMat, facade, facade]
       );
       b.position.set(x, h / 2 - 8, z);
       this.mapGroup.add(b);
@@ -1327,6 +1407,195 @@ export class World {
     );
     moon.position.set(30, 34, -52);
     this.mapGroup.add(moon);
+
+    this._detailAzoteas(bldgs, moon.position);
+  }
+
+  // Capas urbanas de bajo coste: señalética, ventiladores, luces de borde y
+  // siluetas. No participan en colisión ni cobertura.
+  _detailAzoteas(bldgs, moonPos) {
+    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
+    const p = new THREE.Vector3(), s = new THREE.Vector3();
+
+    // Helipuerto técnico bajo el tanque central: landmark visible en picado.
+    const roofMark = new THREE.Mesh(
+      new THREE.PlaneGeometry(8.5, 8.5),
+      new THREE.MeshBasicMaterial({
+        map: this._tex('roofMark'), transparent: true, opacity: 0.68,
+        depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2,
+      })
+    );
+    roofMark.rotation.x = -Math.PI / 2;
+    roofMark.position.y = 0.024;
+    this.mapGroup.add(roofMark);
+
+    // Ventiladores de los A/C. Dos meshes instanciados para todos los equipos.
+    const acSeed = [
+      [-5.2, -18.4], [5.2, -18.4], [-3, -11.5], [1.5, -8.8],
+      [-2, -6.2], [-7.5, -1.8], [-4.5, 0.8],
+    ];
+    const seen = new Set(), acUnits = [];
+    for (const [x, z] of acSeed) {
+      for (const [ax, az] of [[x, z], [-x, -z]]) {
+        const key = `${ax.toFixed(2)}:${az.toFixed(2)}`;
+        if (!seen.has(key)) { seen.add(key); acUnits.push([ax, az]); }
+      }
+    }
+    const fanMat = new THREE.MeshBasicMaterial({ color: 0x26313d });
+    const fanRings = new THREE.InstancedMesh(
+      new THREE.CylinderGeometry(0.39, 0.39, 0.055, 14), fanMat, acUnits.length);
+    acUnits.forEach(([x, z], i) => {
+      m4.compose(p.set(x, BLOCK.LOW + 0.045, z), q.identity(), s.set(1, 1, 1));
+      fanRings.setMatrixAt(i, m4);
+    });
+    this.mapGroup.add(fanRings);
+
+    const blades = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshBasicMaterial({ color: 0x526273 }), acUnits.length * 2);
+    let bladeI = 0;
+    for (const [x, z] of acUnits) {
+      for (const ry of [0, Math.PI / 2]) {
+        q.setFromEuler(e.set(0, ry, 0));
+        m4.compose(p.set(x, BLOCK.LOW + 0.085, z), q, s.set(0.55, 0.025, 0.075));
+        blades.setMatrixAt(bladeI++, m4);
+      }
+    }
+    this.mapGroup.add(blades);
+
+    // Franjas ámbar: peligros verticales y lados de la caseta central.
+    const hazardSpots = [
+      [0, 1.62, -1.01, 0, 1.1], [0, 1.62, 1.01, Math.PI, 1.1],
+      [10.99, 1.34, -8, -Math.PI / 2, 1.15], [-10.99, 1.34, 8, Math.PI / 2, 1.15],
+      [-12.49, 1.35, -10.5, Math.PI / 2, 0.9], [12.49, 1.35, 10.5, -Math.PI / 2, 0.9],
+    ];
+    const hazards = new THREE.InstancedMesh(
+      new THREE.PlaneGeometry(1.7, 0.22),
+      new THREE.MeshBasicMaterial({ map: this._tex('hazard') }), hazardSpots.length);
+    hazardSpots.forEach(([x, y, z, ry, sc], i) => {
+      q.setFromEuler(e.set(0, ry, 0));
+      m4.compose(p.set(x, y, z), q, s.set(sc, 1, 1));
+      hazards.setMatrixAt(i, m4);
+    });
+    this.mapGroup.add(hazards);
+
+    // Balizas de borde: rojo/azul en bases, cian en flancos. Una sola malla.
+    const edgeData = [];
+    for (let x = -17.5; x <= 17.5; x += 5) {
+      edgeData.push([x, -25.95, 0xff5d50, 0]);
+      edgeData.push([x, 25.95, 0x64a9ff, 0]);
+    }
+    for (let z = -18; z <= 18; z += 6) {
+      edgeData.push([-20.5, z, 0x55d5df, Math.PI / 2]);
+      edgeData.push([20.5, z, 0x55d5df, Math.PI / 2]);
+    }
+    const edgeLights = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(0.55, 0.07, 0.12),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true }), edgeData.length);
+    edgeData.forEach(([x, z, color, ry], i) => {
+      q.setFromEuler(e.set(0, ry, 0));
+      m4.compose(p.set(x, 0.055, z), q, s.set(1, 1, 1));
+      edgeLights.setMatrixAt(i, m4);
+      edgeLights.setColorAt(i, new THREE.Color(color));
+    });
+    edgeLights.instanceColor.needsUpdate = true;
+    this.mapGroup.add(edgeLights);
+
+    // Charcos de lluvia muy sutiles: rompen el mosaico sin reflejos costosos.
+    const puddleData = [
+      [-17, -20, 1.8, 0.7], [-13, 2, 1.2, 0.55], [-18, 15, 1.5, 0.65],
+      [17, 20, 1.8, 0.7], [13, -2, 1.2, 0.55], [18, -15, 1.5, 0.65],
+      [-5, 11, 1.15, 0.48], [5, -11, 1.15, 0.48],
+    ];
+    const puddles = new THREE.InstancedMesh(
+      new THREE.CircleGeometry(1, 18),
+      new THREE.MeshBasicMaterial({
+        color: 0x15273a, transparent: true, opacity: 0.36, depthWrite: false,
+      }), puddleData.length);
+    puddleData.forEach(([x, z, sx, sz], i) => {
+      q.setFromEuler(e.set(-Math.PI / 2, 0, (x - z) * 0.13));
+      m4.compose(p.set(x, 0.026, z), q, s.set(sx, sz, 1));
+      puddles.setMatrixAt(i, m4);
+    });
+    this.mapGroup.add(puddles);
+
+    // Volúmenes técnicos oscuros sobre edificios: la ciudad deja de parecer
+    // una colección de cubos luminosos idénticos.
+    const roofBits = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshBasicMaterial({ color: 0x141b28 }), bldgs.length);
+    bldgs.forEach(([x, z, w, h], i) => {
+      const top = h - 8;
+      q.setFromEuler(e.set(0, i * 0.47, 0));
+      m4.compose(p.set(x + ((i % 3) - 1) * 0.7, top + 0.33, z), q,
+        s.set(w * 0.28, 0.66, w * 0.2));
+      roofBits.setMatrixAt(i, m4);
+    });
+    this.mapGroup.add(roofBits);
+
+    // Anuncio cian/ámbar en el edificio este, orientado hacia la cancha.
+    const billboard = new THREE.Mesh(
+      new THREE.PlaneGeometry(6.2, 2.32),
+      new THREE.MeshBasicMaterial({ map: this._tex('billboard'), side: THREE.DoubleSide }));
+    billboard.position.set(27.46, 5.3, 12);
+    billboard.rotation.y = -Math.PI / 2;
+    this.mapGroup.add(billboard);
+
+    // Aros y escalera del tanque central: lectura industrial sin otra luz.
+    const tankBands = new THREE.InstancedMesh(
+      new THREE.CylinderGeometry(1.02, 1.02, 0.07, 10),
+      new THREE.MeshBasicMaterial({ color: 0x202934 }), 2);
+    [BLOCK.HIGH + 0.18, BLOCK.HIGH + 1.31].forEach((y, i) => {
+      m4.compose(p.set(0, y, 0), q.identity(), s.set(1, 1, 1));
+      tankBands.setMatrixAt(i, m4);
+    });
+    this.mapGroup.add(tankBands);
+    const ladderParts = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshBasicMaterial({ color: 0x9b7040 }), 7);
+    for (let i = 0; i < 5; i++) {
+      m4.compose(p.set(0, BLOCK.HIGH + 0.15 + i * 0.29, -1.01), q.identity(), s.set(0.55, 0.045, 0.045));
+      ladderParts.setMatrixAt(i, m4);
+    }
+    for (const [i, x] of [[5, -0.26], [6, 0.26]]) {
+      m4.compose(p.set(x, BLOCK.HIGH + 0.73, -1.01), q.identity(), s.set(0.045, 1.45, 0.045));
+      ladderParts.setMatrixAt(i, m4);
+    }
+    this.mapGroup.add(ladderParts);
+
+    // Halos con sprites: dan sensación de emisión sin PointLights ni sombras.
+    const haloMat = new THREE.SpriteMaterial({
+      map: this._tex('glow'), color: 0xff6650, transparent: true,
+      opacity: 0.48, depthWrite: false, fog: false,
+    });
+    const beaconHalo = new THREE.Sprite(haloMat);
+    beaconHalo.position.set(0, BLOCK.HIGH + 2.12, 0);
+    beaconHalo.scale.set(1.35, 1.35, 1);
+    this.mapGroup.add(beaconHalo);
+    const moonHalo = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: this._tex('glow'), color: 0xbdd8ff, transparent: true,
+      opacity: 0.3, depthWrite: false, fog: false,
+    }));
+    moonHalo.position.copy(moonPos);
+    moonHalo.scale.set(9.5, 9.5, 1);
+    this.mapGroup.add(moonHalo);
+
+    // Estrellas deterministas para que el cielo tenga escala y no parpadee
+    // entre cambios de mapa.
+    let seed = 3907;
+    const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
+    const starsPos = [];
+    for (let i = 0; i < 110; i++) {
+      const a = rnd() * Math.PI * 2, r = 76 + rnd() * 34;
+      starsPos.push(Math.cos(a) * r, 16 + rnd() * 42, Math.sin(a) * r);
+    }
+    const starsGeo = new THREE.BufferGeometry();
+    starsGeo.setAttribute('position', new THREE.Float32BufferAttribute(starsPos, 3));
+    const stars = new THREE.Points(starsGeo, new THREE.PointsMaterial({
+      color: 0xa9c8e8, size: 0.14, transparent: true, opacity: 0.72,
+      sizeAttenuation: true, fog: false,
+    }));
+    this.mapGroup.add(stars);
   }
 
   _buildSpawns() {
