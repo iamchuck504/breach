@@ -667,6 +667,8 @@ export class Rig {
         : 0,
       ox: 0, oz: 0, oy: 0,
       vx, vz, vy: 0,
+      // (el clamp by>=floorY se aplica abajo: morir a mitad de un mantle con
+      // el cuerpo ya dentro de la huella del bloque lo dejaba incrustado)
       ang: 0,
       hit: false, flopT: 0, // impacto contra el suelo → flop de extremidades
       // flop contenido: flexible pero con masa (nada de muñeco de goma)
@@ -682,6 +684,7 @@ export class Rig {
         rnd(-0.3, 0.4), rnd(-0.7, -0.2),
       ],
     };
+    if (this.rag.by < this.rag.floorY) this.rag.by = this.rag.floorY;
   }
 
   _addNameTag(name, tc) {

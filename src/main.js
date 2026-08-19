@@ -1283,7 +1283,7 @@ function simStep(dt) {
 
   // (el flip Matrix SÍ permite disparar en el aire)
   const stateOk = !p.dead && p.state !== 'dive' && p.state !== 'slide' &&
-    p.state !== 'roadie' && input.anyDevice;
+    p.state !== 'roadie' && p.state !== 'mantle' && input.anyDevice;
   // giro brusco: el tiro de CADERA espera solo si el cuerpo apunta casi de
   // espaldas (el trigger fuerza el giro rápido). Apuntando (ADS) nunca se
   // bloquea: la bala sale de la cámara.
