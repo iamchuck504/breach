@@ -6,7 +6,7 @@ import { BINDS, KB_LABELS, PAD_LABELS, keyLabel, padBtnName, loadBinds, saveBind
 import { Input } from './core/input.js';
 import { ShoulderCamera } from './core/camera.js';
 import { World } from './world/world.js';
-import { Rig, CHAR_NAMES } from './player/rig.js';
+import { Rig, CHAR_NAMES, RAGDOLL_R } from './player/rig.js';
 import { Controller, PLAYER_R } from './player/controller.js';
 import { RemotePlayer } from './player/remote.js';
 import { Dummies } from './player/practice.js';
@@ -471,6 +471,7 @@ function buildCharUI() {
           G.rig.dispose(scene);
           G.rig = new Rig(scene, G.team, null, v);
           G.rig.groundFn = (x, z, y) => world.groundHeight({ x, z }, PLAYER_R, y);
+          G.rig.collideFn = (p, y, r = RAGDOLL_R) => world.resolveCircle(p, r, y);
           G.rig.setWeapon(G.weapons.cur);
         }
       });
@@ -691,7 +692,7 @@ function spawnLocal(team, spawn) {
   G.team = team;
   G.rig = new Rig(scene, team, null, G.charVariant);
   G.rig.groundFn = (x, z, y) => world.groundHeight({ x, z }, PLAYER_R, y);
-  G.rig.collideFn = (p, y) => world.resolveCircle(p, 0.3, y);
+  G.rig.collideFn = (p, y, r = RAGDOLL_R) => world.resolveCircle(p, r, y);
   G.player = new Controller(world, shoulderCam, ctrlEvents);
   G.player.respawn(spawn);
   G.weapons.reset();
@@ -714,6 +715,7 @@ function damagePlayerLocal(dmg, fromName, shooter) {
   if (G.selfHp <= 0) {
     G.selfHp = 0;
     G.selfAlive = false;
+    G.weapons.cancelActions();
     // contexto físico de la muerte ANTES de matar (kill() borra la velocidad):
     // dirección del tiro, potencia del golpe final, momentum y estado
     G.rig.setDeathContext({
@@ -734,14 +736,20 @@ function damagePlayerLocal(dmg, fromName, shooter) {
       G.respawnT = 0;
       hud.center('SIN VIDAS', 'esperando el final de la ronda', 4500);
     }
-    // el arma se le CAE de las manos durante el desplome (~0.28s), no aparece
-    // teletransportada al piso en el frame de la muerte
+    // El drop nace cuando desaparece el arma de la mano y en la posición
+    // ACTUAL del cadáver; antes aparecía 60 ms tarde en el punto inicial.
     const dropAt = { x: G.player.pos.x, z: G.player.pos.z, y: world.groundHeight(G.player.pos, PLAYER_R, G.player.y) };
     const wep = G.weapons.cur, mag = G.weapons.st.mag, res = G.weapons.st.reserve;
     const id = 'p' + G.dropSeq++;
+    const deathRig = G.rig, deathDrops = G.drops;
     setTimeout(() => {
-      G.drops?.spawn(id, wep, dropAt.x, dropAt.z, 'red', mag, res, undefined, dropAt.y);
-    }, 280);
+      if (!deathDrops || G.rig !== deathRig || G.drops !== deathDrops) return;
+      const rag = deathRig.rag;
+      const x = rag ? rag.bx + rag.ox : dropAt.x;
+      const z = rag ? rag.bz + rag.oz : dropAt.z;
+      const y = rag ? world.groundHeight({ x, z }, PLAYER_R, rag.by) : dropAt.y;
+      deathDrops.spawn(id, wep, x, z, 'red', mag, res, undefined, y);
+    }, 220);
     return true;
   }
   return false;
@@ -766,18 +774,23 @@ function startBots() {
     effects, audio, hud,
     playerName: G.name,
     stepSound,
-    dropWeapon: (wep, x, z, team, y = 0) => {
+    dropWeapon: (wep, x, z, team, y = 0, deathRig = null) => {
       // los bots no llevan contador de balas: sueltan un remanente plausible.
-      // El drop aparece cuando el arma se le CAE de las manos (~0.28s), en
-      // sincronía con el ragdoll — no teletransportada al morir
+      // Aparece exactamente al soltar el arma y sigue el pequeño arrastre del
+      // cadáver en vez de quedarse en la posición previa al impacto.
       const def = TUNING.weapons[wep];
       const id = 'b' + G.dropSeq++;
-      const gy = world.groundHeight({ x, z }, PLAYER_R, y);
+      const deathDrops = G.drops;
       setTimeout(() => {
-        G.drops?.spawn(id, wep, x, z, team,
+        if (!deathDrops || G.drops !== deathDrops) return;
+        const rag = deathRig?.rag;
+        const dx = rag ? rag.bx + rag.ox : x;
+        const dz = rag ? rag.bz + rag.oz : z;
+        const gy = world.groundHeight({ x: dx, z: dz }, PLAYER_R, rag?.by ?? y);
+        deathDrops.spawn(id, wep, dx, dz, team,
           Math.ceil(def.mag * (0.2 + Math.random() * 0.6)),
           Math.ceil(def.reserve * Math.random() * 0.4), undefined, gy);
-      }, 280);
+      }, 220);
     },
     player: () => ({
       x: G.player.pos.x, z: G.player.pos.z, y: G.player.y, alive: G.selfAlive,
@@ -824,7 +837,7 @@ function startPractice() {
   world.setLayout(G.mapChoice); // mapa elegido en el menú
   G.mode = 'practice';
   spawnLocal('red', world.spawns.red[1]);
-  G.dummies = new Dummies(scene);
+  G.dummies = new Dummies(scene, world);
   G.crates = new AmmoCrates(scene, false, world.cratePos ?? undefined);
   hud.showMenu(false);
   showControls(false);
@@ -892,7 +905,7 @@ function addRemote(p) {
   if (prev) prev.dispose(scene); // id repetido: no dejar rigs huérfanos
   const r = new RemotePlayer(scene, p.id, p.name, p.team, p.v | 0);
   r.rig.groundFn = (x, z, y) => world.groundHeight({ x, z }, PLAYER_R, y);
-  r.rig.collideFn = (pt, y) => world.resolveCircle(pt, 0.3, y);
+  r.rig.collideFn = (pt, y, radius = RAGDOLL_R) => world.resolveCircle(pt, radius, y);
   r.alive = p.alive !== false;
   // posición real desde el welcome: sin ella nacían apilados en (0,0)
   if (typeof p.x === 'number') { r.x = p.x; r.z = p.z; }
@@ -973,6 +986,7 @@ function bindNet(net) {
     }
     if (m.target === net.id) {
       G.selfAlive = false;
+      G.weapons.cancelActions();
       G.rig.setDeathContext({
         impact: killer ? { x: G.player.pos.x - killer.x, z: G.player.pos.z - killer.z } : null,
         power: m.gib ? 1 : 0.6,
@@ -1188,6 +1202,12 @@ function fireShot() {
     if (G.mode === 'practice') {
       effects.blood(e.point, TEAM_HEX.blue);
       const killed = G.dummies.damage(id, e.dmg, (d) => {
+        d.rig.setDeathContext({
+          impact: { x: d.x - G.player.pos.x, z: d.z - G.player.pos.z },
+          power: Math.min(1, e.dmg / 55),
+          vel: { x: 0, z: 0 },
+          state: 'run',
+        });
         G.scores.red++;
         hud.score(G.scores.red, G.scores.blue);
         hud.kill(G.name, 'red', d.name, 'blue');

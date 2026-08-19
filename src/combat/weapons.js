@@ -28,6 +28,17 @@ export class Weapons {
     }
     this.cur = 'smg';
     this.swapT = 0;
+    this._swapped = false;
+  }
+
+  // La muerte tiene prioridad absoluta sobre gestos del arma. Congelar el
+  // swap en el arma que realmente estaba activa evita que el modelo cambie
+  // sobre el cadáver y que el drop no coincida con lo que vio el jugador.
+  cancelActions() {
+    this.swapT = 0;
+    this._swapped = false;
+    this.state.smg.reload = 0;
+    this.state.shotgun.reload = 0;
   }
 
   // caja de munición: rellena TODO (ambas armas) sin tocar el arma actual

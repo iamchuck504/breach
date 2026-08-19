@@ -123,6 +123,10 @@ function glowMaterial(color) {
 // La identidad de clase vive en accesorios desmontables (casco, peto, mochila,
 // hombreras y faldón), nunca en la escala de huesos o extremidades.
 export const CHAR_NAMES = ['RECLUTA', 'CENTINELA', 'EXPLORADOR', 'PESADO', 'FANTASMA'];
+// Radio exclusivo del cadáver: la armadura bulky ocupa más que el círculo de
+// gameplay del jugador vivo. El callback acepta un radio menor para el probe
+// de torso usado mientras el cuerpo cae.
+export const RAGDOLL_R = 0.58;
 
 const L1 = 0.28, L2 = 0.36; // largo húmero / antebrazo (pivotes)
 
@@ -1096,7 +1100,7 @@ export class Rig {
       if (this.collideFn) {
         RAG_P.x = r.bx + r.ox; RAG_P.z = r.bz + r.oz;
         const px0 = RAG_P.x, pz0 = RAG_P.z;
-        this.collideFn(RAG_P, r.by);
+        this.collideFn(RAG_P, r.by, RAGDOLL_R);
         if (RAG_P.x !== px0 || RAG_P.z !== pz0) { r.vx *= 0.35; r.vz *= 0.35; }
         r.ox = RAG_P.x - r.bx; r.oz = RAG_P.z - r.bz;
       }
@@ -1127,6 +1131,37 @@ export class Rig {
       if (r.by > r.floorY) {
         r.vyy -= 22 * dt;
         r.by = Math.max(r.floorY, r.by + r.vyy * dt);
+      }
+      // Segundo probe sobre torso/cabeza. El círculo raíz evita que los pies
+      // crucen paredes, pero una caída de 90° podía meter media armadura y el
+      // arma en la geometría. Al corregir este punto desplazamos el cadáver
+      // completo sin simular cada extremidad por separado.
+      if (this.collideFn && fall > 0.04) {
+        const deadYaw = r.byaw + r.spin * fall;
+        const sign = Math.sign(a) || 1;
+        let fx, fz;
+        if (r.axis === 'x') {
+          fx = Math.sin(deadYaw) * sign;
+          fz = Math.cos(deadYaw) * sign;
+        } else {
+          fx = -Math.cos(deadYaw) * sign;
+          fz = Math.sin(deadYaw) * sign;
+        }
+        const extent = 0.72 * fall;
+        const wantX = r.bx + r.ox + fx * extent;
+        const wantZ = r.bz + r.oz + fz * extent;
+        RAG_P.x = wantX; RAG_P.z = wantZ;
+        this.collideFn(RAG_P, r.by, 0.22);
+        const cx = RAG_P.x - wantX, cz = RAG_P.z - wantZ;
+        if (Math.abs(cx) + Math.abs(cz) > 1e-5) {
+          r.ox += cx; r.oz += cz;
+          r.vx *= 0.35; r.vz *= 0.35;
+          // asegurar que la corrección del torso no empuje la raíz dentro de
+          // otra pared en pasillos estrechos.
+          RAG_P.x = r.bx + r.ox; RAG_P.z = r.bz + r.oz;
+          this.collideFn(RAG_P, r.by, RAGDOLL_R);
+          r.ox = RAG_P.x - r.bx; r.oz = RAG_P.z - r.bz;
+        }
       }
       this.root.position.set(r.bx + r.ox, r.by, r.bz + r.oz);
       this.root.rotation.y = r.byaw + r.spin * fall;

@@ -13,7 +13,7 @@
 // - Stats (kills/deaths, 100 pts por kill) para el scoreboard (Tab/VIEW).
 import * as THREE from 'three';
 import { TUNING } from '../config/tuning.js';
-import { Rig } from '../player/rig.js';
+import { Rig, RAGDOLL_R } from '../player/rig.js';
 import { resolveShot, applySpread } from '../combat/ballistics.js';
 
 const ROUND_TIME = 300;      // 5 minutos
@@ -59,7 +59,7 @@ class Bot {
     };
     this.rig = new Rig(scene, team, name, (Math.random() * 5) | 0); // soldado random
     this.rig.groundFn = (x, z, y) => world.groundHeight({ x, z }, 0.38, y);
-    this.rig.collideFn = (p, y) => world.resolveCircle(p, 0.3, y);
+    this.rig.collideFn = (p, y, r = RAGDOLL_R) => world.resolveCircle(p, r, y);
     this.respawn(spawn);
   }
 
@@ -1098,7 +1098,7 @@ export class BotMatch {
     // el arma del bot cae junto a su cuerpo (la del jugador la suelta main)
     if (victimId !== 'player') {
       const b = this.bots.find((x) => x.id === victimId);
-      if (b) this.cb.dropWeapon?.(b.wep, b.pos.x, b.pos.z, b.team, b.y);
+      if (b) this.cb.dropWeapon?.(b.wep, b.pos.x, b.pos.z, b.team, b.y, b.rig);
     }
     if (v && k) this.cb.hud.kill(k.name, k.team, v.name, v.team);
     if (killerId === 'player') { this.cb.audio.kill(); this.cb.hud.hitmarker(); }

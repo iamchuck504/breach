@@ -1,7 +1,7 @@
 // Modo práctica: dummies del equipo azul que patrullan entre dos puntos.
 // No disparan; son blancos móviles para probar armas, cover y bounce.
 import { TUNING } from '../config/tuning.js';
-import { Rig } from './rig.js';
+import { Rig, RAGDOLL_R } from './rig.js';
 
 const PATROLS = [
   [{ x: -4.8, z: 3.5 }, { x: -4.8, z: 9 }],
@@ -11,17 +11,24 @@ const PATROLS = [
 ];
 
 export class Dummies {
-  constructor(scene) {
+  constructor(scene, world = null) {
     this.scene = scene;
-    this.list = PATROLS.map((path, i) => ({
-      id: 'dummy' + i,
-      name: 'DUMMY-' + (i + 1),
-      team: 'blue',
-      rig: new Rig(scene, 'blue', 'DUMMY-' + (i + 1), (Math.random() * 5) | 0),
-      path, seg: 0, u: Math.random(),
-      x: path[0].x, z: path[0].z, yaw: 0,
-      hp: TUNING.combat.hp, alive: true, respawnT: 0,
-    }));
+    this.list = PATROLS.map((path, i) => {
+      const rig = new Rig(scene, 'blue', 'DUMMY-' + (i + 1), (Math.random() * 5) | 0);
+      if (world) {
+        rig.groundFn = (x, z, y) => world.groundHeight({ x, z }, 0.38, y);
+        rig.collideFn = (p, y, r = RAGDOLL_R) => world.resolveCircle(p, r, y);
+      }
+      return {
+        id: 'dummy' + i,
+        name: 'DUMMY-' + (i + 1),
+        team: 'blue',
+        rig,
+        path, seg: 0, u: Math.random(),
+        x: path[0].x, z: path[0].z, yaw: 0,
+        hp: TUNING.combat.hp, alive: true, respawnT: 0,
+      };
+    });
   }
 
   // targets para la balística

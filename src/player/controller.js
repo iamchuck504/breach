@@ -176,7 +176,7 @@ export class Controller {
   // Busca cobertura y entra en slide, o hace dive. Devuelve 'slide' | 'dive'
   // | false — SOLO 'slide' cuenta como rebote (chain/SFX/bonus); el fallback
   // de dive devolvía true y un rebote al vacío sumaba cadena igual.
-  _tryEvade(dir, range) {
+  _tryEvade(dir, range, allowDive = true) {
     const T = TUNING.evade;
     if (this.evadeCooldown > 0) return false;
     // normalizar SIEMPRE: con el stick a medio recorrido la búsqueda de
@@ -196,6 +196,9 @@ export class Controller {
       this.ev.onSlideStart?.(this.chain);
       return 'slide';
     }
+    // Un cancel de dive solo puede convertirse en un wallbounce real. Si no
+    // hay cover, conservar el dive actual evita reiniciarlo infinitamente.
+    if (!allowDive) return false;
     // sin cobertura: dive en la dirección pedida
     this.dive = { dir };
     this.slide = null;
@@ -238,9 +241,19 @@ export class Controller {
     switch (this.state) {
       case 'idle': case 'run': case 'roadie': {
         const roadie = this.state === 'roadie';
-        // transiciones roadie
-        if (roadie && (!input.sprintHeld || !hasInput || input.aimHeld || firing)) this._setState('run');
-        else if (!roadie && input.sprintHeld && hasInput && !this.aim && this.stateT > 0.05) this._setState('roadie');
+        // Estados lógicos y visuales deben coincidir: momentum, pasos, red y
+        // animación consumen este estado. Antes se podía correr a 4.8 m/s
+        // permaneciendo lógicamente en idle.
+        if (roadie && (!input.sprintHeld || !hasInput || input.aimHeld || firing)) {
+          this._setState(hasInput || this.speed > 0.4 ? 'run' : 'idle');
+        } else if (!roadie && input.sprintHeld && hasInput && !this.aim &&
+                   this.stateT > 0.05) {
+          this._setState('roadie');
+        } else if (this.state === 'idle' && hasInput) {
+          this._setState('run');
+        } else if (this.state === 'run' && !hasInput && this.speed <= 0.4) {
+          this._setState('idle');
+        }
 
         const targetSpeed = (this.state === 'roadie' ? M.roadieSpeed : M.runSpeed) * (this.aim ? 0.45 : 1);
         let dx = mw.x, dz = mw.z;
@@ -297,7 +310,10 @@ export class Controller {
           this.evadeMom = mom;
           this.runT = 0;
           this.runDist = 0;
-          const range = this.state === 'roadie' ? E.roadieSlideDist : E.slideMaxDist;
+          // Entrar a roadie y evadir en el mismo frame no regala su alcance:
+          // se obtiene solo si ya había velocidad real de carrera.
+          const earnedRoadie = roadie && this.speed > M.runSpeed * 0.55;
+          const range = earnedRoadie ? E.roadieSlideDist : E.slideMaxDist;
           // primero intento snap directo si el cover está pegado
           const snap = this.world.findCover(this.pos, dir, C.snapRange, PLAYER_R, 0.3);
           if (snap) this._enterCover(snap.face, snap.target);
@@ -396,7 +412,7 @@ export class Controller {
           const ndir = mw.mag > 0.1 ? { x: mw.x, z: mw.z } : this.dive.dir;
           this.chain++;
           this.evadeMom *= 0.45;
-          if (this._tryEvade(ndir, E.bounceRange) === 'slide') this.ev.onBounce?.(this.chain);
+          if (this._tryEvade(ndir, E.bounceRange, false) === 'slide') this.ev.onBounce?.(this.chain);
           else this.chain--;
         } else if (t >= 1) {
           this._setState(hasInput ? 'run' : 'idle');
@@ -461,8 +477,57 @@ export class Controller {
         const latOut = eSign !== 0 && hasInput ? (mw.x * ux + mw.z * uz) * eSign : 0;
         const atTip = u <= PLAYER_R * 0.7 + 0.04 || u >= len - PLAYER_R * 0.7 - 0.04;
 
-        // --- salir por el extremo, tres intenciones (romper cobertura tiene
-        // prioridad sobre "seguir desplazándose"):
+        // Las acciones pulsadas ganan a la salida automática. Antes Shift+F
+        // o Shift+Space en el extremo se interpretaban como roadie y perdían
+        // por completo el salto/evade de ese frame.
+        if (input.jumpPressed && eSign !== 0) {
+          const ox = ux * eSign, oz = uz * eSign;
+          const wantOut = hasInput ? (mw.x * ox + mw.z * oz) : 1;
+          if (wantOut > 0.35) {
+            TMP_O.set(this.pos.x, this.y + 0.9, this.pos.z);
+            TMP_D.set(ox, 0, oz);
+            if (this.world.raycast(TMP_O, TMP_D, PLAYER_R + 1.3) === null) {
+              this.cover = null;
+              this.chain = 0;
+              this._setState('run');
+              this.vy = TUNING.jump.vel * 0.85;
+              this.grounded = false;
+              this.vel.x = ox * M.runSpeed * 0.95 + n.x * 1.4;
+              this.vel.z = oz * M.runSpeed * 0.95 + n.z * 1.4;
+              this.ev.onJump?.();
+              break;
+            }
+          }
+        }
+
+        // WALLBOUNCE / EVADE / MANTLE: una diagonal en el extremo es una
+        // evasión lateral, no un mantle ni un input perdido. Frente a cover
+        // alto se conserva la cobertura porque no existe mantle posible.
+        if (input.evadePressed) {
+          const dir = hasInput ? { x: mw.x, z: mw.z } : { x: n.x, z: n.z };
+          const im3 = Math.max(0.001, Math.hypot(dir.x, dir.z));
+          const into = -(dir.x * n.x + dir.z * n.z) / im3;
+          const latIn = Math.abs((dir.x * ux + dir.z * uz) / im3);
+          const centered = len < edgeDist * 2 + 0.5 || (!nearA && !nearB);
+          const wantsMantle = low && into >= 0.8 && latIn <= into * 0.6 && centered;
+          const wantsEvade = into < 0.5 || (eSign !== 0 && latIn > 0.35);
+
+          if (wantsMantle) {
+            if (this._tryMantle(f, n)) break;
+          } else if (wantsEvade) {
+            const chained = this.bounceWindow > 0 && this.chain < E.chainMax;
+            if (chained || this.evadeRecovery <= 0) {
+              if (chained) this.chain++; else this.chain = 0;
+              this.evadeMom *= 0.45;
+              const result = this._tryEvade(dir, E.bounceRange);
+              if (result === 'slide' && chained) this.ev.onBounce?.(this.chain);
+              else if (result !== 'slide' && chained) this.chain--;
+              if (this.state !== 'cover') break;
+            }
+          }
+        }
+
+        // --- salir por el extremo, tres intenciones de locomoción:
         //   1) CORRER + stick hacia fuera (cualquier ángulo razonable) →
         //      salida INMEDIATA en roadie
         //   2) diagonal clara hacia fuera → salir a run (sin sprint)
@@ -484,36 +549,16 @@ export class Controller {
           this.edgePushT = 0;
           const im = Math.max(0.001, mw.mag);
           const dx2 = mw.x / im, dz2 = mw.z / im;
-          this.yaw = yawFromDir(dx2, dz2); // el cuerpo sale hacia donde apuntas
+          // conservar continuidad corporal; el estado nuevo completa el giro
+          // en los frames siguientes en vez de saltar 90° instantáneamente.
+          this.yaw = lerpAngle(this.yaw, yawFromDir(dx2, dz2),
+            1 - Math.exp(-M.turnLerp * dt));
           this._setState(exitMode === 2 ? 'roadie' : 'run');
           const spd = exitMode === 2 ? M.roadieSpeed * 0.78 : M.runSpeed * C.edgeExitBoost;
           this.vel.x = dx2 * spd;
           this.vel.z = dz2 * spd;
           this.ev.onDetach?.();
           break;
-        }
-
-        // --- salto LATERAL por el extremo: saltar + dirección hacia fuera
-        // despega del cover por ese lado (con chequeo de espacio libre)
-        if (input.jumpPressed && eSign !== 0) {
-          const ox = ux * eSign, oz = uz * eSign;   // hacia fuera por ese extremo
-          const wantOut = hasInput ? (mw.x * ox + mw.z * oz) : 1;
-          if (wantOut > 0.35) {
-            TMP_O.set(this.pos.x, this.y + 0.9, this.pos.z);
-            TMP_D.set(ox, 0, oz);
-            if (this.world.raycast(TMP_O, TMP_D, PLAYER_R + 1.3) === null) {
-              this.cover = null;
-              this.chain = 0;
-              this._setState('run');
-              this.vy = TUNING.jump.vel * 0.85;
-              this.grounded = false;
-              // impulso lateral + separación de la pared (sin atravesarla)
-              this.vel.x = ox * M.runSpeed * 0.95 + n.x * 1.4;
-              this.vel.z = oz * M.runSpeed * 0.95 + n.z * 1.4;
-              this.ev.onJump?.();
-              break;
-            }
-          }
         }
 
         // soltarse empujando lejos del cover (centro de la cara: el detach
@@ -528,32 +573,6 @@ export class Controller {
           }
         } else this.detachT = 0;
 
-        // WALLBOUNCE desde cover, o MANTLE — con la intención bien separada
-        if (input.evadePressed) {
-          const dir = hasInput ? { x: mw.x, z: mw.z } : { x: n.x, z: n.z };
-          const im3 = Math.max(0.001, Math.hypot(dir.x, dir.z));
-          const into = -(dir.x * n.x + dir.z * n.z) / im3;
-          const latIn = Math.abs((dir.x * ux + dir.z * uz) / im3);
-          if (into < 0.5) {
-            // bounce (ventana encadenada) o evasión NUEVA — la nueva respeta
-            // la recuperación: spamear desde cover ya no encadena slides
-            const chained = this.bounceWindow > 0 && this.chain < E.chainMax;
-            if (chained || this.evadeRecovery <= 0) {
-              if (chained) this.chain++; else this.chain = 0;
-              this.evadeMom *= 0.45;
-              if (this._tryEvade(dir, E.bounceRange) === 'slide') {
-                if (chained) this.ev.onBounce?.(this.chain);
-              } else if (chained) this.chain--;
-            }
-          } else if (low && into >= 0.8 && latIn <= into * 0.6 &&
-                     (len < edgeDist * 2 + 0.5 || (!nearA && !nearB))) {
-            // MANTLE solo con intención FRONTAL clara (cono ±37°, poca
-            // componente lateral) y CENTRADO en la cara — en el extremo con
-            // stick diagonal, la intención es SALIR, no subirse. (Las caras
-            // cortas, tipo ducto, cuentan enteras como "centro".)
-            this._tryMantle(f, n);
-          }
-        }
         break;
       }
     }

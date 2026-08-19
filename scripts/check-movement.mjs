@@ -11,13 +11,16 @@ import { clearClip } from './lib-clip.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
-const CHROME = process.env.CHROME_PATH ||
-  'C:\\Users\\iamch\\AppData\\Local\\ms-playwright\\chromium-1228\\chrome-win64\\chrome.exe';
+// Playwright resuelve automáticamente la revisión compatible instalada.
+// CHROME_PATH sigue permitiendo un override explícito en CI.
+const launchOptions = process.env.CHROME_PATH
+  ? { executablePath: process.env.CHROME_PATH }
+  : {};
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
   env: { ...process.env, PORT: '8784' }, stdio: 'ignore',
 });
 await new Promise((r) => setTimeout(r, 900));
-const browser = await chromium.launch({ executablePath: CHROME, headless: true });
+const browser = await chromium.launch({ ...launchOptions, headless: true });
 const page = await browser.newPage({ viewport: { width: 960, height: 540 } });
 const problems = [];
 page.on('pageerror', (e) => problems.push('PAGEERROR: ' + e.message));
@@ -33,13 +36,19 @@ await page.evaluate(() => {
   const P = window.BREACH.player;
   const orig = P.update.bind(P);
   window.__mon = {
-    issues: [], maxSpeed: 0, evades: 0, lastX: P.pos.x, lastZ: P.pos.z,
-    ignoreTeleport: 0, lastState: P.state, stuckT: 0,
+    issues: [], maxSpeed: 0, evades: 0, diveRestarts: 0,
+    lastX: P.pos.x, lastZ: P.pos.z, ignoreTeleport: 0,
+    lastState: P.state, stuckT: 0,
   };
+  const oldDive = P.ev.onDive;
+  const oldSlide = P.ev.onSlideStart;
+  P.ev.onDive = (...args) => { window.__mon.evades++; oldDive?.(...args); };
+  P.ev.onSlideStart = (...args) => { window.__mon.evades++; oldSlide?.(...args); };
   const VALID = new Set(['idle', 'run', 'roadie', 'dive', 'slide', 'cover', 'flip', 'mantle', 'dead']);
   P.update = (dt, input, firing) => {
     const m = window.__mon;
     const wasState = P.state;
+    const wasStateT = P.stateT;
     orig(dt, input, firing);
     // NaN / estado inválido / combos rotos
     if (!isFinite(P.pos.x) || !isFinite(P.pos.z) || !isFinite(P.y)) m.issues.push('NaN en posición');
@@ -58,8 +67,7 @@ await page.evaluate(() => {
     // velocidad desbocada (tope teórico slide con cadena+momentum ≈ 13.8)
     if (P.speed > m.maxSpeed) m.maxSpeed = P.speed;
     if (P.speed > 15) m.issues.push('velocidad desbocada: ' + P.speed.toFixed(1));
-    // conteo de evasiones iniciadas
-    if ((P.state === 'dive' || P.state === 'slide') && wasState !== 'dive' && wasState !== 'slide') m.evades++;
+    if (wasState === 'dive' && P.state === 'dive' && P.stateT < wasStateT) m.diveRestarts++;
   };
   window.__tp = (x, z, yaw = Math.PI) => {
     const p = window.BREACH.player;
@@ -79,13 +87,15 @@ const flush = async (tag) => {
 const key = async (k, ms) => { await page.keyboard.down(k); await page.waitForTimeout(ms); await page.keyboard.up(k); };
 
 // ---- FASE 1: spam de evade en campo abierto (20 pulsaciones rápidas) ----
-await page.evaluate(() => { window.__tp(0, -10); window.__mon.evades = 0; });
+await page.evaluate(() => { window.__tp(0, -10); window.__mon.evades = 0; window.__mon.diveRestarts = 0; });
 await page.keyboard.down('s');
 for (let i = 0; i < 20; i++) { await page.keyboard.press('Space'); await page.waitForTimeout(90); }
 await page.keyboard.up('s');
 const spam = await page.evaluate(() => window.__mon.evades);
+const diveRestarts = await page.evaluate(() => window.__mon.diveRestarts);
 // 20 presses en ~1.9s: con dive 0.36 + recovery 0.35 caben ~3; margen: ≤5
 if (spam > 5) problems.push(`SPAM: ${spam} evasiones en 1.9s de spam (esperaba ≤5)`);
+if (diveRestarts > 0) problems.push(`SPAM: dive se reinició ${diveRestarts} veces sin terminar`);
 await flush('spam');
 
 // ---- FASE 2: mantener presionado (edge-triggered: 1 sola) ----
@@ -165,8 +175,8 @@ await coverExitTest('diagonal-fuera', ['s', 'd'], ['run', 'idle', 'dive'], 700);
 await coverExitTest('lateral-corto-NO-sale', ['d'], ['cover'], 350);       // en el centro: sigue desplazándose
 
 // ---- FASE 7: muertes en plena transición ----
-const dieIn = async (tag, prep, expectState = null) => {
-  await page.evaluate(() => window.__tp(0, -12));
+const dieIn = async (tag, prep, expectState = null, keepPosition = false) => {
+  if (!keepPosition) await page.evaluate(() => window.__tp(0, -12));
   await page.waitForTimeout(200);
   const cleanup = (await prep()) || (() => {});
   const res = await page.evaluate(() => {
@@ -193,7 +203,7 @@ const dieIn = async (tag, prep, expectState = null) => {
     if (!r) return { err: 'sin ragdoll' };
     const px = r.bx + r.ox, pz = r.bz + r.oz;
     const probe = { x: px, z: pz };
-    W.resolveCircle(probe, 0.22, r.by);
+    W.resolveCircle(probe, 0.58, r.by);
     return {
       disp: +Math.hypot(r.ox, r.oz).toFixed(2),
       by: +r.by.toFixed(2), floorY: +r.floorY.toFixed(2),
@@ -272,7 +282,7 @@ await page.evaluate(() => window.__tp(-19.8, -10, Math.PI / 2));
 await page.keyboard.down('w');
 await page.waitForTimeout(400);
 await page.keyboard.up('w');
-await dieIn('pared', async () => { await page.evaluate(() => { window.__mon.ignoreTeleport = 4; }); });
+await dieIn('pared', async () => { await page.evaluate(() => { window.__mon.ignoreTeleport = 4; }); }, null, true);
 
 const fin = await page.evaluate(() => ({ maxSpeed: +window.__mon.maxSpeed.toFixed(1) }));
 console.log('MOV-CHECK:', JSON.stringify({ maxSpeed: fin.maxSpeed, problemas: problems.length }));
