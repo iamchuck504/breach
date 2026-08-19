@@ -15,6 +15,8 @@ const lerpAngle = (a, b, k) => {
 
 export const PLAYER_R = 0.38;
 
+const TMP_O = new THREE.Vector3(), TMP_D = new THREE.Vector3();
+
 export class Controller {
   constructor(world, camera, events = {}) {
     this.world = world;
@@ -35,6 +37,11 @@ export class Controller {
     this.chain = 0;         // rebotes encadenados
     this.bounceWindow = 0;
     this.evadeCooldown = 0;
+    this.evadeRecovery = 0; // cooldown entre evasiones NUEVAS desde el suelo
+    this.runT = 0;          // carrera continua (momentum ganado)
+    this.runDist = 0;
+    this.evadeMom = 0;      // impulso ganado aplicado a la evasión en curso
+    this.mantle = null;     // vault sobre cover bajo en progreso
     this.detachT = 0;
     this.aim = false;
     this.firingBlind = 0;   // timer para mantener pose de blindfire
@@ -67,6 +74,7 @@ export class Controller {
         return low ? 'cover_low' : 'cover_high';
       }
       case 'flip': return 'flip';
+      case 'mantle': return 'mantle';
       case 'roadie': return this.grounded ? 'roadie' : 'jump';
       case 'dive': return 'dive';
       case 'slide': return 'slide';
@@ -122,6 +130,11 @@ export class Controller {
     this.coverLeanAnim = 0;
     this.detachT = 0;
     this.evadeCooldown = 0;
+    this.evadeRecovery = 0;
+    this.runT = 0;
+    this.runDist = 0;
+    this.evadeMom = 0;
+    this.mantle = null;
     this.bounceWindow = 0;
     this.chain = 0;
     this.usedDouble = false;
@@ -144,6 +157,7 @@ export class Controller {
     this.dead = true;
     this._setState('idle'); // resetea stateT (directo dejaba el valor pre-muerte)
     this.cover = null; this.slide = null; this.dive = null; this.flip = null;
+    this.mantle = null;
     this.aim = false;
     this.vel = { x: 0, z: 0 };
     this._clearTransient();
@@ -195,6 +209,7 @@ export class Controller {
     const M = TUNING.move, E = TUNING.evade, C = TUNING.cover;
     this.stateT += dt;
     this.evadeCooldown = Math.max(0, this.evadeCooldown - dt);
+    this.evadeRecovery = Math.max(0, this.evadeRecovery - dt);
     this.bounceWindow = Math.max(0, this.bounceWindow - dt);
     this.firingBlind = Math.max(0, this.firingBlind - dt);
     if (firing && !this.aim) this.firingBlind = 0.7; // sostiene la postura de tiro
@@ -204,8 +219,20 @@ export class Controller {
     const mw = this._moveWorld(input);
     const hasInput = mw.mag > 0.1;
     const aimAllowed = this.state !== 'dive' && this.state !== 'slide' &&
-      this.state !== 'roadie' && this.state !== 'flip';
+      this.state !== 'roadie' && this.state !== 'flip' && this.state !== 'mantle';
     this.aim = input.aimHeld && aimAllowed;
+
+    // momentum GANADO corriendo: tiempo continuo + distancia reciente en el
+    // suelo. Se pierde al instante al dejar de correr — un toque de carrera
+    // seguido de evade no genera impulso falso.
+    if (this.grounded && (this.state === 'run' || this.state === 'roadie') &&
+        this.speed > TUNING.move.runSpeed * 0.55) {
+      this.runT += dt;
+      this.runDist = Math.min(E.momentumRunDist * 2, this.runDist + this.speed * dt);
+    } else if (this.state !== 'slide' && this.state !== 'dive') {
+      this.runT = 0;
+      this.runDist = 0;
+    }
 
     switch (this.state) {
       case 'idle': case 'run': case 'roadie': {
@@ -251,15 +278,56 @@ export class Controller {
           else if (!this._tryWallKick() && !this.usedDouble && hasInput) this._airRoll(mw, input.moveVec());
         }
 
-        // evadir / cover (solo en el suelo)
-        if (input.evadePressed && this.grounded) {
+        // evadir / cover (solo en el suelo, con recuperación anti-spam:
+        // la siguiente evasión NUEVA espera a que la anterior "aterrice")
+        if (input.evadePressed && this.grounded && this.evadeRecovery <= 0) {
           this.chain = 0;
           const dir = hasInput ? { x: mw.x, z: mw.z } : this.facing();
+          // impulso ganado: solo si venía corriendo un tramo REAL y la
+          // evasión va en la dirección que ya traía (proporcional, con tope)
+          let mom = 0;
+          if (this.runT > 0.15 && this.speed > 1) {
+            const align = (this.vel.x * dir.x + this.vel.z * dir.z) /
+              (this.speed * Math.max(0.001, Math.hypot(dir.x, dir.z)));
+            mom = Math.min(1, this.runT / E.momentumRunTime) *
+              Math.min(1, this.runDist / E.momentumRunDist) *
+              Math.max(0, align);
+          }
+          this.evadeMom = mom;
+          this.runT = 0;
+          this.runDist = 0;
           const range = this.state === 'roadie' ? E.roadieSlideDist : E.slideMaxDist;
           // primero intento snap directo si el cover está pegado
           const snap = this.world.findCover(this.pos, dir, C.snapRange, PLAYER_R, 0.3);
           if (snap) this._enterCover(snap.face, snap.target);
           else this._tryEvade(dir, range);
+        }
+        break;
+      }
+
+      case 'mantle': {
+        // vault corto sobre cover bajo: sube primero, avanza después.
+        // Movimiento guiado — sin gravedad, sin input, sin cancelaciones.
+        const m = this.mantle;
+        m.t += dt;
+        const k = Math.min(1, m.t / m.dur);
+        const kUp = Math.min(1, k * 1.9);           // la subida llega antes
+        const eUp = kUp * kUp * (3 - 2 * kUp);
+        const eFwd = k * k * (3 - 2 * k);           // avance ease-in-out
+        this.y = m.fy + (m.ty + 0.02 - m.fy) * eUp;
+        this.pos.x = m.fx + (m.tx2 - m.fx) * eFwd;
+        this.pos.z = m.fz + (m.tz2 - m.fz) * eFwd;
+        this.vel.x = 0; this.vel.z = 0;
+        this.yaw = lerpAngle(this.yaw, yawFromDir(-m.n.x, -m.n.z), 1 - Math.exp(-12 * dt));
+        if (k >= 1) {
+          this.mantle = null;
+          this.grounded = true;
+          this.vy = 0;
+          this._setState(hasInput ? 'run' : 'idle');
+          // continuidad: sale caminando encima, no clavado en seco
+          const fd = this.facing();
+          this.vel.x = fd.x * M.runSpeed * TUNING.mantle.exitSpeed;
+          this.vel.z = fd.z * M.runSpeed * TUNING.mantle.exitSpeed;
         }
         break;
       }
@@ -279,7 +347,8 @@ export class Controller {
 
       case 'slide': {
         const s = this.slide;
-        const spd = E.slideSpeed * (1 + E.chainSpeedBonus * this.chain);
+        const spd = E.slideSpeed *
+          (1 + E.chainSpeedBonus * this.chain + E.momentumBoost * this.evadeMom);
         const dx = s.target.x - this.pos.x, dz = s.target.z - this.pos.z;
         const d = Math.hypot(dx, dz);
         this.yaw = lerpAngle(this.yaw, yawFromDir(dx, dz), 1 - Math.exp(-18 * dt));
@@ -289,6 +358,8 @@ export class Controller {
           this.slide = null;
           this._setState('run');
           this.chain = 0;
+          this.evadeMom = 0;
+          this.evadeRecovery = E.recovery;
           const sp = Math.hypot(this.vel.x, this.vel.z);
           if (sp > M.runSpeed) {
             const k = M.runSpeed / sp;
@@ -303,6 +374,7 @@ export class Controller {
             const ndir = mw.mag > 0.1 ? { x: mw.x, z: mw.z } : null;
             if (ndir) {
               this.chain++;
+              this.evadeMom *= 0.45; // el impulso ganado se disipa por rebote
               if (this._tryEvade(ndir, E.bounceRange) === 'slide') this.ev.onBounce?.(this.chain);
               else this.chain--; // dive al vacío o nada: sin bonus ni SFX
             }
@@ -314,18 +386,22 @@ export class Controller {
       case 'dive': {
         const t = this.stateT / E.diveTime;
         const ease = 1 - t * t; // desacelera
-        const spd = E.diveSpeed * Math.max(0.15, ease) * (1 + E.chainSpeedBonus * this.chain);
+        const spd = E.diveSpeed * Math.max(0.15, ease) *
+          (1 + E.chainSpeedBonus * this.chain + E.momentumBoost * this.evadeMom);
         this.vel.x = this.dive.dir.x * spd;
         this.vel.z = this.dive.dir.z * spd;
         this.yaw = lerpAngle(this.yaw, yawFromDir(this.dive.dir.x, this.dive.dir.z), 1 - Math.exp(-14 * dt));
         if (input.evadePressed && t > E.diveCancelPct && this.chain < E.chainMax) {
           const ndir = mw.mag > 0.1 ? { x: mw.x, z: mw.z } : this.dive.dir;
           this.chain++;
+          this.evadeMom *= 0.45;
           if (this._tryEvade(ndir, E.bounceRange) === 'slide') this.ev.onBounce?.(this.chain);
           else this.chain--;
         } else if (t >= 1) {
           this._setState(hasInput ? 'run' : 'idle');
           this.chain = 0;
+          this.evadeMom = 0;
+          this.evadeRecovery = E.recovery; // la siguiente evasión espera el "aterrizaje"
         }
         break;
       }
@@ -376,8 +452,49 @@ export class Controller {
           this.coverLeanAnim = (ux * leanSide) * rx + (uz * leanSide) * rz >= 0 ? 1 : -1;
         } else this.coverLeanAnim = 0;
 
-        // soltarse empujando lejos del cover
         const away = hasInput ? (mw.x * n.x + mw.z * n.z) : 0;
+
+        // --- salida OFENSIVA por el extremo: adelante = soltarse YA con
+        // impulso y seguir corriendo (roadie si vas esprintando) — sin tener
+        // que "cancelar" el cover primero
+        if (!this.aim && hasInput && (nearA || nearB) && away > 0.3) {
+          this.cover = null;
+          this.chain = 0;
+          this._setState(input.sprintHeld ? 'roadie' : 'run');
+          const im = Math.max(0.001, mw.mag);
+          const spd = M.runSpeed * C.edgeExitBoost;
+          this.vel.x = (mw.x / im) * spd;
+          this.vel.z = (mw.z / im) * spd;
+          this.ev.onDetach?.();
+          break;
+        }
+
+        // --- salto LATERAL por el extremo: saltar + dirección hacia fuera
+        // despega del cover por ese lado (con chequeo de espacio libre)
+        if (input.jumpPressed && (nearA || nearB)) {
+          const eSign = nearB ? 1 : -1;             // qué extremo estoy usando
+          const ox = ux * eSign, oz = uz * eSign;   // hacia fuera por ese extremo
+          const wantOut = hasInput ? (mw.x * ox + mw.z * oz) : 1;
+          if (wantOut > 0.35) {
+            TMP_O.set(this.pos.x, this.y + 0.9, this.pos.z);
+            TMP_D.set(ox, 0, oz);
+            if (this.world.raycast(TMP_O, TMP_D, PLAYER_R + 1.3) === null) {
+              this.cover = null;
+              this.chain = 0;
+              this._setState('run');
+              this.vy = TUNING.jump.vel * 0.85;
+              this.grounded = false;
+              // impulso lateral + separación de la pared (sin atravesarla)
+              this.vel.x = ox * M.runSpeed * 0.95 + n.x * 1.4;
+              this.vel.z = oz * M.runSpeed * 0.95 + n.z * 1.4;
+              this.ev.onJump?.();
+              break;
+            }
+          }
+        }
+
+        // soltarse empujando lejos del cover (centro de la cara: el detach
+        // clásico de 0.11s sigue evitando salidas accidentales)
         if (away > C.detachPush && !this.aim) {
           this.detachT += dt;
           if (this.detachT > C.detachTime) {
@@ -388,28 +505,33 @@ export class Controller {
           }
         } else this.detachT = 0;
 
-        // WALLBOUNCE desde cover: evadir hacia otra cobertura
+        // WALLBOUNCE desde cover, o MANTLE si empujas HACIA un cover bajo
         if (input.evadePressed) {
           const dir = hasInput ? { x: mw.x, z: mw.z } : { x: n.x, z: n.z };
           const into = -(dir.x * n.x + dir.z * n.z);
           if (into < 0.5) { // no re-entrar al mismo cover
             const chained = this.bounceWindow > 0 && this.chain < E.chainMax;
             if (chained) this.chain++; else this.chain = 0;
+            this.evadeMom *= 0.45;
             if (this._tryEvade(dir, E.bounceRange) === 'slide') {
               if (chained) this.ev.onBounce?.(this.chain);
             } else if (chained) this.chain--;
+          } else if (low) {
+            // cubierto + stick hacia el bloque bajo = subirse (vault corto)
+            this._tryMantle(f, n);
           }
         }
         break;
       }
     }
 
-    // integrar + colisión (cover se pega manualmente, pero el resolve no estorba)
-    if (this.state !== 'cover') {
+    // integrar + colisión (cover se pega manualmente, pero el resolve no estorba;
+    // en mantle el movimiento es guiado y CRUZA el borde: el resolve pelearía)
+    if (this.state !== 'cover' && this.state !== 'mantle') {
       this.pos.x += this.vel.x * dt;
       this.pos.z += this.vel.z * dt;
     }
-    this.world.resolveCircle(this.pos, PLAYER_R, this.y);
+    if (this.state !== 'mantle') this.world.resolveCircle(this.pos, PLAYER_R, this.y);
 
     // vertical: gravedad + suelo (permite pararse sobre coberturas)
     const airStates = this.state === 'idle' || this.state === 'run' ||
@@ -432,13 +554,41 @@ export class Controller {
       } else {
         this.grounded = this.y <= ground + 0.02;
       }
-    } else {
+    } else if (this.state !== 'mantle') {
       // estados pegados al suelo: la Y sigue al terreno real (un slide que
-      // sale de una caja no debe conservar una altura fantasma)
+      // sale de una caja no debe conservar una altura fantasma).
+      // (mantle administra su propia Y guiada)
       this.y = this.world.groundHeight(this.pos, PLAYER_R, this.y);
       this.vy = 0;
       this.grounded = true;
     }
+  }
+
+  // Mantle/vault corto sobre cover BAJO (cubierto + stick hacia el bloque).
+  // Verifica ANTES de comprometer la animación: espacio libre sobre el
+  // borde (nada más alto detrás), y superficie de aterrizaje al nivel del
+  // tope del bloque (no un hueco ni otro nivel).
+  _tryMantle(f, n) {
+    if (this.mantle) return false;
+    const h = f.h;
+    const landX = this.pos.x - n.x * (PLAYER_R + 0.5);
+    const landZ = this.pos.z - n.z * (PLAYER_R + 0.5);
+    TMP_O.set(this.pos.x, h + 0.55, this.pos.z);
+    TMP_D.set(-n.x, 0, -n.z);
+    if (this.world.raycast(TMP_O, TMP_D, PLAYER_R + 0.9) !== null) return false;
+    const gh = this.world.groundHeight({ x: landX, z: landZ }, PLAYER_R, h + 0.2);
+    if (Math.abs(gh - h) > 0.25) return false;
+    this.mantle = {
+      t: 0, dur: TUNING.mantle.time,
+      fx: this.pos.x, fz: this.pos.z, fy: this.y,
+      tx2: landX, tz2: landZ, ty: h,
+      n,
+    };
+    this.cover = null;
+    this.vel = { x: 0, z: 0 };
+    this._setState('mantle');
+    this.ev.onMantle?.();
+    return true;
   }
 
   _tryJump() {
@@ -508,6 +658,7 @@ export class Controller {
   _enterCover(face, target) {
     this.pos.x = target.x; this.pos.z = target.z;
     this.vel = { x: 0, z: 0 };
+    this.evadeMom = 0; // el impulso ganado se gasta al llegar
     this.cover = face;
     this.slide = null;
     this._setState('cover');

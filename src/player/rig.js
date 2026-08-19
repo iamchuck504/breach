@@ -799,6 +799,23 @@ export class Rig {
         hipsY = 0.66;
         break;
       }
+      case 'mantle': {
+        // vault corto sobre cover bajo: torso volcado, ambas manos al borde,
+        // pierna de apoyo arriba — el arma va pegada al pecho
+        damp = 18;
+        R(this.torso, -0.85, 0, 0.06);
+        R(this.head, 0.5, 0, 0);
+        R(this.armL.shoulder, 1.35, 0, -0.25); R(this.armL.elbow, 0.25, 0, 0);
+        R(this.armR.shoulder, 1.2, 0, 0.2); R(this.armR.elbow, 0.3, 0, 0);
+        R(this.legL.hip, 1.5, 0, 0.1); R(this.legL.knee, -1.9, 0, 0);
+        R(this.legR.hip, 0.35, 0, -0.05); R(this.legR.knee, -0.5, 0, 0);
+        ikArms = false; // manos al borde, no al arma
+        M(0.14, -0.05, -0.2, 0.9, 0, 0.15);
+        R(this.aimRig, 0, 0, 0);
+        hipsY = 0.5;
+        break;
+      }
+
       case 'flip': {
         // patada de pared Matrix: giro LATERAL con piernas semi-recogidas,
         // arma al frente en ambas manos para disparar en el aire
@@ -947,8 +964,8 @@ export class Rig {
         // anterior y el arma quedaba apuntando al cielo mientras ruedas
         set(this.aimRig.rotation, 'x', 0);
         set(this.aimRig.rotation, 'y', 0);
-      } else if (p.state !== 'roadie' && p.state !== 'flip') {
-        // (roadie y flip fijan su propio aimRig dentro del switch)
+      } else if (p.state !== 'roadie' && p.state !== 'flip' && p.state !== 'mantle') {
+        // (roadie, flip y mantle fijan su propio aimRig dentro del switch)
         set(this.aimRig.rotation, 'x', pitch * (p.firing ? 1 : 0.5));
         set(this.aimRig.rotation, 'y', p.firing ? yawErr : 0);
       }

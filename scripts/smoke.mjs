@@ -161,6 +161,74 @@ try {
   if (dj.axis !== 'z') errors.push('DOUBLEJUMP: stick derecha debería dar giro lateral, dio ' + dj.axis);
   await page.waitForTimeout(800);
 
+  // ---- MANTLE: cubierto tras un bloque BAJO + adelante+evadir = subirse ----
+  await page.evaluate(() => {
+    const G = window.BREACH, W = window.BREACH_WORLD;
+    // cara LOW mirando a -z (el jugador se cubre desde el sur): buscar una
+    const f = W.faces.find((c) => c.h <= 1.2 && c.n.z < -0.9);
+    const mx = (c => (c.a.x + c.b.x) / 2)(f), mz = (c => (c.a.z + c.b.z) / 2)(f);
+    G.player.pos.x = mx; G.player.pos.z = mz - 1.2;
+    G.player.cam.yaw = Math.PI; // mirando a +z (hacia el bloque)
+    G.player.yaw = Math.PI;     // el cuerpo ya girado (el lerp tarda ~0.4s)
+    G.player.vel.x = 0; G.player.vel.z = 0;
+    G.player.evadeRecovery = 0;
+  });
+  await page.waitForTimeout(250);
+  // snap al cover pegado (reintento: el primer edge a veces cae en un frame
+  // de transición del test anterior)
+  let inCover = '';
+  for (let i = 0; i < 3 && inCover !== 'cover'; i++) {
+    await page.keyboard.press('Space');
+    await page.waitForTimeout(320);
+    inCover = await page.evaluate(() => window.BREACH.player.state);
+  }
+  await page.keyboard.down('w');      // hacia el bloque
+  await page.waitForTimeout(150);
+  let midMantle = '';
+  for (let i = 0; i < 3 && midMantle !== 'mantle'; i++) {
+    await page.keyboard.press('Space'); // + evadir = mantle
+    await page.waitForTimeout(180);
+    midMantle = await page.evaluate(() => window.BREACH.player.state);
+  }
+  await page.keyboard.up('w'); // soltar: seguir empujando te baja del bloque (0.9m)
+  await page.waitForTimeout(650);
+  const afterMantle = await page.evaluate(() => ({
+    st: window.BREACH.player.state, y: +window.BREACH.player.y.toFixed(2),
+  }));
+  await page.keyboard.up('w');
+  console.log('MANTLE:', JSON.stringify({ inCover, midMantle, ...afterMantle }));
+  if (inCover !== 'cover') errors.push('MANTLE: no entró a cover (' + inCover + ')');
+  if (midMantle !== 'mantle') errors.push('MANTLE: no inició el vault (' + midMantle + ')');
+  if (afterMantle.y < 0.9) errors.push('MANTLE: no terminó ENCIMA del bloque (y=' + afterMantle.y + ')');
+  await page.evaluate(() => { const P = window.BREACH.player; P.pos.x = 0; P.pos.z = -14; P.y = 0; });
+  await page.waitForTimeout(400);
+
+  // ---- EVADE-CD: spamear evadir no encadena dives inmediatos ----
+  await page.evaluate(() => {
+    const P = window.BREACH.player;
+    P.pos.x = 0; P.pos.z = -10; P.cam.yaw = Math.PI; P.evadeRecovery = 0; P.chain = 0;
+  });
+  await page.keyboard.down('s'); // alejándose de coberturas (dive al vacío)
+  await page.waitForTimeout(80);
+  await page.keyboard.press('Space');
+  await page.waitForTimeout(500); // el dive (0.36s) terminó → recovery activa
+  await page.keyboard.press('Space');
+  await page.waitForTimeout(120);
+  const cdBlocked = await page.evaluate(() => window.BREACH.player.state);
+  await page.waitForTimeout(600); // recovery vencida
+  await page.keyboard.press('Space');
+  await page.waitForTimeout(120);
+  const cdReady = await page.evaluate(() => window.BREACH.player.state);
+  await page.keyboard.up('s');
+  console.log('EVADE-CD:', JSON.stringify({ trasSpam: cdBlocked, trasEspera: cdReady }));
+  if (cdBlocked === 'dive' || cdBlocked === 'slide') {
+    errors.push('EVADE-CD: el spam encadenó otra evasión inmediata');
+  }
+  if (cdReady !== 'dive' && cdReady !== 'slide' && cdReady !== 'cover') {
+    errors.push('EVADE-CD: tras la recuperación la evasión no salió (' + cdReady + ')');
+  }
+  await page.waitForTimeout(700);
+
   // retícula ADS por arma: la escopeta debe dibujar un anillo mucho mayor
   await page.mouse.down({ button: 'right' });
   await page.waitForTimeout(250);

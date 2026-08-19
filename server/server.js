@@ -237,7 +237,7 @@ function vec3(v) {
   return out.every((n) => Math.abs(n) < 1000) ? out : null;
 }
 const VALID_STATES = new Set(['idle', 'run', 'roadie', 'dive', 'slide',
-  'cover_low', 'cover_high', 'blind_over', 'jump', 'flip', 'dead']);
+  'cover_low', 'cover_high', 'blind_over', 'jump', 'flip', 'mantle', 'dead']);
 
 // tick: regen + respawns + snapshot
 setInterval(() => {

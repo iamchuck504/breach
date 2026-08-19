@@ -82,6 +82,7 @@ const states = [
   ['reload-mid', P({ reloading: true, reloadT: 0.5 }), 45],
   ['dive', P({ state: 'dive' }), 35],
   ['slide', P({ state: 'slide' }), 35],
+  ['mantle', P({ state: 'mantle' }), 35],
 ];
 for (const wep of ['smg', 'shotgun']) {
   await page.evaluate((w) => { window.__r.setWeapon(w); }, wep);

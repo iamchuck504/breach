@@ -36,12 +36,38 @@ renderer.shadowMap.type = THREE.PCFShadowMap; // bordes de sombra nítidos, sin 
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(TUNING.cam.fovNormal, 1, 0.1, 200);
-const world = new World(scene);
+// Antes de una partida, Azotea funciona como backdrop 3D deliberado del menú.
+// Al jugar, setLayout reutiliza este mismo World con el mapa elegido.
+const world = new World(scene, 'azoteas');
 const effects = new Effects(scene);
 const audio = new Audio();
 const hud = new HUD();
 const input = new Input(canvas);
 const shoulderCam = new ShoulderCamera(camera, world);
+const MENU_CAM_POS = new THREE.Vector3(18, 7.2, -25.5);
+const MENU_CAM_TARGET = new THREE.Vector3(3, 2.3, -1.5);
+const menuCamTarget = new THREE.Vector3();
+
+function updateMenuBackdrop(now = performance.now()) {
+  const t = now * 0.00012;
+  camera.position.set(
+    MENU_CAM_POS.x + Math.sin(t) * 0.38,
+    MENU_CAM_POS.y + Math.sin(t * 0.73) * 0.09,
+    MENU_CAM_POS.z + Math.cos(t * 0.81) * 0.24,
+  );
+  menuCamTarget.copy(MENU_CAM_TARGET);
+  menuCamTarget.y += Math.sin(t * 0.57) * 0.06;
+  camera.lookAt(menuCamTarget);
+  if (camera.fov !== 50) {
+    camera.fov = 50;
+    camera.updateProjectionMatrix();
+  }
+}
+
+function showMenuBackdrop() {
+  world.setLayout('azoteas');
+  updateMenuBackdrop();
+}
 
 function resize() {
   renderer.setSize(innerWidth, innerHeight);
@@ -110,6 +136,10 @@ const ctrlEvents = {
     audio.land();
     if (G.player) effects.dust(G.player.pos);
   },
+  onMantle: () => {
+    audio.footstep('jump', 0.9);
+    audio.whoosh();
+  },
 };
 
 // ---------- menú ----------
@@ -150,6 +180,7 @@ const menuIsOpen = () => !hud.el.menu.classList.contains('off');
 function openMenu() {
   hud.showMenu(true);
   showControls(false);
+  hud.el.menu.classList.toggle('in-match-bg', !!G.mode);
   btnResume.style.display = G.mode ? 'flex' : 'none';
   mainCard.classList.toggle('in-match', !!G.mode);
   document.getElementById('menu-title').textContent = G.mode ? 'PAUSA' : 'JUGAR';
@@ -750,6 +781,7 @@ function startBots() {
         if (!bm || G.botMatch !== bm) return;
         G.mode = null;
         teardown();
+        showMenuBackdrop();
         hud.show(false);
         input.releaseLock(); // en el menú principal el cursor queda libre
         openMenu();
@@ -972,6 +1004,7 @@ function bindNet(net) {
     if (G.mode === 'online') {
       G.mode = null;
       teardown(); // limpiar escena completa (rigs remotos, drops, cajas)
+      showMenuBackdrop();
       hud.show(false);
       openMenu(); // (no showMenu directo: dejaba visible un REANUDAR muerto)
       netStatus.textContent = 'Desconectado del servidor';
@@ -1325,6 +1358,7 @@ function frame(now) {
   last = now;
 
   const menuOpen = menuIsOpen();
+  if (!G.mode) updateMenuBackdrop(now);
   input.suppress = menuOpen; // con menú abierto los inputs de juego se ignoran
   input.pollPad(dt, !!G.mode && !menuOpen);
 

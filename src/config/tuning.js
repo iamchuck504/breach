@@ -24,6 +24,15 @@ export const TUNING = {
     bounceCooldown: 0.06,
     chainSpeedBonus: 0.05,// % de velocidad extra por rebote encadenado
     chainMax: 5,
+    momentumBoost: 0.22,  // % máx de impulso extra al evadir tras venir corriendo
+    momentumRunTime: 0.45,// seg de carrera CONTINUA para el impulso pleno
+    momentumRunDist: 3.2, // metros recorridos recientes para el pleno
+    recovery: 0.45,       // seg entre evasiones NUEVAS desde el suelo (anti-spam;
+                          // los rebotes encadenados usan sus propias ventanas)
+  },
+  mantle: {
+    time: 0.42,           // duración del vault sobre cover bajo
+    exitSpeed: 0.32,      // % de runSpeed al aterrizar arriba (paso, no empujón)
   },
   jump: {
     vel: 6.2,          // impulso vertical (apex ~1.28m: pasa bloques LOW de 1.1)
@@ -43,6 +52,7 @@ export const TUNING = {
     detachTime: 0.11,
     cornerLean: 0.55,     // margen del borde para lean en esquinas
     lowHeight: 1.4,       // altura máxima que cuenta como cobertura baja (popover)
+    edgeExitBoost: 0.85,  // % de runSpeed del impulso al salir por el extremo
   },
   cam: {
     sens: 0.045,          // sensibilidad ratón (deg por pixel; ~360° en 20cm a 1000dpi)

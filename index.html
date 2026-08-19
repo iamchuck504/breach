@@ -159,9 +159,13 @@
 
   #menu { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
     overflow: auto; padding: 24px; background:
-      radial-gradient(circle at 78% 35%, rgba(255,122,47,.14), transparent 28%),
-      linear-gradient(115deg, rgba(8,10,13,.98) 0 38%, rgba(8,10,13,.75) 66%, rgba(8,10,13,.94));
+      radial-gradient(circle at 81% 30%, rgba(255,166,73,.13), transparent 25%),
+      linear-gradient(0deg, rgba(8,10,13,.84), transparent 38%),
+      linear-gradient(108deg, rgba(8,10,13,.97) 0 27%, rgba(8,10,13,.76) 48%, rgba(8,10,13,.42) 72%, rgba(8,10,13,.72));
     z-index: 10; }
+  #menu.in-match-bg { background:
+      radial-gradient(circle at 78% 35%, rgba(255,122,47,.14), transparent 28%),
+      linear-gradient(115deg, rgba(8,10,13,.98) 0 38%, rgba(8,10,13,.75) 66%, rgba(8,10,13,.94)); }
   #menu.off { display: none; }
   .menu-card { position: relative; z-index: 1; width: min(900px, calc(100vw - 48px));
     background: rgba(8,10,13,.34); padding: 28px 32px 24px;
