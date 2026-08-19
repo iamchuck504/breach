@@ -135,6 +135,7 @@ export class Controller {
     this.runDist = 0;
     this.evadeMom = 0;
     this.mantle = null;
+    this.edgePushT = 0;
     this.bounceWindow = 0;
     this.chain = 0;
     this.usedDouble = false;
@@ -453,25 +454,39 @@ export class Controller {
         } else this.coverLeanAnim = 0;
 
         const away = hasInput ? (mw.x * n.x + mw.z * n.z) : 0;
-        // extremo en uso y cuánto apunta el stick MÁS ALLÁ de ese extremo
-        const eSign = nearB ? 1 : nearA ? -1 : 0;
+        // zona de salida por extremo: MÁS AMPLIA que la de lean ("estoy en la
+        // orilla" empieza antes de tocar el tope), y detección de tope real
+        const exitZone = C.cornerLean * 1.7 + PLAYER_R;
+        const eSign = (len - u) < exitZone ? 1 : u < exitZone ? -1 : 0;
         const latOut = eSign !== 0 && hasInput ? (mw.x * ux + mw.z * uz) * eSign : 0;
+        const atTip = u <= PLAYER_R * 0.7 + 0.04 || u >= len - PLAYER_R * 0.7 - 0.04;
 
-        // --- salida OFENSIVA por el extremo, dos intenciones claras:
-        //   · stick en diagonal hacia FUERA (componente frontal) → salir
-        //   · CORRER + stick más allá del extremo (lateral puro) → salir
-        //     corriendo (el sprint es la señal de intención; sin él, el
-        //     stick lateral sigue siendo desplazarse por la cobertura)
-        const exitFwd = away > 0.3;
-        const exitRun = input.sprintHeld && latOut > 0.5;
-        if (!this.aim && hasInput && eSign !== 0 && (exitFwd || exitRun)) {
+        // --- salir por el extremo, tres intenciones (romper cobertura tiene
+        // prioridad sobre "seguir desplazándose"):
+        //   1) CORRER + stick hacia fuera (cualquier ángulo razonable) →
+        //      salida INMEDIATA en roadie
+        //   2) diagonal clara hacia fuera → salir a run (sin sprint)
+        //   3) clavar el stick MÁS ALLÁ del tope ~0.12s (el strafe ya no
+        //      avanza) → caminar fuera de la cobertura, nada de quedarse
+        //      pegado empujando contra el aire
+        let exitMode = 0;
+        if (!this.aim && hasInput && eSign !== 0) {
+          if (input.sprintHeld && (latOut > 0.2 || away > 0.1)) exitMode = 2;
+          else if (away > 0.3) exitMode = 1;
+          else if (atTip && latOut > 0.6) {
+            this.edgePushT = (this.edgePushT ?? 0) + dt;
+            if (this.edgePushT > 0.12) exitMode = 1;
+          } else this.edgePushT = 0;
+        } else this.edgePushT = 0;
+        if (exitMode) {
           this.cover = null;
           this.chain = 0;
+          this.edgePushT = 0;
           const im = Math.max(0.001, mw.mag);
           const dx2 = mw.x / im, dz2 = mw.z / im;
           this.yaw = yawFromDir(dx2, dz2); // el cuerpo sale hacia donde apuntas
-          this._setState(input.sprintHeld ? 'roadie' : 'run');
-          const spd = M.runSpeed * C.edgeExitBoost;
+          this._setState(exitMode === 2 ? 'roadie' : 'run');
+          const spd = exitMode === 2 ? M.roadieSpeed * 0.78 : M.runSpeed * C.edgeExitBoost;
           this.vel.x = dx2 * spd;
           this.vel.z = dz2 * spd;
           this.ev.onDetach?.();

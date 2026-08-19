@@ -65,6 +65,8 @@ await page.evaluate(() => {
     const p = window.BREACH.player;
     p.pos.x = x; p.pos.z = z; p.y = 0; p.vel.x = 0; p.vel.z = 0;
     p.cam.yaw = yaw; p.yaw = yaw; p.evadeRecovery = 0; p.chain = 0;
+    p.cover = null; p.slide = null; p.dive = null; p.mantle = null;
+    p.state = 'idle'; p.stateT = 0; // teleport limpio: sin estado arrastrado
     window.__mon.ignoreTeleport = 4;
   };
   window.__issues = () => { const i = window.__mon.issues.splice(0); return i; };
@@ -132,7 +134,37 @@ const unwalled = await page.evaluate(() => +window.BREACH.player.speed.toFixed(1
 if (unwalled < 1) problems.push('PARED: no recuperó movimiento al alejarse (speed=' + unwalled + ')');
 await flush('pared');
 
-// ---- FASE 6: muertes en plena transición ----
+// ---- FASE 6: salidas por el extremo del cover (ambos extremos y ángulos) ----
+const coverExitTest = async (tag, keys, expect, holdMs) => {
+  await page.evaluate(() => {
+    const W = window.BREACH_WORLD;
+    const f = W.faces.find((c) => c.h <= 1.2 && c.n.z < -0.9);
+    window.__tp((f.a.x + f.b.x) / 2, (f.a.z + f.b.z) / 2 - 1.2, Math.PI);
+  });
+  await page.waitForTimeout(250);
+  let st = '';
+  for (let i = 0; i < 3 && st !== 'cover'; i++) {
+    await page.keyboard.press('Space');
+    await page.waitForTimeout(300);
+    st = await page.evaluate(() => window.BREACH.player.state);
+  }
+  if (st !== 'cover') { problems.push(`SALIDA ${tag}: no entró a cover`); return; }
+  for (const k of keys) await page.keyboard.down(k);
+  await page.waitForTimeout(holdMs);
+  const out = await page.evaluate(() => window.BREACH.player.state);
+  for (const k of keys) await page.keyboard.up(k);
+  if (!expect.includes(out)) problems.push(`SALIDA ${tag}: esperaba ${expect.join('/')}, quedó en ${out}`);
+  console.log(`salida ${tag}: ${out}`);
+  await page.waitForTimeout(300);
+  await flush('salida-' + tag);
+};
+await coverExitTest('sprint+lateral-B', ['Shift', 'a'], ['roadie', 'run'], 1200);
+await coverExitTest('sprint+lateral-A', ['Shift', 'd'], ['roadie', 'run'], 1200);
+await coverExitTest('lateral-al-tope', ['a'], ['run', 'idle'], 1500);      // sin sprint: camina fuera
+await coverExitTest('diagonal-fuera', ['s', 'd'], ['run', 'idle', 'dive'], 700); // away>0.3 sale sin sprint
+await coverExitTest('lateral-corto-NO-sale', ['d'], ['cover'], 350);       // en el centro: sigue desplazándose
+
+// ---- FASE 7: muertes en plena transición ----
 const dieIn = async (tag, prep, expectState = null) => {
   await page.evaluate(() => window.__tp(0, -12));
   await page.waitForTimeout(200);

@@ -260,23 +260,53 @@ try {
   }
   await page.waitForTimeout(700);
 
-  // retícula ADS por arma: la escopeta debe dibujar un anillo mucho mayor
-  await page.mouse.down({ button: 'right' });
+  // reset a campo abierto: la última evasión del test anterior a veces
+  // termina EN COVER (pared alta centro = apuntar suprimido por diseño)
+  await page.evaluate(() => {
+    const P = window.BREACH.player;
+    P.cover = null; P.slide = null; P.dive = null;
+    P.state = 'idle'; P.stateT = 0;
+    P.pos.x = 0; P.pos.z = -12; P.vel.x = 0; P.vel.z = 0;
+  });
   await page.waitForTimeout(250);
-  const rSmg = await page.evaluate(() => +document.getElementById('cross-ring').getAttribute('r'));
+
+  // retícula ADS por arma: la escopeta debe dibujar un anillo mucho mayor.
+  // Con POLLING: a tiempo fijo, bajo carga el anillo podía leerse antes del
+  // primer refresco (40 = valor por defecto del SVG) — falso negativo.
+  const readRing = async () => {
+    let r = 40;
+    for (let i = 0; i < 10; i++) {
+      await page.waitForTimeout(120);
+      r = await page.evaluate(() => +document.getElementById('cross-ring').getAttribute('r'));
+      if (r !== 40) break;
+    }
+    return r;
+  };
+  await page.mouse.down({ button: 'right' });
+  const rSmg = await readRing();
   await page.mouse.up({ button: 'right' });
   await page.keyboard.press('q'); // cambiar a escopeta (con animación)
   await page.waitForTimeout(750);
   await page.mouse.down({ button: 'right' });
-  await page.waitForTimeout(250);
-  const rSg = await page.evaluate(() => ({
-    r: +document.getElementById('cross-ring').getAttribute('r'),
+  const rSgR = await readRing();
+  const rSg = await page.evaluate((rr) => ({
+    r: rr,
     wep: window.BREACH.weapons.cur,
-  }));
+  }), rSgR);
   await page.mouse.up({ button: 'right' });
   console.log('RETICLE:', JSON.stringify({ smg: rSmg, shotgun: rSg.r, wep: rSg.wep }));
   if (rSg.wep !== 'shotgun') errors.push('RETICLE: el swap no llegó a escopeta');
-  if (!(rSg.r > rSmg * 3)) errors.push('RETICLE: anillo de escopeta no es mayor (' + rSmg + ' vs ' + rSg.r + ')');
+  if (!(rSg.r > rSmg * 3)) {
+    const dbg = await page.evaluate(() => ({
+      menu: !document.getElementById('menu').classList.contains('off'),
+      suppress: window.BREACH_INPUT.suppress,
+      aim: window.BREACH.player.aim,
+      aimHeld: window.BREACH_INPUT.aimHeld,
+      st: window.BREACH.player.state,
+      cls: document.getElementById('crosshair').getAttribute('class'),
+    }));
+    errors.push('RETICLE: anillo de escopeta no es mayor (' + rSmg + ' vs ' + rSg.r + ') dbg=' + JSON.stringify(dbg));
+  }
   await page.keyboard.press('q'); // volver a metralleta
   await page.waitForTimeout(700);
 
