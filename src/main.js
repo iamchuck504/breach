@@ -691,6 +691,7 @@ function spawnLocal(team, spawn) {
   G.team = team;
   G.rig = new Rig(scene, team, null, G.charVariant);
   G.rig.groundFn = (x, z, y) => world.groundHeight({ x, z }, PLAYER_R, y);
+  G.rig.collideFn = (p, y) => world.resolveCircle(p, 0.3, y);
   G.player = new Controller(world, shoulderCam, ctrlEvents);
   G.player.respawn(spawn);
   G.weapons.reset();
@@ -702,7 +703,7 @@ function grantSpawnProtection() {
   hud.hint('PROTECCIÓN DE SPAWN — SE ROMPE AL DISPARAR', 2200);
 }
 
-function damagePlayerLocal(dmg) {
+function damagePlayerLocal(dmg, fromName, shooter) {
   if (!G.selfAlive) return false;
   if (G.spawnProt > 0) return false; // protegido: sin daño
   G.selfHp -= dmg;
@@ -713,6 +714,16 @@ function damagePlayerLocal(dmg) {
   if (G.selfHp <= 0) {
     G.selfHp = 0;
     G.selfAlive = false;
+    // contexto físico de la muerte ANTES de matar (kill() borra la velocidad):
+    // dirección del tiro, potencia del golpe final, momentum y estado
+    G.rig.setDeathContext({
+      impact: shooter
+        ? { x: G.player.pos.x - shooter.x, z: G.player.pos.z - shooter.z }
+        : null,
+      power: Math.min(1, dmg / 55),
+      vel: { x: G.player.vel.x, z: G.player.vel.z },
+      state: G.player.animState(),
+    });
     G.player.kill();
     audio.death();
     input.pad.rumble(350, 0.8, 1.0);
@@ -723,11 +734,14 @@ function damagePlayerLocal(dmg) {
       G.respawnT = 0;
       hud.center('SIN VIDAS', 'esperando el final de la ronda', 4500);
     }
-    // el arma en mano cae junto al cuerpo con las balas restantes
-    G.drops?.spawn('p' + G.dropSeq++, G.weapons.cur,
-      G.player.pos.x, G.player.pos.z, 'red',
-      G.weapons.st.mag, G.weapons.st.reserve, undefined,
-      world.groundHeight(G.player.pos, PLAYER_R, G.player.y));
+    // el arma se le CAE de las manos durante el desplome (~0.28s), no aparece
+    // teletransportada al piso en el frame de la muerte
+    const dropAt = { x: G.player.pos.x, z: G.player.pos.z, y: world.groundHeight(G.player.pos, PLAYER_R, G.player.y) };
+    const wep = G.weapons.cur, mag = G.weapons.st.mag, res = G.weapons.st.reserve;
+    const id = 'p' + G.dropSeq++;
+    setTimeout(() => {
+      G.drops?.spawn(id, wep, dropAt.x, dropAt.z, 'red', mag, res, undefined, dropAt.y);
+    }, 280);
     return true;
   }
   return false;
@@ -753,12 +767,17 @@ function startBots() {
     playerName: G.name,
     stepSound,
     dropWeapon: (wep, x, z, team, y = 0) => {
-      // los bots no llevan contador de balas: sueltan un remanente plausible
+      // los bots no llevan contador de balas: sueltan un remanente plausible.
+      // El drop aparece cuando el arma se le CAE de las manos (~0.28s), en
+      // sincronía con el ragdoll — no teletransportada al morir
       const def = TUNING.weapons[wep];
-      G.drops?.spawn('b' + G.dropSeq++, wep, x, z, team,
-        Math.ceil(def.mag * (0.2 + Math.random() * 0.6)),
-        Math.ceil(def.reserve * Math.random() * 0.4), undefined,
-        world.groundHeight({ x, z }, PLAYER_R, y));
+      const id = 'b' + G.dropSeq++;
+      const gy = world.groundHeight({ x, z }, PLAYER_R, y);
+      setTimeout(() => {
+        G.drops?.spawn(id, wep, x, z, team,
+          Math.ceil(def.mag * (0.2 + Math.random() * 0.6)),
+          Math.ceil(def.reserve * Math.random() * 0.4), undefined, gy);
+      }, 280);
     },
     player: () => ({
       x: G.player.pos.x, z: G.player.pos.z, y: G.player.y, alive: G.selfAlive,
@@ -873,6 +892,7 @@ function addRemote(p) {
   if (prev) prev.dispose(scene); // id repetido: no dejar rigs huérfanos
   const r = new RemotePlayer(scene, p.id, p.name, p.team, p.v | 0);
   r.rig.groundFn = (x, z, y) => world.groundHeight({ x, z }, PLAYER_R, y);
+  r.rig.collideFn = (pt, y) => world.resolveCircle(pt, 0.3, y);
   r.alive = p.alive !== false;
   // posición real desde el welcome: sin ella nacían apilados en (0,0)
   if (typeof p.x === 'number') { r.x = p.x; r.z = p.z; }
@@ -931,8 +951,34 @@ function bindNet(net) {
       else effects.blood(new THREE.Vector3(pos.x, 1, pos.z), TEAM_HEX[vteam]);
     }
     hud.kill(m.kn, m.kt, m.vn, m.vt);
+    // contexto físico para el ragdoll (dirección del tiro + momentum previo)
+    const killer = m.from === net.id
+      ? { x: G.player.pos.x, z: G.player.pos.z }
+      : (() => { const k = G.remotes.get(m.from); return k ? { x: k.x, z: k.z } : null; })();
+    if (victim) {
+      // velocidad aproximada del remoto desde sus últimos snapshots
+      const b = victim.buf;
+      let rv = { x: 0, z: 0 };
+      if (b.length >= 2) {
+        const s1 = b[b.length - 2], s2 = b[b.length - 1];
+        const dt2 = Math.max(0.03, s2.rt - s1.rt);
+        rv = { x: (s2.x - s1.x) / dt2, z: (s2.z - s1.z) / dt2 };
+      }
+      victim.rig.setDeathContext({
+        impact: killer ? { x: victim.x - killer.x, z: victim.z - killer.z } : null,
+        power: m.gib ? 1 : 0.6,
+        vel: rv,
+        state: victim.st,
+      });
+    }
     if (m.target === net.id) {
       G.selfAlive = false;
+      G.rig.setDeathContext({
+        impact: killer ? { x: G.player.pos.x - killer.x, z: G.player.pos.z - killer.z } : null,
+        power: m.gib ? 1 : 0.6,
+        vel: { x: G.player.vel.x, z: G.player.vel.z },
+        state: G.player.animState(),
+      });
       G.player.kill();
       audio.death();
       input.pad.rumble(350, 0.8, 1.0);

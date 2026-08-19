@@ -59,6 +59,7 @@ class Bot {
     };
     this.rig = new Rig(scene, team, name, (Math.random() * 5) | 0); // soldado random
     this.rig.groundFn = (x, z, y) => world.groundHeight({ x, z }, 0.38, y);
+    this.rig.collideFn = (p, y) => world.resolveCircle(p, 0.3, y);
     this.respawn(spawn);
   }
 
@@ -417,7 +418,8 @@ class Bot {
       this.pos.x += d.x * spd * dt;
       this.pos.z += d.z * spd * dt;
       this.speed = spd;
-    } else this.speed = 0;
+      this.velX = d.x * spd; this.velZ = d.z * spd; // momentum para la muerte
+    } else { this.speed = 0; this.velX = 0; this.velZ = 0; }
     this.world.resolveCircle(this.pos, 0.38, this.y);
 
     // detector de atasco: si no avanza lo esperado, replantear el plan
@@ -1047,7 +1049,7 @@ export class BotMatch {
     for (const [id, dmg] of dmgAcc) {
       if (id === 'player') {
         this.cb.effects.blood(_v3.set(this.cb.player().x, 1, this.cb.player().z), TEAM_HEX.red);
-        const died = this.cb.damagePlayer(dmg, bot.name);
+        const died = this.cb.damagePlayer(dmg, bot.name, { x: bot.pos.x, z: bot.pos.z });
         if (died) this._onDeath('player', bot.id, false);
       } else {
         this.damageBot(id, dmg, bot.id, false, true);
@@ -1072,6 +1074,14 @@ export class BotMatch {
     if (!silent) this.cb.effects.blood(_v3.set(b.pos.x, b.y + 1, b.pos.z), TEAM_HEX[b.team]);
     if (b.hp <= 0) {
       b.alive = false;
+      // contexto físico del ragdoll: de dónde vino el tiro final, con qué
+      // fuerza (daño del golpe), y el momentum/estado que llevaba el bot
+      b.rig.setDeathContext({
+        impact: att ? { x: b.pos.x - att.x, z: b.pos.z - att.z } : null,
+        power: Math.min(1, dmg / 55) + (gib ? 0.35 : 0),
+        vel: { x: b.velX ?? 0, z: b.velZ ?? 0 },
+        state: b.state === 'cover' ? (b.cover?.low ? 'cover_low' : 'cover_high') : b.state,
+      });
       if (gib) this.cb.effects.gib(_v3.set(b.pos.x, b.y, b.pos.z), TEAM_HEX[b.team]);
       this._onDeath(id, from, gib);
       return true;

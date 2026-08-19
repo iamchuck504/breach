@@ -301,6 +301,7 @@ const IK_M = new THREE.Matrix4(), IK_Q = new THREE.Quaternion(), IK_QE = new THR
 const IK_BQ = new THREE.Quaternion();
 const AXIS_X = new THREE.Vector3(1, 0, 0);
 const TMP_A = new THREE.Vector3(), TMP_B = new THREE.Vector3();
+const RAG_P = { x: 0, z: 0 }; // punto mutable para la colisión del cadáver
 const clamp01 = (v) => Math.min(1, Math.max(-1, v));
 
 export class Rig {
@@ -449,7 +450,9 @@ export class Rig {
     this._recoil = 0;
     this._deadT = 0;
     this.rag = null; // estado del ragdoll de muerte
-    this.groundFn = null; // (x,z,y)->alturaSuelo — lo inyecta quien tiene el world
+    this.groundFn = null;  // (x,z,y)->alturaSuelo — lo inyecta quien tiene el world
+    this.collideFn = null; // (p,y)->muta p fuera de los AABBs (colisión del cadáver)
+    this._deathCtx = null; // contexto físico de la muerte (setDeathContext)
   }
 
   // Mismo volumen craneal para las cinco variantes. Todo lo que cambia es
@@ -597,14 +600,63 @@ export class Rig {
   // Impulso y pose de desparrame aleatorios para esta muerte.
   // ANCLA la posición de muerte: el cadáver se queda ahí (desliza <40cm),
   // peso muerto — nada de salir volando.
+  // La muerte usa CONTEXTO físico: dirección y potencia del impacto final,
+  // velocidad y estado previos del personaje. Lo setea quien conoce el tiro
+  // (main / botmatch / handler de red) justo antes de matar al rig — la
+  // variación entre muertes viene del contexto, no de aleatoriedad pura.
+  setDeathContext(ctx) { this._deathCtx = ctx; }
+
   _startRagdoll() {
     const yaw = this.root.rotation.y;
     const back = { x: Math.sin(yaw), z: Math.cos(yaw) };
     const right = { x: Math.cos(yaw), z: -Math.sin(yaw) };
-    const lat = Math.random() * 2 - 1;
-    const spd = 0.6 + Math.random() * 0.6;
     const rnd = (a, b) => a + Math.random() * (b - a);
+    const ctx = this._deathCtx || {};
+    this._deathCtx = null;
+    const vel = ctx.vel || { x: 0, z: 0 };
+    const power = Math.min(1, Math.max(0.2, ctx.power ?? 0.4));
+    let imp = ctx.impact || null;
+    if (imp) {
+      const il = Math.hypot(imp.x, imp.z);
+      imp = il > 0.01 ? { x: imp.x / il, z: imp.z / il } : null;
+    }
+    const st = ctx.state || 'idle';
+    const inCover = st === 'cover_low' || st === 'cover_high' || st === 'blind_over';
+    const evading = st === 'dive' || st === 'slide';
+
+    // impulso inicial: el momentum que TRAÍA + el empuje del arma (potencia y
+    // dirección del tiro). Con tope — nadie "sale disparado"; cubierto casi
+    // no se desplaza: se desploma en el sitio, contra su cover.
+    let vx = vel.x * (evading ? 0.75 : 0.5) + (imp ? imp.x : back.x) * (0.55 + power * 2.1);
+    let vz = vel.z * (evading ? 0.75 : 0.5) + (imp ? imp.z : back.z) * (0.55 + power * 2.1);
+    if (inCover) { vx *= 0.3; vz *= 0.3; }
+    const vm = Math.hypot(vx, vz);
+    if (vm > 4.2) { vx *= 4.2 / vm; vz *= 4.2 / vm; }
+
+    // dirección del desplome según el contexto: tiro de costado → rueda hacia
+    // ese lado; iba lanzado (roadie/evasión) → cae de bruces con su momentum;
+    // tiro frontal → se va de espaldas
+    const side = imp ? imp.x * right.x + imp.z * right.z : rnd(-0.5, 0.5);
+    const front = imp ? imp.x * back.x + imp.z * back.z : 1;
+    const fwdMom = vel.x * -back.x + vel.z * -back.z;
+    let axis, angTarget;
+    if (Math.abs(side) > Math.abs(front) + 0.25) {
+      axis = 'z';
+      angTarget = (side > 0 ? -1 : 1) * (Math.PI / 2) * rnd(0.9, 1.05);
+    } else if (fwdMom > 3.4 && !inCover) {
+      axis = 'x';
+      angTarget = -(Math.PI / 2) * rnd(0.9, 1.05);
+    } else {
+      axis = 'x';
+      angTarget = (front >= 0 ? 1 : -1) * (Math.PI / 2) * rnd(0.9, 1.05);
+    }
+    if (inCover) angTarget *= rnd(0.62, 0.78); // se escurre contra su cobertura
+
     this.rag = {
+      t: 0,
+      // reacción al impacto ANTES de perder el cuerpo: el golpe se "encaja"
+      // un instante (más potencia = más encaje) mientras el paso trastabilla
+      reactT: 0.09 + power * 0.09,
       bx: this.root.position.x, bz: this.root.position.z, byaw: yaw,
       by: this.root.position.y, vyy: 0, // caída vertical real (muerte en el aire)
       // suelo REAL bajo el cadáver: clavar a y=0 enterraba el cuerpo dentro
@@ -614,20 +666,18 @@ export class Rig {
         ? this.groundFn(this.root.position.x, this.root.position.z, this.root.position.y)
         : 0,
       ox: 0, oz: 0, oy: 0,
-      vx: (back.x + right.x * lat * 0.8) * spd,
-      vz: (back.z + right.z * lat * 0.8) * spd,
-      vy: 0,
+      vx, vz, vy: 0,
       ang: 0,
       hit: false, flopT: 0, // impacto contra el suelo → flop de extremidades
-      fl: [rnd(0.15, 0.45), rnd(0.15, 0.45), rnd(0.1, 0.35), rnd(0.1, 0.35), rnd(0.25, 0.55), rnd(0.5, 1)],
-      axis: Math.abs(lat) > 0.6 ? 'z' : 'x',
-      angTarget: (Math.abs(lat) > 0.6 ? (lat > 0 ? -1 : 1) : 1) * (Math.PI / 2) * rnd(0.9, 1.05),
-      tilt: rnd(-0.35, 0.35),
-      spin: rnd(-0.5, 0.5),
+      // flop contenido: flexible pero con masa (nada de muñeco de goma)
+      fl: [rnd(0.12, 0.34), rnd(0.12, 0.34), rnd(0.08, 0.26), rnd(0.08, 0.26), rnd(0.2, 0.42), rnd(0.4, 0.8)],
+      axis, angTarget,
+      tilt: (imp ? side * 0.3 : rnd(-0.3, 0.3)) + rnd(-0.08, 0.08),
+      spin: evading ? rnd(-0.9, 0.9) : imp ? -side * rnd(0.25, 0.5) : rnd(-0.4, 0.4),
       pose: [
         rnd(-0.2, 0.2), rnd(-0.3, 0.3), rnd(-0.4, 0.2), rnd(-0.4, 0.4),
-        rnd(0.2, 0.9), rnd(0.4, 1.0), rnd(0.1, 0.6),
-        rnd(0.2, 0.9), rnd(0.4, 1.0), rnd(0.1, 0.6),
+        rnd(0.2, 0.8), rnd(0.35, 0.9), rnd(0.1, 0.55),
+        rnd(0.2, 0.8), rnd(0.35, 0.9), rnd(0.1, 0.55),
         rnd(-0.2, 0.5), rnd(0.1, 0.4), rnd(-0.6, -0.1),
         rnd(-0.3, 0.4), rnd(-0.7, -0.2),
       ],
@@ -905,7 +955,8 @@ export class Rig {
         // ACELERADA por gravedad (tope seco), y al impactar un flop de
         // extremidades amortiguado (flexible, pero se apaga rápido = peso)
         if (!this.rag) this._startRagdoll();
-        this.activeGun.visible = false; // el arma cae al suelo (WeaponDrops)
+        // (la visibilidad del arma la maneja la física del ragdoll: se le
+        // cae de las manos ~0.22s después del impacto, no al instante)
         damp = 3.2; // articulaciones flojas: van rezagadas detrás del cuerpo
         ikArms = false;
         const rg = this.rag;
@@ -1032,18 +1083,32 @@ export class Rig {
     // suelo; ahí dispara el flop de extremidades del case 'dead'.
     if (p.state === 'dead' && this.rag) {
       const r = this.rag;
+      r.t += dt;
       const fr = Math.exp(-6 * dt);
       r.vx *= fr; r.vz *= fr;
       r.ox += r.vx * dt; r.oz += r.vz * dt;
-      // el desplome de rodillas solo progresa CERCA del suelo: muriendo en el
-      // aire el cuerpo apenas se ladea mientras cae y colapsa al aterrizar
-      // (antes completaba el flop en el aire y bajaba rígido el resto)
+      // el cadáver COLISIONA: contra una pared choca, se frena y se apoya —
+      // ya no la atraviesa deslizándose (collideFn lo inyecta quien tiene
+      // el world, igual que groundFn)
+      if (this.collideFn) {
+        RAG_P.x = r.bx + r.ox; RAG_P.z = r.bz + r.oz;
+        const px0 = RAG_P.x, pz0 = RAG_P.z;
+        this.collideFn(RAG_P, r.by);
+        if (RAG_P.x !== px0 || RAG_P.z !== pz0) { r.vx *= 0.35; r.vz *= 0.35; }
+        r.ox = RAG_P.x - r.bx; r.oz = RAG_P.z - r.bz;
+      }
+      // el desplome de rodillas solo progresa CERCA del suelo, y NUNCA antes
+      // de la reacción al impacto (r.reactT): primero el cuerpo encaja el
+      // golpe con un paso trastabillado, DESPUÉS pierde el control
       const onGround = r.by <= r.floorY + 0.08;
       if (r.ang < 1) {
-        if (onGround) {
+        if (onGround && r.t > r.reactT) {
           r.ang = Math.min(1, r.ang + dt * (0.9 + r.ang * 7.5)); // cae acelerando
-          if (r.ang >= 1 && !r.hit) { r.hit = true; r.flopT = 0; }
-        } else {
+          if (r.ang >= 1 && !r.hit) {
+            r.hit = true; r.flopT = 0;
+            r.vx *= 0.5; r.vz *= 0.5; // el golpe contra el suelo absorbe el arrastre
+          }
+        } else if (!onGround) {
           r.ang = Math.min(0.35, r.ang + dt * 0.6);
         }
       } else if (r.hit) {
@@ -1062,6 +1127,8 @@ export class Rig {
       }
       this.root.position.set(r.bx + r.ox, r.by, r.bz + r.oz);
       this.root.rotation.y = r.byaw + r.spin * fall;
+      // el arma se le CAE de las manos durante el desplome, no al instante
+      this.activeGun.visible = r.t < 0.22;
     } else if (p.state !== 'dead') {
       if (this.rag) {
         this.rag = null;
