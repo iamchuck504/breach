@@ -11,6 +11,23 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
+function extrudedPlate(points, bevel = 0.065) {
+  const shape = new THREE.Shape();
+  shape.moveTo(points[0][0], points[0][1]);
+  for (let i = 1; i < points.length; i++) shape.lineTo(points[i][0], points[i][1]);
+  shape.closePath();
+  const geometry = new THREE.ExtrudeGeometry(shape, {
+    depth: 1,
+    steps: 1,
+    bevelEnabled: true,
+    bevelSegments: 2,
+    bevelSize: bevel,
+    bevelThickness: bevel,
+  });
+  geometry.center();
+  return geometry;
+}
+
 const TEAM_COLORS = { red: 0xd94f3f, blue: 0x4f8de0 };
 // Paleta Vanguard V2: grafito profundo + placas gunmetal. El color de equipo
 // funciona como identificación luminosa, no como una masa de plástico rojo/azul.
@@ -31,10 +48,22 @@ const BOX_GEO = new RoundedBoxGeometry(1, 1, 1, 1, 0.12);
 // Las masas principales usan un bisel adicional; las piezas pequeñas siguen
 // usando BOX_GEO para que el detalle no se convierta en geometría desperdiciada.
 const ARMOR_GEO = new RoundedBoxGeometry(1, 1, 1, 2, 0.16);
+// Siluetas nuevas de Vanguard V3. Ya no son cajas disfrazadas: cada placa
+// tiene un contorno propio y bisel PBR, aunque el esqueleto siga siendo igual.
+const CHEST_GEO = extrudedPlate([[-0.34, -0.5], [0.34, -0.5], [0.5, 0.5], [-0.5, 0.5]]);
+const SHIELD_GEO = extrudedPlate([[-0.46, 0.5], [0.46, 0.5], [0.38, -0.18], [0, -0.5], [-0.38, -0.18]]);
+const PAULDRON_GEO = extrudedPlate([
+  [-0.42, 0.34], [-0.5, -0.08], [-0.3, -0.5], [0.3, -0.46],
+  [0.5, -0.08], [0.42, 0.34], [0.2, 0.5], [-0.2, 0.5],
+]);
+const LIMB_GEO = extrudedPlate([[-0.38, 0.5], [0.38, 0.5], [0.5, -0.5], [-0.5, -0.5]], 0.05);
 const BALL_GEO = new THREE.SphereGeometry(1, 14, 10);
 const CAPSULE_GEO = new THREE.CapsuleGeometry(0.25, 0.5, 4, 8);
 const CYLINDER_GEO = new THREE.CylinderGeometry(0.5, 0.5, 1, 10);
-for (const g of [BOX_GEO, ARMOR_GEO, BALL_GEO, CAPSULE_GEO, CYLINDER_GEO]) g.userData.shared = true;
+for (const g of [
+  BOX_GEO, ARMOR_GEO, CHEST_GEO, SHIELD_GEO, PAULDRON_GEO, LIMB_GEO,
+  BALL_GEO, CAPSULE_GEO, CYLINDER_GEO,
+]) g.userData.shared = true;
 
 // Seis pasos suaves: conserva el sombreado estilizado, pero recupera el detalle
 // de las placas oscuras y sus biseles en lugar de aplastarlos casi a negro.
@@ -57,6 +86,22 @@ function toonMaterial(color) {
     mat = new THREE.MeshToonMaterial({ color, gradientMap: TOON_GRADIENT });
     mat.userData.shared = true;
     MATERIALS.set(color, mat);
+  }
+  return mat;
+}
+
+const PLATED_MATERIALS = new Map();
+function platedMaterial(color) {
+  let mat = PLATED_MATERIALS.get(color);
+  if (!mat) {
+    const isRubber = color === RUBBER || color === VISOR;
+    mat = new THREE.MeshStandardMaterial({
+      color,
+      roughness: isRubber ? 0.88 : (color === METAL ? 0.34 : 0.55),
+      metalness: isRubber ? 0.02 : (color === METAL ? 0.58 : 0.26),
+    });
+    mat.userData.shared = true;
+    PLATED_MATERIALS.set(color, mat);
   }
   return mat;
 }
@@ -90,6 +135,13 @@ function box(w, h, d, color, x = 0, y = 0, z = 0) {
 }
 function armorBox(w, h, d, color, x = 0, y = 0, z = 0) {
   const m = new THREE.Mesh(ARMOR_GEO, toonMaterial(color));
+  m.position.set(x, y, z);
+  m.scale.set(w, h, d);
+  m.castShadow = true;
+  return m;
+}
+function armorPlate(geometry, w, h, d, color, x = 0, y = 0, z = 0) {
+  const m = new THREE.Mesh(geometry, platedMaterial(color));
   m.position.set(x, y, z);
   m.scale.set(w, h, d);
   m.castShadow = true;
@@ -266,24 +318,29 @@ export class Rig {
     this.torso = new THREE.Group();
     this.hips.add(this.torso);
     this.torso.add(box(0.46, 0.15, 0.3, RUBBER, 0, 0.02, 0.015));   // cinturón/pelvis
-    this.torso.add(armorBox(0.49, 0.3, 0.31, MID, 0, 0.2, 0));      // abdomen común
-    this.torso.add(box(0.35, 0.13, 0.045, PLATE, 0, 0.2, -0.18));   // placa abdominal
+    this.torso.add(armorPlate(CHEST_GEO, 0.49, 0.3, 0.31, MID, 0, 0.2, 0));
+    this.torso.add(armorPlate(LIMB_GEO, 0.35, 0.13, 0.045, PLATE, 0, 0.2, -0.18));
     this.torso.add(box(0.12, 0.09, 0.055, DARK, -0.16, 0.1, -0.18)); // bolsas de cinturón
     this.torso.add(box(0.12, 0.09, 0.055, DARK, 0.16, 0.1, -0.18));
     this.torso.add(box(0.045, 0.025, 0.018, COPPER, -0.16, 0.12, -0.215));
     this.torso.add(box(0.045, 0.025, 0.018, COPPER, 0.16, 0.12, -0.215));
-    this.torso.add(armorBox(0.66, 0.34, 0.4, DARK, 0, 0.46, 0));    // coraza común
-    this.torso.add(armorBox(0.56, 0.25, 0.065, MID, 0, 0.47, -0.225));
-    this.torso.add(armorBox(0.39, 0.135, 0.04, PLATE, 0, 0.49, -0.275));
+    this.torso.add(armorPlate(CHEST_GEO, 0.68, 0.37, 0.4, DARK, 0, 0.46, 0));
+    this.torso.add(armorPlate(CHEST_GEO, 0.57, 0.27, 0.065, MID, 0, 0.47, -0.225));
+    this.torso.add(armorPlate(SHIELD_GEO, 0.39, 0.16, 0.04, PLATE, 0, 0.49, -0.275));
     this.torso.add(box(0.52, 0.075, 0.42, MID, 0, 0.635, 0));       // collar común
     this.torso.add(box(0.055, 0.2, 0.04, METAL, -0.24, 0.48, -0.285));
     this.torso.add(box(0.055, 0.2, 0.04, METAL, 0.24, 0.48, -0.285));
     this.torso.add(box(0.25, 0.085, 0.035, tc, 0, 0.5, -0.31));    // placa de equipo
     this.torso.add(glowBox(0.13, 0.022, 0.02, tc, 0, 0.5, -0.333));
-    this.torso.add(ball(0.18, tc, -0.38, 0.56, 0, 1.12, 0.82, 1)); // hombreras de equipo
-    this.torso.add(ball(0.18, tc, 0.38, 0.56, 0, 1.12, 0.82, 1));
-    this.torso.add(armorBox(0.25, 0.075, 0.2, DARK, -0.38, 0.61, -0.025));
-    this.torso.add(armorBox(0.25, 0.075, 0.2, DARK, 0.38, 0.61, -0.025));
+    this.torso.add(ball(0.145, DARK, -0.38, 0.54, 0, 1, 1, 1));    // articulación bajo la placa
+    this.torso.add(ball(0.145, DARK, 0.38, 0.54, 0, 1, 1, 1));
+    const pauldronL = armorPlate(PAULDRON_GEO, 0.36, 0.25, 0.34, tc, -0.4, 0.58, -0.015);
+    const pauldronR = armorPlate(PAULDRON_GEO, 0.36, 0.25, 0.34, tc, 0.4, 0.58, -0.015);
+    pauldronL.rotation.z = -0.09;
+    pauldronR.rotation.z = 0.09;
+    this.torso.add(pauldronL, pauldronR);
+    this.torso.add(armorPlate(LIMB_GEO, 0.24, 0.06, 0.2, DARK, -0.4, 0.64, -0.025));
+    this.torso.add(armorPlate(LIMB_GEO, 0.24, 0.06, 0.2, DARK, 0.4, 0.64, -0.025));
     this.torso.add(box(0.16, 0.035, 0.035, PLATE, -0.38, 0.58, -0.155));
     this.torso.add(box(0.16, 0.035, 0.035, PLATE, 0.38, 0.58, -0.155));
     this.torso.add(glowBox(0.105, 0.018, 0.02, tc, -0.38, 0.58, -0.18));
@@ -322,9 +379,9 @@ export class Rig {
       const elbow = new THREE.Group();
       elbow.position.set(0, -L1, 0);
       shoulder.add(elbow);
-      elbow.add(armorBox(0.18, 0.32, 0.18, DARK, 0, -0.16, 0));    // guantelete común
-      elbow.add(armorBox(0.12, 0.2, 0.035, MID, 0, -0.14, -0.105));
-      elbow.add(box(0.105, 0.145, 0.028, tc, 0, -0.14, -0.13));    // placa de equipo
+      elbow.add(armorPlate(LIMB_GEO, 0.19, 0.33, 0.18, DARK, 0, -0.16, 0));
+      elbow.add(armorPlate(LIMB_GEO, 0.13, 0.21, 0.035, MID, 0, -0.14, -0.105));
+      elbow.add(armorPlate(LIMB_GEO, 0.11, 0.15, 0.028, tc, 0, -0.14, -0.13));
       elbow.add(glowBox(0.055, 0.018, 0.018, tc, 0, -0.14, -0.151));
       const hand = new THREE.Group();
       hand.position.set(0, -L2, 0);
@@ -341,13 +398,13 @@ export class Rig {
       hip.position.set(s * 0.15, 0.02, 0);
       this.hips.add(hip);
       hip.add(capsule(0.21, 0.31, 0.22, MID, 0, -0.155, 0));        // muslo común
-      hip.add(box(0.135, 0.2, 0.04, PLATE, 0, -0.15, -0.135));     // blindaje de muslo
+      hip.add(armorPlate(LIMB_GEO, 0.145, 0.21, 0.04, PLATE, 0, -0.15, -0.135));
       const knee = new THREE.Group();
       knee.position.set(0, -0.32, 0);
       hip.add(knee);
-      knee.add(armorBox(0.18, 0.25, 0.2, DARK, 0, -0.12, 0));       // canilla común
-      knee.add(box(0.125, 0.13, 0.04, MID, 0, -0.15, -0.125));     // placa de canilla
-      knee.add(box(0.15, 0.1, 0.04, tc, 0, -0.04, -0.13));         // rodillera de equipo
+      knee.add(armorPlate(LIMB_GEO, 0.19, 0.26, 0.2, DARK, 0, -0.12, 0));
+      knee.add(armorPlate(LIMB_GEO, 0.135, 0.14, 0.04, MID, 0, -0.15, -0.125));
+      knee.add(armorPlate(SHIELD_GEO, 0.16, 0.11, 0.04, tc, 0, -0.04, -0.13));
       knee.add(glowBox(0.075, 0.018, 0.018, tc, 0, -0.04, -0.155));
       knee.add(armorBox(0.23, 0.13, 0.34, DARK, 0, -0.31, -0.075));// bota común
       knee.add(box(0.19, 0.055, 0.07, MID, 0, -0.29, -0.25));      // puntera reforzada
@@ -466,7 +523,7 @@ export class Rig {
   _variantExtras(tc, v) {
     const t = this.torso;
     if (v === 1) {
-      t.add(armorBox(0.4, 0.3, 0.06, PLATE, 0, 0.46, -0.3));       // peto-escudo
+      t.add(armorPlate(SHIELD_GEO, 0.4, 0.3, 0.06, PLATE, 0, 0.46, -0.3));
       t.add(box(0.055, 0.25, 0.025, METAL, -0.18, 0.46, -0.34));
       t.add(box(0.055, 0.25, 0.025, METAL, 0.18, 0.46, -0.34));
       t.add(box(0.23, 0.14, 0.025, DARK, 0, 0.47, -0.345));
@@ -489,22 +546,27 @@ export class Rig {
       t.add(glowBox(0.04, 0.12, 0.02, tc, 0.12, 0.43, 0.4));
       t.add(rod(0.018, 0.35, METAL, 0.24, 0.76, 0.25));            // antena
       t.add(glowBox(0.045, 0.045, 0.045, tc, 0.24, 0.95, 0.25));
-      t.add(box(0.22, 0.12, 0.1, DARK, -0.42, 0.58, -0.03));       // hombrera asimétrica
+      const scoutPauldron = armorPlate(PAULDRON_GEO, 0.25, 0.14, 0.13, DARK, -0.43, 0.59, -0.03);
+      scoutPauldron.rotation.z = -0.12;
+      t.add(scoutPauldron);
     } else if (v === 3) {
-      t.add(armorBox(0.58, 0.16, 0.08, PLATE, 0, 0.54, -0.31));    // peto superior
-      t.add(armorBox(0.31, 0.18, 0.055, tc, 0, 0.39, -0.335));
+      t.add(armorPlate(CHEST_GEO, 0.59, 0.18, 0.08, PLATE, 0, 0.54, -0.31));
+      t.add(armorPlate(SHIELD_GEO, 0.32, 0.19, 0.055, tc, 0, 0.39, -0.335));
       t.add(box(0.19, 0.09, 0.025, DARK, 0, 0.39, -0.372));
       t.add(glowBox(0.12, 0.022, 0.016, tc, 0, 0.39, -0.39));
-      t.add(ball(0.23, tc, -0.43, 0.57, 0, 1.2, 0.86, 1.08));      // carcasa hombro L
-      t.add(ball(0.23, tc, 0.43, 0.57, 0, 1.2, 0.86, 1.08));
-      t.add(box(0.3, 0.085, 0.21, DARK, -0.43, 0.63, -0.04));
-      t.add(box(0.3, 0.085, 0.21, DARK, 0.43, 0.63, -0.04));
+      const heavyPauldronL = armorPlate(PAULDRON_GEO, 0.44, 0.3, 0.39, tc, -0.43, 0.59, -0.01);
+      const heavyPauldronR = armorPlate(PAULDRON_GEO, 0.44, 0.3, 0.39, tc, 0.43, 0.59, -0.01);
+      heavyPauldronL.rotation.z = -0.1;
+      heavyPauldronR.rotation.z = 0.1;
+      t.add(heavyPauldronL, heavyPauldronR);
+      t.add(armorPlate(LIMB_GEO, 0.3, 0.075, 0.22, DARK, -0.43, 0.66, -0.04));
+      t.add(armorPlate(LIMB_GEO, 0.3, 0.075, 0.22, DARK, 0.43, 0.66, -0.04));
       t.add(box(0.17, 0.035, 0.025, PLATE, -0.43, 0.59, -0.17));
       t.add(box(0.17, 0.035, 0.025, PLATE, 0.43, 0.59, -0.17));
       t.add(glowBox(0.1, 0.016, 0.016, tc, -0.43, 0.59, -0.19));
       t.add(glowBox(0.1, 0.016, 0.016, tc, 0.43, 0.59, -0.19));
-      this.armL.elbow.add(armorBox(0.24, 0.3, 0.23, PLATE, 0, -0.16, 0));
-      this.armR.elbow.add(armorBox(0.24, 0.3, 0.23, PLATE, 0, -0.16, 0));
+      this.armL.elbow.add(armorPlate(LIMB_GEO, 0.24, 0.3, 0.23, PLATE, 0, -0.16, 0));
+      this.armR.elbow.add(armorPlate(LIMB_GEO, 0.24, 0.3, 0.23, PLATE, 0, -0.16, 0));
       this.armL.elbow.add(glowBox(0.1, 0.025, 0.02, tc, 0, -0.14, -0.145));
       this.armR.elbow.add(glowBox(0.1, 0.025, 0.02, tc, 0, -0.14, -0.145));
     } else if (v === 4) {
@@ -517,10 +579,10 @@ export class Rig {
       t.add(box(0.25, 0.045, 0.035, RUBBER, 0, 0.33, -0.35));
       t.add(box(0.16, 0.035, 0.025, tc, 0, 0.33, -0.38));
       t.add(box(0.09, 0.07, 0.025, COPPER, 0, 0.02, -0.18));
-      this.armR.shoulder.add(box(0.17, 0.075, 0.16, PLATE, 0, -0.09, 0));
+      this.armR.shoulder.add(armorPlate(PAULDRON_GEO, 0.18, 0.09, 0.17, PLATE, 0, -0.09, 0));
       this.armR.shoulder.add(glowBox(0.09, 0.022, 0.02, tc, 0, -0.09, -0.095));
     } else {
-      t.add(armorBox(0.35, 0.18, 0.055, PLATE, 0, 0.46, -0.32));   // placa recluta
+      t.add(armorPlate(SHIELD_GEO, 0.36, 0.19, 0.055, PLATE, 0, 0.46, -0.32));
       t.add(box(0.17, 0.085, 0.025, tc, 0, 0.47, -0.355));
       t.add(box(0.09, 0.04, 0.018, DARK, 0, 0.47, -0.376));
       t.add(glowBox(0.055, 0.014, 0.014, tc, 0, 0.47, -0.39));
