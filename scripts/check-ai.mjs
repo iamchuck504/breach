@@ -8,7 +8,8 @@ import { clearClip } from './lib-clip.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
-const CHROME = 'C:\\Users\\iamch\\AppData\\Local\\ms-playwright\\chromium-1228\\chrome-win64\\chrome.exe';
+const CHROME = process.env.CHROME_PATH ||
+  'C:\\Users\\iamch\\AppData\\Local\\ms-playwright\\chromium-1228\\chrome-win64\\chrome.exe';
 
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
   env: { ...process.env, PORT: '8789' }, stdio: 'ignore',
@@ -17,7 +18,8 @@ await new Promise((r) => setTimeout(r, 900));
 
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
 const page = await browser.newPage();
-page.on('pageerror', (e) => console.log('PAGEERROR:', e.message));
+let pageErrors = 0;
+page.on('pageerror', (e) => { pageErrors++; console.log('PAGEERROR:', e.message); });
 const LAYOUT = process.argv[2] || 'fortaleza';
 await page.goto('http://localhost:8789/?nolock=1', { waitUntil: 'networkidle' });
 await page.evaluate((l) => { window.BREACH.mapChoice = l; }, LAYOUT);
@@ -51,8 +53,15 @@ for (let i = 0; i < 60; i++) {
 }
 covers = coverSeen.size;
 const avgMin = +(minDistAcc / Math.max(1, samples)).toFixed(2);
-console.log('AI-CHECK:', JSON.stringify({ flipsVistos: flips, botsQueCubrieron: covers, distMinPromedio: avgMin }));
+console.log('AI-CHECK:', JSON.stringify({ flipsVistos: flips, botsQueCubrieron: covers, distMinPromedio: avgMin, pageErrors }));
 
 await browser.close();
 server.kill();
 clearClip();
+
+// asertos anti-regresión (el cover es situacional: no se exige).
+// Nota: el comportamiento usa Math.random — los NÚMEROS varían por corrida,
+// pero estos umbrales deben cumplirse siempre en 30s de partida.
+const ok = pageErrors === 0 && flips > 0 && avgMin > 2.4;
+console.log(ok ? 'AI OK' : 'AI FALLO (flips=' + flips + ', distMin=' + avgMin + ', errores=' + pageErrors + ')');
+process.exit(ok ? 0 : 1);

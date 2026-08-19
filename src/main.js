@@ -715,7 +715,12 @@ function startBots() {
         Math.ceil(def.reserve * Math.random() * 0.4), undefined,
         world.groundHeight({ x, z }, PLAYER_R, y));
     },
-    player: () => ({ x: G.player.pos.x, z: G.player.pos.z, y: G.player.y, alive: G.selfAlive }),
+    player: () => ({
+      x: G.player.pos.x, z: G.player.pos.z, y: G.player.y, alive: G.selfAlive,
+      // agachado tras cover bajo: hitbox reducida (la cabeza ya no flota
+      // sobre el bloque invisible para los bots)
+      crouch: G.player.animState() === 'cover_low',
+    }),
     damagePlayer: (dmg) => damagePlayerLocal(dmg),
     respawnPlayer: (spawn) => {
       G.selfAlive = true;
@@ -981,7 +986,7 @@ function currentTargets() {
   if (G.mode === 'bots') return G.botMatch ? G.botMatch.targets() : [];
   const out = [];
   for (const r of G.remotes.values()) {
-    if (r.team !== G.team) out.push({ id: r.id, x: r.x, z: r.z, y: r.y ?? 0, alive: r.alive });
+    if (r.team !== G.team) out.push({ id: r.id, x: r.x, z: r.z, y: r.y ?? 0, alive: r.alive, crouch: r.st === 'cover_low' });
   }
   return out;
 }
@@ -1362,10 +1367,19 @@ function frame(now) {
     }
 
     // pausa real en práctica y vs bots; online la partida sigue.
-    // Simulación por frame con dt variable: un paso de sim por frame dibujado
-    // elimina el judder (imagen "doble"/blur) en monitores de más de 60 Hz.
+    // Simulación por frame con dt variable: a ≥30 fps es EXACTAMENTE un paso
+    // por frame dibujado (el fix del judder). Bajo 30 fps se recupera el
+    // tiempo real con hasta 4 pasos de ≤1/30 — antes el juego entraba en
+    // cámara lenta en máquinas que no sostenían 30 fps.
     const paused = menuOpen && (G.mode === 'practice' || G.mode === 'bots');
-    if (!paused) simStep(Math.min(dt, 1 / 30));
+    if (!paused) {
+      let acc = dt, steps = 0;
+      while (acc > 1e-6 && steps < 4) {
+        const st = Math.min(acc, 1 / 30);
+        simStep(st);
+        acc -= st; steps++;
+      }
+    }
 
     shoulderCam.update(dt, G.player);
     G.rig.setWeapon(G.weapons.cur); // el intercambio real ocurre a mitad del gesto

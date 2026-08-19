@@ -39,7 +39,10 @@ export function rayCapsule(o, d, x, z, y0, y1, r) {
   return t0 ?? t1;
 }
 
-// targets: [{id, x, z, alive}] — hitbox: cuerpo y0.35..1.3 r0.4, cabeza y1.52 r0.22
+// targets: [{id, x, z, y, alive, crouch}] — hitbox de PIE: cuerpo y0.35..1.3
+// r0.4, cabeza y1.52 r0.22. AGACHADO (cover bajo): cuerpo 0.26..0.6, cabeza
+// 0.86 (tope 1.08 < bloque LOW 1.1) — sin esto, el personaje visualmente
+// agachado conservaba la cabeza-hitbox de pie flotando sobre el bloque.
 // Devuelve {kind:'world'|'player'|'none', t, point, id, part}
 export function resolveShot(world, targets, origin, dir, maxRange, excludeId = null) {
   let bestT = world.raycast(origin, dir, maxRange);
@@ -51,9 +54,10 @@ export function resolveShot(world, targets, origin, dir, maxRange, excludeId = n
   for (const tg of targets) {
     if (!tg.alive || tg.id === excludeId) continue;
     const ty = tg.y || 0; // altura de los pies (saltos / encima de cajas)
-    const th = raySphere(origin, dir, tg.x, 1.52 + ty, tg.z, 0.22);
+    const cr = !!tg.crouch;
+    const th = raySphere(origin, dir, tg.x, (cr ? 0.86 : 1.52) + ty, tg.z, 0.22);
     if (th !== null && th < bestT) { bestT = th; hit = { kind: 'player', t: th, id: tg.id, part: 'head' }; continue; }
-    const tb = rayCapsule(origin, dir, tg.x, tg.z, 0.35 + ty, 1.3 + ty, 0.4);
+    const tb = rayCapsule(origin, dir, tg.x, tg.z, (cr ? 0.26 : 0.35) + ty, (cr ? 0.6 : 1.3) + ty, cr ? 0.42 : 0.4);
     if (tb !== null && tb < bestT) { bestT = tb; hit = { kind: 'player', t: tb, id: tg.id, part: 'body' }; }
   }
 

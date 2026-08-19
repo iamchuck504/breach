@@ -65,6 +65,7 @@ class Bot {
     this.aggro = Math.random(); // personalidad por vida: >0.55 = rushea con escopeta
     this.laneBias = Math.random() * 2 - 1; // carril propio: dispersa el ataque
     this.coverCd = 0;  // enfriamiento entre visitas a cobertura
+    this.targetId = null; this.reactT = 0; // reacción al adquirir blanco
     this.flip = null;  // vuelta acrobática en el aire (solo estilo)
     this.stuckT = 0; this.avoidSide = 0;
     this._px = this.pos.x; this._pz = this.pos.z;
@@ -160,6 +161,15 @@ class Bot {
       ? Math.max(0.05, Math.hypot(enemy.x - this.pos.x, enemy.z - this.pos.z))
       : Infinity;
 
+    // reacción humana: adquirir un blanco NUEVO cuesta 150-350ms antes del
+    // primer tiro (antes giraba y disparaba en el mismo frame)
+    const eid = enemy ? enemy.id : null;
+    if (eid !== this.targetId) {
+      this.targetId = eid;
+      if (eid) this.reactT = 0.15 + Math.random() * 0.2;
+    }
+    this.reactT = Math.max(0, (this.reactT ?? 0) - dt);
+
     // ---- decidir estado ----
     // sin spot disponible se sigue a las ramas de combate: antes el if vacío
     // congelaba estado Y arma del bot herido hasta que regeneraba.
@@ -170,14 +180,17 @@ class Bot {
     if (spot) {
       this.cover = spot; this.state = 'cover';
       this.coverPhase = 'go'; this.coverT = 0; this.coverPhaseT = 0;
+      match.coverClaims.set(this.id, spot); // reservar: nadie más a este spot
     } else if (this.state === 'cover') {
       this.coverT += dt;
       this.coverPhaseT = (this.coverPhaseT ?? 0) + dt;
-      // recuperado o demasiado tiempo escondido → volver a pelear, y un
-      // buen rato sin volver a esconderse
-      if (this.hp > 62 || this.coverT > 6) {
+      // salir con la vida CASI llena (o por tiempo): con el umbral en 62 y
+      // regen de 48/s, la ventana entre asomarse (55) y salir era de 0.15s
+      // — el ciclo hide→peek→hide nunca ocurría de verdad
+      if (this.hp > 90 || this.coverT > 6.5) {
         this.state = 'advance'; this.cover = null;
         this.coverCd = 6 + Math.random() * 5;
+        match.coverClaims.delete(this.id);
       }
     } else if (enemy) {
       // arma según distancia; los agresivos con vida llena se comprometen al rush
@@ -225,7 +238,9 @@ class Bot {
         // agazapado tras el bloque, regenerando
         animOverride = c.low ? 'cover_low' : 'cover_high';
         if (enemy) this._face((enemy.x - this.pos.x), (enemy.z - this.pos.z), dt, 5);
-        if (this.coverPhaseT > 1.2 + Math.random() * 0.8 && this.hp > 55) {
+        // asomarse aunque el regen no haya llegado (35): así el ciclo
+        // hide→peek→hide ocurre 2-3 veces por visita a cobertura
+        if (this.coverPhaseT > 1.0 + Math.random() * 0.7 && this.hp > 35) {
           this.coverPhase = 'peek'; this.coverPhaseT = 0;
           this.peekDir = Math.random() < 0.5 ? -1 : 1;
         }
@@ -347,6 +362,14 @@ class Bot {
   // ráfagas (metralleta) o bombazos sueltos (escopeta). Los timers burstT y
   // pauseT decrementan GLOBALMENTE en update(); aquí solo se dispara/arma.
   _fireAt(dt, match, enemy, dist) {
+    // sin reaccionar aún, o con el cuerpo todavía girando (>26° de error),
+    // no se dispara — antes la bala salía perfecta aunque el modelo apenas
+    // empezara a voltear hacia el blanco
+    if (this.reactT > 0) return;
+    let da = (Math.atan2(-(enemy.x - this.pos.x), -(enemy.z - this.pos.z)) - this.yaw) % (Math.PI * 2);
+    if (da > Math.PI) da -= Math.PI * 2;
+    if (da < -Math.PI) da += Math.PI * 2;
+    if (Math.abs(da) > 0.45) return;
     if (this.wep === 'shotgun') {
       if (this.shotCd <= 0 && dist < 20) {
         this.shotCd = (60 / TUNING.weapons.shotgun.rpm) * 1.5;
@@ -393,6 +416,7 @@ export class BotMatch {
     this.phaseT = 0;
     this.pool = { red: RESPAWN_POOL, blue: RESPAWN_POOL };
     this.respawnQueue = [];
+    this.coverClaims = new Map(); // botId -> spot reservado (sin duplicar cover)
 
     this.stats.set('player', { name: cb.playerName, team: 'red', kills: 0, deaths: 0 });
     let n = 0;
@@ -413,6 +437,7 @@ export class BotMatch {
     this.timer = ROUND_TIME;
     this.pool = { red: RESPAWN_POOL, blue: RESPAWN_POOL };
     this.respawnQueue = [];
+    this.coverClaims.clear();
     this.phase = 'playing';
     let i = { red: 0, blue: 0 };
     for (const b of this.bots) {
@@ -429,19 +454,24 @@ export class BotMatch {
     return alive + this.pool[team];
   }
 
+  // agachado real: escondido tras cover BAJO → hitbox reducida en ballistics
+  _crouched(b) {
+    return b.state === 'cover' && b.coverPhase === 'hide' && !!b.cover?.low;
+  }
+
   targets() { // enemigos del JUGADOR (azules vivos)
     return this.bots
       .filter((b) => b.team === 'blue' && b.alive)
-      .map((b) => ({ id: b.id, x: b.pos.x, z: b.pos.z, y: b.y, alive: true }));
+      .map((b) => ({ id: b.id, x: b.pos.x, z: b.pos.z, y: b.y, alive: true, crouch: this._crouched(b) }));
   }
 
   _enemiesOf(bot) {
     const out = this.bots
       .filter((b) => b.team !== bot.team && b.alive)
-      .map((b) => ({ id: b.id, x: b.pos.x, z: b.pos.z, y: b.y, alive: true }));
+      .map((b) => ({ id: b.id, x: b.pos.x, z: b.pos.z, y: b.y, alive: true, crouch: this._crouched(b) }));
     if (bot.team === 'blue') {
       const p = this.cb.player();
-      if (p.alive) out.push({ id: 'player', x: p.x, z: p.z, y: p.y, alive: true });
+      if (p.alive) out.push({ id: 'player', x: p.x, z: p.z, y: p.y, alive: true, crouch: !!p.crouch });
     }
     return out;
   }
@@ -451,8 +481,11 @@ export class BotMatch {
     for (const e of this._enemiesOf(bot)) {
       const d = Math.hypot(e.x - bot.pos.x, e.z - bot.pos.z);
       if (d >= bestD) continue;
+      // ojo del BLANCO según postura: un agachado tras cover bajo no debe
+      // ser visto "a través" del bloque a altura de pie
+      const eyeT = e.crouch ? 0.9 : 1.3;
       _v1.set(bot.pos.x, bot.y + 1.3, bot.pos.z);
-      _v2.set(e.x - bot.pos.x, (e.y + 1.3) - (bot.y + 1.3), e.z - bot.pos.z);
+      _v2.set(e.x - bot.pos.x, (e.y + eyeT) - (bot.y + 1.3), e.z - bot.pos.z);
       const len = _v2.length();
       _v2.normalize();
       if (this.world.raycast(_v1, _v2, len - 0.5) !== null) continue; // sin LOS
@@ -474,6 +507,12 @@ export class BotMatch {
       const d = Math.hypot(sx - bot.pos.x, sz - bot.pos.z);
       if (d >= bestD) continue;
       if (Math.hypot(threat.x - sx, threat.z - sz) < 5) continue; // no en la cara del enemigo
+      // spot ya reservado por un compañero → buscar otro
+      let taken = false;
+      for (const [cid, c] of this.coverClaims) {
+        if (cid !== bot.id && Math.hypot(c.x - sx, c.z - sz) < 1.6) { taken = true; break; }
+      }
+      if (taken) continue;
       // vista bloqueada desde la POSTURA real: agachado (0.8) tras bloques
       // LOW — con ojo fijo a 1.2 un bloque de 1.1 jamás calificaba
       const eye = f.h <= TUNING.cover.lowHeight ? 0.8 : 1.2;
@@ -575,6 +614,7 @@ export class BotMatch {
   }
 
   _onDeath(victimId, killerId, gib) {
+    this.coverClaims.delete(victimId); // el muerto suelta su reserva de cover
     const v = this.stats.get(victimId), k = this.stats.get(killerId);
     if (v) v.deaths++;
     if (k) k.kills++;
@@ -611,6 +651,7 @@ export class BotMatch {
     this.phase = 'intermission';
     this.phaseT = 4;
     this.respawnQueue = [];
+    this.coverClaims.clear();
     if (winner) this.wins[winner]++;
     const w = this.wins;
     if (winner && w[winner] >= 2) {
