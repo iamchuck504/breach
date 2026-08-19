@@ -53,7 +53,8 @@ export class World {
     this._boxBatch = { sides: this._newBatch(), tops: this._newBatch() };
     // fz de fortaleza 26.6: bolsillo de spawn de 3.2m (spawns fijos en ±23.4)
     // — la cámara (dist 2.7) ya no choca con la muralla y no hace zoom forzado
-    const dims = { arena: [11, 13], fortaleza: [21, 26.6], azoteas: [21, 26.6], foundry: [FIELD_X, FIELD_Z] };
+    // azoteas ×1.5 (pedido de Chuck): 63×80 — spawns propios en ±35.1
+    const dims = { arena: [11, 13], fortaleza: [21, 26.6], azoteas: [31.5, 40], foundry: [FIELD_X, FIELD_Z] };
     [this.fx, this.fz] = dims[layout] ?? dims.foundry;
     // texturas del batch por mapa (piedra medieval vs concreto urbano)
     this._batchTexIds = layout === 'azoteas' ? ['concrete', 'concreteTop'] : ['stone', 'stoneTop'];
@@ -1272,37 +1273,41 @@ export class World {
     this._box(-this.fx - 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
     this._box(this.fx + 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
 
-    // --- base (lado rojo; el espejo crea el azul)
-    this._box(0, -20.9, 7, 1.1, HIGH, hutOpts);            // caseta de acceso (escudo)
-    this._box(-5.2, -18.4, 2.2, 1.2, LOW, acOpts);         // A/C flanqueando salidas
-    this._box(5.2, -18.4, 2.2, 1.2, LOW, acOpts);
-    this._box(7.5, -15, 3, 3, LOW, glassOpts);             // claraboya pisable
-    this._box(-8, -14.5, 4.5, 1, MID, hutOpts);            // muro mediano
+    // --- base (lado rojo; el espejo crea el azul) — posiciones ×1.5
+    this._box(0, -31.35, 8, 1.2, HIGH, hutOpts);           // caseta de acceso (escudo)
+    this._box(-7.8, -27.6, 2.4, 1.3, LOW, acOpts);         // A/C flanqueando salidas
+    this._box(7.8, -27.6, 2.4, 1.3, LOW, acOpts);
+    this._box(2.2, -24.5, 2.4, 1, LOW, acOpts);            // A/C puente (relleno)
+    this._box(11.25, -22.5, 3.6, 3.6, LOW, glassOpts);     // claraboya pisable
+    this._box(-12, -21.75, 5.5, 1, MID, hutOpts);          // muro mediano
 
-    // --- caseta de elevador de flanco
-    this._box(-13.5, -10.5, 2, 2, HIGH, hutOpts);
+    // --- caseta de elevador de flanco (el TANQUE DE AGUA vive encima)
+    this._box(-20.25, -15.75, 2.4, 2.4, HIGH, hutOpts);
 
-    // --- cadena de A/C bajos (ruta de wallbounce)
-    this._box(-3, -11.5, 2.4, 1, LOW, acOpts);
-    this._box(1.5, -8.8, 2.4, 1, LOW, acOpts);
-    this._box(-2, -6.2, 2.4, 1, LOW, acOpts);
+    // --- cadena de A/C bajos (ruta de wallbounce, ahora de 4 saltos)
+    this._box(-4.5, -17.25, 2.4, 1, LOW, acOpts);
+    this._box(2.25, -13.2, 2.4, 1, LOW, acOpts);
+    this._box(-3, -9.3, 2.4, 1, LOW, acOpts);
+    this._box(4.5, -7.2, 2.4, 1, LOW, acOpts);
 
     // --- carril derecho
-    this._box(11.5, -8, 1, 4, HIGH, hutOpts);
-    this._box(16.5, -12, 1, 2.2, LOW, ventOpts);
-    this._box(18.5, -5, 2.2, 1, LOW, ventOpts);
+    this._box(17.25, -12, 1, 5, HIGH, hutOpts);
+    this._box(24.75, -18, 1, 2.6, LOW, ventOpts);
+    this._box(27.75, -7.5, 2.6, 1, LOW, ventOpts);
+    this._box(21.5, -2.5, 1, 2.4, LOW, ventOpts);          // ducto medio (relleno)
 
     // --- carril izquierdo
-    this._box(-18.5, -6.5, 2.2, 1, LOW, ventOpts);
-    this._box(-16, -2.5, 1, 3, MID, hutOpts);
+    this._box(-27.75, -9.75, 2.6, 1, LOW, ventOpts);
+    this._box(-24, -3.75, 1, 3.6, MID, hutOpts);
+    this._box(-13.5, -6.5, 2.6, 1, LOW, ventOpts);         // ducto central-izq (relleno)
 
-    // --- media cancha
-    this._box(5.5, -3, 3.2, 1, MID, hutOpts);
-    this._box(-7.5, -1.8, 2.4, 2.4, LOW, acOpts);
+    // --- media cancha (anillo del helipuerto)
+    this._box(8.25, -4.5, 3.8, 1, MID, hutOpts);
+    this._box(-11.25, -2.7, 2.6, 2.6, LOW, acOpts);
+    this._box(-7.5, 1.4, 1, 2.6, LOW, acOpts);             // borde del anillo
 
-    // --- centro (auto-simétrico): base del tanque de agua + flancos bajos
-    this._box(0, 0, 2, 2, HIGH, { ...hutOpts, mirror: false, top: 0x3a3f46 });
-    this._box(-4.5, 0.8, 1, 2.4, LOW, acOpts);
+    // --- CENTRO: helipuerto DESPEJADO (regla de Chuck) — cero obstáculos ni
+    // decoración dentro del pad; el cover vive en el anillo de media cancha
 
     this._decorAzoteas();
   }
@@ -1322,10 +1327,10 @@ export class World {
     this.mapGroup.add(street);
 
     const bldgs = [
-      [-32, -12, 9, 20], [-36, 8, 11, 14], [-29, 24, 8, 10],
-      [32, 12, 9, 22], [35, -9, 10, 13], [29, -25, 8, 16],
-      [-12, -37, 10, 12], [8, -39, 12, 18], [14, 37, 10, 11],
-      [-8, 39, 11, 20], [24, 33, 8, 9], [-24, -33, 9, 8],
+      [-48, -18, 12, 24], [-54, 12, 14, 17], [-44, 36, 11, 12],
+      [48, 18, 12, 26], [52, -14, 13, 16], [44, -38, 11, 19],
+      [-18, -55, 13, 14], [12, -58, 15, 22], [21, 55, 13, 13],
+      [-12, 58, 14, 24], [36, 50, 11, 11], [-36, -50, 12, 10],
     ];
     const skylineRoofMat = new THREE.MeshBasicMaterial({ color: 0x111826 });
     for (const [x, z, w, h] of bldgs) {
@@ -1341,29 +1346,34 @@ export class World {
       this.mapGroup.add(b);
     }
 
-    // --- tanque de agua sobre el bloque central (landmark)
+    // --- DOS tanques de agua simétricos sobre las casetas de elevador,
+    // en lados opuestos del área central (el centro quedó despejado para
+    // el helipuerto — pedido de Chuck)
+    this._tankSpots = [[-20.25, -15.75], [20.25, 15.75]];
     const tankMat = new THREE.MeshLambertMaterial({ color: 0x4c525c });
-    const tank = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 0.95, 1.5, 10), tankMat);
-    tank.position.set(0, HIGH + 0.75, 0);
-    tank.castShadow = true;
-    this.mapGroup.add(tank);
-    const cap = new THREE.Mesh(new THREE.ConeGeometry(1.05, 0.55, 10), tankMat);
-    cap.position.set(0, HIGH + 1.75, 0);
-    this.mapGroup.add(cap);
-    const beacon = new THREE.Mesh(
-      new THREE.SphereGeometry(0.09, 8, 6),
-      new THREE.MeshBasicMaterial({ color: 0xff4444 })
-    );
-    beacon.position.set(0, HIGH + 2.12, 0);
-    this.mapGroup.add(beacon);
+    for (const [tx, tz] of this._tankSpots) {
+      const tank = new THREE.Mesh(new THREE.CylinderGeometry(1.0, 1.0, 1.5, 10), tankMat);
+      tank.position.set(tx, HIGH + 0.75, tz);
+      tank.castShadow = true;
+      this.mapGroup.add(tank);
+      const cap = new THREE.Mesh(new THREE.ConeGeometry(1.1, 0.55, 10), tankMat);
+      cap.position.set(tx, HIGH + 1.75, tz);
+      this.mapGroup.add(cap);
+      const beacon = new THREE.Mesh(
+        new THREE.SphereGeometry(0.09, 8, 6),
+        new THREE.MeshBasicMaterial({ color: 0xff4444 })
+      );
+      beacon.position.set(tx, HIGH + 2.12, tz);
+      this.mapGroup.add(beacon);
+    }
 
     // --- antenas con luz roja (sobre casetas de elevador y perímetro)
     const poleMat = new THREE.MeshLambertMaterial({ color: 0x3a3f46 });
     const redMat = new THREE.MeshBasicMaterial({ color: 0xff5544 });
     for (const [ax, az, base] of [
-      [-13.5, -10.5, HIGH], [13.5, 10.5, HIGH],
-      [-this.fx - 0.4, -14, HIGH], [this.fx + 0.4, 14, HIGH],
-      [2.6, -20.9, HIGH], [-2.6, 20.9, HIGH],
+      [17.25, -12, HIGH], [-17.25, 12, HIGH],       // muros altos de carril
+      [-this.fx - 0.4, -21, HIGH], [this.fx + 0.4, 21, HIGH],
+      [3, -31.35, HIGH], [-3, 31.35, HIGH],         // casetas de spawn
     ]) {
       const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 2.4, 5), poleMat);
       pole.position.set(ax, base + 1.2, az);
@@ -1379,9 +1389,9 @@ export class World {
     }
 
     // --- brillo de las claraboyas (vidrio iluminado desde adentro)
-    for (const [gx, gz] of [[7.5, -15], [-7.5, 15]]) {
+    for (const [gx, gz] of [[11.25, -22.5], [-11.25, 22.5]]) {
       const glow = new THREE.Mesh(
-        new THREE.PlaneGeometry(2.7, 2.7),
+        new THREE.PlaneGeometry(3.3, 3.3),
         new THREE.MeshBasicMaterial({ color: 0x9fc4ff, transparent: true, opacity: 0.32 })
       );
       glow.rotation.x = -Math.PI / 2;
@@ -1390,9 +1400,9 @@ export class World {
     }
 
     // --- neón de equipo en la caseta de spawn (mirando al campo)
-    for (const [color, z, ry] of [[0xd94f3f, -20.9 + 0.58, 0], [0x4f8de0, 20.9 - 0.58, Math.PI]]) {
+    for (const [color, z, ry] of [[0xd94f3f, -31.35 + 0.62, 0], [0x4f8de0, 31.35 - 0.62, Math.PI]]) {
       const neon = new THREE.Mesh(
-        new THREE.PlaneGeometry(4.6, 0.16),
+        new THREE.PlaneGeometry(5.4, 0.16),
         new THREE.MeshBasicMaterial({ color })
       );
       neon.position.set(0, 2.5, z);
@@ -1402,10 +1412,10 @@ export class World {
 
     // --- luna
     const moon = new THREE.Mesh(
-      new THREE.SphereGeometry(1.7, 12, 10),
+      new THREE.SphereGeometry(2.2, 12, 10),
       new THREE.MeshBasicMaterial({ color: 0xf2ecd8 })
     );
-    moon.position.set(30, 34, -52);
+    moon.position.set(44, 44, -74);
     this.mapGroup.add(moon);
 
     this._detailAzoteas(bldgs, moon.position);
@@ -1417,9 +1427,10 @@ export class World {
     const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
     const p = new THREE.Vector3(), s = new THREE.Vector3();
 
-    // Helipuerto técnico bajo el tanque central: landmark visible en picado.
+    // Helipuerto central DESPEJADO: solo la marca pintada, sin obstáculos ni
+    // decoración encima (regla de Chuck). Escalado con el mapa.
     const roofMark = new THREE.Mesh(
-      new THREE.PlaneGeometry(8.5, 8.5),
+      new THREE.PlaneGeometry(12.75, 12.75),
       new THREE.MeshBasicMaterial({
         map: this._tex('roofMark'), transparent: true, opacity: 0.68,
         depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2,
@@ -1431,8 +1442,8 @@ export class World {
 
     // Ventiladores de los A/C. Dos meshes instanciados para todos los equipos.
     const acSeed = [
-      [-5.2, -18.4], [5.2, -18.4], [-3, -11.5], [1.5, -8.8],
-      [-2, -6.2], [-7.5, -1.8], [-4.5, 0.8],
+      [-7.8, -27.6], [7.8, -27.6], [2.2, -24.5], [-4.5, -17.25],
+      [2.25, -13.2], [-3, -9.3], [4.5, -7.2], [-11.25, -2.7], [-7.5, 1.4],
     ];
     const seen = new Set(), acUnits = [];
     for (const [x, z] of acSeed) {
@@ -1463,11 +1474,11 @@ export class World {
     }
     this.mapGroup.add(blades);
 
-    // Franjas ámbar: peligros verticales y lados de la caseta central.
+    // Franjas ámbar: muros de carril, casetas de los tanques y escudos de spawn.
     const hazardSpots = [
-      [0, 1.62, -1.01, 0, 1.1], [0, 1.62, 1.01, Math.PI, 1.1],
-      [10.99, 1.34, -8, -Math.PI / 2, 1.15], [-10.99, 1.34, 8, Math.PI / 2, 1.15],
-      [-12.49, 1.35, -10.5, Math.PI / 2, 0.9], [12.49, 1.35, 10.5, -Math.PI / 2, 0.9],
+      [16.74, 1.34, -12, -Math.PI / 2, 1.3], [-16.74, 1.34, 12, Math.PI / 2, 1.3],
+      [-19.04, 1.35, -15.75, Math.PI / 2, 1.0], [19.04, 1.35, 15.75, -Math.PI / 2, 1.0],
+      [2.2, 1.5, -30.74, 0, 1.2], [-2.2, 1.5, 30.74, Math.PI, 1.2],
     ];
     const hazards = new THREE.InstancedMesh(
       new THREE.PlaneGeometry(1.7, 0.22),
@@ -1481,13 +1492,13 @@ export class World {
 
     // Balizas de borde: rojo/azul en bases, cian en flancos. Una sola malla.
     const edgeData = [];
-    for (let x = -17.5; x <= 17.5; x += 5) {
-      edgeData.push([x, -25.95, 0xff5d50, 0]);
-      edgeData.push([x, 25.95, 0x64a9ff, 0]);
+    for (let x = -28; x <= 28; x += 7) {
+      edgeData.push([x, -39.35, 0xff5d50, 0]);
+      edgeData.push([x, 39.35, 0x64a9ff, 0]);
     }
-    for (let z = -18; z <= 18; z += 6) {
-      edgeData.push([-20.5, z, 0x55d5df, Math.PI / 2]);
-      edgeData.push([20.5, z, 0x55d5df, Math.PI / 2]);
+    for (let z = -32; z <= 32; z += 8) {
+      edgeData.push([-30.85, z, 0x55d5df, Math.PI / 2]);
+      edgeData.push([30.85, z, 0x55d5df, Math.PI / 2]);
     }
     const edgeLights = new THREE.InstancedMesh(
       new THREE.BoxGeometry(0.55, 0.07, 0.12),
@@ -1503,9 +1514,10 @@ export class World {
 
     // Charcos de lluvia muy sutiles: rompen el mosaico sin reflejos costosos.
     const puddleData = [
-      [-17, -20, 1.8, 0.7], [-13, 2, 1.2, 0.55], [-18, 15, 1.5, 0.65],
-      [17, 20, 1.8, 0.7], [13, -2, 1.2, 0.55], [18, -15, 1.5, 0.65],
-      [-5, 11, 1.15, 0.48], [5, -11, 1.15, 0.48],
+      [-25.5, -30, 2.1, 0.85], [-19.5, 3, 1.45, 0.65], [-27, 22.5, 1.8, 0.8],
+      [25.5, 30, 2.1, 0.85], [19.5, -3, 1.45, 0.65], [27, -22.5, 1.8, 0.8],
+      [-7.5, 16.5, 1.4, 0.58], [7.5, -16.5, 1.4, 0.58],
+      [-14, -26, 1.3, 0.55], [14, 26, 1.3, 0.55],
     ];
     const puddles = new THREE.InstancedMesh(
       new THREE.CircleGeometry(1, 18),
@@ -1537,30 +1549,38 @@ export class World {
     const billboard = new THREE.Mesh(
       new THREE.PlaneGeometry(6.2, 2.32),
       new THREE.MeshBasicMaterial({ map: this._tex('billboard'), side: THREE.DoubleSide }));
-    billboard.position.set(27.46, 5.3, 12);
+    billboard.position.set(41.9, 6.5, 18);
     billboard.rotation.y = -Math.PI / 2;
+    billboard.scale.set(1.3, 1.3, 1);
     this.mapGroup.add(billboard);
 
-    // Aros y escalera del tanque central: lectura industrial sin otra luz.
+    // Aros y escalera de CADA tanque: lectura industrial sin otra luz.
+    const spots = this._tankSpots;
     const tankBands = new THREE.InstancedMesh(
-      new THREE.CylinderGeometry(1.02, 1.02, 0.07, 10),
-      new THREE.MeshBasicMaterial({ color: 0x202934 }), 2);
-    [BLOCK.HIGH + 0.18, BLOCK.HIGH + 1.31].forEach((y, i) => {
-      m4.compose(p.set(0, y, 0), q.identity(), s.set(1, 1, 1));
-      tankBands.setMatrixAt(i, m4);
+      new THREE.CylinderGeometry(1.07, 1.07, 0.07, 10),
+      new THREE.MeshBasicMaterial({ color: 0x202934 }), spots.length * 2);
+    spots.forEach(([tx, tz], t) => {
+      [BLOCK.HIGH + 0.18, BLOCK.HIGH + 1.31].forEach((y, i) => {
+        m4.compose(p.set(tx, y, tz), q.identity(), s.set(1, 1, 1));
+        tankBands.setMatrixAt(t * 2 + i, m4);
+      });
     });
     this.mapGroup.add(tankBands);
     const ladderParts = new THREE.InstancedMesh(
       new THREE.BoxGeometry(1, 1, 1),
-      new THREE.MeshBasicMaterial({ color: 0x9b7040 }), 7);
-    for (let i = 0; i < 5; i++) {
-      m4.compose(p.set(0, BLOCK.HIGH + 0.15 + i * 0.29, -1.01), q.identity(), s.set(0.55, 0.045, 0.045));
-      ladderParts.setMatrixAt(i, m4);
-    }
-    for (const [i, x] of [[5, -0.26], [6, 0.26]]) {
-      m4.compose(p.set(x, BLOCK.HIGH + 0.73, -1.01), q.identity(), s.set(0.045, 1.45, 0.045));
-      ladderParts.setMatrixAt(i, m4);
-    }
+      new THREE.MeshBasicMaterial({ color: 0x9b7040 }), spots.length * 7);
+    spots.forEach(([tx, tz], t) => {
+      const lz = tz + (tz < 0 ? -1.06 : 1.06); // escalera por la cara exterior
+      let li = t * 7;
+      for (let i = 0; i < 5; i++) {
+        m4.compose(p.set(tx, BLOCK.HIGH + 0.15 + i * 0.29, lz), q.identity(), s.set(0.55, 0.045, 0.045));
+        ladderParts.setMatrixAt(li++, m4);
+      }
+      for (const x of [-0.26, 0.26]) {
+        m4.compose(p.set(tx + x, BLOCK.HIGH + 0.73, lz), q.identity(), s.set(0.045, 1.45, 0.045));
+        ladderParts.setMatrixAt(li++, m4);
+      }
+    });
     this.mapGroup.add(ladderParts);
 
     // Halos con sprites: dan sensación de emisión sin PointLights ni sombras.
@@ -1568,10 +1588,12 @@ export class World {
       map: this._tex('glow'), color: 0xff6650, transparent: true,
       opacity: 0.48, depthWrite: false, fog: false,
     });
-    const beaconHalo = new THREE.Sprite(haloMat);
-    beaconHalo.position.set(0, BLOCK.HIGH + 2.12, 0);
-    beaconHalo.scale.set(1.35, 1.35, 1);
-    this.mapGroup.add(beaconHalo);
+    for (const [tx, tz] of spots) {
+      const beaconHalo = new THREE.Sprite(haloMat);
+      beaconHalo.position.set(tx, BLOCK.HIGH + 2.12, tz);
+      beaconHalo.scale.set(1.35, 1.35, 1);
+      this.mapGroup.add(beaconHalo);
+    }
     const moonHalo = new THREE.Sprite(new THREE.SpriteMaterial({
       map: this._tex('glow'), color: 0xbdd8ff, transparent: true,
       opacity: 0.3, depthWrite: false, fog: false,
@@ -1586,8 +1608,8 @@ export class World {
     const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
     const starsPos = [];
     for (let i = 0; i < 110; i++) {
-      const a = rnd() * Math.PI * 2, r = 76 + rnd() * 34;
-      starsPos.push(Math.cos(a) * r, 16 + rnd() * 42, Math.sin(a) * r);
+      const a = rnd() * Math.PI * 2, r = 105 + rnd() * 45;
+      starsPos.push(Math.cos(a) * r, 20 + rnd() * 52, Math.sin(a) * r);
     }
     const starsGeo = new THREE.BufferGeometry();
     starsGeo.setAttribute('position', new THREE.Float32BufferAttribute(starsPos, 3));
@@ -1599,9 +1621,12 @@ export class World {
   }
 
   _buildSpawns() {
-    // fortaleza: spawns FIJOS en ±23.4 (el server los espeja) con la muralla
-    // más atrás; otros mapas, pegados al muro como siempre
-    const z = this.layout === 'fortaleza' || this.layout === 'azoteas' ? 23.4 : this.fz - 1.6;
+    // fortaleza: spawns FIJOS en ±23.4 (el server los espeja); azoteas
+    // escalada ×1.5 usa ±35.1 (solo bots/práctica — el server no la corre);
+    // otros mapas, pegados al muro como siempre
+    const z = this.layout === 'fortaleza' ? 23.4
+      : this.layout === 'azoteas' ? 35.1
+      : this.fz - 1.6;
     for (let i = 0; i < 4; i++) {
       const x = -3.6 + i * 2.4;
       // convención: facing = (-sin yaw, -cos yaw) → yaw π mira a +z, yaw 0 a -z

@@ -31,7 +31,12 @@ await page.waitForTimeout(1200);
 // soltar la cámara: sin G.player el loop no la pisa cada frame
 await page.evaluate(() => { window.BREACH.player = null; document.getElementById('hud').classList.remove('on'); });
 
-const shots = [
+const shots = LAYOUT === 'azoteas' ? [
+  ['aerea', [0, 66, -60], [0, 0, 3]],
+  ['spawn', [-5, 2.2, -29.5], [3, 1.6, -39]],
+  ['campo', [12, 2.6, -18], [-6, 1.4, 3]],
+  ['centro', [10, 3.4, -10], [0, 0.6, 0]],
+] : [
   ['aerea', [0, 44, -40], [0, 0, 2]],
   ['spawn', [-4, 2.2, -19.5], [2, 1.6, -26]],
   ['campo', [8, 2.6, -12], [-4, 1.4, 2]],
