@@ -25,6 +25,10 @@ const BOT_NAMES = { red: ['REX', 'VOLT', 'JAZZ'], blue: ['NOVA', 'DUKE', 'BLITZ'
 const TEAM_HEX = { red: 0xd94f3f, blue: 0x4f8de0 };
 const BOT_DMG = 0.7;         // los bots pegan más suave que un jugador
 const TACTICAL_ROLES = ['advance', 'flank', 'hold', 'support', 'angle'];
+const STUCK_WINDOW = 0.45;   // reacción perceptiblemente inmediata, sin ruido de un frame
+const STUCK_RATIO = 0.32;    // progreso real mínimo frente al movimiento solicitado
+const FAILED_ROUTE_TTL = 4.5;
+const BYPASS_CLEARANCE = 0.9;
 
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
 
@@ -94,31 +98,196 @@ class Bot {
     this.tacticalGoal = null;
     this.flip = null;  // vuelta acrobática en el aire (solo estilo)
     this.stuckT = 0; this.avoidSide = 0;
-    this._px = this.pos.x; this._pz = this.pos.z;
+    this.recovery = null;    // waypoint temporal para rodear un obstáculo concreto
+    this.failedRoutes = [];  // memoria corta de obstáculo/lado y destinos fallidos
+    this.progressT = 0; this.progressExpected = 0; this.progressActual = 0;
+    this.progressStartX = this.pos.x; this.progressStartZ = this.pos.z;
+    this.blockedFrameT = 0;
     this.protT = TUNING.combat.spawnProtection; // invulnerable al nacer
     this.rig.setWeapon('smg');
     this.rig.setVisible(true);
   }
 
-  // Steering: si el frente está bloqueado (y no es saltable), desviarse hacia
-  // el lado más libre. avoidSide es pegajoso para no oscilar contra la pared.
-  _steer(dx, dz) {
+  _resetProgress() {
+    this.stuckT = 0;
+    this.progressT = 0;
+    this.progressExpected = 0;
+    this.progressActual = 0;
+    this.progressStartX = this.pos.x;
+    this.progressStartZ = this.pos.z;
+    this.blockedFrameT = 0;
+  }
+
+  _obstacleKey(c) {
+    if (!c) return 'unknown';
+    if (c.minx !== undefined) {
+      return `a:${c.minx.toFixed(2)}:${c.minz.toFixed(2)}:${c.maxx.toFixed(2)}:${c.maxz.toFixed(2)}`;
+    }
+    if (c.a && c.b) {
+      return `s:${c.a.x.toFixed(2)}:${c.a.z.toFixed(2)}:${c.b.x.toFixed(2)}:${c.b.z.toFixed(2)}`;
+    }
+    return 'unknown';
+  }
+
+  _goalRecentlyFailed(x, z, radius = 1.8) {
+    return this.failedRoutes.some((f) => f.kind === 'goal' && f.ttl > 0 &&
+      Math.hypot(f.x - x, f.z - z) < radius);
+  }
+
+  _routeSideFailed(key, side) {
+    return this.failedRoutes.some((f) => f.kind === 'side' && f.ttl > 0 &&
+      f.key === key && f.side === side);
+  }
+
+  _rememberGoalFailure(goal) {
+    if (!goal) return;
+    this.failedRoutes.push({ kind: 'goal', x: goal.x, z: goal.z, ttl: FAILED_ROUTE_TTL });
+  }
+
+  _rememberSideFailure(recovery) {
+    if (!recovery) return;
+    this.failedRoutes.push({
+      kind: 'side', key: recovery.key, side: recovery.side, ttl: FAILED_ROUTE_TTL,
+    });
+  }
+
+  _colliderBounds(c) {
+    if (!c) return null;
+    if (c.minx !== undefined) {
+      return { minx: c.minx, minz: c.minz, maxx: c.maxx, maxz: c.maxz };
+    }
+    if (c.a && c.b) {
+      const pad = c.half ?? 0.1;
+      return {
+        minx: Math.min(c.a.x, c.b.x) - pad, minz: Math.min(c.a.z, c.b.z) - pad,
+        maxx: Math.max(c.a.x, c.b.x) + pad, maxz: Math.max(c.a.z, c.b.z) + pad,
+      };
+    }
+    return null;
+  }
+
+  _startObstacleRecovery(collider, dx, dz, goal, match) {
+    const bounds = this._colliderBounds(collider);
+    if (!bounds) return false;
+    const key = this._obstacleKey(collider);
+    const len = Math.max(0.001, Math.hypot(dx, dz));
+    const fx = dx / len, fz = dz / len;
+    const px = -fz, pz = fx;
+    const cx = (bounds.minx + bounds.maxx) * 0.5;
+    const cz = (bounds.minz + bounds.maxz) * 0.5;
+    const hx = (bounds.maxx - bounds.minx) * 0.5;
+    const hz = (bounds.maxz - bounds.minz) * 0.5;
+    const centerF = cx * fx + cz * fz;
+    const centerP = cx * px + cz * pz;
+    const radiusF = Math.abs(fx) * hx + Math.abs(fz) * hz;
+    const radiusP = Math.abs(px) * hx + Math.abs(pz) * hz;
+    const currentF = this.pos.x * fx + this.pos.z * fz;
+    const preferred = this.avoidSide ||
+      (hash01(this.id + ':avoid:' + key + ':' + this.decisionSerial) < 0.5 ? -1 : 1);
+    const sides = [preferred, -preferred];
+    let best = null, bestScore = -Infinity;
+
+    for (const side of sides) {
+      if (this._routeSideFailed(key, side)) continue;
+      const targetF = Math.max(currentF + 1.15, centerF + radiusF + BYPASS_CLEARANCE);
+      const targetP = centerP + side * (radiusP + BYPASS_CLEARANCE);
+      let x = fx * targetF + px * targetP;
+      let z = fz * targetF + pz * targetP;
+      x = Math.max(-this.world.fx + 0.75, Math.min(this.world.fx - 0.75, x));
+      z = Math.max(-this.world.fz + 0.75, Math.min(this.world.fz - 0.75, z));
+      const tx = x - this.pos.x, tz = z - this.pos.z;
+      const dist = Math.hypot(tx, tz);
+      if (dist < 0.7) continue;
+
+      _v1.set(this.pos.x, 1.45, this.pos.z);
+      _v2.set(tx / dist, 0, tz / dist);
+      const routeHit = this.world.raycastHit?.(_v1, _v2, Math.max(0, dist - 0.5));
+      let score = -dist * 0.18;
+      if (goal) score -= Math.hypot(goal.x - x, goal.z - z) * 0.08;
+      if (routeHit && routeHit.collider !== collider) score -= 8;
+      else if (routeHit) score -= 1.2; // rozar el mismo volumen es aceptable: el clearance lo rodea
+      for (const ally of match.bots) {
+        if (ally === this || !ally.alive || ally.team !== this.team) continue;
+        const ad = Math.hypot(ally.pos.x - x, ally.pos.z - z);
+        if (ad < 2.2) score -= (2.2 - ad) * 1.2;
+      }
+      score += side === preferred ? 0.25 : 0;
+      if (score > bestScore) { bestScore = score; best = { x, z, side }; }
+    }
+    if (!best) return false;
+    this.recovery = {
+      ...best, key, collider, age: 0,
+      goalX: goal?.x ?? null, goalZ: goal?.z ?? null,
+    };
+    this.avoidSide = best.side;
+    this._resetProgress();
+    return true;
+  }
+
+  _recoverFromStuck(match, contact, requested, goal) {
+    const previous = this.recovery;
+    if (previous) this._rememberSideFailure(previous);
+    this.recovery = null;
+    const collider = contact?.collider || previous?.collider || null;
+    if (collider && this._startObstacleRecovery(collider, requested.x, requested.z, goal, match)) return;
+
+    // Ambos lados fallaron o el bloqueo no pertenece al mundo estático:
+    // descartar el destino y pedir otra decisión táctica, no invertir al azar.
+    this._rememberGoalFailure(goal);
+    this.wp = null; this.tacticalGoal = null; this.repathT = 0;
+    this.decisionT = 0; this.decisionSerial++;
+    if (this.state === 'cover' && this.coverPhase === 'go') {
+      this._rememberGoalFailure(this.cover);
+      const threats = match.threatsFor(this, this.coverThreat);
+      const again = threats.length
+        ? match.findCoverSpot(this, threats[0], { retreat: true, threats }) : null;
+      if (again) {
+        this.cover = again;
+        match.coverClaims.set(this.id, again);
+      } else {
+        this.state = 'advance'; this.cover = null;
+        match.coverClaims.delete(this.id);
+        this.coverCd = 3;
+      }
+    } else {
+      match.refreshTacticalPlan(this, match.nearestVisibleEnemy(this));
+      this.wp = this.tacticalGoal;
+    }
+    this._resetProgress();
+  }
+
+  // Steering: el look-ahead identifica el collider alto antes del contacto y
+  // crea un waypoint persistente detrás de una de sus esquinas.
+  _steer(dx, dz, match, goal) {
     _v1.set(this.pos.x, 0.7, this.pos.z);
     _v2.set(dx, 0, dz);
-    if (this.world.raycast(_v1, _v2, 1.3) === null) { this.avoidSide = 0; return { x: dx, z: dz }; }
+    const lowHit = this.world.raycastHit?.(_v1, _v2, 1.35);
+    if (!lowHit) return { x: dx, z: dz, blocked: false, hit: null };
     // si lo alto está libre es un obstáculo saltable: _jumpIfBlocked se encarga
     _v1.y = 1.6;
-    if (this.world.raycast(_v1, _v2, 1.6) === null) return { x: dx, z: dz };
-    _v1.y = 0.7;
-    if (!this.avoidSide) this.avoidSide = Math.random() < 0.5 ? 1 : -1;
-    for (const ang of [0.85 * this.avoidSide, -0.85 * this.avoidSide,
-                       1.6 * this.avoidSide, -1.6 * this.avoidSide]) {
-      const c = Math.cos(ang), s = Math.sin(ang);
-      const nx = dx * c - dz * s, nz = dx * s + dz * c;
-      _v2.set(nx, 0, nz);
-      if (this.world.raycast(_v1, _v2, 1.3) === null) return { x: nx, z: nz };
+    const highHit = this.world.raycastHit?.(_v1, _v2, 1.6);
+    if (!highHit) return { x: dx, z: dz, blocked: false, hit: lowHit };
+
+    const obstacle = lowHit.collider || highHit.collider;
+    if (!this.recovery || this.recovery.key !== this._obstacleKey(obstacle)) {
+      this._startObstacleRecovery(obstacle, dx, dz, goal, match);
     }
-    return { x: -dx, z: -dz }; // encajonado: salir hacia atrás
+    let rx = dx, rz = dz;
+    if (this.recovery) {
+      rx = this.recovery.x - this.pos.x; rz = this.recovery.z - this.pos.z;
+      const rl = Math.max(0.001, Math.hypot(rx, rz)); rx /= rl; rz /= rl;
+    }
+    _v1.y = 0.7;
+    for (const ang of [0, 0.42 * this.avoidSide, 0.85 * this.avoidSide,
+                       -0.42 * this.avoidSide, 1.35 * this.avoidSide]) {
+      const c = Math.cos(ang), s = Math.sin(ang);
+      const nx = rx * c - rz * s, nz = rx * s + rz * c;
+      _v2.set(nx, 0, nz);
+      if (this.world.raycast(_v1, _v2, 0.9) === null) {
+        return { x: nx, z: nz, blocked: true, hit: lowHit };
+      }
+    }
+    return { x: -rx, z: -rz, blocked: true, hit: lowHit }; // crear espacio para el siguiente intento
   }
 
   _face(tx, tz, dt, rate = 8) {
@@ -174,6 +343,9 @@ class Bot {
     this.coverCd = Math.max(0, this.coverCd - dt);
     this.roleT = Math.max(0, this.roleT - dt);
     this.decisionT = Math.max(0, this.decisionT - dt);
+    for (const f of this.failedRoutes) f.ttl -= dt;
+    this.failedRoutes = this.failedRoutes.filter((f) => f.ttl > 0);
+    if (this.recovery) this.recovery.age += dt;
     this.shotCd = Math.max(-0.5, this.shotCd - dt);
     // ráfaga/pausa SIEMPRE decrementan: si el bot pierde al enemigo a mitad
     // de ráfaga, la pose de disparo no debe quedarse congelada
@@ -396,6 +568,24 @@ class Bot {
       }
     }
 
+    // Un bypass activo manda sobre el waypoint final hasta cruzar la esquina.
+    // Al completarlo, la intención táctica original vuelve a tomar el control.
+    const activeGoal = this.state === 'cover' && this.coverPhase === 'go'
+      ? this.cover : (this.wp || this.tacticalGoal || enemy);
+    if (this.recovery) {
+      const rx = this.recovery.x - this.pos.x, rz = this.recovery.z - this.pos.z;
+      const rd = Math.hypot(rx, rz);
+      if (rd < 0.65) {
+        this.recovery = null;
+        this._resetProgress();
+      } else if (this.recovery.age > 3.2) {
+        this._recoverFromStuck(match, null, { x: rx / rd, z: rz / rd }, activeGoal);
+      } else {
+        mx = rx / rd; mz = rz / rd;
+        this._face(mx, mz, dt, 9);
+      }
+    }
+
     // ---- mover (con steering) + salto de obstáculos + física vertical ----
     const spd = this.state === 'rush' ? 5.2 : this.state === 'engage' ? 3.2 : 4.2;
     // separación de compañeros: repulsión suave bajo 3.4m — sin esto
@@ -412,52 +602,51 @@ class Bot {
     }
     mx += sepX * 0.9; mz += sepZ * 0.9;
     const mlen = Math.hypot(mx, mz);
+    const beforeX = this.pos.x, beforeZ = this.pos.z;
+    let steering = null;
     if (mlen > 0.05) {
-      const d = this._steer(mx / mlen, mz / mlen);
-      this._jumpIfBlocked(d.x, d.z);
-      this.pos.x += d.x * spd * dt;
-      this.pos.z += d.z * spd * dt;
-      this.speed = spd;
-      this.velX = d.x * spd; this.velZ = d.z * spd; // momentum para la muerte
+      steering = this._steer(mx / mlen, mz / mlen, match, activeGoal);
+      this._jumpIfBlocked(steering.x, steering.z);
+      this.pos.x += steering.x * spd * dt;
+      this.pos.z += steering.z * spd * dt;
     } else { this.speed = 0; this.velX = 0; this.velZ = 0; }
     this.world.resolveCircle(this.pos, 0.38, this.y);
 
-    // detector de atasco: si no avanza lo esperado, replantear el plan
+    const actualX = this.pos.x - beforeX, actualZ = this.pos.z - beforeZ;
+    const moved = Math.hypot(actualX, actualZ);
+    if (mlen > 0.05) {
+      this.speed = Math.min(spd * 1.15, moved / Math.max(0.001, dt));
+      this.velX = actualX / Math.max(0.001, dt);
+      this.velZ = actualZ / Math.max(0.001, dt); // momentum REAL para la muerte
+    }
+
+    // Movimiento solicitado vs. movimiento real, acumulado en una ventana
+    // corta. También cuenta contactos repetidos para reaccionar antes de 0.45s.
     if (mlen > 0.05 && this.grounded) {
-      const moved = Math.hypot(this.pos.x - this._px, this.pos.z - this._pz);
-      if (moved < spd * dt * 0.3) this.stuckT += dt;
-      else this.stuckT = Math.max(0, this.stuckT - dt * 2);
-      if (this.stuckT > 0.9) {
-        this.stuckT = 0;
-        this.wp = null; this.repathT = 0;
-        this.avoidSide = -(this.avoidSide || 1);
-        this.strafeDir *= -1;
-        if (this.state === 'cover') {
-          // atascado camino al cover: RECALCULAR la retirada con otro spot
-          // (serial nuevo ⇒ candidato distinto), no rendirse contra la pared
-          if (this.coverPhase === 'go') {
-            this.decisionSerial++;
-            const threats = match.threatsFor(this, this.coverThreat);
-            const again = threats.length
-              ? match.findCoverSpot(this, threats[0], { retreat: true, threats }) : null;
-            if (again) {
-              this.cover = again;
-              match.coverClaims.set(this.id, again);
-            } else {
-              this.state = 'advance'; this.cover = null;
-              match.coverClaims.delete(this.id);
-              this.coverCd = 3; this.decisionT = 0;
-            }
-          } else {
-            this.state = 'advance'; this.cover = null;
-            match.coverClaims.delete(this.id);
-            this.decisionT = 0;
-          }
-        }
-        if (Math.random() < 0.5) this._jump();
+      const expected = spd * dt;
+      const forward = Math.max(0, actualX * steering.x + actualZ * steering.z);
+      this.progressT += dt;
+      this.progressExpected += expected;
+      this.progressActual += forward;
+      this.stuckT = this.progressT;
+      if (forward < expected * 0.22) this.blockedFrameT += dt;
+      else this.blockedFrameT = Math.max(0, this.blockedFrameT - dt * 2.5);
+
+      const ratio = this.progressActual / Math.max(0.001, this.progressExpected);
+      const net = Math.hypot(this.pos.x - this.progressStartX, this.pos.z - this.progressStartZ);
+      const repeatedContact = this.blockedFrameT >= 0.28;
+      const windowStuck = this.progressT >= STUCK_WINDOW && ratio < STUCK_RATIO &&
+        net < this.progressExpected * 0.38;
+      if (repeatedContact || windowStuck) {
+        _v1.set(this.pos.x, 0.7, this.pos.z);
+        _v2.set(steering.x, 0, steering.z);
+        const contact = steering.hit || this.world.raycastHit?.(_v1, _v2, 1.6) || null;
+        this.speed = 0; this.velX = 0; this.velZ = 0;
+        this._recoverFromStuck(match, contact, steering, activeGoal);
+      } else if (this.progressT >= STUCK_WINDOW) {
+        this._resetProgress();
       }
-    } else this.stuckT = 0;
-    this._px = this.pos.x; this._pz = this.pos.z;
+    } else this._resetProgress();
     this.vy -= 15 * dt;
     this.y += this.vy * dt;
     const ground = this.world.groundHeight(this.pos, 0.38, this.y);
@@ -803,6 +992,11 @@ export class BotMatch {
       targetZ = bot.pos.z + Math.max(-14, Math.min(14, desired - bot.pos.z));
     }
     targetX = clampX(targetX); targetZ = clampZ(targetZ);
+    if (bot._goalRecentlyFailed(targetX, targetZ, 2.4)) {
+      const side = bot.avoidSide || (bot.profile.flank < 0.5 ? -1 : 1);
+      targetX = clampX(targetX + side * 5.5);
+      targetZ = clampZ(targetZ - toward * 1.5);
+    }
 
     let best = null, bestScore = -Infinity;
     for (let i = 0; i < this.world.faces.length; i++) {
@@ -811,6 +1005,7 @@ export class BotMatch {
       const x = (f.a.x + f.b.x) / 2 + f.n.x * 0.78;
       const z = (f.a.z + f.b.z) / 2 + f.n.z * 0.78;
       if (Math.abs(x) > this.world.fx - 1 || Math.abs(z) > this.world.fz - 1) continue;
+      if (bot._goalRecentlyFailed(x, z)) continue;
       const d = Math.hypot(x - bot.pos.x, z - bot.pos.z);
       if (d < 2 || d > (role === 'flank' ? 22 : 18)) continue;
       const progress = (z - bot.pos.z) * toward;
@@ -938,6 +1133,7 @@ export class BotMatch {
       // el bot se "cubría" parado del lado del enemigo, de frente a él
       if ((primary.x - mx) * f.n.x + (primary.z - mz) * f.n.z > -0.2) continue;
       const sx = mx + f.n.x * 0.7, sz = mz + f.n.z * 0.7;
+      if (bot._goalRecentlyFailed(sx, sz)) continue;
       const d = Math.hypot(sx - bot.pos.x, sz - bot.pos.z);
       if (d > 16 || d < 1.2) continue;
       if (Math.hypot(primary.x - sx, primary.z - sz) < 5) continue; // no en su cara
