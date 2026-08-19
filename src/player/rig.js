@@ -342,8 +342,6 @@ export class Rig {
       skirtL.rotation.z = -0.06;
       skirtR.rotation.z = 0.06;
       t.add(skirtL, skirtR);
-      t.add(box(0.055, 0.29, 0.025, LIGHT, -0.13, -0.12, -0.145));
-      t.add(box(0.055, 0.29, 0.025, LIGHT, 0.13, -0.12, -0.145));
       this.armR.shoulder.add(box(0.16, 0.07, 0.16, tc, 0, -0.09, 0));
     } else {
       t.add(box(0.34, 0.17, 0.055, MID, 0, 0.46, -0.275));         // placa recluta
