@@ -43,11 +43,13 @@ export function rayCapsule(o, d, x, z, y0, y1, r) {
 // r0.4, cabeza y1.52 r0.22. AGACHADO (cover bajo): cuerpo 0.26..0.6, cabeza
 // 0.86 (tope 1.08 < bloque LOW 1.1) — sin esto, el personaje visualmente
 // agachado conservaba la cabeza-hitbox de pie flotando sobre el bloque.
-// Devuelve {kind:'world'|'player'|'none', t, point, id, part}
+// Devuelve {kind:'world'|'player'|'none', t, point, id, part, normal, surface}.
+// normal/surface solo existen para geometría estática válida: nunca personajes.
 export function resolveShot(world, targets, origin, dir, maxRange, excludeId = null) {
-  let bestT = world.raycast(origin, dir, maxRange);
+  const contact = world.raycastHit?.(origin, dir, maxRange) ?? null;
+  let bestT = contact?.t ?? world.raycast(origin, dir, maxRange);
   let hit = bestT !== null
-    ? { kind: 'world', t: bestT }
+    ? { kind: 'world', t: bestT, normal: contact?.normal, surface: contact?.surface || 'concrete' }
     : { kind: 'none', t: maxRange };
   bestT = hit.t;
 

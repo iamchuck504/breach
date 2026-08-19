@@ -119,8 +119,11 @@ wss.on('connection', (ws) => {
       if (!me.alive) return; // los muertos no disparan
       const o = vec3(msg.o), pt = vec3(msg.p);
       if (!o || !pt) return; // malformado: descartar, no propagar el crash
+      // Hasta ocho impactos estáticos (los pellets de la escopeta). Se sanean
+      // individualmente y el cliente receptor los valida contra su propio mapa.
+      const decals = Array.isArray(msg.d) ? msg.d.slice(0, 8).map(vec3).filter(Boolean) : undefined;
       me.prot = 0; // disparar rompe la protección de spawn
-      broadcast({ t: 'fire', id: me.id, o, p: pt, w: me.w });
+      broadcast({ t: 'fire', id: me.id, o, p: pt, w: me.w, ...(decals ? { d: decals } : {}) });
       return;
     }
     if (msg.t === 'takeDrop') {

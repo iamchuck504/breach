@@ -22,6 +22,11 @@ const HELIPAD = {
   rampLength: 5,
   rampHalfWidth: 1.55,
 };
+const HIT_N = {
+  nx: { x: -1, y: 0, z: 0 }, px: { x: 1, y: 0, z: 0 },
+  ny: { x: 0, y: -1, z: 0 }, py: { x: 0, y: 1, z: 0 },
+  nz: { x: 0, y: 0, z: -1 }, pz: { x: 0, y: 0, z: 1 },
+};
 
 export class World {
   constructor(scene, layout = 'foundry') {
@@ -661,6 +666,7 @@ export class World {
   // Caja física + visual. mirror=true agrega la copia rotada 180° (-x,-z).
   _box(x, z, w, d, h, {
     mirror = true, color = 0x9a958c, top = 0xaeaaa1, cover = true, visual = true,
+    surface = null,
   } = {}) {
     const place = (px, pz) => {
       // variación sutil de tono por caja: rompe la monotonía sin romper la paleta
@@ -669,7 +675,8 @@ export class World {
       const t = new THREE.Color(top).multiplyScalar(jit).getHex();
       if (visual) this._batchBox(px, pz, w, d, h, c, t);
       const minx = px - w / 2, maxx = px + w / 2, minz = pz - d / 2, maxz = pz + d / 2;
-      this.colliders.push({ minx, minz, maxx, maxz, h });
+      const material = surface || (this.layout === 'fortaleza' ? 'stone' : 'concrete');
+      this.colliders.push({ minx, minz, maxx, maxz, h, surface: material });
       if (cover) {
         this.faces.push(
           { n: { x: 1, z: 0 }, a: { x: maxx, z: minz }, b: { x: maxx, z: maxz }, h },
@@ -1277,11 +1284,11 @@ export class World {
     const { LOW, MID, HIGH } = BLOCK;
     // Familias tonales distintas: el jugador reconoce A/C, ductos, casetas y
     // vidrio antes de acercarse, aun con la iluminación nocturna.
-    const acOpts = { color: 0x8796a5, top: 0xb9c7d2 };    // A/C metálicos
-    const ventOpts = { color: 0x71808e, top: 0xa6b2bc };  // ductos
-    const hutOpts = { color: 0x727b86, top: 0x9ba5ae };   // casetas de concreto
-    const glassOpts = { color: 0x38677c, top: 0x67b6d0 }; // claraboyas
-    const wallOpts = { mirror: false, color: 0x59636f, top: 0x7e8994 };
+    const acOpts = { color: 0x8796a5, top: 0xb9c7d2, surface: 'metal' };    // A/C metálicos
+    const ventOpts = { color: 0x71808e, top: 0xa6b2bc, surface: 'metal' }; // ductos
+    const hutOpts = { color: 0x727b86, top: 0x9ba5ae, surface: 'concrete' };
+    const glassOpts = { color: 0x38677c, top: 0x67b6d0, surface: 'metal' }; // marco de claraboya
+    const wallOpts = { mirror: false, color: 0x59636f, top: 0x7e8994, surface: 'concrete' };
 
     // perímetro: parapetos / fachadas de los edificios vecinos
     this._box(0, -this.fz - 0.4, this.fx * 2 + 2, 0.8, HIGH, wallOpts);
@@ -1348,7 +1355,7 @@ export class World {
       const len = Math.hypot(tx, tz);
       if (len < 0.05) return;
       const n = { x: -tz / len, z: tx / len }; // vértices en sentido horario
-      const wall = { a, b, n, half: 0.08, h: HELIPAD.height + LOW, coverH: LOW };
+      const wall = { a, b, n, half: 0.08, h: HELIPAD.height + LOW, coverH: LOW, surface: 'metal' };
       this._helipadSegments.push(wall);
       this.segmentColliders.push(wall);
       for (const side of [1, -1]) {
@@ -2118,6 +2125,106 @@ export class World {
   }
 
   // ---------- física ----------
+
+  // Raycast detallado exclusivo para impactos. Además de la distancia devuelve
+  // la normal exterior y el material lógico de la superficie. Incluye suelo,
+  // plataforma y rampas; el raycast de locomoción conserva su comportamiento.
+  raycastHit(origin, dir, maxDist) {
+    let best = null;
+    const accept = (t, normal, surface, collider = null) => {
+      if (!Number.isFinite(t) || t < 0.0001 || t > maxDist) return;
+      if (!best || t < best.t) best = { t, normal, surface, collider };
+    };
+
+    const slabs = (axes, surface, collider) => {
+      let near = -Infinity, far = Infinity;
+      let nearN = null, farN = null;
+      for (const a of axes) {
+        if (Math.abs(a.d) < 1e-8) {
+          if (a.o < a.lo || a.o > a.hi) return;
+          continue;
+        }
+        let t1 = (a.lo - a.o) / a.d, t2 = (a.hi - a.o) / a.d;
+        let n1 = a.nLo, n2 = a.nHi;
+        if (t1 > t2) { [t1, t2] = [t2, t1]; [n1, n2] = [n2, n1]; }
+        if (t1 > near) { near = t1; nearN = n1; }
+        if (t2 < far) { far = t2; farN = n2; }
+        if (near > far) return;
+      }
+      const outside = near >= 0.0001;
+      accept(outside ? near : far, outside ? nearN : farN, surface, collider);
+    };
+
+    for (const c of this.colliders) {
+      slabs([
+        { o: origin.x, d: dir.x, lo: c.minx, hi: c.maxx,
+          nLo: HIT_N.nx, nHi: HIT_N.px },
+        { o: origin.y, d: dir.y, lo: -0.1, hi: c.h,
+          nLo: HIT_N.ny, nHi: HIT_N.py },
+        { o: origin.z, d: dir.z, lo: c.minz, hi: c.maxz,
+          nLo: HIT_N.nz, nHi: HIT_N.pz },
+      ], c.surface || 'concrete', c);
+    }
+
+    // Barandas y otros colliders delgados rotados: caja orientada completa,
+    // incluidas tapas y extremos, para no dejar decals flotando en las esquinas.
+    for (const c of this.segmentColliders) {
+      const tx = c.b.x - c.a.x, tz = c.b.z - c.a.z;
+      const len = Math.hypot(tx, tz);
+      if (len < 0.001) continue;
+      const ux = tx / len, uz = tz / len;
+      const cx = (c.a.x + c.b.x) * 0.5, cz = (c.a.z + c.b.z) * 0.5;
+      const ox = origin.x - cx, oz = origin.z - cz;
+      slabs([
+        { o: ox * ux + oz * uz, d: dir.x * ux + dir.z * uz, lo: -len * 0.5, hi: len * 0.5,
+          nLo: { x: -ux, y: 0, z: -uz }, nHi: { x: ux, y: 0, z: uz } },
+        { o: ox * c.n.x + oz * c.n.z, d: dir.x * c.n.x + dir.z * c.n.z, lo: -c.half, hi: c.half,
+          nLo: { x: -c.n.x, y: 0, z: -c.n.z }, nHi: { x: c.n.x, y: 0, z: c.n.z } },
+        { o: origin.y, d: dir.y, lo: -0.1, hi: c.h,
+          nLo: HIT_N.ny, nHi: HIT_N.py },
+      ], c.surface || 'metal', c);
+    }
+
+    const groundSurface = this.layout === 'fortaleza' ? 'stone' : 'concrete';
+    const plane = (t, normal, surface, contains) => {
+      if (!Number.isFinite(t) || t < 0.0001 || t > maxDist) return;
+      const x = origin.x + dir.x * t, z = origin.z + dir.z * t;
+      if (contains(x, z)) accept(t, normal, surface);
+    };
+
+    // Superficie superior del helipuerto y sus dos rampas inclinadas.
+    for (const zone of this.surfaceZones) {
+      if (zone.kind !== 'helipad') continue;
+      if (dir.y < -1e-8) {
+        const t = (zone.height - origin.y) / dir.y;
+        plane(t, HIT_N.py, 'metal', (x, z) => {
+          const ax = Math.abs(x), az = Math.abs(z);
+          return ax <= zone.edge && az <= zone.edge && ax + az <= zone.diagonal;
+        });
+      }
+      for (const sign of [-1, 1]) {
+        const slope = zone.height * sign / zone.rampLength;
+        const denom = dir.y + slope * dir.z;
+        if (Math.abs(denom) < 1e-8) continue;
+        const constant = zone.height * (1 + zone.edge / zone.rampLength);
+        const t = (constant - origin.y - slope * origin.z) / denom;
+        const il = 1 / Math.hypot(1, slope);
+        const normal = { x: 0, y: il, z: slope * il };
+        plane(t, normal, 'metal', (x, z) => {
+          const sz = sign * z;
+          return Math.abs(x) <= zone.rampHalfWidth && sz >= zone.edge && sz <= zone.edge + zone.rampLength;
+        });
+      }
+    }
+
+    // Piso base, deliberadamente limitado al área jugable.
+    if (dir.y < -1e-8) {
+      const t = -origin.y / dir.y;
+      plane(t, HIT_N.py, groundSurface,
+        (x, z) => Math.abs(x) <= this.fx + 0.05 && Math.abs(z) <= this.fz + 0.05);
+    }
+    return best;
+  }
 
   // Raycast 3D contra los AABBs. Devuelve t (distancia) o null. inflate expande cajas.
   raycast(origin, dir, maxDist, inflate = 0) {

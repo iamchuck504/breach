@@ -65,6 +65,7 @@ function updateMenuBackdrop(now = performance.now()) {
 }
 
 function showMenuBackdrop() {
+  effects.clearImpacts();
   world.setLayout('azoteas');
   updateMenuBackdrop();
 }
@@ -762,6 +763,7 @@ function startBots() {
   startSeq++;
   teardown();
   G.name = saveName();
+  effects.clearImpacts();
   world.setLayout(G.mapChoice); // mapa elegido en el menú
   G.mode = 'bots';
   spawnLocal('red', world.spawns.red[0]);
@@ -834,6 +836,7 @@ function startPractice() {
   startSeq++;
   teardown();
   G.name = saveName();
+  effects.clearImpacts();
   world.setLayout(G.mapChoice); // mapa elegido en el menú
   G.mode = 'practice';
   spawnLocal('red', world.spawns.red[1]);
@@ -866,6 +869,7 @@ async function startOnline() {
     // este welcome tardío no debe secuestrarla
     if (startSeq !== mySeq) { net.close(); return; }
     teardown();
+    effects.clearImpacts();
     world.setLayout('fortaleza'); // mapa grande de multijugador
     G.net = net;
     G.mode = 'online';
@@ -946,6 +950,22 @@ function bindNet(net) {
     if (!okVec(m.o) || !okVec(m.p)) return;
     const o = new THREE.Vector3(...m.o), p = new THREE.Vector3(...m.p);
     effects.tracer(o, p);
+    // Servidores nuevos reenvían todos los impactos estáticos de la escopeta;
+    // con servidores anteriores, el endpoint único mantiene compatibilidad.
+    const remoteMarks = Array.isArray(m.d) ? m.d.filter(okVec).slice(0, 8) : [m.p];
+    for (const packed of remoteMarks) {
+      const endpoint = new THREE.Vector3(...packed);
+      const remoteDir = endpoint.sub(o);
+      const remoteLen = remoteDir.length();
+      if (remoteLen > 0.001) {
+        remoteDir.multiplyScalar(1 / remoteLen);
+        const contact = world.raycastHit(o, remoteDir, remoteLen + 0.08);
+        if (contact && Math.abs(contact.t - remoteLen) < 0.12) {
+          const point = o.clone().addScaledVector(remoteDir, contact.t);
+          effects.impact(point, contact.normal, contact.surface);
+        }
+      }
+    }
     effects.muzzleFlash(o, m.w === 'shotgun');
     if (m.w === 'shotgun') audio.shotgun(); else audio.smg();
     const r = G.remotes.get(m.id);
@@ -1164,13 +1184,17 @@ function fireShot() {
   const targets = currentTargets();
   const dmgByTarget = new Map();
   let anyPoint = null;
+  const worldImpacts = [];
 
   for (let i = 0; i < def.pellets; i++) {
     const dir = applySpread(baseDir, spread);
     const hit = resolveShot(world, targets, origin, dir, def.range, null);
     anyPoint = hit.point;
     effects.tracer(muzzle, hit.point);
-    if (hit.kind === 'world') effects.impact(hit.point);
+    if (hit.kind === 'world') {
+      effects.impact(hit.point, hit.normal, hit.surface);
+      worldImpacts.push(hit.point);
+    }
     if (hit.kind === 'player') {
       let dmg = def.dmg * falloff(def, hit.t);
       if (hit.part === 'head') dmg *= def.headMult;
@@ -1228,7 +1252,7 @@ function fireShot() {
   if (hitSomeone) hud.hitmarker();
 
   // replicar visual
-  if (G.net && anyPoint) G.net.fire(muzzle, anyPoint, w.cur);
+  if (G.net && anyPoint) G.net.fire(muzzle, anyPoint, w.cur, worldImpacts);
 }
 
 // ---------- retícula de cañón (shoot from the barrel) ----------
@@ -1286,6 +1310,7 @@ window.BREACH_INPUT = input;
 window.BREACH_CAM = camera;
 window.BREACH_AUDIO = audio;
 window.BREACH_WORLD = world;
+window.BREACH_EFFECTS = effects;
 window.BREACH_RIG = Rig; // para tests visuales de poses/animaciones
 window.THREE = THREE;
 

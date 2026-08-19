@@ -1,6 +1,155 @@
 // Efectos ligeros: tracers, fogonazos, impactos, gibs estilizados, polvo de slides.
 import * as THREE from 'three';
 
+const DECAL_MAX = 96;
+const DECAL_LIFE = 22;
+const DECAL_FADE = 4;
+const PLUS_Z = new THREE.Vector3(0, 0, 1);
+const HIDDEN_MATRIX = new THREE.Matrix4().makeScale(0, 0, 0);
+const IMPACT_COLORS = {
+  concrete: new THREE.Color(0x6c7375),
+  stone: new THREE.Color(0x786a58),
+  metal: new THREE.Color(0x8c7155),
+};
+
+// Un solo InstancedMesh y un ring buffer: 96 impactos cuestan un draw call,
+// nunca crean/destruyen meshes y la marca más antigua se reutiliza primero.
+class ImpactDecalPool {
+  constructor(scene, max = DECAL_MAX) {
+    this.max = max;
+    this.cursor = 0;
+    this.activeCount = 0;
+    this.slots = new Array(max).fill(null);
+    this.opacity = new Float32Array(max);
+    this.colors = new Float32Array(max * 3);
+
+    const geo = new THREE.PlaneGeometry(1, 1);
+    geo.setAttribute('instanceOpacity', new THREE.InstancedBufferAttribute(this.opacity, 1));
+    geo.setAttribute('instanceColor', new THREE.InstancedBufferAttribute(this.colors, 3));
+    const mat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      depthTest: true,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+      vertexShader: `
+        attribute float instanceOpacity;
+        attribute vec3 instanceColor;
+        varying vec2 vUv;
+        varying float vOpacity;
+        varying vec3 vColor;
+        void main() {
+          vUv = uv;
+          vOpacity = instanceOpacity;
+          vColor = instanceColor;
+          gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        varying vec2 vUv;
+        varying float vOpacity;
+        varying vec3 vColor;
+        void main() {
+          vec2 p = vUv - 0.5;
+          float r = length(p);
+          float a = atan(p.y, p.x);
+          float jag = sin(a * 7.0 + 0.8) * 0.018 + sin(a * 13.0) * 0.010;
+          float outer = 1.0 - smoothstep(0.43 + jag, 0.50 + jag, r);
+          float core = 1.0 - smoothstep(0.08, 0.29, r);
+          float ring = smoothstep(0.24, 0.31, r) - smoothstep(0.38 + jag, 0.46 + jag, r);
+          ring *= 0.68 + 0.32 * sin(a * 9.0 + 1.7);
+          float alpha = max(core * 0.86, max(ring * 0.82, outer * 0.13)) * vOpacity;
+          if (alpha < 0.025) discard;
+          vec3 soot = vec3(0.018, 0.021, 0.023);
+          vec3 color = mix(soot, vColor, clamp(ring * 1.35, 0.0, 0.72));
+          gl_FragColor = vec4(color, alpha);
+        }
+      `,
+    });
+    geo.userData.shared = true;
+    mat.userData.shared = true;
+    this.mesh = new THREE.InstancedMesh(geo, mat, max);
+    this.mesh.name = 'impact-decals';
+    this.mesh.frustumCulled = false;
+    this.mesh.renderOrder = 3;
+    for (let i = 0; i < max; i++) this.mesh.setMatrixAt(i, HIDDEN_MATRIX);
+    this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.mesh.instanceMatrix.needsUpdate = true;
+    scene.add(this.mesh);
+
+    this._normal = new THREE.Vector3();
+    this._pos = new THREE.Vector3();
+    this._quat = new THREE.Quaternion();
+    this._spin = new THREE.Quaternion();
+    this._scale = new THREE.Vector3();
+    this._matrix = new THREE.Matrix4();
+  }
+
+  add(point, normal, surface = 'concrete') {
+    if (!point || !normal) return;
+    this._normal.set(normal.x, normal.y, normal.z);
+    if (this._normal.lengthSq() < 0.5) return;
+    this._normal.normalize();
+
+    const i = this.cursor;
+    this.cursor = (this.cursor + 1) % this.max;
+    if (!this.slots[i]) this.activeCount++;
+    this.slots[i] = { age: 0, ttl: DECAL_LIFE + Math.random() * 4 };
+
+    const base = surface === 'metal' ? 0.115 : surface === 'stone' ? 0.155 : 0.14;
+    const size = base * (0.82 + Math.random() * 0.36);
+    this._pos.copy(point).addScaledVector(this._normal, 0.008);
+    this._quat.setFromUnitVectors(PLUS_Z, this._normal);
+    this._spin.setFromAxisAngle(PLUS_Z, Math.random() * Math.PI * 2);
+    this._quat.multiply(this._spin);
+    this._scale.set(size, size * (0.86 + Math.random() * 0.2), 1);
+    this._matrix.compose(this._pos, this._quat, this._scale);
+    this.mesh.setMatrixAt(i, this._matrix);
+
+    const color = IMPACT_COLORS[surface] || IMPACT_COLORS.concrete;
+    const tone = 0.82 + Math.random() * 0.28;
+    this.colors[i * 3] = color.r * tone;
+    this.colors[i * 3 + 1] = color.g * tone;
+    this.colors[i * 3 + 2] = color.b * tone;
+    this.opacity[i] = 0.92 + Math.random() * 0.08;
+    this.mesh.instanceMatrix.needsUpdate = true;
+    this.mesh.geometry.attributes.instanceColor.needsUpdate = true;
+    this.mesh.geometry.attributes.instanceOpacity.needsUpdate = true;
+  }
+
+  update(dt) {
+    let opacityDirty = false, matrixDirty = false;
+    for (let i = 0; i < this.max; i++) {
+      const slot = this.slots[i];
+      if (!slot) continue;
+      slot.age += dt;
+      if (slot.age >= slot.ttl) {
+        this.slots[i] = null;
+        this.activeCount--;
+        this.opacity[i] = 0;
+        this.mesh.setMatrixAt(i, HIDDEN_MATRIX);
+        opacityDirty = matrixDirty = true;
+      } else if (slot.age > slot.ttl - DECAL_FADE) {
+        this.opacity[i] = Math.max(0, (slot.ttl - slot.age) / DECAL_FADE);
+        opacityDirty = true;
+      }
+    }
+    if (opacityDirty) this.mesh.geometry.attributes.instanceOpacity.needsUpdate = true;
+    if (matrixDirty) this.mesh.instanceMatrix.needsUpdate = true;
+  }
+
+  clear() {
+    this.cursor = 0;
+    this.activeCount = 0;
+    this.slots.fill(null);
+    this.opacity.fill(0);
+    for (let i = 0; i < this.max; i++) this.mesh.setMatrixAt(i, HIDDEN_MATRIX);
+    this.mesh.geometry.attributes.instanceOpacity.needsUpdate = true;
+    this.mesh.instanceMatrix.needsUpdate = true;
+  }
+}
+
 export class Effects {
   constructor(scene) {
     this.scene = scene;
@@ -14,6 +163,8 @@ export class Effects {
     ];
     this._gibGeo = new THREE.BoxGeometry(1, 1, 1);
     this._gibMats = new Map();
+    this.decals = new ImpactDecalPool(scene);
+    this._impactBurstBudget = 4;
     for (const r of [this._tracerMat, this._tracerGeo, this._flashMat, ...this._flashGeo, this._gibGeo]) {
       r.userData.shared = true;
     }
@@ -54,15 +205,21 @@ export class Effects {
     });
   }
 
-  _burst(pos, count, color, speed, size, ttl, gravity = 9) {
+  _burst(pos, count, color, speed, size, ttl, gravity = 9, normal = null) {
     const geo = new THREE.BufferGeometry();
     const arr = new Float32Array(count * 3);
     const vels = [];
     for (let i = 0; i < count; i++) {
       arr[i * 3] = pos.x; arr[i * 3 + 1] = pos.y; arr[i * 3 + 2] = pos.z;
-      vels.push(new THREE.Vector3(
+      const vel = new THREE.Vector3(
         (Math.random() - 0.5) * 2, Math.random() * 0.9 + 0.1, (Math.random() - 0.5) * 2
-      ).normalize().multiplyScalar(speed * (0.4 + Math.random() * 0.6)));
+      );
+      if (normal) {
+        const dot = vel.x * normal.x + vel.y * normal.y + vel.z * normal.z;
+        if (dot < 0) vel.addScaledVector(normal, -2 * dot);
+        vel.addScaledVector(normal, 0.75);
+      }
+      vels.push(vel.normalize().multiplyScalar(speed * (0.4 + Math.random() * 0.6)));
     }
     geo.setAttribute('position', new THREE.BufferAttribute(arr, 3));
     const mat = new THREE.PointsMaterial({ color, size, transparent: true });
@@ -80,7 +237,16 @@ export class Effects {
     });
   }
 
-  impact(pos) { this._burst(pos, 8, 0xd8d2c4, 3.2, 0.055, 0.35); }
+  impact(pos, normal = null, surface = 'concrete') {
+    if (normal) this.decals.add(pos, normal, surface);
+    // Los decals siempre se registran; los puffs se presupuestan para que una
+    // escopeta no cree ocho sistemas de partículas en el mismo frame.
+    if (this._impactBurstBudget < 1) return;
+    this._impactBurstBudget--;
+    if (surface === 'metal') this._burst(pos, 4, 0xffb568, 4.1, 0.045, 0.24, 5, normal);
+    else if (surface === 'stone') this._burst(pos, 5, 0xb5a58d, 2.5, 0.052, 0.32, 8, normal);
+    else this._burst(pos, 5, 0xb8bec0, 2.4, 0.05, 0.3, 7, normal);
+  }
   blood(pos, teamColor) { this._burst(pos, 10, teamColor, 2.6, 0.07, 0.4); }
   dust(pos) { this._burst(new THREE.Vector3(pos.x, 0.15, pos.z), 9, 0xbdb6a8, 1.6, 0.09, 0.5, 2.5); }
 
@@ -120,6 +286,8 @@ export class Effects {
   }
 
   update(dt) {
+    this._impactBurstBudget = Math.min(4, this._impactBurstBudget + dt * 10);
+    this.decals.update(dt);
     for (let i = this.items.length - 1; i >= 0; i--) {
       const it = this.items[i];
       it.life += dt;
@@ -131,4 +299,6 @@ export class Effects {
       } else it.tick(it, dt);
     }
   }
+
+  clearImpacts() { this.decals.clear(); }
 }

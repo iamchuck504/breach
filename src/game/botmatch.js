@@ -1041,8 +1041,9 @@ export class BotMatch {
         }
         if (hit.part === 'head') dmg *= def.headMult;
         dmgAcc.set(hit.id, (dmgAcc.get(hit.id) || 0) + dmg);
-      } else if (hit.kind === 'world' && i === 0) {
-        this.cb.effects.impact(hit.point);
+      } else if (hit.kind === 'world') {
+        // Cada pellet deja su marca; Effects limita/presupuesta las partículas.
+        this.cb.effects.impact(hit.point, hit.normal, hit.surface);
       }
     }
     if (bot.wep === 'shotgun') this.cb.audio.shotgun(); else this.cb.audio.smg();

@@ -76,8 +76,9 @@ export class NetClient {
     });
   }
 
-  fire(origin, point, wep) {
-    this.send({ t: 'fire', o: [+origin.x.toFixed(2), +origin.y.toFixed(2), +origin.z.toFixed(2)], p: [+point.x.toFixed(2), +point.y.toFixed(2), +point.z.toFixed(2)], w: wep });
+  fire(origin, point, wep, impacts = []) {
+    const pack = (v) => [+v.x.toFixed(2), +v.y.toFixed(2), +v.z.toFixed(2)];
+    this.send({ t: 'fire', o: pack(origin), p: pack(point), w: wep, d: impacts.slice(0, 8).map(pack) });
   }
 
   hit(targetId, dmg, part, gib) {

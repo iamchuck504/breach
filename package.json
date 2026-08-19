@@ -9,8 +9,9 @@
     "preview": "vite preview --port 5200",
     "server": "node server/server.js",
     "check:controller": "node scripts/check-controller.mjs",
+    "check:impacts": "node scripts/check-impacts.mjs",
     "check:movement": "node scripts/check-movement.mjs",
-    "test": "npm run check:controller"
+    "test": "npm run check:controller && npm run check:impacts"
   },
   "dependencies": {
     "lil-gui": "^0.20.0",
