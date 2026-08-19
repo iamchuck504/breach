@@ -19,7 +19,12 @@ await new Promise((r) => setTimeout(r, 900));
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 page.on('pageerror', (e) => console.log('PAGEERROR:', e.message));
+const LAYOUT = process.argv[2] || 'fortaleza'; // node scripts/shot-map.mjs [mapa]
 await page.goto('http://localhost:8797/?nolock=1', { waitUntil: 'networkidle' });
+await page.evaluate((l) => {
+  localStorage.setItem('breach.map', l);
+  window.BREACH.mapChoice = l; // G.mapChoice ya se leyó al cargar el módulo
+}, LAYOUT);
 await page.evaluate(() => document.getElementById('btn-practice').click());
 await page.waitForTimeout(1200);
 
@@ -39,7 +44,7 @@ for (const [name, pos, at] of shots) {
     cam.lookAt(a[0], a[1], a[2]);
   }, [pos, at]);
   await page.waitForTimeout(250);
-  await page.screenshot({ path: path.join(root, 'scripts', `shot-fortaleza-${name}.png`) });
+  await page.screenshot({ path: path.join(root, 'scripts', `shot-${LAYOUT}-${name}.png`) });
   console.log('shot', name);
 }
 await browser.close();

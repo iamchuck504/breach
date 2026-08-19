@@ -18,7 +18,9 @@ await new Promise((r) => setTimeout(r, 900));
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
 const page = await browser.newPage();
 page.on('pageerror', (e) => console.log('PAGEERROR:', e.message));
+const LAYOUT = process.argv[2] || 'fortaleza';
 await page.goto('http://localhost:8789/?nolock=1', { waitUntil: 'networkidle' });
+await page.evaluate((l) => { window.BREACH.mapChoice = l; }, LAYOUT);
 await page.evaluate(() => document.getElementById('btn-bots').click());
 await page.waitForTimeout(1200);
 

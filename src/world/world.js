@@ -24,7 +24,8 @@ export class World {
     this.setLayout(layout);
   }
 
-  // Cambia de mapa en caliente: 'foundry' | 'arena' (compacto) | 'fortaleza'
+  // Cambia de mapa en caliente:
+  // 'foundry' | 'arena' (compacto) | 'fortaleza' (día) | 'azoteas' (noche)
   setLayout(layout) {
     if (this.layout === layout && this.mapGroup) return;
     this.layout = layout;
@@ -52,12 +53,15 @@ export class World {
     this._boxBatch = { sides: this._newBatch(), tops: this._newBatch() };
     // fz de fortaleza 26.6: bolsillo de spawn de 3.2m (spawns fijos en ±23.4)
     // — la cámara (dist 2.7) ya no choca con la muralla y no hace zoom forzado
-    const dims = { arena: [11, 13], fortaleza: [21, 26.6], foundry: [FIELD_X, FIELD_Z] };
+    const dims = { arena: [11, 13], fortaleza: [21, 26.6], azoteas: [21, 26.6], foundry: [FIELD_X, FIELD_Z] };
     [this.fx, this.fz] = dims[layout] ?? dims.foundry;
+    // texturas del batch por mapa (piedra medieval vs concreto urbano)
+    this._batchTexIds = layout === 'azoteas' ? ['concrete', 'concreteTop'] : ['stone', 'stoneTop'];
 
     this._buildFloor();
     if (layout === 'arena') this._buildArena();
     else if (layout === 'fortaleza') this._buildFortaleza();
+    else if (layout === 'azoteas') this._buildAzoteas();
     else this._buildMap();
     this._flushBoxBatch();
     this._buildSpawns();
@@ -84,6 +88,10 @@ export class World {
       crack: this._crackCanvas(),               // daño mural (alphaTest)
       ivy: this._ivyCanvas(),                  // hiedra colgante (alphaTest)
       grass: this._grassCanvas(),              // mata de pasto (alphaTest)
+      concrete: this._concreteCanvas(false),   // paneles de concreto (Azoteas)
+      concreteTop: this._concreteCanvas(true),
+      roofFloor: this._roofFloorCanvas(),      // grava/brea de azotea
+      windows: this._windowsCanvas(),          // fachadas nocturnas iluminadas
     };
     this._texCache = new Map(); // compartidas por (canvas, repeat): pocas subidas a GPU
   }
@@ -276,6 +284,75 @@ export class World {
     return cv;
   }
 
+  // Paneles de concreto: juntas de encofrado, manchas y chorreados sutiles.
+  _concreteCanvas(flat) {
+    const s = 256;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = s;
+    const g = cv.getContext('2d');
+    g.fillStyle = '#b9b6ae'; g.fillRect(0, 0, s, s);
+    // juntas de panel
+    g.strokeStyle = 'rgba(60,56,48,0.4)'; g.lineWidth = 3;
+    for (const x of [0, s / 2, s]) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, s); g.stroke(); }
+    for (const y of [0, s / (flat ? 2 : 3) * 1, s / (flat ? 2 : 3) * 2, s]) {
+      g.beginPath(); g.moveTo(0, y); g.lineTo(s, y); g.stroke();
+    }
+    // manchas y chorreados
+    for (let i = 0; i < 10; i++) {
+      g.fillStyle = `rgba(70,66,58,${0.05 + Math.random() * 0.08})`;
+      g.fillRect(Math.random() * s, Math.random() * s, 14 + Math.random() * 40, 8 + Math.random() * 26);
+    }
+    for (let i = 0; i < 6; i++) {
+      const x = Math.random() * s;
+      g.fillStyle = 'rgba(60,56,48,0.14)';
+      g.fillRect(x, Math.random() * s * 0.4, 2, 30 + Math.random() * 60);
+    }
+    // pernos de encofrado
+    g.fillStyle = 'rgba(50,46,40,0.5)';
+    for (const x of [s * 0.25, s * 0.75]) for (const y of [s * 0.2, s * 0.55, s * 0.9]) g.fillRect(x - 2, y - 2, 5, 5);
+    return cv;
+  }
+
+  // Azotea: grava fina con juntas de brea y parches.
+  _roofFloorCanvas() {
+    const s = 256;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = s;
+    const g = cv.getContext('2d');
+    g.fillStyle = '#8f8d88'; g.fillRect(0, 0, s, s);
+    for (let i = 0; i < 900; i++) { // grava
+      const l = 45 + Math.random() * 35;
+      g.fillStyle = `hsl(40, 4%, ${l}%)`;
+      g.fillRect(Math.random() * s, Math.random() * s, 2, 2);
+    }
+    g.strokeStyle = 'rgba(30,28,26,0.5)'; g.lineWidth = 4; // juntas de brea
+    for (const t of [0, s / 2, s]) {
+      g.beginPath(); g.moveTo(t, 0); g.lineTo(t, s); g.stroke();
+      g.beginPath(); g.moveTo(0, t); g.lineTo(s, t); g.stroke();
+    }
+    g.fillStyle = 'rgba(70,68,64,0.5)'; // parche reparado
+    g.fillRect(s * 0.6, s * 0.15, 60, 44);
+    return cv;
+  }
+
+  // Fachada nocturna: retícula de ventanas, unas encendidas (cálidas/frías).
+  _windowsCanvas() {
+    const w = 128, h = 256;
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    const g = cv.getContext('2d');
+    g.fillStyle = '#0c0e15'; g.fillRect(0, 0, w, h);
+    const cols = 5, rows = 11, cw = w / cols, rh = h / rows;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const lit = Math.random();
+        g.fillStyle = lit < 0.22 ? '#ffd9a0' : lit < 0.32 ? '#a8c8ff' : '#171a24';
+        g.fillRect(c * cw + 4, r * rh + 5, cw - 8, rh - 9);
+      }
+    }
+    return cv;
+  }
+
   _tex(id, rx = 1, ry = 1) {
     const key = id + ':' + rx.toFixed(2) + ':' + ry.toFixed(2);
     let t = this._texCache.get(key);
@@ -354,8 +431,8 @@ export class World {
       mesh.receiveShadow = true;
       this.mapGroup.add(mesh);
     };
-    build(this._boxBatch.sides, 'stone');
-    build(this._boxBatch.tops, 'stoneTop');
+    build(this._boxBatch.sides, this._batchTexIds[0]);
+    build(this._boxBatch.tops, this._batchTexIds[1]);
     this._boxBatch = null;
   }
 
@@ -414,6 +491,22 @@ export class World {
       ]);
       // Empieza fuera de los carriles jugables; solo integra paisaje lejano.
       this.scene.fog = new THREE.Fog(0x91a0a3, 46, 118);
+    } else if (layout === 'azoteas') {
+      // Noche urbana: luna fría, ambiente azul y resplandor cálido de la
+      // ciudad en el horizonte. Los acentos emisivos (ventanas, neón,
+      // luces de antena) ponen el color.
+      this.hemi.color.setHex(0x3a4866);
+      this.hemi.groundColor.setHex(0x20232c);
+      this.hemi.intensity = 1.12;
+      this.amb.color.setHex(0x39415a);
+      this.amb.intensity = 0.62;
+      this.sun.color.setHex(0xc3d5f2); // luna
+      this.sun.intensity = 1.15;
+      this.sun.position.set(20, 26, -14);
+      this._setSky([
+        [0, '#070b18'], [0.5, '#101a30'], [0.82, '#28273f'], [1, '#54394a'],
+      ]);
+      this.scene.fog = null;
     } else {
       this.hemi.color.setHex(0xd9e6f0);
       this.hemi.groundColor.setHex(0x97876e);
@@ -431,13 +524,16 @@ export class World {
   }
 
   _buildFloor() {
-    // patio de losas de arenisca (4 losas por tile → losa ≈ 0.65 m)
-    const tex = this._tex('floor', this.fx * 2 / 2.6, this.fz * 2 / 2.6);
+    // fortaleza: losas de arenisca; azoteas: grava/brea de techo urbano
+    const roof = this.layout === 'azoteas';
+    const tex = roof
+      ? this._tex('roofFloor', this.fx * 2 / 4.2, this.fz * 2 / 4.2)
+      : this._tex('floor', this.fx * 2 / 2.6, this.fz * 2 / 2.6);
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(this.fx * 2, this.fz * 2),
       new THREE.MeshLambertMaterial({
         map: tex,
-        color: this.layout === 'fortaleza' ? 0xc3b79f : 0xffffff,
+        color: roof ? 0xcdd0d4 : this.layout === 'fortaleza' ? 0xc3b79f : 0xffffff,
       })
     );
     floor.rotation.x = -Math.PI / 2;
@@ -1081,10 +1177,162 @@ export class World {
     }
   }
 
+  // Mapa "Azoteas": techos de ciudad de noche. Misma simetría rotacional 180°
+  // y las MISMAS tres alturas (LOW/MID/HIGH): unidades de A/C y claraboyas
+  // como cobertura baja, casetas como muros, cuartos de máquinas altos.
+  // Spawns fijos en ±23.4 (idénticos a Fortaleza → compatible con el server).
+  _buildAzoteas() {
+    const { LOW, MID, HIGH } = BLOCK;
+    const acOpts = { color: 0xaeb6be, top: 0xc4cad0 };    // A/C metálicos
+    const ventOpts = { color: 0xa2a7ae, top: 0xb8bdc3 };  // ductos
+    const hutOpts = { color: 0xb2aea4, top: 0xc2beb4 };   // casetas de concreto
+    const glassOpts = { color: 0x6f7d8a, top: 0x89a6c0 }; // claraboyas
+    const wallOpts = { mirror: false, color: 0xa39f97, top: 0xb3afa7 };
+
+    // perímetro: parapetos / fachadas de los edificios vecinos
+    this._box(0, -this.fz - 0.4, this.fx * 2 + 2, 0.8, HIGH, wallOpts);
+    this._box(0, this.fz + 0.4, this.fx * 2 + 2, 0.8, HIGH, wallOpts);
+    this._box(-this.fx - 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
+    this._box(this.fx + 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
+
+    // --- base (lado rojo; el espejo crea el azul)
+    this._box(0, -20.9, 7, 1.1, HIGH, hutOpts);            // caseta de acceso (escudo)
+    this._box(-5.2, -18.4, 2.2, 1.2, LOW, acOpts);         // A/C flanqueando salidas
+    this._box(5.2, -18.4, 2.2, 1.2, LOW, acOpts);
+    this._box(7.5, -15, 3, 3, LOW, glassOpts);             // claraboya pisable
+    this._box(-8, -14.5, 4.5, 1, MID, hutOpts);            // muro mediano
+
+    // --- caseta de elevador de flanco
+    this._box(-13.5, -10.5, 2, 2, HIGH, hutOpts);
+
+    // --- cadena de A/C bajos (ruta de wallbounce)
+    this._box(-3, -11.5, 2.4, 1, LOW, acOpts);
+    this._box(1.5, -8.8, 2.4, 1, LOW, acOpts);
+    this._box(-2, -6.2, 2.4, 1, LOW, acOpts);
+
+    // --- carril derecho
+    this._box(11.5, -8, 1, 4, HIGH, hutOpts);
+    this._box(16.5, -12, 1, 2.2, LOW, ventOpts);
+    this._box(18.5, -5, 2.2, 1, LOW, ventOpts);
+
+    // --- carril izquierdo
+    this._box(-18.5, -6.5, 2.2, 1, LOW, ventOpts);
+    this._box(-16, -2.5, 1, 3, MID, hutOpts);
+
+    // --- media cancha
+    this._box(5.5, -3, 3.2, 1, MID, hutOpts);
+    this._box(-7.5, -1.8, 2.4, 2.4, LOW, acOpts);
+
+    // --- centro (auto-simétrico): base del tanque de agua + flancos bajos
+    this._box(0, 0, 2, 2, HIGH, { ...hutOpts, mirror: false, top: 0x3a3f46 });
+    this._box(-4.5, 0.8, 1, 2.4, LOW, acOpts);
+
+    this._decorAzoteas();
+  }
+
+  // Ambiente nocturno de Azoteas: TODO decorativo (cero colisión) — skyline
+  // con ventanas encendidas, tanque de agua central, antenas con luz roja,
+  // claraboyas con brillo, neones de equipo y luna.
+  _decorAzoteas() {
+    const { HIGH } = BLOCK;
+    // --- calle abajo y skyline alrededor (edificios con ventanas emisivas)
+    const street = new THREE.Mesh(
+      new THREE.PlaneGeometry(340, 340),
+      new THREE.MeshBasicMaterial({ color: 0x0a0c12 })
+    );
+    street.rotation.x = -Math.PI / 2;
+    street.position.y = -8;
+    this.mapGroup.add(street);
+
+    const bldgs = [
+      [-32, -12, 9, 20], [-36, 8, 11, 14], [-29, 24, 8, 10],
+      [32, 12, 9, 22], [35, -9, 10, 13], [29, -25, 8, 16],
+      [-12, -37, 10, 12], [8, -39, 12, 18], [14, 37, 10, 11],
+      [-8, 39, 11, 20], [24, 33, 8, 9], [-24, -33, 9, 8],
+    ];
+    for (const [x, z, w, h] of bldgs) {
+      const b = new THREE.Mesh(
+        new THREE.BoxGeometry(w, h, w * 0.85),
+        new THREE.MeshBasicMaterial({
+          map: this._tex('windows', Math.max(1, Math.round(w / 6)), Math.max(1, Math.round(h / 12))),
+        })
+      );
+      b.position.set(x, h / 2 - 8, z);
+      this.mapGroup.add(b);
+    }
+
+    // --- tanque de agua sobre el bloque central (landmark)
+    const tankMat = new THREE.MeshLambertMaterial({ color: 0x4c525c });
+    const tank = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 0.95, 1.5, 10), tankMat);
+    tank.position.set(0, HIGH + 0.75, 0);
+    tank.castShadow = true;
+    this.mapGroup.add(tank);
+    const cap = new THREE.Mesh(new THREE.ConeGeometry(1.05, 0.55, 10), tankMat);
+    cap.position.set(0, HIGH + 1.75, 0);
+    this.mapGroup.add(cap);
+    const beacon = new THREE.Mesh(
+      new THREE.SphereGeometry(0.09, 8, 6),
+      new THREE.MeshBasicMaterial({ color: 0xff4444 })
+    );
+    beacon.position.set(0, HIGH + 2.12, 0);
+    this.mapGroup.add(beacon);
+
+    // --- antenas con luz roja (sobre casetas de elevador y perímetro)
+    const poleMat = new THREE.MeshLambertMaterial({ color: 0x3a3f46 });
+    const redMat = new THREE.MeshBasicMaterial({ color: 0xff5544 });
+    for (const [ax, az, base] of [
+      [-13.5, -10.5, HIGH], [13.5, 10.5, HIGH],
+      [-this.fx - 0.4, -14, HIGH], [this.fx + 0.4, 14, HIGH],
+      [2.6, -20.9, HIGH], [-2.6, 20.9, HIGH],
+    ]) {
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 2.4, 5), poleMat);
+      pole.position.set(ax, base + 1.2, az);
+      this.mapGroup.add(pole);
+      for (const [by, bw] of [[0.7, 0.7], [1.3, 0.45]]) {
+        const bar = new THREE.Mesh(new THREE.BoxGeometry(bw, 0.035, 0.035), poleMat);
+        bar.position.set(ax, base + by, az);
+        this.mapGroup.add(bar);
+      }
+      const light = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), redMat);
+      light.position.set(ax, base + 2.45, az);
+      this.mapGroup.add(light);
+    }
+
+    // --- brillo de las claraboyas (vidrio iluminado desde adentro)
+    for (const [gx, gz] of [[7.5, -15], [-7.5, 15]]) {
+      const glow = new THREE.Mesh(
+        new THREE.PlaneGeometry(2.7, 2.7),
+        new THREE.MeshBasicMaterial({ color: 0x9fc4ff, transparent: true, opacity: 0.32 })
+      );
+      glow.rotation.x = -Math.PI / 2;
+      glow.position.set(gx, BLOCK.LOW + 0.012, gz);
+      this.mapGroup.add(glow);
+    }
+
+    // --- neón de equipo en la caseta de spawn (mirando al campo)
+    for (const [color, z, ry] of [[0xd94f3f, -20.9 + 0.58, 0], [0x4f8de0, 20.9 - 0.58, Math.PI]]) {
+      const neon = new THREE.Mesh(
+        new THREE.PlaneGeometry(4.6, 0.16),
+        new THREE.MeshBasicMaterial({ color })
+      );
+      neon.position.set(0, 2.5, z);
+      neon.rotation.y = ry;
+      this.mapGroup.add(neon);
+    }
+
+    // --- luna
+    const moon = new THREE.Mesh(
+      new THREE.SphereGeometry(1.7, 12, 10),
+      new THREE.MeshBasicMaterial({ color: 0xf2ecd8 })
+    );
+    moon.position.set(30, 34, -52);
+    this.mapGroup.add(moon);
+  }
+
   _buildSpawns() {
     // fortaleza: spawns FIJOS en ±23.4 (el server los espeja) con la muralla
     // más atrás; otros mapas, pegados al muro como siempre
-    const z = this.layout === 'fortaleza' ? 23.4 : this.fz - 1.6;
+    const z = this.layout === 'fortaleza' || this.layout === 'azoteas' ? 23.4 : this.fz - 1.6;
     for (let i = 0; i < 4; i++) {
       const x = -3.6 + i * 2.4;
       // convención: facing = (-sin yaw, -cos yaw) → yaw π mira a +z, yaw 0 a -z

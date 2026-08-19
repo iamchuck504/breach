@@ -202,6 +202,18 @@ input.onLockedMouseUp = () => { vDrag = null; };
 document.getElementById('btn-bots').addEventListener('click', () => startBots());
 document.getElementById('btn-practice').addEventListener('click', () => startPractice());
 document.getElementById('btn-online').addEventListener('click', () => startOnline());
+
+// selector de mapa (VS Bots y Práctica; online lo fija el server: Fortaleza)
+const btnMap = document.getElementById('btn-map');
+const MAP_LABELS = { fortaleza: 'FORTALEZA', azoteas: 'AZOTEAS' };
+G.mapChoice = localStorage.getItem('breach.map') === 'azoteas' ? 'azoteas' : 'fortaleza';
+function updateMapBtn() { btnMap.lastChild.textContent = ' Mapa: ' + MAP_LABELS[G.mapChoice]; }
+btnMap.addEventListener('click', () => {
+  G.mapChoice = G.mapChoice === 'fortaleza' ? 'azoteas' : 'fortaleza';
+  localStorage.setItem('breach.map', G.mapChoice);
+  updateMapBtn();
+});
+updateMapBtn();
 btnResume.addEventListener('click', () => closeMenu());
 document.getElementById('btn-pause').addEventListener('click', () => openMenu());
 
@@ -683,7 +695,7 @@ function startBots() {
   startSeq++;
   teardown();
   G.name = saveName();
-  world.setLayout('fortaleza'); // mapa grande también para el 4v4 vs bots
+  world.setLayout(G.mapChoice); // mapa elegido en el menú
   G.mode = 'bots';
   spawnLocal('red', world.spawns.red[0]);
   G.selfHp = TUNING.combat.hp;
@@ -738,7 +750,7 @@ function startPractice() {
   startSeq++;
   teardown();
   G.name = saveName();
-  world.setLayout('fortaleza'); // el mapa grande, para explorarlo con dummies
+  world.setLayout(G.mapChoice); // mapa elegido en el menú
   G.mode = 'practice';
   spawnLocal('red', world.spawns.red[1]);
   G.dummies = new Dummies(scene);
@@ -1153,6 +1165,7 @@ window.BREACH = G;
 window.BREACH_INPUT = input;
 window.BREACH_CAM = camera;
 window.BREACH_AUDIO = audio;
+window.BREACH_WORLD = world;
 window.THREE = THREE;
 
 function angDiff(a, b) {
