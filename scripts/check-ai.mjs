@@ -29,7 +29,7 @@ await page.waitForTimeout(1200);
 
 let flips = 0, covers = 0, minDistAcc = 0, samples = 0;
 let goalDistAcc = 0, goalSamples = 0, spanAcc = 0, spanSamples = 0;
-let center = 0, positions = 0;
+let center = 0, positions = 0, coverSafeN = 0, coverUnsafeN = 0;
 const coverSeen = new Set();
 const rolesSeen = new Set(), zonesSeen = new Set();
 for (let i = 0; i < DURATION * 2; i++) {
@@ -42,10 +42,32 @@ for (let i = 0; i < DURATION * 2; i++) {
     const roles = [], zones = [];
     const fx = window.BREACH_WORLD?.fx ?? 21;
     const fz = window.BREACH_WORLD?.fz ?? 26.6;
+    // covers SEGUROS de verdad: escondido (hide/peek) con la línea de tiro
+    // del enemigo más cercano bloqueada desde su postura real
+    let coverSafe = 0, coverUnsafe = 0;
+    const T = window.THREE, W = window.BREACH_WORLD;
+    const _o = new T.Vector3(), _d = new T.Vector3();
     for (const b of bots) {
       if (!b.alive) continue;
       if (b.flip) flip++;
       if (b.state === 'cover') inCover.push(b.id);
+      // solo la fase 'hide': el peek se asoma a disparar A PROPÓSITO
+      if (b.state === 'cover' && b.coverPhase === 'hide' && W) {
+        let ne = null, nd = Infinity;
+        for (const o of bots) {
+          if (!o.alive || o.team === b.team) continue;
+          const d = Math.hypot(o.pos.x - b.pos.x, o.pos.z - b.pos.z);
+          if (d < nd) { nd = d; ne = o; }
+        }
+        if (ne && nd < 28) {
+          const eye = b.cover?.low ? 0.8 : 1.2;
+          _o.set(b.pos.x, eye, b.pos.z);
+          _d.set(ne.pos.x - b.pos.x, 0.1, ne.pos.z - b.pos.z);
+          const len = _d.length();
+          _d.normalize();
+          if (W.raycast(_o, _d, len) !== null) coverSafe++; else coverUnsafe++;
+        }
+      }
       roles.push(b.role);
       center += Math.abs(b.pos.x) < fx * 0.3 ? 1 : 0;
       positions++;
@@ -68,7 +90,7 @@ for (let i = 0; i < DURATION * 2; i++) {
       if (xs.length > 1) span += Math.max(...xs) - Math.min(...xs);
     }
     return {
-      flip, inCover, roles, zones, center, positions, fx,
+      flip, inCover, roles, zones, center, positions, fx, coverSafe, coverUnsafe,
       minD: isFinite(minD) ? +minD.toFixed(2) : null,
       minGoalD: isFinite(minGoalD) ? +minGoalD.toFixed(2) : null,
       span: span / 2,
@@ -79,6 +101,7 @@ for (let i = 0; i < DURATION * 2; i++) {
   for (const role of s.roles) rolesSeen.add(role);
   for (const zone of s.zones) zonesSeen.add(zone);
   center += s.center; positions += s.positions;
+  coverSafeN += s.coverSafe; coverUnsafeN += s.coverUnsafe;
   if (s.minD !== null) { minDistAcc += s.minD; samples++; }
   if (s.minGoalD !== null) { goalDistAcc += s.minGoalD; goalSamples++; }
   spanAcc += s.span / s.fx; spanSamples++;
@@ -98,6 +121,7 @@ console.log('AI-CHECK:', JSON.stringify({
   concentracionCentro: centerRatio,
   rolesObservados: [...rolesSeen],
   zonasVisitadas: zonesSeen.size,
+  coverSeguro: coverSafeN, coverExpuesto: coverUnsafeN,
   pageErrors,
 }));
 
@@ -108,10 +132,15 @@ clearClip();
 // asertos anti-regresión (el cover es situacional: no se exige).
 // Nota: animación y combate conservan variación, por lo que los números cambian
 // entre corridas; los umbrales validan la capa táctica, no un guion exacto.
+// cover seguro: con muestra suficiente, ≥75% de los escondites deben romper
+// de verdad la línea de tiro del enemigo más cercano
+const coverOk = (coverSafeN + coverUnsafeN) < 5 ||
+  coverSafeN / (coverSafeN + coverUnsafeN) >= 0.75;
 const ok = pageErrors === 0 && avgMin > 2.4 && avgGoalMin > 2.4 &&
-  avgSpanRatio > 0.24 && centerRatio < 0.72 && rolesSeen.size >= 4 && zonesSeen.size >= 8;
+  avgSpanRatio > 0.24 && centerRatio < 0.72 && rolesSeen.size >= 4 &&
+  zonesSeen.size >= 8 && coverOk;
 console.log(ok ? 'AI OK' : 'AI FALLO ' + JSON.stringify({
   avgMin, avgGoalMin, avgSpanRatio, centerRatio, roles: rolesSeen.size,
-  zones: zonesSeen.size, pageErrors,
+  zones: zonesSeen.size, coverSafeN, coverUnsafeN, pageErrors,
 }));
 process.exit(ok ? 0 : 1);

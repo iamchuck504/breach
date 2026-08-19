@@ -86,6 +86,8 @@ class Bot {
     this.laneBias = this.laneBias ?? (this.profile.flank * 2 - 1);
     this.coverCd = 0;  // enfriamiento entre visitas a cobertura
     this.targetId = null; this.reactT = 0; // reacción al adquirir blanco
+    this.lastThreat = null;  // {x,z,age}: el último que me pegó (aunque no lo vea)
+    this.coverThreat = null; // amenaza contra la que se eligió el cover actual
     this.role = this.role ?? 'advance';
     this.roleT = 0; this.decisionT = 0; this.decisionSerial = 0;
     this.tacticalGoal = null;
@@ -163,6 +165,7 @@ class Bot {
       return;
     }
     this.lastDamage += dt; this.recentHit += dt;
+    if (this.lastThreat && (this.lastThreat.age += dt) > 4) this.lastThreat = null;
     this.protT = Math.max(0, this.protT - dt);
     this.swapCd = Math.max(0, this.swapCd - dt);
     this.swapAnim = Math.max(0, this.swapAnim - dt);
@@ -196,17 +199,23 @@ class Bot {
     this.reactT = Math.max(0, (this.reactT ?? 0) - dt);
 
     // ---- decidir estado ----
-    // La retirada ahora considera fuego reciente y balance local, no solo una
-    // cifra extrema de vida. Así un bot aislado puede romper contacto antes de
-    // morir, mientras uno apoyado conserva la presión.
+    // La retirada considera fuego reciente y balance local, no solo una cifra
+    // extrema de vida. La amenaza de referencia incluye al ÚLTIMO TIRADOR
+    // aunque no esté en línea de visión (antes huía "del visible más
+    // cercano", que podía no ser quien le pegaba).
     const pressure = enemy ? match.localPressure(this, 11) : 0;
+    const ghost = this.lastThreat && this.lastThreat.age < 3 ? this.lastThreat : null;
+    const threatRef = enemy ?? ghost;
     const wantsSafety = this.hp < 24 ||
       (this.hp < 48 && (this.recentHit < 2.2 || pressure > 0));
-    const spot = this.state !== 'cover' && this.coverCd <= 0 && wantsSafety && enemy
-      ? match.findCoverSpot(this, enemy, { retreat: true }) : null;
+    const spot = this.state !== 'cover' && this.coverCd <= 0 && wantsSafety && threatRef
+      ? match.findCoverSpot(this, threatRef, { retreat: true, threats: match.threatsFor(this, threatRef) })
+      : null;
     if (spot) {
       this.cover = spot; this.state = 'cover';
       this.coverPhase = 'go'; this.coverT = 0; this.coverPhaseT = 0;
+      this.coverThreat = { x: threatRef.x, z: threatRef.z };
+      this.coverCheckT = 0.6;
       match.releaseTacticalClaim(this.id);
       match.coverClaims.set(this.id, spot); // reservar: nadie más a este spot
     } else if (this.state === 'cover') {
@@ -285,15 +294,74 @@ class Bot {
       if (this.coverPhase === 'go') {
         const dx = c.x - this.pos.x, dz = c.z - this.pos.z;
         const d = Math.hypot(dx, dz);
-        if (d < 0.5) { this.coverPhase = 'hide'; this.coverPhaseT = 0; }
-        else { mx = dx / d; mz = dz / d; this._face(mx, mz, dt); }
+        // revalidar EN RUTA cada 0.6s: si el spot dejó de romper la línea de
+        // tiro (la amenaza se movió) o un compañero lo reclamó, re-buscar en
+        // vez de seguir corriendo a una posición que ya no protege
+        this.coverCheckT = (this.coverCheckT ?? 0.6) - dt;
+        if (this.coverCheckT <= 0 && d > 0.6) {
+          this.coverCheckT = 0.6;
+          const threats = match.threatsFor(this, enemy ?? this.coverThreat);
+          if (threats.length && !match.coverStillSafe(this, c, threats)) {
+            this.decisionSerial++;
+            const again = match.findCoverSpot(this, threats[0], { retreat: true, threats });
+            if (again) {
+              this.cover = again;
+              match.coverClaims.set(this.id, again);
+            } else {
+              this.state = 'advance'; this.cover = null;
+              match.coverClaims.delete(this.id);
+              this.coverCd = 2; this.decisionT = 0;
+            }
+          }
+        }
+        if (d < 0.5) {
+          // "cerca del cover" ≠ "protegido": solo agacharse si la posición
+          // REALMENTE bloquea a la amenaza; si no, re-buscar de inmediato
+          const threats = match.threatsFor(this, enemy ?? this.coverThreat);
+          if (!threats.length || match.coverStillSafe(this, c, threats)) {
+            this.coverPhase = 'hide'; this.coverPhaseT = 0;
+          } else {
+            this.decisionSerial++;
+            const again = match.findCoverSpot(this, threats[0], { retreat: true, threats });
+            if (again) { this.cover = again; match.coverClaims.set(this.id, again); }
+            else {
+              this.state = 'advance'; this.cover = null;
+              match.coverClaims.delete(this.id);
+              this.coverCd = 2; this.decisionT = 0;
+            }
+          }
+        } else { mx = dx / d; mz = dz / d; this._face(mx, mz, dt); }
       } else if (this.coverPhase === 'hide') {
         // agazapado tras el bloque, regenerando
         animOverride = c.low ? 'cover_low' : 'cover_high';
         if (enemy) this._face((enemy.x - this.pos.x), (enemy.z - this.pos.z), dt, 5);
+        // el escondite CADUCA si la amenaza flanquea: re-evaluar cada 0.6s y
+        // reubicarse (muchas veces al otro lado del MISMO bloque)
+        this.coverCheckT = (this.coverCheckT ?? 0.6) - dt;
+        if (this.coverCheckT <= 0) {
+          this.coverCheckT = 0.6;
+          const threats = match.threatsFor(this, enemy ?? this.coverThreat);
+          if (threats.length && !match.coverStillSafe(this, c, threats)) {
+            this.decisionSerial++;
+            const again = match.findCoverSpot(this, threats[0], { retreat: true, threats });
+            if (again) {
+              this.cover = again;
+              this.coverPhase = 'go'; this.coverPhaseT = 0;
+              this.coverThreat = { x: threats[0].x, z: threats[0].z };
+              match.coverClaims.set(this.id, again);
+            } else {
+              this.state = 'advance'; this.cover = null;
+              match.coverClaims.delete(this.id);
+              this.coverCd = 2; this.decisionT = 0;
+            }
+          } else if (threats[0]) {
+            this.coverThreat = { x: threats[0].x, z: threats[0].z };
+          }
+        }
         // asomarse aunque el regen no haya llegado (35): así el ciclo
         // hide→peek→hide ocurre 2-3 veces por visita a cobertura
-        if (this.coverPhaseT > 1.0 + Math.random() * 0.7 && this.hp > 35) {
+        if (this.state === 'cover' && this.coverPhase === 'hide' &&
+            this.coverPhaseT > 1.0 + Math.random() * 0.7 && this.hp > 35) {
           this.coverPhase = 'peek'; this.coverPhaseT = 0;
           this.peekDir = Math.random() < 0.5 ? -1 : 1;
         }
@@ -363,9 +431,26 @@ class Bot {
         this.avoidSide = -(this.avoidSide || 1);
         this.strafeDir *= -1;
         if (this.state === 'cover') {
-          this.state = 'advance'; this.cover = null;
-          match.coverClaims.delete(this.id);
-          this.decisionT = 0;
+          // atascado camino al cover: RECALCULAR la retirada con otro spot
+          // (serial nuevo ⇒ candidato distinto), no rendirse contra la pared
+          if (this.coverPhase === 'go') {
+            this.decisionSerial++;
+            const threats = match.threatsFor(this, this.coverThreat);
+            const again = threats.length
+              ? match.findCoverSpot(this, threats[0], { retreat: true, threats }) : null;
+            if (again) {
+              this.cover = again;
+              match.coverClaims.set(this.id, again);
+            } else {
+              this.state = 'advance'; this.cover = null;
+              match.coverClaims.delete(this.id);
+              this.coverCd = 3; this.decisionT = 0;
+            }
+          } else {
+            this.state = 'advance'; this.cover = null;
+            match.coverClaims.delete(this.id);
+            this.decisionT = 0;
+          }
         }
         if (Math.random() < 0.5) this._jump();
       }
@@ -796,22 +881,71 @@ export class BotMatch {
 
   _third(x) { return x < -this.world.fx / 3 ? 0 : x > this.world.fx / 3 ? 2 : 1; }
 
+  // Amenazas REALES de una retirada: enemigos con línea de visión + el último
+  // tirador (fantasma, aunque no se vea). La primaria va primero.
+  threatsFor(bot, primary) {
+    const list = this.visibleEnemies(bot).slice(0, 3);
+    const lt = bot.lastThreat;
+    if (lt && lt.age < 3 &&
+        !list.some((e) => Math.hypot(e.x - lt.x, e.z - lt.z) < 3)) {
+      list.push({ x: lt.x, z: lt.z, ghost: true });
+    }
+    if (primary) {
+      const i = list.findIndex((e) => Math.hypot(e.x - primary.x, e.z - primary.z) < 0.5);
+      if (i > 0) list.unshift(list.splice(i, 1)[0]);
+      else if (i < 0) list.unshift({ x: primary.x, z: primary.z });
+    }
+    return list;
+  }
+
+  // ¿Este spot sigue siendo cobertura REAL contra estas amenazas?
+  // (lado correcto de la cara + línea de tiro de la primaria bloqueada
+  // desde la postura final + reserva no pisada por un compañero)
+  coverStillSafe(bot, c, threats) {
+    const t = threats[0];
+    if (!t) return true;
+    if (c.nx !== undefined && (t.x - c.x) * c.nx + (t.z - c.z) * c.nz > 0.2) return false;
+    const eye = c.low ? 0.8 : 1.2;
+    _v1.set(c.x, eye, c.z);
+    _v2.set(t.x - c.x, 0.1, t.z - c.z);
+    const len = _v2.length();
+    _v2.normalize();
+    if (this.world.raycast(_v1, _v2, Math.min(len, 25)) === null) return false;
+    for (const [cid, cl] of this.coverClaims) {
+      if (cid !== bot.id && Math.hypot(cl.x - c.x, cl.z - c.z) < 1.4) return false;
+    }
+    return true;
+  }
+
   // Cobertura que BLOQUEA la línea de visión del enemigo. No elige simplemente
-  // la más cercana: pondera retirada, ruta, espacio personal y reservas.
-  findCoverSpot(bot, threat, { retreat = false } = {}) {
+  // la más cercana: puntúa cada candidato por amenazas restantes con tiro,
+  // seguridad de la RUTA (nada de correr contra un muro no saltable ni HACIA
+  // la amenaza), retirada, espacio personal y reservas.
+  findCoverSpot(bot, threat, { retreat = false, threats = null } = {}) {
+    const threatList = threats && threats.length ? threats : [{ x: threat.x, z: threat.z }];
+    const primary = threatList[0];
     let best = null, bestScore = -Infinity;
-    const currentThreatD = Math.hypot(threat.x - bot.pos.x, threat.z - bot.pos.z);
+    const currentThreatD = Math.hypot(primary.x - bot.pos.x, primary.z - bot.pos.z);
+    const toThreatX = (primary.x - bot.pos.x) / Math.max(0.01, currentThreatD);
+    const toThreatZ = (primary.z - bot.pos.z) / Math.max(0.01, currentThreatD);
     for (let fi = 0; fi < this.world.faces.length; fi++) {
       const f = this.world.faces[fi];
       if (f.h > 2.6) continue; // muros perimetrales no
       const mx = (f.a.x + f.b.x) / 2, mz = (f.a.z + f.b.z) / 2;
-      // la cara debe darle la ESPALDA al enemigo: sin este check el bot se
-      // "cubría" parado del lado del enemigo, de frente a él contra la pared
-      if ((threat.x - mx) * f.n.x + (threat.z - mz) * f.n.z > -0.2) continue;
+      // la cara debe darle la ESPALDA a la amenaza primaria: sin este check
+      // el bot se "cubría" parado del lado del enemigo, de frente a él
+      if ((primary.x - mx) * f.n.x + (primary.z - mz) * f.n.z > -0.2) continue;
       const sx = mx + f.n.x * 0.7, sz = mz + f.n.z * 0.7;
       const d = Math.hypot(sx - bot.pos.x, sz - bot.pos.z);
       if (d > 16 || d < 1.2) continue;
-      if (Math.hypot(threat.x - sx, threat.z - sz) < 5) continue; // no en la cara del enemigo
+      if (Math.hypot(primary.x - sx, primary.z - sz) < 5) continue; // no en su cara
+
+      // NUNCA escapar corriendo HACIA la amenaza: si la ruta apunta a menos
+      // de ~55° del tirador y él está en ese trayecto, el spot no sirve
+      const pdx = (sx - bot.pos.x) / Math.max(0.01, d);
+      const pdz = (sz - bot.pos.z) / Math.max(0.01, d);
+      if (retreat && pdx * toThreatX + pdz * toThreatZ > 0.55 && currentThreatD < d + 4) continue;
+
       // spot ya reservado por un compañero → buscar otro
       let taken = false;
       for (const [cid, c] of this.coverClaims) {
@@ -826,10 +960,24 @@ export class BotMatch {
       // LOW — con ojo fijo a 1.2 un bloque de 1.1 jamás calificaba
       const eye = f.h <= TUNING.cover.lowHeight ? 0.8 : 1.2;
       _v1.set(sx, eye, sz);
-      _v2.set(threat.x - sx, 0.1, threat.z - sz);
+      _v2.set(primary.x - sx, 0.1, primary.z - sz);
       const len = _v2.length();
       _v2.normalize();
       if (this.world.raycast(_v1, _v2, Math.min(len, 25)) === null) continue; // vista libre = mal
+
+      // amenazas SECUNDARIAS que aún tendrían tiro desde el spot: cada una
+      // resta — "cerca de un cover" no es "protegido por ese cover"
+      let exposure = 0;
+      for (let ti = 1; ti < threatList.length; ti++) {
+        const t2 = threatList[ti];
+        const sideOk = (t2.x - mx) * f.n.x + (t2.z - mz) * f.n.z < 0.2;
+        _v1.set(sx, eye, sz);
+        _v2.set(t2.x - sx, 0.1, t2.z - sz);
+        const l2 = _v2.length();
+        _v2.normalize();
+        const blocked = this.world.raycast(_v1, _v2, Math.min(l2, 25)) !== null;
+        if (!sideOk || !blocked) exposure += t2.ghost ? 1.0 : 1.6;
+      }
 
       let crowd = 0;
       for (const a of this._alliesOf(bot)) {
@@ -837,16 +985,24 @@ export class BotMatch {
         const ad = Math.hypot(a.pos.x - sx, a.pos.z - sz);
         if (ad < 5) crowd += (5 - ad) * 0.8;
       }
-      const newThreatD = Math.hypot(threat.x - sx, threat.z - sz);
-      let score = -d * 0.34 - crowd + (newThreatD - currentThreatD) * (retreat ? 0.18 : 0.06);
+      const newThreatD = Math.hypot(primary.x - sx, primary.z - sz);
+      let score = -d * 0.34 - crowd - exposure +
+        (newThreatD - currentThreatD) * (retreat ? 0.18 : 0.06);
       const faceLen = Math.hypot(f.b.x - f.a.x, f.b.z - f.a.z);
       score += Math.min(1.2, faceLen * 0.12);
+
+      // ruta: un bloqueo a altura de pecho (no saltable) al inicio del
+      // trayecto = correr contra la pared → descartar; lejano → castigo duro
       _v1.set(bot.pos.x, 1.45, bot.pos.z);
       _v2.set(sx - bot.pos.x, 0, sz - bot.pos.z);
       const pathLen = _v2.length();
       if (pathLen > 1.5) {
         _v2.normalize();
-        if (this.world.raycast(_v1, _v2, pathLen - 1.1) !== null) score -= 1.1;
+        const tHit = this.world.raycast(_v1, _v2, pathLen - 1.1);
+        if (tHit !== null) {
+          if (retreat && tHit < Math.min(4, pathLen * 0.55)) continue;
+          score -= 3;
+        }
       }
       score += hash01(bot.id + ':cover:' + bot.decisionSerial + ':' + fi) * 0.16;
       if (score <= bestScore) continue;
@@ -854,6 +1010,7 @@ export class BotMatch {
       best = {
         x: sx, z: sz,
         tx: (f.b.x - f.a.x) / tlen, tz: (f.b.z - f.a.z) / tlen,
+        nx: f.n.x, nz: f.n.z,
         low: f.h <= TUNING.cover.lowHeight,
       };
       bestScore = score;
@@ -906,6 +1063,12 @@ export class BotMatch {
     b.hp -= dmg;
     b.lastDamage = 0;
     b.recentHit = 0;
+    // memoria del tirador: la retirada debe protegerse de QUIEN le pega,
+    // esté o no en línea de visión en ese momento
+    const att = from === 'player'
+      ? (() => { const p = this.cb.player(); return p.alive ? { x: p.x, z: p.z } : null; })()
+      : (() => { const ab = this.bots.find((x) => x.id === from); return ab?.alive ? { x: ab.pos.x, z: ab.pos.z } : null; })();
+    if (att) b.lastThreat = { x: att.x, z: att.z, age: 0 };
     if (!silent) this.cb.effects.blood(_v3.set(b.pos.x, b.y + 1, b.pos.z), TEAM_HEX[b.team]);
     if (b.hp <= 0) {
       b.alive = false;

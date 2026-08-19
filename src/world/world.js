@@ -659,13 +659,15 @@ export class World {
   }
 
   // Caja física + visual. mirror=true agrega la copia rotada 180° (-x,-z).
-  _box(x, z, w, d, h, { mirror = true, color = 0x9a958c, top = 0xaeaaa1, cover = true } = {}) {
+  _box(x, z, w, d, h, {
+    mirror = true, color = 0x9a958c, top = 0xaeaaa1, cover = true, visual = true,
+  } = {}) {
     const place = (px, pz) => {
       // variación sutil de tono por caja: rompe la monotonía sin romper la paleta
       const jit = 0.95 + Math.random() * 0.1;
       const c = new THREE.Color(color).multiplyScalar(jit).getHex();
       const t = new THREE.Color(top).multiplyScalar(jit).getHex();
-      this._batchBox(px, pz, w, d, h, c, t);
+      if (visual) this._batchBox(px, pz, w, d, h, c, t);
       const minx = px - w / 2, maxx = px + w / 2, minz = pz - d / 2, maxz = pz + d / 2;
       this.colliders.push({ minx, minz, maxx, maxz, h });
       if (cover) {
@@ -1302,11 +1304,22 @@ export class World {
 
     // --- ruta técnica oeste: giros cerrados y posiciones de escopeta
     this._box(-20.25, -15.75, 2.8, 2.8, HIGH, hutOpts);    // elevador + tanque landmark
-    this._box(-25, -6.8, 2.4, 6.2, MID, hutOpts);          // pantalla técnica / giro CQC
+    this._box(-25, -6.8, 2.4, 6.2, MID, hutOpts);          // bases simétricas: grúa / generador
+    // Núcleo alto idéntico en ambas instalaciones. La silueta superior cambia,
+    // pero colisión, cover y rutas conservan simetría rotacional exacta.
+    this._box(-25, -6.8, 1.7, 1.7, HIGH, { ...hutOpts, visual: false });
+    this._azoteasLandmarks = {
+      crane: { x: -25, z: -6.8 }, generator: { x: 25, z: 6.8 },
+    };
 
     // --- aproximación central: una estación grande y un único bounce final
     this._box(-2, -15.6, 5.5, 2.5, LOW, acOpts);           // estación HVAC central
-    this._box(-4, -9.5, 3.6, 1.4, LOW, acOpts);            // último apoyo antes del pad
+    // El panel solar reemplaza este cover, incluida su copia a 180°. Solo
+    // cambia la lectura visual: huella, altura, caras y balance son los mismos.
+    this._box(-4, -9.5, 3.6, 1.4, LOW, { ...acOpts, visual: false });
+    this._solarCoverSpots = [
+      { x: -4, z: -9.5, ry: 0 }, { x: 4, z: 9.5, ry: Math.PI },
+    ];
 
     // --- ruta rápida este: corredor de roadie run con dos cortes de visión
     this._box(18, -14, 1.1, 5.2, HIGH, hutOpts);           // cuarto técnico / duelo CQC
@@ -1473,11 +1486,213 @@ export class World {
     this._detailAzoteas(bldgs, moon.position);
   }
 
+  // Landmarks de media cancha. Comparten huella física y núcleo HIGH a 180°;
+  // la grúa aporta altura en el oeste y el generador masa industrial al este.
+  // Todo lo que sobresale de los núcleos es decorativo y de geometría barata.
+  _addAzoteasLandmarks() {
+    const spots = this._azoteasLandmarks;
+    if (!spots) return;
+    const steel = new THREE.MeshStandardMaterial({ color: 0x465967, metalness: 0.72, roughness: 0.5 });
+    const dark = new THREE.MeshStandardMaterial({ color: 0x1d2933, metalness: 0.78, roughness: 0.45 });
+    const casing = new THREE.MeshStandardMaterial({ color: 0x536b78, metalness: 0.62, roughness: 0.56 });
+    const cyan = new THREE.MeshBasicMaterial({ color: 0x54d9e4 });
+    const red = new THREE.MeshBasicMaterial({ color: 0xff5749 });
+    const beamAxis = new THREE.Vector3(0, 0, 1);
+    const boxBatches = new Map();
+
+    const addBox = (parent, w, h, d, x, y, z, mat, cast = true) => {
+      let batches = boxBatches.get(parent);
+      if (!batches) { batches = new Map(); boxBatches.set(parent, batches); }
+      const key = `${mat.uuid}:${cast ? 1 : 0}`;
+      let batch = batches.get(key);
+      if (!batch) { batch = { mat, cast, matrices: [] }; batches.set(key, batch); }
+      batch.matrices.push(new THREE.Matrix4().compose(
+        new THREE.Vector3(x, y, z), new THREE.Quaternion(), new THREE.Vector3(w, h, d)));
+    };
+    const addBeam = (parent, a, b, width, mat) => {
+      const delta = b.clone().sub(a);
+      const len = delta.length();
+      const mid = a.clone().add(b).multiplyScalar(0.5);
+      const rot = new THREE.Quaternion().setFromUnitVectors(beamAxis, delta.normalize());
+      let batches = boxBatches.get(parent);
+      if (!batches) { batches = new Map(); boxBatches.set(parent, batches); }
+      const key = `${mat.uuid}:1`;
+      let batch = batches.get(key);
+      if (!batch) { batch = { mat, cast: true, matrices: [] }; batches.set(key, batch); }
+      batch.matrices.push(new THREE.Matrix4().compose(mid, rot, new THREE.Vector3(width, width, len)));
+    };
+    const addBeacon = (parent, x, y, z) => {
+      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 6), red);
+      lamp.position.set(x, y, z);
+      parent.add(lamp);
+      const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: this._tex('glow'), color: 0xff5949, transparent: true,
+        opacity: 0.48, depthWrite: false, fog: false,
+      }));
+      halo.position.copy(lamp.position);
+      halo.scale.set(0.85, 0.85, 1);
+      parent.add(halo);
+    };
+    const addSteam = (parent, x, y, z) => {
+      for (let i = 0; i < 3; i++) {
+        const puff = new THREE.Sprite(new THREE.SpriteMaterial({
+          map: this._tex('glow'), color: 0xc7d6df, transparent: true,
+          opacity: 0.16 - i * 0.025, depthWrite: false,
+        }));
+        puff.position.set(x + i * 0.12, y + i * 0.42, z - i * 0.08);
+        const size = 0.65 + i * 0.35;
+        puff.scale.set(size, size, 1);
+        parent.add(puff);
+      }
+    };
+
+    // Grúa oeste: pedestal sólido hasta HIGH y celosía liviana por encima.
+    const crane = new THREE.Group();
+    crane.position.set(spots.crane.x, 0, spots.crane.z);
+    crane.rotation.y = Math.atan2(spots.crane.z, -spots.crane.x);
+    this.mapGroup.add(crane);
+    addBox(crane, 1.7, BLOCK.HIGH - BLOCK.MID, 1.7,
+      0, BLOCK.MID + (BLOCK.HIGH - BLOCK.MID) / 2, 0, casing);
+    addBox(crane, 2.05, 0.16, 2.05, 0, BLOCK.HIGH + 0.08, 0, dark);
+    const towerBottom = BLOCK.HIGH + 0.16, towerH = 5.0, towerTop = towerBottom + towerH;
+    for (const x of [-0.55, 0.55]) {
+      for (const z of [-0.55, 0.55]) {
+        addBox(crane, 0.13, towerH, 0.13, x, towerBottom + towerH / 2, z, steel);
+      }
+    }
+    for (let i = 0; i <= 4; i++) {
+      const y = towerBottom + i * (towerH / 4);
+      addBox(crane, 1.24, 0.1, 0.1, 0, y, -0.55, dark);
+      addBox(crane, 1.24, 0.1, 0.1, 0, y, 0.55, dark);
+      addBox(crane, 0.1, 0.1, 1.24, -0.55, y, 0, dark);
+      addBox(crane, 0.1, 0.1, 1.24, 0.55, y, 0, dark);
+    }
+    for (let i = 0; i < 4; i++) {
+      const y0 = towerBottom + i * (towerH / 4), y1 = y0 + towerH / 4;
+      const flip = i % 2 ? -1 : 1;
+      for (const z of [-0.56, 0.56]) {
+        addBeam(crane,
+          new THREE.Vector3(-0.5 * flip, y0 + 0.08, z),
+          new THREE.Vector3(0.5 * flip, y1 - 0.08, z), 0.075, steel);
+      }
+    }
+
+    // Pluma orientada hacia el mapa, pero termina antes del anillo central.
+    const boomLen = 13.5, boomY = towerTop - 0.12;
+    for (const z of [-0.34, 0.34]) {
+      addBox(crane, boomLen, 0.12, 0.12, boomLen / 2, boomY, z, steel);
+      addBox(crane, boomLen, 0.1, 0.1, boomLen / 2, boomY - 0.62, z, dark);
+      for (let i = 0; i < 6; i++) {
+        const x0 = i * boomLen / 6, x1 = (i + 1) * boomLen / 6;
+        const swap = i % 2 === 0;
+        addBeam(crane,
+          new THREE.Vector3(x0, swap ? boomY : boomY - 0.62, z),
+          new THREE.Vector3(x1, swap ? boomY - 0.62 : boomY, z), 0.065, steel);
+      }
+    }
+    addBox(crane, 3.4, 0.15, 0.7, -1.7, boomY - 0.08, 0, steel);
+    addBox(crane, 1.0, 0.7, 0.9, -3.15, boomY - 0.42, 0, dark);
+    const cable = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 2.1, 6), dark);
+    cable.position.set(10.8, boomY - 1.05, 0);
+    crane.add(cable);
+    addBox(crane, 0.34, 0.26, 0.34, 10.8, boomY - 2.16, 0, dark, false);
+    addBox(crane, 1.15, 0.08, 0.08, 0, BLOCK.MID + 0.18, 3.05, cyan, false);
+    addBeacon(crane, 0, towerTop + 0.16, 0);
+    addSteam(crane, -0.5, BLOCK.HIGH + 0.2, -0.45);
+
+    // Generador este: mismo núcleo físico; volumen horizontal y escape alto
+    // compensan la masa visual de la grúa sin copiar su silueta.
+    const generator = new THREE.Group();
+    generator.position.set(spots.generator.x, 0, spots.generator.z);
+    generator.rotation.y = crane.rotation.y + Math.PI;
+    this.mapGroup.add(generator);
+    addBox(generator, 1.7, BLOCK.HIGH - BLOCK.MID, 1.7,
+      0, BLOCK.MID + (BLOCK.HIGH - BLOCK.MID) / 2, 0, casing);
+    addBox(generator, 2.05, 0.14, 2.05, 0, BLOCK.HIGH + 0.07, 0, dark);
+    for (const z of [-2.05, 2.05]) {
+      addBox(generator, 1.75, 0.55, 1.25, 0, BLOCK.MID + 0.28, z, steel);
+      for (let i = -2; i <= 2; i++) {
+        addBox(generator, 0.06, 0.34, 1.27, i * 0.25,
+          BLOCK.MID + 0.28, z, dark, false);
+      }
+    }
+    addBox(generator, 0.09, 0.78, 1.2, -0.88, BLOCK.MID + 0.55, 0, dark, false);
+    addBox(generator, 0.09, 0.78, 1.2, 0.88, BLOCK.MID + 0.55, 0, dark, false);
+    const stack = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.2, 2.2, 8), dark);
+    stack.position.set(0.48, BLOCK.HIGH + 1.1, -0.35);
+    generator.add(stack);
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.27, 0.2, 0.12, 8), steel);
+    cap.position.set(0.48, BLOCK.HIGH + 2.2, -0.35);
+    generator.add(cap);
+    for (const z of [-2.72, 2.72]) {
+      addBox(generator, 1.15, 0.08, 0.08, 0, BLOCK.MID + 0.18, z, cyan, false);
+    }
+    addBeacon(generator, -0.48, BLOCK.HIGH + 0.22, 0.42);
+    addSteam(generator, 0.48, BLOCK.HIGH + 2.3, -0.35);
+
+    // Todas las vigas/cajas de cada material se suben como instancias: la
+    // celosía conserva su silueta con un puñado de draw calls.
+    for (const [parent, batches] of boxBatches) {
+      for (const { mat, cast, matrices } of batches.values()) {
+        const mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), mat, matrices.length);
+        matrices.forEach((matrix, i) => mesh.setMatrixAt(i, matrix));
+        mesh.instanceMatrix.needsUpdate = true;
+        mesh.castShadow = cast;
+        mesh.receiveShadow = true;
+        parent.add(mesh);
+      }
+    }
+  }
+
+  // El mismo par de cajas LOW conserva la física original, pero se lee como
+  // paneles técnicos. Cada grupo es la rotación 180° exacta del otro.
+  _addAzoteasSolarCovers() {
+    if (!this._solarCoverSpots) return;
+    const panelMat = new THREE.MeshStandardMaterial({
+      color: 0x173b55, emissive: 0x071b28, emissiveIntensity: 0.45,
+      metalness: 0.48, roughness: 0.32,
+    });
+    const frameMat = new THREE.MeshStandardMaterial({ color: 0x647785, metalness: 0.75, roughness: 0.4 });
+    const baseMat = new THREE.MeshStandardMaterial({ color: 0x263641, metalness: 0.65, roughness: 0.55 });
+    const lightMat = new THREE.MeshBasicMaterial({ color: 0x4ed8e4 });
+    for (const spot of this._solarCoverSpots) {
+      const group = new THREE.Group();
+      group.position.set(spot.x, 0, spot.z);
+      group.rotation.y = spot.ry;
+      this.mapGroup.add(group);
+      const base = new THREE.Mesh(new THREE.BoxGeometry(3.55, 0.34, 1.34), baseMat);
+      base.position.y = 0.17;
+      base.castShadow = true;
+      base.receiveShadow = true;
+      group.add(base);
+      for (const x of [-1.16, 0, 1.16]) {
+        const panel = new THREE.Mesh(new THREE.BoxGeometry(1.08, 0.07, 1.18), panelMat);
+        panel.position.set(x, 0.82, 0);
+        panel.rotation.x = -0.38;
+        panel.castShadow = true;
+        group.add(panel);
+        for (const px of [-0.42, 0.42]) {
+          const post = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.64, 0.06), frameMat);
+          post.position.set(x + px, 0.48, 0.27);
+          group.add(post);
+        }
+      }
+      for (const x of [-1.72, 1.72]) {
+        const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.09, 0.42), lightMat);
+        lamp.position.set(x, 0.42, -0.48);
+        group.add(lamp);
+      }
+    }
+  }
+
   // Capas urbanas de bajo coste: señalética, ventiladores, luces de borde y
   // siluetas. No participan en colisión ni cobertura.
   _detailAzoteas(bldgs, moonPos) {
     const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
     const p = new THREE.Vector3(), s = new THREE.Vector3();
+
+    this._addAzoteasLandmarks();
+    this._addAzoteasSolarCovers();
 
     // Helipuerto sobre plinto metálico octagonal. La elevación es real para
     // jugadores y bots (groundHeight), pero demasiado baja para dar ventaja.
@@ -1577,7 +1792,7 @@ export class World {
       [-9, -27.7], [-7.4, -27.7],
       [-28, -31.5], [-26.3, -31.5], [-24.6, -31.5],
       [-3.6, -15.6], [-2, -15.6], [-0.4, -15.6],
-      [-4, -9.5], [-9.8, -5.2], [-8.8, -5.2],
+      [-9.8, -5.2], [-8.8, -5.2],
     ];
     const seen = new Set(), acUnits = [];
     for (const [x, z] of acSeed) {
