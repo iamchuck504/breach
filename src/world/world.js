@@ -13,6 +13,15 @@ const FIELD_X = 15, FIELD_Z = 18; // semiancho / semilargo
 //   HIGH (3.0): inalcanzable incluso saltando; muros y estructuras
 // Ninguna pieza de mapa puede usar otra altura.
 export const BLOCK = { LOW: 1.1, MID: 1.9, HIGH: 3.0 };
+const HELIPAD_RADIUS = 7.2;
+const HELIPAD = {
+  height: 0.22,
+  radius: HELIPAD_RADIUS,
+  edge: HELIPAD_RADIUS * Math.cos(Math.PI / 8),
+  diagonal: HELIPAD_RADIUS * (Math.cos(Math.PI / 8) + Math.sin(Math.PI / 8)),
+  rampLength: 2.8,
+  rampHalfWidth: 2.25,
+};
 
 export class World {
   constructor(scene, layout = 'foundry') {
@@ -46,6 +55,7 @@ export class World {
     this.scene.add(this.mapGroup);
     this.colliders = []; // {minx,minz,maxx,maxz,h}
     this.faces = [];     // caras de cobertura {n:{x,z}, a:{x,z}, b:{x,z}, h}
+    this.surfaceZones = []; // superficies transitables que elevan el suelo sin actuar como cover
     this.spawns = { red: [], blue: [] };
     // La geometría jugable se acumula en CPU y se sube como solo DOS meshes:
     // uno para los lados y otro para las tapas. Antes, cada BoxGeometry tenía
@@ -60,7 +70,7 @@ export class World {
     this._batchTexIds = layout === 'azoteas' ? ['concrete', 'concreteTop'] : ['stone', 'stoneTop'];
     // cajas de munición por mapa: en azoteas van sobre el eje del helipuerto,
     // libres de cover (las ±7,0 por defecto chocaban con el anillo)
-    this.cratePos = layout === 'azoteas' ? [{ x: 0, z: -8.8 }, { x: 0, z: 8.8 }] : null;
+    this.cratePos = layout === 'azoteas' ? [{ x: 0, z: -10.1 }, { x: 0, z: 10.1 }] : null;
 
     this._buildFloor();
     if (layout === 'arena') this._buildArena();
@@ -1309,6 +1319,21 @@ export class World {
 
     // --- CENTRO: helipuerto DESPEJADO (regla de Chuck) — cero obstáculos ni
     // decoración dentro del pad; el cover vive en el anillo de media cancha
+    this.surfaceZones.push({ kind: 'helipad', ...HELIPAD });
+    this._helipadBarriers = [-1, 1].map((sign) => ({
+      x: sign * HELIPAD.edge, z: 0, w: 0.34, d: 4.8, h: LOW, sign,
+    }));
+    for (const b of this._helipadBarriers) {
+      const minx = b.x - b.w / 2, maxx = b.x + b.w / 2;
+      const minz = b.z - b.d / 2, maxz = b.z + b.d / 2;
+      this.colliders.push({ minx, minz, maxx, maxz, h: b.h });
+      this.faces.push(
+        { n: { x: 1, z: 0 }, a: { x: maxx, z: minz }, b: { x: maxx, z: maxz }, h: b.h },
+        { n: { x: -1, z: 0 }, a: { x: minx, z: minz }, b: { x: minx, z: maxz }, h: b.h },
+        { n: { x: 0, z: 1 }, a: { x: minx, z: maxz }, b: { x: maxx, z: maxz }, h: b.h },
+        { n: { x: 0, z: -1 }, a: { x: minx, z: minz }, b: { x: maxx, z: minz }, h: b.h },
+      );
+    }
 
     this._decorAzoteas();
   }
@@ -1428,6 +1453,107 @@ export class World {
     const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
     const p = new THREE.Vector3(), s = new THREE.Vector3();
 
+    // Helipuerto sobre plinto metálico octagonal. La elevación es real para
+    // jugadores y bots (groundHeight), pero demasiado baja para dar ventaja.
+    const deckSide = new THREE.MeshStandardMaterial({ color: 0x263541, metalness: 0.72, roughness: 0.48 });
+    const deckTop = new THREE.MeshStandardMaterial({ color: 0x566873, metalness: 0.58, roughness: 0.62 });
+    const deck = new THREE.Mesh(
+      new THREE.CylinderGeometry(HELIPAD.radius, HELIPAD.radius, HELIPAD.height, 8),
+      [deckSide, deckTop, deckSide]);
+    deck.position.y = HELIPAD.height / 2;
+    deck.rotation.y = Math.PI / 8;
+    deck.receiveShadow = true;
+    this.mapGroup.add(deck);
+
+    // Dos accesos anchos por el eje de los equipos. Los lados este/oeste
+    // alojan barreras de cover y siguen siendo rodeables por sus extremos.
+    const rampMat = new THREE.MeshStandardMaterial({ color: 0x435763, metalness: 0.66, roughness: 0.54 });
+    const rampWidth = HELIPAD.rampHalfWidth * 2;
+    const rampAngle = Math.atan2(HELIPAD.height, HELIPAD.rampLength);
+    for (const axis of ['z']) {
+      for (const sign of [-1, 1]) {
+        const ramp = new THREE.Mesh(
+          axis === 'z'
+            ? new THREE.BoxGeometry(rampWidth, 0.08, HELIPAD.rampLength)
+            : new THREE.BoxGeometry(HELIPAD.rampLength, 0.08, rampWidth),
+          rampMat);
+        if (axis === 'z') {
+          ramp.position.set(0, HELIPAD.height / 2, sign * (HELIPAD.edge + HELIPAD.rampLength / 2));
+          ramp.rotation.x = sign * rampAngle;
+        } else {
+          ramp.position.set(sign * (HELIPAD.edge + HELIPAD.rampLength / 2), HELIPAD.height / 2, 0);
+          ramp.rotation.z = -sign * rampAngle;
+        }
+        ramp.receiveShadow = true;
+        this.mapGroup.add(ramp);
+      }
+    }
+
+    // Barreras laterales de acero: el plinto ahora es cover real. El cuerpo
+    // nace sobre la cubierta y termina a LOW, con extremos abiertos al flank.
+    const barrierMat = new THREE.MeshStandardMaterial({
+      color: 0x526a78, metalness: 0.68, roughness: 0.52,
+    });
+    const barrierDark = new THREE.MeshStandardMaterial({
+      color: 0x263944, metalness: 0.78, roughness: 0.44,
+    });
+    for (const b of this._helipadBarriers) {
+      const bodyH = b.h - HELIPAD.height;
+      const body = new THREE.Mesh(new THREE.BoxGeometry(b.w, bodyH, b.d), barrierMat);
+      body.position.set(b.x, HELIPAD.height + bodyH / 2, b.z);
+      body.castShadow = true;
+      body.receiveShadow = true;
+      this.mapGroup.add(body);
+
+      for (const zOff of [-b.d / 2 + 0.18, b.d / 2 - 0.18]) {
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.48, bodyH + 0.14, 0.48), barrierDark);
+        post.position.set(b.x, HELIPAD.height + (bodyH + 0.14) / 2, zOff);
+        post.castShadow = true;
+        this.mapGroup.add(post);
+      }
+      const rail = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.085, 0.085, b.d - 0.35, 8), barrierDark);
+      rail.rotation.x = Math.PI / 2;
+      rail.position.set(b.x, b.h - 0.045, b.z);
+      rail.castShadow = true;
+      this.mapGroup.add(rail);
+
+      for (const faceSign of [-1, 1]) {
+        const warning = new THREE.Mesh(
+          new THREE.PlaneGeometry(2.8, 0.18),
+          new THREE.MeshBasicMaterial({ map: this._tex('hazard') }));
+        warning.position.set(b.x + faceSign * (b.w / 2 + 0.006), 0.7, b.z);
+        warning.rotation.y = faceSign * Math.PI / 2;
+        this.mapGroup.add(warning);
+      }
+    }
+
+    // Vigas del faldón y balizas cian: dan escala industrial desde cualquier
+    // carril y llenan el centro sin introducir obstáculos jugables.
+    const edgeLen = 2 * HELIPAD.radius * Math.sin(Math.PI / 8);
+    const apothem = HELIPAD.radius * Math.cos(Math.PI / 8);
+    const rim = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshLambertMaterial({ color: 0x18252e }), 8);
+    const deckLights = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(0.9, 0.075, 0.055),
+      new THREE.MeshBasicMaterial({ color: 0x55d5df }), 8);
+    for (let i = 0; i < 8; i++) {
+      const a = i * Math.PI / 4;
+      q.setFromEuler(e.set(0, a, 0));
+      m4.compose(
+        p.set(Math.sin(a) * apothem, HELIPAD.height * 0.5, Math.cos(a) * apothem),
+        q, s.set(edgeLen * 0.93, 0.12, 0.14));
+      rim.setMatrixAt(i, m4);
+      m4.compose(
+        p.set(Math.sin(a) * (apothem + 0.085), HELIPAD.height * 0.52,
+          Math.cos(a) * (apothem + 0.085)),
+        q, s.set(1, 1, 1));
+      deckLights.setMatrixAt(i, m4);
+    }
+    rim.castShadow = true;
+    this.mapGroup.add(rim, deckLights);
+
     // Helipuerto central DESPEJADO: solo la marca pintada, sin obstáculos ni
     // decoración encima (regla de Chuck). Escalado con el mapa.
     const roofMark = new THREE.Mesh(
@@ -1438,7 +1564,7 @@ export class World {
       })
     );
     roofMark.rotation.x = -Math.PI / 2;
-    roofMark.position.y = 0.024;
+    roofMark.position.y = HELIPAD.height + 0.012;
     this.mapGroup.add(roofMark);
 
     // Los equipos grandes llevan varios ventiladores: así se leen como bancos
@@ -1740,6 +1866,17 @@ export class World {
   // altura de los pies o debajo (permite pararse sobre coberturas).
   groundHeight(p, r, y) {
     let g = 0;
+    for (const zone of this.surfaceZones) {
+      if (zone.kind !== 'helipad') continue;
+      const ax = Math.abs(p.x), az = Math.abs(p.z);
+      const insideDeck = ax <= zone.edge && az <= zone.edge && ax + az <= zone.diagonal;
+      let h = insideDeck ? zone.height : 0;
+      // Rampas norte/sur: transición progresiva para jugadores y bots.
+      if (ax <= zone.rampHalfWidth && az > zone.edge && az <= zone.edge + zone.rampLength) {
+        h = Math.max(h, zone.height * (1 - (az - zone.edge) / zone.rampLength));
+      }
+      if (h > g) g = h;
+    }
     const m = r * 0.5;
     for (const c of this.colliders) {
       if (c.h > y + 0.25) continue; // demasiado alta para apoyarse
