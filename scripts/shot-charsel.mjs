@@ -8,7 +8,8 @@ import { clearClip } from './lib-clip.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
-const CHROME = 'C:\\Users\\iamch\\AppData\\Local\\ms-playwright\\chromium-1228\\chrome-win64\\chrome.exe';
+const CHROME = process.env.CHROME_PATH ||
+  'C:\\Users\\iamch\\AppData\\Local\\ms-playwright\\chromium-1228\\chrome-win64\\chrome.exe';
 
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
   env: { ...process.env, PORT: '8795' }, stdio: 'ignore',
@@ -19,6 +20,8 @@ const browser = await chromium.launch({ executablePath: CHROME, headless: true }
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 page.on('pageerror', (e) => console.log('PAGEERROR:', e.message));
 await page.goto('http://localhost:8795/?nolock=1', { waitUntil: 'networkidle' });
+await page.click('#btn-enter');
+await page.screenshot({ path: path.join(root, 'scripts', 'shot-main-menu.png') });
 
 // página de selección de personaje
 await page.evaluate(() => document.getElementById('btn-character').click());

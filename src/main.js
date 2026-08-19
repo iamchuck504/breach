@@ -126,14 +126,24 @@ loadBinds();
 const inName = document.getElementById('in-name');
 const inServer = document.getElementById('in-server');
 const netStatus = document.getElementById('net-status');
+const splash = document.getElementById('splash');
+const btnEnter = document.getElementById('btn-enter');
 inName.value = localStorage.getItem('breach.name') || 'CHUCK';
 const isSecure = location.protocol === 'https:';
 inServer.value = localStorage.getItem('breach.server') ||
   (isSecure ? '' : `ws://${location.hostname}:8787`);
 
-const mainCard = document.querySelector('#menu .menu-card');
+const mainCard = document.getElementById('main-card');
 const controlsCard = document.getElementById('controls-card');
 const btnResume = document.getElementById('btn-resume');
+
+function dismissSplash() { splash.classList.add('off'); }
+btnEnter.addEventListener('click', () => {
+  dismissSplash();
+  inName.focus();
+  inName.select();
+});
+btnEnter.focus();
 
 const menuIsOpen = () => !hud.el.menu.classList.contains('off');
 
@@ -141,6 +151,9 @@ function openMenu() {
   hud.showMenu(true);
   showControls(false);
   btnResume.style.display = G.mode ? 'flex' : 'none';
+  mainCard.classList.toggle('in-match', !!G.mode);
+  document.getElementById('menu-title').textContent = G.mode ? 'PAUSA' : 'JUGAR';
+  document.getElementById('menu-kicker').textContent = G.mode ? 'Partida actual' : 'Selecciona un modo';
   // NO soltamos el pointer lock: el menú se usa con el cursor virtual.
   // (Cada exit de lock es una oportunidad para el bug de ClipCursor de
   // Chromium/Windows que deja el cursor confinado.)
@@ -207,7 +220,7 @@ document.getElementById('btn-online').addEventListener('click', () => startOnlin
 const btnMap = document.getElementById('btn-map');
 const MAP_LABELS = { fortaleza: 'FORTALEZA', azoteas: 'AZOTEAS' };
 G.mapChoice = localStorage.getItem('breach.map') === 'azoteas' ? 'azoteas' : 'fortaleza';
-function updateMapBtn() { btnMap.lastChild.textContent = ' Mapa: ' + MAP_LABELS[G.mapChoice]; }
+function updateMapBtn() { document.getElementById('map-label').textContent = 'Mapa: ' + MAP_LABELS[G.mapChoice]; }
 btnMap.addEventListener('click', () => {
   G.mapChoice = G.mapChoice === 'fortaleza' ? 'azoteas' : 'fortaleza';
   localStorage.setItem('breach.map', G.mapChoice);
@@ -234,8 +247,8 @@ document.getElementById('btn-fullscreen').addEventListener('click', () => toggle
 document.getElementById('btn-fs').addEventListener('click', () => toggleFullscreen());
 document.addEventListener('fullscreenchange', () => {
   const on = !!document.fullscreenElement;
-  document.getElementById('btn-fullscreen').lastChild.textContent = on
-    ? ' Salir de pantalla completa' : ' Pantalla completa';
+  document.getElementById('fullscreen-label').textContent = on
+    ? 'Salir de pantalla completa' : 'Pantalla completa';
   // en fullscreen, capturar Esc (Keyboard Lock API): ni Esc suelta el pointer
   // lock → el bug de ClipCursor no tiene forma de dispararse jugando.
   // Registramos si fue CONCEDIDO: si falla, Esc mantiene el exit programático.
@@ -690,6 +703,7 @@ function damagePlayerLocal(dmg) {
 }
 
 function startBots() {
+  dismissSplash();
   audio.ensure();
   enterFullscreen();
   startSeq++;
@@ -750,6 +764,7 @@ function startBots() {
 }
 
 function startPractice() {
+  dismissSplash();
   audio.ensure();
   enterFullscreen();
   startSeq++;
@@ -770,6 +785,7 @@ function startPractice() {
 }
 
 async function startOnline() {
+  dismissSplash();
   audio.ensure();
   enterFullscreen();
   G.name = saveName();

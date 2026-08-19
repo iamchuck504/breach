@@ -21,6 +21,7 @@ try {
   browser = await chromium.launch({ executablePath: CHROME, headless: true });
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   await page.goto('http://localhost:8793/?nolock=1', { waitUntil: 'networkidle' });
+  await page.click('#btn-enter');
   await page.click('#btn-practice');
   await page.waitForTimeout(600);
 

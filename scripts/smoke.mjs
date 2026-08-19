@@ -32,6 +32,9 @@ try {
   await page.waitForTimeout(800);
   await page.screenshot({ path: path.join(root, 'scripts', 'shot-menu.png') });
 
+  // atravesar el splash antes de usar el menú principal
+  await page.click('#btn-enter');
+
   // entrar a práctica
   await page.click('#btn-practice');
   await page.waitForTimeout(1500);
