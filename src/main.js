@@ -1171,6 +1171,7 @@ window.BREACH_INPUT = input;
 window.BREACH_CAM = camera;
 window.BREACH_AUDIO = audio;
 window.BREACH_WORLD = world;
+window.BREACH_RIG = Rig; // para tests visuales de poses/animaciones
 window.THREE = THREE;
 
 function angDiff(a, b) {

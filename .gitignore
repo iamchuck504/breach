@@ -6,3 +6,4 @@ scripts/shot-*.png
 
 .vercel
 scripts/pose-*.png
+scripts/anim/

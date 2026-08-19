@@ -260,7 +260,9 @@ export function buildSMG(teamColor) {
   g.add(glowBox(0.04, 0.015, 0.015, teamColor, 0, 0.04, -0.242));
   g.userData.muzzle = anchor(g, 0, 0.025, -0.52);
   g.userData.grip = anchor(g, 0, -0.09, 0.06);
-  g.userData.forend = anchor(g, 0, -0.08, -0.16);
+  // mano izq. al frente del receptor (más cerca): con las poses adelantadas
+  // para librar la coraza Vanguard, en -0.16 el brazo no alcanzaba
+  g.userData.forend = anchor(g, 0, -0.08, -0.1);
   g.userData.mag = anchor(g, 0, -0.24, -0.03); // base del cargador (recarga)
   return g;
 }
@@ -419,7 +421,9 @@ export class Rig {
     this.gunMount = new THREE.Group();
     this.aimRig.add(this.gunMount);
     this.backMount = new THREE.Group();
-    this.backMount.position.set(-0.06, 0.3, 0.26);
+    // detrás de las placas dorsales (z 0.31); el EXPLORADOR lleva mochila
+    // (hasta z 0.40): su arma va aún más afuera para no incrustarse
+    this.backMount.position.set(-0.06, 0.3, variant === 2 ? 0.44 : 0.34);
     this.backMount.rotation.set(Math.PI / 2, 0, 0.4);
     this.torso.add(this.backMount);
     this.gunSMG = buildSMG(tc);
@@ -756,7 +760,7 @@ export class Rig {
         R(this.legR.hip, swing2 * 1.05, 0, 0); R(this.legR.knee, -(Math.max(0, -swing2) * 1.5 + 0.2), 0, 0);
         R(this.armL.shoulder, swing2 * 0.9 + 0.2, 0, -0.2); R(this.armL.elbow, 1.25, 0, 0);
         // arma baja al costado, una mano
-        M(0.16, -0.34, -0.1, -0.5, 0.05, 0);
+        M(0.19, -0.34, -0.22, -0.5, 0.05, 0);
         R(this.aimRig, 0, 0, 0);
         hipsY = 0.58 + bob * 0.06;
         break;
@@ -770,13 +774,15 @@ export class Rig {
         R(this.legR.hip, swing2 * 0.75 * m, 0, 0); R(this.legR.knee, -(Math.max(0, -swing2) * 1.1 + 0.1) * m, 0, 0);
         leftOnGun = true;
         if (p.firing) {
-          // blindfire de cadera: arma al frente SIN canteo, colineal al tiro
+          // blindfire de cadera: arma al frente SIN canteo, colineal al tiro.
+          // z -0.4: la coraza Vanguard llega a z-0.33 — más atrás, el receptor
+          // y las manos quedaban ENTERRADOS en el pecho
           damp = 18;
-          M(0.15, -0.1, -0.26, 0, 0, 0);
+          M(0.15, -0.08, -0.38, 0, 0, 0);
         } else {
           // low-ready diagonal (Gears): cruzada e inclinada, el cañón asoma
           // sobre el hombro izquierdo visto desde atrás
-          M(0.16, -0.21 + bob * 0.01 * m, -0.24, 0.3, 0.4, 0.05);
+          M(0.17, -0.2 + bob * 0.01 * m, -0.32, 0.3, 0.4, 0.05);
         }
         hipsY = 0.66 + bob * 0.045 * m;
         break;
@@ -789,7 +795,7 @@ export class Rig {
         R(this.legL.hip, 0.55, 0, 0); R(this.legL.knee, -1.0, 0, 0);
         R(this.legR.hip, 0.2, 0, 0); R(this.legR.knee, -0.5, 0, 0);
         leftOnGun = true;
-        M(0.15, -0.16, -0.22, 0, 0.15, 0);
+        M(0.16, -0.14, -0.34, 0, 0.15, 0);
         hipsY = 0.66;
         break;
       }
@@ -802,7 +808,7 @@ export class Rig {
         R(this.legL.hip, 1.25, 0, 0.15); R(this.legL.knee, -1.7, 0, 0);
         R(this.legR.hip, 1.05, 0, -0.15); R(this.legR.knee, -1.5, 0, 0);
         leftOnGun = true;
-        M(0.13, -0.12, -0.24, 0, 0, 0);
+        M(0.14, -0.1, -0.36, 0, 0, 0);
         set(this.aimRig.rotation, 'x', pitch); // apunta con la cámara en el aire
         set(this.aimRig.rotation, 'y', p.aimYawErr ?? 0);
         hipsY = 0.72;
@@ -815,7 +821,7 @@ export class Rig {
         R(this.legL.hip, 0.9, 0, 0); R(this.legL.knee, -1.4, 0, 0);
         R(this.legR.hip, 0.6, 0, 0); R(this.legR.knee, -1.2, 0, 0);
         R(this.armL.shoulder, 0.6, 0, -0.45); R(this.armL.elbow, 0.4, 0, 0);
-        M(0.12, -0.22, -0.16, -0.3, 0, 0);
+        M(0.12, -0.22, -0.28, -0.3, 0, 0);
         hipsY = 0.45;
         break;
       }
@@ -826,7 +832,7 @@ export class Rig {
         R(this.legL.hip, 1.2, 0, 0); R(this.legL.knee, -0.3, 0, 0);   // pierna extendida
         R(this.legR.hip, 0.55, 0, 0); R(this.legR.knee, -1.3, 0, 0);  // pierna doblada
         R(this.armL.shoulder, -0.6, 0, -0.5); R(this.armL.elbow, 0.3, 0, 0); // brazo atrás
-        M(0.12, -0.15, -0.2, 0.05, 0, 0);
+        M(0.12, -0.15, -0.32, 0.05, 0, 0);
         hipsY = 0.38;
         break;
       }
@@ -859,9 +865,9 @@ export class Rig {
         // (el pitch/yaw del tiro lo aplica el bloque post-switch del aimRig)
         if (p.firing) {
           damp = 16;
-          M(0.15, -0.1, -0.26, 0, 0, 0);
+          M(0.15, -0.08, -0.38, 0, 0, 0);
         } else {
-          M(0.07, -0.06, -0.2, 1.25, 0, 0.06);
+          M(0.1, -0.04, -0.32, 1.25, 0, 0.06);
         }
         break;
       }
@@ -873,7 +879,7 @@ export class Rig {
         R(this.legR.hip, 1.15, 0, 0); R(this.legR.knee, -1.65, 0, 0);
         // arma por encima del cover, mano izq. apoyada cerca del pecho
         R(this.armL.shoulder, 0.5, -0.5, -0.15); R(this.armL.elbow, 1.4, 0, 0);
-        M(0.04, 0.28, -0.18, 0, 0, 0);
+        M(0.06, 0.28, -0.32, 0, 0, 0);
         hipsY = 0.42;
         break;
       }
@@ -918,7 +924,7 @@ export class Rig {
       R(this.torso, -0.12, -0.15, -lean * 0.22);
       R(this.head, pitch * 0.25, 0, lean * 0.08);
       // arma al hombro derecho, a la altura de la mejilla (pronunciada)
-      M(0.1, 0.06, -0.28, 0, 0.05, 0);
+      M(0.11, 0.05, -0.38, 0, 0.05, 0);
       if (p.state === 'cover_low') hipsY = 0.56; // popover: se levanta y apunta
       if (lean) {
         // piernas plantadas hacia la pared, torso fuera de la esquina
@@ -960,7 +966,9 @@ export class Rig {
     // cambio de arma: el arma barre hacia el hombro/espalda y regresa
     // (el modelo se intercambia a mitad del gesto, en Weapons.update)
     if (p.swapping && p.state !== 'dead') {
-      M(0.15, 0.28, 0.05, 1.5, 0, 0.35);
+      // barrido POR FUERA, junto al hombro derecho: por el centro atravesaba
+      // los cascos Vanguard (mucho más grandes que el casco original)
+      M(0.33, 0.2, -0.16, 1.35, -0.3, 0.6);
       set(this.aimRig.rotation, 'x', 0);
       set(this.aimRig.rotation, 'y', 0); // sin guiño lateral heredado del latch de tiro
     }

@@ -339,7 +339,9 @@ try {
       if (b.y > 0.25) seen.jump = true;
       if (b.w === 'shotgun') seen.shotgun = true;
     }
-    if (seen.cover && seen.rush && seen.jump && seen.shotgun && samples >= 16) break;
+    // el drop también es condición de corte: sin esperarlo, la ventana podía
+    // cerrarse antes de la primera muerte (falso negativo aleatorio)
+    if (seen.cover && seen.rush && seen.jump && seen.shotgun && seen.drop && samples >= 16) break;
   }
   const minWalk = Math.min(...walked.map((w) => +w.toFixed(1)));
   console.log('AI:', JSON.stringify({ ...seen, minWalk, secs: samples / 2 }));
