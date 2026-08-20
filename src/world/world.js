@@ -70,23 +70,43 @@ export class World {
     // fz de fortaleza 26.6: bolsillo de spawn de 3.2m (spawns fijos en ±23.4)
     // — la cámara (dist 2.7) ya no choca con la muralla y no hace zoom forzado
     // azoteas ×1.5 (pedido de Chuck): 63×80 — spawns propios en ±35.1
-    const dims = { arena: [11, 13], fortaleza: [21, 26.6], azoteas: [31.5, 40], foundry: [FIELD_X, FIELD_Z] };
+    const dims = {
+      arena: [11, 13], fortaleza: [21, 26.6], azoteas: [31.5, 40],
+      calle: [17, 30], metro: [16, 26], prision: [22, 30], pueblo: [26, 34],
+      foundry: [FIELD_X, FIELD_Z],
+    };
     [this.fx, this.fz] = dims[layout] ?? dims.foundry;
-    // texturas del batch por mapa (piedra medieval vs concreto urbano)
-    this._batchTexIds = layout === 'azoteas' ? ['concrete', 'concreteTop'] : ['stone', 'stoneTop'];
+    // texturas del batch por mapa (piedra, concreto, azulejo o ladrillo)
+    this._batchTexIds = {
+      azoteas: ['concrete', 'concreteTop'],
+      calle: ['concrete', 'concreteTop'],
+      metro: ['tile', 'tileTop'],
+      prision: ['concrete', 'concreteTop'],
+      pueblo: ['brick', 'brickTop'],
+    }[layout] ?? ['stone', 'stoneTop'];
     // cajas de munición por mapa: en azoteas van sobre el eje del helipuerto,
     // libres de cover (las ±7,0 por defecto chocaban con el anillo)
-    this.cratePos = layout === 'azoteas' ? [{ x: 0, z: -12.1 }, { x: 0, z: 12.1 }] : null;
+    this.cratePos = {
+      azoteas: [{ x: 0, z: -12.1 }, { x: 0, z: 12.1 }],
+      calle: [{ x: -14, z: 0 }, { x: 14, z: 0 }],
+      metro: [{ x: -8, z: 0 }, { x: 8, z: 0 }],
+      prision: [{ x: -17.5, z: -2 }, { x: 17.5, z: 2 }],
+      pueblo: [{ x: 12, z: -20 }, { x: -12, z: 20 }],
+    }[layout] ?? null;
     // pedestal del arma ESPECIAL (sniper/bazooka alternando por ronda):
     // zona central de riesgo, equidistante de ambos spawns
     this.specialSpot = layout === 'fortaleza' ? { x: 2.8, z: 0 }
-      : layout === 'azoteas' ? { x: 0, z: 0 }
+      : ['azoteas', 'calle', 'metro', 'prision', 'pueblo'].includes(layout) ? { x: 0, z: 0 }
       : null;
 
     this._buildFloor();
     if (layout === 'arena') this._buildArena();
     else if (layout === 'fortaleza') this._buildFortaleza();
     else if (layout === 'azoteas') this._buildAzoteas();
+    else if (layout === 'calle') this._buildCalle();
+    else if (layout === 'metro') this._buildMetro();
+    else if (layout === 'prision') this._buildPrision();
+    else if (layout === 'pueblo') this._buildPueblo();
     else this._buildMap();
     this._flushBoxBatch();
     this._buildSpawns();
@@ -115,6 +135,11 @@ export class World {
       grass: this._grassCanvas(),              // mata de pasto (alphaTest)
       concrete: this._concreteCanvas(false),   // paneles de concreto (Azoteas)
       concreteTop: this._concreteCanvas(true),
+      asphalt: this._asphaltCanvas(),          // asfalto urbano (Calle)
+      tile: this._tileCanvas(false),           // azulejo de estación (Metro)
+      tileTop: this._tileCanvas(true),
+      brick: this._brickCanvas(false),         // ladrillo viejo (Pueblo)
+      brickTop: this._brickCanvas(true),
       roofFloor: this._roofFloorCanvas(),      // grava/brea de azotea
       windows: this._windowsCanvas(),          // fachadas nocturnas iluminadas
       roofMark: this._roofMarkCanvas(),        // marca técnica del centro
@@ -339,6 +364,89 @@ export class World {
     // pernos de encofrado
     g.fillStyle = 'rgba(50,46,40,0.5)';
     for (const x of [s * 0.25, s * 0.75]) for (const y of [s * 0.2, s * 0.55, s * 0.9]) g.fillRect(x - 2, y - 2, 5, 5);
+    return cv;
+  }
+
+  // Asfalto: agregado fino, grietas y un parche de recapeo — piso de Calle.
+  _asphaltCanvas() {
+    const s = 256;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = s;
+    const g = cv.getContext('2d');
+    g.fillStyle = '#57544f'; g.fillRect(0, 0, s, s);
+    for (let i = 0; i < 1100; i++) { // agregado
+      const l = 28 + Math.random() * 22;
+      g.fillStyle = `hsl(40, 3%, ${l}%)`;
+      g.fillRect(Math.random() * s, Math.random() * s, 2, 2);
+    }
+    g.strokeStyle = 'rgba(24,22,20,0.55)'; g.lineWidth = 2; // grietas
+    for (let i = 0; i < 4; i++) {
+      let x = Math.random() * s, y = Math.random() * s;
+      g.beginPath(); g.moveTo(x, y);
+      for (let k = 0; k < 5; k++) {
+        x += (Math.random() - 0.5) * 60; y += 14 + Math.random() * 26;
+        g.lineTo(x, y);
+      }
+      g.stroke();
+    }
+    g.fillStyle = 'rgba(30,29,27,0.5)'; // parche de recapeo
+    g.fillRect(s * 0.55, s * 0.6, 74, 52);
+    return cv;
+  }
+
+  // Azulejo de estación: retícula clara con lechada oscura y piezas
+  // manchadas/rotas — muros y andenes del Metro.
+  _tileCanvas(flat) {
+    const s = 256, t = flat ? 64 : 32, j = 3;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = s;
+    const g = cv.getContext('2d');
+    g.fillStyle = '#3f4448'; g.fillRect(0, 0, s, s); // lechada
+    for (let y = 0; y < s; y += t) {
+      for (let x = 0; x < s; x += t) {
+        const stained = Math.random() < 0.12;
+        const l = stained ? 42 + Math.random() * 10 : 66 + Math.random() * 8;
+        g.fillStyle = `hsl(${185 + Math.random() * 14}, ${stained ? 6 : 10}%, ${l}%)`;
+        g.fillRect(x + j, y + j, t - j * 2, t - j * 2);
+        // brillo cerámico superior (borde nítido, sin blur)
+        g.fillStyle = 'rgba(255,255,255,0.16)';
+        g.fillRect(x + j, y + j, t - j * 2, 3);
+        if (Math.random() < 0.05) { // pieza descascarada
+          g.fillStyle = '#33373a';
+          g.fillRect(x + j + 4, y + t / 2, t / 2, t / 3);
+        }
+      }
+    }
+    return cv;
+  }
+
+  // Ladrillo viejo: hiladas alternadas con mortero claro y piezas caídas —
+  // muros del Pueblo abandonado.
+  _brickCanvas(flat) {
+    const s = 256, bh = flat ? 42 : 30, bw = flat ? 84 : 62, j = 4;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = s;
+    const g = cv.getContext('2d');
+    g.fillStyle = '#7d746a'; g.fillRect(0, 0, s, s); // mortero
+    let row = 0;
+    for (let y = 0; y < s; y += bh, row++) {
+      const off = row % 2 ? bw / 2 : 0;
+      for (let x = -bw; x < s + bw; x += bw) {
+        const missing = Math.random() < 0.06;
+        if (missing) { g.fillStyle = '#5c554d'; }
+        else {
+          const l = 38 + Math.random() * 14;
+          g.fillStyle = `hsl(${16 + Math.random() * 10}, ${26 + Math.random() * 10}%, ${l}%)`;
+        }
+        g.fillRect(x + off + j, y + j, bw - j * 2, bh - j * 2);
+        if (!missing) { // luz superior + sombra inferior = relieve nítido
+          g.fillStyle = 'rgba(255,235,210,0.18)';
+          g.fillRect(x + off + j, y + j, bw - j * 2, 3);
+          g.fillStyle = 'rgba(30,20,14,0.28)';
+          g.fillRect(x + off + j, y + bh - j - 3, bw - j * 2, 3);
+        }
+      }
+    }
     return cv;
   }
 
@@ -607,6 +715,64 @@ export class World {
       ]);
       // Profundidad urbana: inicia fuera del combate y funde el skyline.
       this.scene.fog = new THREE.Fog(0x111a2a, 52, 128);
+    } else if (layout === 'calle') {
+      // Atardecer urbano: cielo violeta-naranja y luz baja de sodio.
+      this.hemi.color.setHex(0x8b96b8);
+      this.hemi.groundColor.setHex(0x5a4f49);
+      this.hemi.intensity = 1.52;
+      this.amb.color.setHex(0xffc490);
+      this.amb.intensity = 0.42;
+      this.sun.color.setHex(0xff9d5c);
+      this.sun.intensity = 2.05;
+      this.sun.position.set(-22, 14, 9);
+      this._setSky([
+        [0, '#2a2f4d'], [0.5, '#565a7d'], [0.8, '#a06a63'], [1, '#e08a4f'],
+      ]);
+      this.scene.fog = new THREE.Fog(0x3d4258, 48, 120);
+    } else if (layout === 'metro') {
+      // Subterráneo: sin cielo real (negro de túnel), luz artificial fría
+      // pareja con un acento verdoso de fluorescente.
+      this.hemi.color.setHex(0xbfd2d8);
+      this.hemi.groundColor.setHex(0x2b2f31);
+      this.hemi.intensity = 1.5;
+      this.amb.color.setHex(0xcfe6d8);
+      this.amb.intensity = 0.4;
+      this.sun.color.setHex(0xe8f2ee); // batería de lámparas del techo
+      this.sun.intensity = 1.7;
+      this.sun.position.set(4, 30, -2);
+      this._setSky([
+        [0, '#040506'], [0.7, '#0a0d0f'], [1, '#131a1c'],
+      ]);
+      // el "techo" es oscuridad: niebla corta y densa vende el túnel
+      this.scene.fog = new THREE.Fog(0x0a0d0f, 34, 92);
+    } else if (layout === 'prision') {
+      // Mediodía crudo: luz dura y gris, sin romanticismo.
+      this.hemi.color.setHex(0xd3dade);
+      this.hemi.groundColor.setHex(0x777b7d);
+      this.hemi.intensity = 1.5;
+      this.amb.color.setHex(0xe8ecee);
+      this.amb.intensity = 0.22;
+      this.sun.color.setHex(0xf3f6f2);
+      this.sun.intensity = 2.35;
+      this.sun.position.set(9, 26, -6);
+      this._setSky([
+        [0, '#7c93a4'], [0.6, '#a9b8c0'], [1, '#cfd6d4'],
+      ]);
+      this.scene.fog = new THREE.Fog(0x9aa6ab, 55, 130);
+    } else if (layout === 'pueblo') {
+      // Tarde nublada cálida: luz ámbar suave sobre ladrillo y polvo.
+      this.hemi.color.setHex(0xc9c2b4);
+      this.hemi.groundColor.setHex(0x8a7156);
+      this.hemi.intensity = 1.42;
+      this.amb.color.setHex(0xffe2b8);
+      this.amb.intensity = 0.3;
+      this.sun.color.setHex(0xffd9a0);
+      this.sun.intensity = 1.95;
+      this.sun.position.set(-16, 18, 12);
+      this._setSky([
+        [0, '#8e9aa4'], [0.5, '#bcb6a6'], [0.85, '#d8c091'], [1, '#e5cf9d'],
+      ]);
+      this.scene.fog = new THREE.Fog(0xb5ad98, 52, 132);
     } else {
       this.hemi.color.setHex(0xd9e6f0);
       this.hemi.groundColor.setHex(0x97876e);
@@ -624,17 +790,19 @@ export class World {
   }
 
   _buildFloor() {
-    // fortaleza: losas de arenisca; azoteas: grava/brea de techo urbano
-    const roof = this.layout === 'azoteas';
-    const tex = roof
-      ? this._tex('roofFloor', this.fx * 2 / 4.2, this.fz * 2 / 4.2)
-      : this._tex('floor', this.fx * 2 / 2.6, this.fz * 2 / 2.6);
+    // piso por mapa: [textura, escala de repetición, tinte]
+    const [texId, cell, tint] = {
+      azoteas: ['roofFloor', 4.2, 0xcdd0d4],   // grava/brea de techo urbano
+      fortaleza: ['floor', 2.6, 0xc3b79f],     // losas de arenisca
+      calle: ['asphalt', 3.6, 0xc4c4c4],       // asfalto de avenida
+      metro: ['tileTop', 3.2, 0xb9c2c6],       // andén de azulejo
+      prision: ['concreteTop', 3.4, 0xb4b6b8], // patio de concreto
+      pueblo: ['floor', 2.6, 0xd0bd97],        // tierra/empedrado cálido
+    }[this.layout] ?? ['floor', 2.6, 0xffffff];
+    const tex = this._tex(texId, this.fx * 2 / cell, this.fz * 2 / cell);
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(this.fx * 2, this.fz * 2),
-      new THREE.MeshLambertMaterial({
-        map: tex,
-        color: roof ? 0xcdd0d4 : this.layout === 'fortaleza' ? 0xc3b79f : 0xffffff,
-      })
+      new THREE.MeshLambertMaterial({ map: tex, color: tint })
     );
     floor.rotation.x = -Math.PI / 2;
     floor.receiveShadow = true;
@@ -680,7 +848,8 @@ export class World {
       const t = new THREE.Color(top).multiplyScalar(jit).getHex();
       if (visual) this._batchBox(px, pz, w, d, h, c, t);
       const minx = px - w / 2, maxx = px + w / 2, minz = pz - d / 2, maxz = pz + d / 2;
-      const material = surface || (this.layout === 'fortaleza' ? 'stone' : 'concrete');
+      const material = surface ||
+        (this.layout === 'fortaleza' || this.layout === 'pueblo' ? 'stone' : 'concrete');
       const collider = { minx, minz, maxx, maxz, h, surface: material };
       this.colliders.push(collider);
       if (cover) {
@@ -779,6 +948,320 @@ export class World {
     // centro: pilar contestado + baja lateral (el espejo crea el par)
     this._box(0, 0, 1.3, 1.3, HIGH, { ...highOpts, mirror: false, top: 0xffb075 });
     this._box(-4.6, 0.4, 0.9, 2.0, LOW, lowOpts);
+  }
+
+  // Mapa "Calle Cerrada" (34×60): avenida urbana al atardecer. Ruta central
+  // con vehículos como cobertura, un BUS que rompe la línea de visión larga
+  // a cada lado del centro, edificios que forman callejones laterales CQC y
+  // barricadas en los chokes. Simetría rotacional; LOW/MID/HIGH estrictos.
+  _buildCalle() {
+    const { LOW, MID, HIGH } = BLOCK;
+    const lowOpts = { color: 0x8f8c86, top: 0xb8b4ab };   // autos/cobertura
+    const midOpts = { color: 0x7d7a74, top: 0xa9a59c };
+    const highOpts = { color: 0x8b857c, top: 0xa39d92 };  // edificios
+    const wallOpts = { mirror: false, color: 0x767068, top: 0x8d867d };
+
+    // perímetro
+    this._box(0, -this.fz - 0.4, this.fx * 2 + 2, 0.8, HIGH, wallOpts);
+    this._box(0, this.fz + 0.4, this.fx * 2 + 2, 0.8, HIGH, wallOpts);
+    this._box(-this.fx - 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
+    this._box(this.fx + 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
+
+    // base: escudo de spawn + salidas flanqueadas
+    this._box(0, -22.5, 7, 1, HIGH, highOpts);
+    this._box(-5.5, -21.4, 2.4, 0.9, LOW, lowOpts);
+    this._box(5.5, -21.4, 2.4, 0.9, LOW, lowOpts);
+
+    // edificios (crean los callejones laterales contra el muro perimetral)
+    this._box(-11.5, -17, 7, 8, HIGH, highOpts);
+    this._box(12, -14, 6, 6, HIGH, highOpts);
+
+    // vehículos sobre la avenida (cobertura baja)
+    this._box(-2.5, -16, 1.9, 4.2, LOW, lowOpts);
+    this._box(3, -10.5, 1.9, 4.2, LOW, lowOpts);
+    this._box(-3, -5.5, 4.2, 1.9, LOW, lowOpts); // auto cruzado
+
+    // barricada del choke central
+    this._box(-1.2, -8.7, 3.2, 0.9, MID, midOpts);
+
+    // bus: gran bloqueador de visión a un lado del centro (espejo en el otro)
+    this._box(-6.5, -1.5, 2.4, 7, HIGH, highOpts);
+
+    // plataforma saltable + kiosco + cobertura del callejón
+    this._box(8.5, -5, 2.6, 2.6, LOW, lowOpts);
+    this._box(12.5, -8.5, 2.8, 1, MID, midOpts);
+    this._box(-16.5, -8, 0.9, 2.2, LOW, lowOpts);
+
+    // cobertura de aproximación al centro
+    this._box(3.6, -2.2, 2.4, 0.9, LOW, lowOpts);
+
+    this._decorCalle();
+  }
+
+  _decorCalle() {
+    // postes de luz de sodio a lo largo de la avenida (glow, sin luz dinámica)
+    const poleMat = new THREE.MeshLambertMaterial({ color: 0x3c4046 });
+    const glowMat = new THREE.MeshBasicMaterial({ color: 0xffc27a });
+    for (const z of [-18, -6, 6, 18]) {
+      for (const x of [-5.9, 5.9]) {
+        const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 4.6, 6), poleMat);
+        pole.position.set(x, 2.3, z);
+        this.mapGroup.add(pole);
+        const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.14, 0.24), glowMat);
+        lamp.position.set(x + (x < 0 ? 0.3 : -0.3), 4.55, z);
+        this.mapGroup.add(lamp);
+      }
+    }
+    // skyline lejano con ventanas encendidas
+    const winMat = new THREE.MeshLambertMaterial({ color: 0x4b5563, map: this._tex('windows', 2, 2) });
+    for (const [x, z, w, h] of [[-26, -14, 7, 15], [27, -4, 8, 19], [-25, 12, 6, 12], [24, 20, 7, 16]]) {
+      const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, 6), winMat);
+      b.position.set(x, h / 2 - 0.5, z);
+      this.mapGroup.add(b);
+    }
+  }
+
+  // Mapa "Estación de Metro" (32×52): subterráneo de luz artificial. Dos
+  // pares de VAGONES sobre el eje central con cruces entre ellos (rutas no
+  // lineales), andenes con columnas, máquinas y bancas. El pedestal especial
+  // queda en el cruce central — la zona más peligrosa.
+  _buildMetro() {
+    const { LOW, MID, HIGH } = BLOCK;
+    const lowOpts = { color: 0x7f8a8d, top: 0xa5adaf };
+    const midOpts = { color: 0x74807f, top: 0x9aa5a2 };
+    const highOpts = { color: 0x5e696e, top: 0x7d878a }; // vagones
+    const wallOpts = { mirror: false, color: 0x59636a, top: 0x6e777c };
+
+    this._box(0, -this.fz - 0.4, this.fx * 2 + 2, 0.8, HIGH, wallOpts);
+    this._box(0, this.fz + 0.4, this.fx * 2 + 2, 0.8, HIGH, wallOpts);
+    this._box(-this.fx - 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
+    this._box(this.fx + 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
+
+    // base
+    this._box(0, -19, 6, 1, HIGH, highOpts);
+    this._box(-4.8, -17.9, 2.2, 0.9, LOW, lowOpts);
+    this._box(4.8, -17.9, 2.2, 0.9, LOW, lowOpts);
+
+    // vagones del eje central (los cruces entre ellos son los chokes)
+    this._box(-2.2, -11.5, 2.6, 7, HIGH, highOpts);
+    this._box(2.6, -3.2, 2.6, 6, HIGH, highOpts);
+
+    // columnas del andén (MID: bloquean pecho, permiten peek)
+    this._box(-8, -14, 1.1, 1.1, MID, midOpts);
+    this._box(-8, -7, 1.1, 1.1, MID, midOpts);
+    this._box(8, -10.5, 1.1, 1.1, MID, midOpts);
+
+    // mobiliario del andén
+    this._box(-11, -17.5, 2.2, 0.9, LOW, lowOpts);  // máquinas expendedoras
+    this._box(11.5, -13, 0.9, 2.2, LOW, lowOpts);
+    this._box(6.5, -16.5, 2.4, 0.9, LOW, lowOpts);  // banca
+    this._box(-12.5, -3, 2.6, 2.6, LOW, lowOpts);   // bloque de escaleras
+    this._box(7.5, -1.8, 3, 0.9, MID, midOpts);     // barrera de andén
+
+    this._decorMetro();
+  }
+
+  _decorMetro() {
+    // identidad de VAGÓN sobre los bloques del eje central: franja de
+    // ventanas y puertas naranjas (planos pegados a la cara, sin colisión)
+    const winMat = new THREE.MeshBasicMaterial({ color: 0x1b2b33 });
+    const doorMat = new THREE.MeshLambertMaterial({ color: 0xc26a2e });
+    const trimMat = new THREE.MeshLambertMaterial({ color: 0x424b50 });
+    // [cx, cz, w, d] de los 4 vagones (los dos declarados + sus espejos)
+    for (const [cx, cz, w, d] of [
+      [-2.2, -11.5, 2.6, 7], [2.2, 11.5, 2.6, 7],
+      [2.6, -3.2, 2.6, 6], [-2.6, 3.2, 2.6, 6],
+    ]) {
+      for (const s of [-1, 1]) {
+        const x = cx + s * (w / 2 + 0.02);
+        const band = new THREE.Mesh(new THREE.PlaneGeometry(d - 0.8, 0.75), winMat);
+        band.rotation.y = s * Math.PI / 2;
+        band.position.set(x, 1.95, cz);
+        this.mapGroup.add(band);
+        const trim = new THREE.Mesh(new THREE.PlaneGeometry(d - 0.4, 0.16), trimMat);
+        trim.rotation.y = s * Math.PI / 2;
+        trim.position.set(x, 1.42, cz);
+        this.mapGroup.add(trim);
+        const door = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 2.2), doorMat);
+        door.rotation.y = s * Math.PI / 2;
+        door.position.set(x, 1.12, cz + (s < 0 ? d / 4 : -d / 4));
+        this.mapGroup.add(door);
+      }
+    }
+    // baterías de lámparas colgantes (el techo es oscuridad de túnel)
+    const stripMat = new THREE.MeshBasicMaterial({ color: 0xdcefe6 });
+    for (let z = -20; z <= 20; z += 8) {
+      for (const x of [-9, 0, 9]) {
+        const strip = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.08, 0.3), stripMat);
+        strip.position.set(x, 4.7, z);
+        this.mapGroup.add(strip);
+      }
+    }
+    // bocas de túnel oscuras tras los muros cortos
+    const mouthMat = new THREE.MeshBasicMaterial({ color: 0x020304 });
+    for (const s of [-1, 1]) {
+      const mouth = new THREE.Mesh(new THREE.BoxGeometry(7, 3.4, 0.4), mouthMat);
+      mouth.position.set(0, 1.7, s * (this.fz + 1.3));
+      this.mapGroup.add(mouth);
+    }
+    // franja de seguridad del borde de andén (plano, sin colisión)
+    const hazMat = new THREE.MeshLambertMaterial({ map: this._tex('hazard', 8, 0.5) });
+    for (const s of [-1, 1]) {
+      const stripe = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 30), hazMat);
+      stripe.rotation.x = -Math.PI / 2;
+      stripe.rotation.z = Math.PI / 2;
+      stripe.position.set(s * 5.2, 0.012, 0);
+      this.mapGroup.add(stripe);
+    }
+  }
+
+  // Mapa "Prisión" (44×60): patio central abierto con cadena de coberturas
+  // bajas, BLOQUES DE CELDAS laterales (corredores interiores con puertas y
+  // divisores) y torres de vigilancia en esquinas espejadas. Interior y
+  // exterior conviven: el patio castiga cruzar, los corredores son CQC.
+  _buildPrision() {
+    const { LOW, MID, HIGH } = BLOCK;
+    const lowOpts = { color: 0x8e9092, top: 0xb2b4b4 };
+    const midOpts = { color: 0x7f8285, top: 0xa2a5a6 };
+    const highOpts = { color: 0x74777b, top: 0x92959a };
+    const wallOpts = { mirror: false, color: 0x6a6d71, top: 0x84878b };
+
+    this._box(0, -this.fz - 0.4, this.fx * 2 + 2, 0.8, HIGH, wallOpts);
+    this._box(0, this.fz + 0.4, this.fx * 2 + 2, 0.8, HIGH, wallOpts);
+    this._box(-this.fx - 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
+    this._box(this.fx + 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
+
+    // base + torre de vigilancia de esquina (bulto jugable HIGH)
+    this._box(0, -22.8, 7.5, 1, HIGH, highOpts);
+    this._box(-5.8, -21.6, 2.4, 0.9, LOW, lowOpts);
+    this._box(5.8, -21.6, 2.4, 0.9, LOW, lowOpts);
+    this._box(-17, -24, 3, 3, HIGH, highOpts);
+
+    // bloque de celdas OESTE: muro interior con puerta + divisores de celda
+    this._box(-13.5, -17, 1, 5, HIGH, highOpts);
+    this._box(-13.5, -8, 1, 5, HIGH, highOpts);
+    this._box(-20.2, -17, 3.4, 0.8, MID, midOpts);
+    this._box(-20.2, -9, 3.4, 0.8, MID, midOpts);
+
+    // bloque de celdas ESTE (mitad sur; el espejo crea el norte-oeste)
+    this._box(14, -12, 1, 6, HIGH, highOpts);
+    this._box(20.3, -12, 3.2, 0.8, MID, midOpts);
+
+    // patio: cadena de coberturas bajas + jardinera + banca
+    this._box(-3, -13, 2.6, 0.9, LOW, lowOpts);
+    this._box(2, -9.5, 2.6, 0.9, LOW, lowOpts);
+    this._box(-2.5, -6, 2.6, 0.9, LOW, lowOpts);
+    this._box(6.5, -14.5, 3, 1, MID, midOpts);
+    this._box(8, -4.5, 2.4, 0.9, LOW, lowOpts);
+
+    // pilar de flanco + aproximación al centro
+    this._box(9.5, -8.5, 1.2, 1.2, HIGH, highOpts);
+    this._box(4.5, -2.6, 3.2, 0.9, MID, midOpts);
+    this._box(-5, -1.4, 2.4, 0.9, LOW, lowOpts);
+
+    this._decorPrision();
+  }
+
+  _decorPrision() {
+    // cabinas sobre las torres de esquina + reflector encendido
+    const cabMat = new THREE.MeshLambertMaterial({ color: 0x5d6165 });
+    const lampMat = new THREE.MeshBasicMaterial({ color: 0xfff3c9 });
+    for (const s of [-1, 1]) {
+      const cab = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.4, 2.4), cabMat);
+      cab.position.set(s * 17, 3.75, s * 24);
+      this.mapGroup.add(cab);
+      const roof = new THREE.Mesh(new THREE.BoxGeometry(2.9, 0.2, 2.9), cabMat);
+      roof.position.set(s * 17, 4.55, s * 24);
+      this.mapGroup.add(roof);
+      const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.3, 0.14), lampMat);
+      lamp.position.set(s * 17, 3.7, s * (24 - 1.26));
+      this.mapGroup.add(lamp);
+    }
+    // postes de reflectores perimetrales
+    const poleMat = new THREE.MeshLambertMaterial({ color: 0x4a4d50 });
+    for (const [x, z] of [[-21, 8], [21, -8], [-10, 29], [10, -29]]) {
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.11, 5.2, 6), poleMat);
+      pole.position.set(x, 2.6, z);
+      this.mapGroup.add(pole);
+      const head = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.3, 0.3), lampMat);
+      head.position.set(x, 5.1, z);
+      this.mapGroup.add(head);
+    }
+  }
+
+  // Mapa "Pueblo Abandonado" (52×68): el más ABIERTO. Casas en ruinas con
+  // muros en L (altura variada HIGH/MID), escombros bajos dispersos, una
+  // plaza central despejada para el pedestal y casonas altas cerca del
+  // centro que parten las diagonales largas.
+  _buildPueblo() {
+    const { LOW, MID, HIGH } = BLOCK;
+    const lowOpts = { color: 0x9a8672, top: 0xc4ac8c };
+    const midOpts = { color: 0x8d7a66, top: 0xb59d7f };
+    const highOpts = { color: 0x86735f, top: 0xa89075 };
+    const wallOpts = { mirror: false, color: 0x77664f, top: 0x93805f };
+
+    this._box(0, -this.fz - 0.4, this.fx * 2 + 2, 0.8, HIGH, wallOpts);
+    this._box(0, this.fz + 0.4, this.fx * 2 + 2, 0.8, HIGH, wallOpts);
+    this._box(-this.fx - 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
+    this._box(this.fx + 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
+
+    // base
+    this._box(0, -26.5, 8, 1, HIGH, highOpts);
+    this._box(-6, -25.4, 2.6, 0.9, LOW, lowOpts);
+    this._box(6, -25.4, 2.6, 0.9, LOW, lowOpts);
+
+    // casa en ruinas A (L alta con remanente bajo: pared rota)
+    this._box(-12, -19, 6, 1, HIGH, highOpts);
+    this._box(-14.5, -16, 1, 5, HIGH, highOpts);
+    this._box(-9.5, -16.5, 1, 3, LOW, lowOpts);
+
+    // casa en ruinas B (L mediana)
+    this._box(10, -14, 1, 6, MID, midOpts);
+    this._box(13, -11.5, 5, 1, MID, midOpts);
+    this._box(8.5, -9.8, 2.4, 0.9, LOW, lowOpts);
+
+    // escombros dispersos (cobertura baja del campo abierto)
+    this._box(-4, -12, 2.2, 1.6, LOW, lowOpts);
+    this._box(3, -19, 2.6, 0.9, LOW, lowOpts);
+    this._box(-1.5, -7, 2.6, 0.9, LOW, lowOpts);
+    this._box(18, -6, 2.2, 2.2, LOW, lowOpts);   // plataforma saltable
+    this._box(-19, -12, 0.9, 3, LOW, lowOpts);
+
+    // fragmentos de muro a media cancha
+    this._box(-7, -3.5, 3.4, 0.9, MID, midOpts);
+    this._box(5.5, -5.2, 3, 0.9, MID, midOpts);
+
+    // casona alta cerca del centro (rompe la diagonal larga)
+    this._box(16, -2, 1, 7, HIGH, highOpts);
+
+    // plaza: cobertura baja orbitando el pedestal central
+    this._box(-4.5, 0.8, 2.4, 0.9, LOW, lowOpts);
+
+    this._decorPueblo();
+  }
+
+  _decorPueblo() {
+    // árboles secos: tronco inclinado + copa rala oscura
+    const trunkMat = new THREE.MeshLambertMaterial({ color: 0x4d4034 });
+    const canopyMat = new THREE.MeshLambertMaterial({ color: 0x54503c });
+    for (const [x, z, lean] of [[-21, -22, 0.2], [20, 23, -0.25], [-22, 16, 0.12], [22, -18, -0.1]]) {
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.2, 3.6, 6), trunkMat);
+      trunk.position.set(x, 1.8, z);
+      trunk.rotation.z = lean;
+      this.mapGroup.add(trunk);
+      for (let i = 0; i < 3; i++) {
+        const c = new THREE.Mesh(new THREE.BoxGeometry(1.1 - i * 0.25, 0.5, 1.1 - i * 0.25), canopyMat);
+        c.position.set(x + lean * (2.4 + i), 3.1 + i * 0.55, z);
+        this.mapGroup.add(c);
+      }
+    }
+    // ruinas de silueta fuera del muro
+    const ruinMat = new THREE.MeshLambertMaterial({ color: 0x8a7a63, map: this._tex('brick', 4, 3) });
+    for (const [x, z, w, h] of [[-32, -10, 6, 5], [33, 4, 7, 6], [-30, 22, 5, 4], [31, -24, 6, 5]]) {
+      const r = new THREE.Mesh(new THREE.BoxGeometry(w, h, 5), ruinMat);
+      r.position.set(x, h / 2 - 0.8, z);
+      this.mapGroup.add(r);
+    }
   }
 
   // Mapa "Fortaleza": multijugador y VS bots, el doble de área que Foundry
@@ -2121,12 +2604,13 @@ export class World {
   }
 
   _buildSpawns() {
-    // fortaleza: spawns FIJOS en ±23.4 (el server los espeja); azoteas
-    // escalada ×1.5 usa ±35.1 (solo bots/práctica — el server no la corre);
-    // otros mapas, pegados al muro como siempre
-    const z = this.layout === 'fortaleza' ? 23.4
-      : this.layout === 'azoteas' ? 35.1
-      : this.fz - 1.6;
+    // spawns FIJOS por mapa con bolsillo respecto al muro trasero (la cámara
+    // no debe chocar la muralla al nacer). El server duplica esta tabla en
+    // spawnSet() — mantener ambos sincronizados.
+    const z = {
+      fortaleza: 23.4, azoteas: 35.1,
+      calle: 26.4, metro: 22.4, prision: 26.4, pueblo: 30.4,
+    }[this.layout] ?? this.fz - 1.6;
     for (let i = 0; i < 4; i++) {
       const x = -3.6 + i * 2.4;
       // convención: facing = (-sin yaw, -cos yaw) → yaw π mira a +z, yaw 0 a -z
@@ -2196,7 +2680,8 @@ export class World {
       ], c.surface || 'metal', c);
     }
 
-    const groundSurface = this.layout === 'fortaleza' ? 'stone' : 'concrete';
+    const groundSurface =
+      this.layout === 'fortaleza' || this.layout === 'pueblo' ? 'stone' : 'concrete';
     const plane = (t, normal, surface, contains) => {
       if (!Number.isFinite(t) || t < 0.0001 || t > maxDist) return;
       const x = origin.x + dir.x * t, z = origin.z + dir.z * t;

@@ -1,6 +1,6 @@
 export const MAX_PLAYERS = 8;
 export const TEAM_CAPACITY = 4;
-export const MAPS = ['fortaleza', 'azoteas'];
+export const MAPS = ['fortaleza', 'azoteas', 'calle', 'metro', 'prision', 'pueblo'];
 export const ROUND_OPTIONS = [1, 3, 5];
 export const LIFE_OPTIONS = [8, 12, 15, 20];
 export const POST_MATCH_OPTIONS = ['lobby', 'next-map'];

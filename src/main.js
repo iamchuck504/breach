@@ -23,7 +23,7 @@ import { BotMatch } from './game/botmatch.js';
 import { SmokeSystem } from './game/smoke.js';
 import { SpecialPickup, Rockets, SPECIAL_HOLD_TIME } from './game/special.js';
 import {
-  DEFAULT_LOBBY_SETTINGS, MAX_PLAYERS, TEAM_CAPACITY, makeBotName,
+  DEFAULT_LOBBY_SETTINGS, MAPS, MAX_PLAYERS, TEAM_CAPACITY, makeBotName,
   nextLobbyMap, normalizeLobbySettings, validateLobby,
 } from './game/lobby-rules.js';
 import { AmmoCrates } from './game/crates.js';
@@ -261,10 +261,11 @@ function updatePresentationAudio(view) {
 
 function updateMatchCamera(now, view) {
   const t = now * 0.00011;
-  const layout = G.mapChoice;
-  const wide = layout === 'azoteas';
-  const radiusX = wide ? 25 : 22;
-  const radiusZ = wide ? 31 : 28;
+  // la órbita de presentación escala con el mapa REAL en pantalla: mapas
+  // grandes suben y alejan la cámara; chicos la acercan
+  const radiusX = Math.min(world.fx + 5, 34);
+  const radiusZ = Math.min(world.fz + 4, 42);
+  const wide = Math.max(world.fx, world.fz) > 28;
   const baseY = wide ? 10.5 : 8.8;
   const side = view?.phase === 'mvp' ? -1 : 1;
   camera.position.set(Math.sin(t) * radiusX * side, baseY + Math.sin(t * .7) * .5, Math.cos(t) * radiusZ);
@@ -714,12 +715,16 @@ document.getElementById('btn-lobby-join').addEventListener('click', () => connec
 
 // selector de mapa: valor inicial de lobby local y mapa de Práctica.
 const btnMap = document.getElementById('btn-map');
-G.mapChoice = localStorage.getItem('breach.map') === 'azoteas' ? 'azoteas' : 'fortaleza';
+{
+  const saved = localStorage.getItem('breach.map');
+  G.mapChoice = MAPS.includes(saved) ? saved : 'fortaleza';
+}
 function updateMapBtn() {
   document.getElementById('map-label').textContent = t('menu.mapValue', { map: mapLabel(G.mapChoice) });
 }
 btnMap.addEventListener('click', () => {
-  G.mapChoice = G.mapChoice === 'fortaleza' ? 'azoteas' : 'fortaleza';
+  // cicla la lista central de mapas (misma fuente que el lobby)
+  G.mapChoice = MAPS[(MAPS.indexOf(G.mapChoice) + 1) % MAPS.length];
   localStorage.setItem('breach.map', G.mapChoice);
   updateMapBtn();
 });

@@ -15,6 +15,10 @@ export const AUDIO_PROFILES = Object.freeze({
 export const AMBIENCE_PROFILES = Object.freeze({
   fortaleza: Object.freeze({ continuousNoise: true, gain: 0.016 }),
   azoteas: Object.freeze({ continuousNoise: false, gain: 0.014, pulseMinMs: 4800 }),
+  calle: Object.freeze({ continuousNoise: true, gain: 0.014 }),
+  metro: Object.freeze({ continuousNoise: true, gain: 0.02 }),
+  prision: Object.freeze({ continuousNoise: true, gain: 0.012 }),
+  pueblo: Object.freeze({ continuousNoise: true, gain: 0.013 }),
 });
 
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
@@ -229,7 +233,7 @@ export class Audio {
   // la intención antes de que WebAudio se desbloquee y se cambia con fade para
   // que menú/transiciones de mapa nunca produzcan un corte audible.
   setAmbience(name = null) {
-    const next = name === 'fortaleza' || name === 'azoteas' ? name : null;
+    const next = AMBIENCE_PROFILES[name] ? name : null;
     if (this._ambienceName === next && (!!this._ambienceNodes === !!next)) return;
     this._ambienceName = next;
     this._stopAmbience();
@@ -262,9 +266,12 @@ export class Audio {
     gain.connect(this.worldBus || this.master);
     const nodes = { gain, sources: [], timers: new Set() };
     const hum = this.ctx.createOscillator();
-    hum.type = 'sine'; hum.frequency.value = name === 'azoteas' ? 49 : 47;
+    // zumbido base por mapa: el metro late más grave y fuerte (ventilación),
+    // la calle con el murmullo urbano, el resto viento/aire suave
+    hum.type = 'sine';
+    hum.frequency.value = { azoteas: 49, metro: 41, calle: 46 }[name] ?? 47;
     const humGain = this.ctx.createGain();
-    humGain.gain.value = name === 'azoteas' ? 0.045 : 0.32;
+    humGain.gain.value = { azoteas: 0.045, metro: 0.5, calle: 0.28, prision: 0.2, pueblo: 0.18 }[name] ?? 0.32;
     hum.connect(humGain).connect(gain);
     hum.start(now); nodes.sources.push(hum);
 

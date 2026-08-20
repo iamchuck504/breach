@@ -71,7 +71,11 @@ const inMatch = () => ['intro', 'countdown', 'playing', 'round-finish', 'intermi
 const isHost = (p) => !!p && p.id === hostId;
 
 function spawnSet(map, team) {
-  const z = map === 'azoteas' ? 35.1 : 23.4;
+  // duplica la tabla de world._buildSpawns — mantener ambas sincronizadas
+  const z = {
+    fortaleza: 23.4, azoteas: 35.1,
+    calle: 26.4, metro: 22.4, prision: 26.4, pueblo: 30.4,
+  }[map] ?? 23.4;
   return Array.from({ length: 4 }, (_, i) => {
     const x = -3.6 + i * 2.4;
     return { x: team === 'red' ? x : -x, z: team === 'red' ? -z : z, yaw: team === 'red' ? Math.PI : 0 };

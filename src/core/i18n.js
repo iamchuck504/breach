@@ -124,6 +124,8 @@ const en = {
   'menu.audio': 'AUDIO', 'menu.video': 'VIDEO',
   'menu.videoShadows': 'SHADOWS', 'menu.videoScale': 'RENDER RESOLUTION',
   'menu.dpadWeapons': 'D-PAD: ↑ GRENADE · ↓ PISTOL · ← SMG · → SHOTGUN',
+  'map.calle': 'CLOSED STREET', 'map.metro': 'SUBWAY STATION',
+  'map.prision': 'PRISON', 'map.pueblo': 'ABANDONED TOWN',
 };
 
 const es = {
@@ -239,6 +241,8 @@ const es = {
   'menu.audio': 'AUDIO', 'menu.video': 'VIDEO',
   'menu.videoShadows': 'SOMBRAS', 'menu.videoScale': 'RESOLUCIÓN DE RENDER',
   'menu.dpadWeapons': 'D-PAD: ↑ GRANADA · ↓ PISTOLA · ← SMG · → ESCOPETA',
+  'map.calle': 'CALLE CERRADA', 'map.metro': 'ESTACIÓN DE METRO',
+  'map.prision': 'PRISIÓN', 'map.pueblo': 'PUEBLO ABANDONADO',
 };
 
 const pt = { ...en,
@@ -321,26 +325,31 @@ Object.assign(pt, {
   'weapon.pistol':'PISTOLA','weapon.grenade':'GRANADA DE FUMAÇA','weapon.sniper':'RIFLE DE PRECISÃO','weapon.bazooka':'BAZUCA',
   'binding.melee':'CORPO A CORPO','binding.slot1':'ARMA 1','binding.slot2':'ARMA 2','binding.slot3':'ARMA 3','binding.slot4':'ARMA 4',
   'menu.options':'OPÇÕES','menu.optionsKicker':'CONFIGURAÇÃO DO JOGO','menu.videoShadows':'SOMBRAS','menu.videoScale':'RESOLUÇÃO DE RENDER',
+  'map.calle':'RUA FECHADA','map.metro':'ESTAÇÃO DE METRÔ','map.prision':'PRISÃO','map.pueblo':'VILA ABANDONADA',
 });
 Object.assign(fr, {
   'weapon.pistol':'PISTOLET','weapon.grenade':'GRENADE FUMIGÈNE','weapon.sniper':'FUSIL DE PRÉCISION','weapon.bazooka':'BAZOOKA',
   'binding.melee':'CORPS À CORPS','binding.slot1':'ARME 1','binding.slot2':'ARME 2','binding.slot3':'ARME 3','binding.slot4':'ARME 4',
   'menu.options':'OPTIONS','menu.optionsKicker':'CONFIGURATION DU JEU','menu.videoShadows':'OMBRES','menu.videoScale':'RÉSOLUTION DE RENDU',
+  'map.calle':'RUE FERMÉE','map.metro':'STATION DE MÉTRO','map.prision':'PRISON','map.pueblo':'VILLAGE ABANDONNÉ',
 });
 Object.assign(it, {
   'weapon.pistol':'PISTOLA','weapon.grenade':'GRANATA FUMOGENA','weapon.sniper':'FUCILE DI PRECISIONE','weapon.bazooka':'BAZOOKA',
   'binding.melee':'CORPO A CORPO','binding.slot1':'ARMA 1','binding.slot2':'ARMA 2','binding.slot3':'ARMA 3','binding.slot4':'ARMA 4',
   'menu.options':'OPZIONI','menu.optionsKicker':'CONFIGURAZIONE DI GIOCO','menu.videoShadows':'OMBRE','menu.videoScale':'RISOLUZIONE DI RENDER',
+  'map.calle':'STRADA CHIUSA','map.metro':'STAZIONE DELLA METRO','map.prision':'PRIGIONE','map.pueblo':'PAESE ABBANDONATO',
 });
 Object.assign(ja, {
   'weapon.pistol':'ピストル','weapon.grenade':'スモークグレネード','weapon.sniper':'スナイパーライフル','weapon.bazooka':'バズーカ',
   'binding.melee':'近接攻撃','binding.slot1':'武器 1','binding.slot2':'武器 2','binding.slot3':'武器 3','binding.slot4':'武器 4',
   'menu.options':'オプション','menu.optionsKicker':'ゲーム設定','menu.videoShadows':'影','menu.videoScale':'レンダリング解像度',
+  'map.calle':'封鎖された通り','map.metro':'地下鉄駅','map.prision':'刑務所','map.pueblo':'廃村',
 });
 Object.assign(zh, {
   'weapon.pistol':'手枪','weapon.grenade':'烟雾弹','weapon.sniper':'狙击步枪','weapon.bazooka':'火箭筒',
   'binding.melee':'近战','binding.slot1':'武器 1','binding.slot2':'武器 2','binding.slot3':'武器 3','binding.slot4':'武器 4',
   'menu.options':'选项','menu.optionsKicker':'游戏设置','menu.videoShadows':'阴影','menu.videoScale':'渲染分辨率',
+  'map.calle':'封锁街道','map.metro':'地铁站','map.prision':'监狱','map.pueblo':'废弃小镇',
 });
 
 const DICTIONARIES = Object.freeze({ en, es, pt, fr, ja, it, zh });

@@ -3,6 +3,9 @@
 import { TUNING } from '../config/tuning.js';
 import { Rig, RAGDOLL_R } from './rig.js';
 
+// Rutas base afinadas para Fortaleza (21×26.6); en otros mapas se ESCALAN a
+// las dimensiones reales y se corrigen contra la geometría (resolveCircle)
+// para que ningún dummy patrulle dentro de un bloque.
 const PATROLS = [
   [{ x: -4.8, z: 3.5 }, { x: -4.8, z: 9 }],
   [{ x: 2.2, z: 6.9 }, { x: 6, z: 6.9 }],
@@ -13,7 +16,15 @@ const PATROLS = [
 export class Dummies {
   constructor(scene, world = null) {
     this.scene = scene;
-    this.list = PATROLS.map((path, i) => {
+    const sx = world ? world.fx / 21 : 1;
+    const sz = world ? world.fz / 26.6 : 1;
+    const fit = (p) => {
+      const q = { x: p.x * sx, z: p.z * sz };
+      if (world) world.resolveCircle(q, 0.45, 0);
+      return q;
+    };
+    this.list = PATROLS.map((base, i) => {
+      const path = base.map(fit);
       const rig = new Rig(scene, 'blue', 'DUMMY-' + (i + 1), (Math.random() * 5) | 0);
       if (world) {
         rig.groundFn = (x, z, y) => world.groundHeight({ x, z }, 0.38, y);
