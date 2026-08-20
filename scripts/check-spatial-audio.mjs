@@ -1,4 +1,4 @@
-import { AUDIO_PROFILES, spatialAudioMix } from '../src/fx/audio.js';
+import { AUDIO_PROFILES, selectAudioListener, spatialAudioMix } from '../src/fx/audio.js';
 
 const failures = [];
 const check = (ok, message) => { if (!ok) failures.push(message); };
@@ -36,6 +36,13 @@ check(spatialAudioMix(4, 2, false, 'footstep').pan === 0.92,
   'paneo derecho no se limitó correctamente');
 check(spatialAudioMix(4, -2, false, 'footstep').pan === -0.92,
   'paneo izquierdo no se limitó correctamente');
+
+const corpse = { x: -20, y: 1, z: 14 };
+const spectatorCamera = { x: 17, y: 4, z: -11 };
+check(selectAudioListener(false, spectatorCamera, corpse) === corpse,
+  'el listener normal no sigue al jugador local');
+check(selectAudioListener(true, spectatorCamera, corpse) === spectatorCamera,
+  'spectator sigue usando el cadáver en vez de la cámara observada');
 
 if (failures.length) {
   failures.forEach((failure) => console.error('AUDIO FALLO:', failure));

@@ -14,6 +14,12 @@ export const AUDIO_PROFILES = Object.freeze({
 
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
 
+// Selección pura de referencia: permite verificar que spectator nunca vuelva
+// a heredar accidentalmente la posición del cadáver local.
+export function selectAudioListener(spectating, cameraPose, playerPose) {
+  return spectating ? cameraPose : playerPose;
+}
+
 // Función pura para poder verificar la mezcla sin depender de WebAudio.
 export function spatialAudioMix(distance, lateral = 0, occluded = false,
   profileName = 'gunshot') {
@@ -58,6 +64,8 @@ export class Audio {
     this.worldBus = null;
     this._impactWindow = 0;
     this._impactCount = 0;
+    this._ambienceName = null;
+    this._ambienceNodes = null;
   }
 
   // Los callbacks viven en main para que Audio no dependa de Three.js/World.
@@ -97,6 +105,7 @@ export class Audio {
       for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
       this._noise = buf;
       this._samplesReady = this._loadSamples();
+      if (this._ambienceName) this._startAmbience(this._ambienceName);
     }
     const resumed = this.ctx.state === 'suspended' ? this.ctx.resume() : Promise.resolve();
     return Promise.all([resumed, this._samplesReady || Promise.resolve()]);
@@ -209,6 +218,59 @@ export class Audio {
     localStorage.setItem('breach.muted', String(this.muted));
     if (this.master) this.master.gain.value = this.muted ? 0 : this.volume;
     return this.muted;
+  }
+
+  // Un único bed ambiental, muy por debajo de pasos y combate. Se conserva
+  // la intención antes de que WebAudio se desbloquee y se cambia con fade para
+  // que menú/transiciones de mapa nunca produzcan un corte audible.
+  setAmbience(name = null) {
+    const next = name === 'fortaleza' || name === 'azoteas' ? name : null;
+    if (this._ambienceName === next && (!!this._ambienceNodes === !!next)) return;
+    this._ambienceName = next;
+    this._stopAmbience();
+    if (next && this.ctx && this._noise) this._startAmbience(next);
+  }
+
+  _stopAmbience() {
+    const nodes = this._ambienceNodes;
+    this._ambienceNodes = null;
+    if (!nodes || !this.ctx) return;
+    const now = this.ctx.currentTime;
+    nodes.gain.gain.cancelScheduledValues(now);
+    nodes.gain.gain.setValueAtTime(Math.max(0.0001, nodes.gain.gain.value), now);
+    nodes.gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.35);
+    setTimeout(() => {
+      try { nodes.noise.stop(); } catch { /* ya detenido */ }
+      try { nodes.hum.stop(); } catch { /* ya detenido */ }
+      nodes.gain.disconnect();
+    }, 420);
+  }
+
+  _startAmbience(name) {
+    if (!this.ctx || !this._noise || this._ambienceNodes) return;
+    const now = this.ctx.currentTime;
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(name === 'azoteas' ? 0.022 : 0.016, now + 0.8);
+    gain.connect(this.worldBus || this.master);
+
+    const noise = this.ctx.createBufferSource();
+    noise.buffer = this._noise; noise.loop = true;
+    const wind = this.ctx.createBiquadFilter();
+    wind.type = name === 'azoteas' ? 'bandpass' : 'lowpass';
+    wind.frequency.value = name === 'azoteas' ? 520 : 260;
+    wind.Q.value = name === 'azoteas' ? 0.42 : 0.7;
+    const noiseGain = this.ctx.createGain();
+    noiseGain.gain.value = name === 'azoteas' ? 0.7 : 0.22;
+    noise.connect(wind).connect(noiseGain).connect(gain);
+
+    const hum = this.ctx.createOscillator();
+    hum.type = 'sine'; hum.frequency.value = name === 'azoteas' ? 63 : 47;
+    const humGain = this.ctx.createGain();
+    humGain.gain.value = name === 'azoteas' ? 0.08 : 0.32;
+    hum.connect(humGain).connect(gain);
+    noise.start(now); hum.start(now);
+    this._ambienceNodes = { gain, noise, hum };
   }
 
   _env(gainNode, t0, a, peak, dec) {
@@ -368,6 +430,27 @@ export class Audio {
   hurt() { this._tone('sawtooth', 220, 90, 0.2, 0.12); }
   death() { this._tone('sawtooth', 320, 60, 0.35, 0.5); }
   win() { for (const [f, d] of [[520, 0], [660, 0.12], [780, 0.24]]) setTimeout(() => this._tone('sine', f, f, 0.25, 0.3), d * 1000); }
+  uiMove() { this._tone('sine', 690, 760, 0.035, 0.035); }
+  uiConfirm() { this._tone('triangle', 410, 620, 0.065, 0.075); }
+  lobbyEnter() {
+    this._tone('triangle', 220, 360, 0.09, 0.13);
+    setTimeout(() => this._tone('sine', 520, 620, 0.06, 0.11), 85);
+  }
+  countdown(value = 3) {
+    const last = value <= 1;
+    this._tone('square', last ? 560 : 420, last ? 760 : 470, last ? 0.14 : 0.09, last ? 0.13 : 0.08);
+  }
+  roundStart() {
+    this._tone('triangle', 260, 520, 0.15, 0.18);
+    setTimeout(() => this._tone('sine', 720, 880, 0.11, 0.16), 95);
+  }
+  roundEnd() { this._tone('triangle', 460, 230, 0.12, 0.24); }
+  defeat() { this._tone('sawtooth', 260, 95, 0.12, 0.34); }
+  mvp() {
+    for (const [f, d] of [[330, 0], [440, 0.09], [660, 0.2]]) {
+      setTimeout(() => this._tone('triangle', f, f * 1.05, 0.075, 0.16), d * 1000);
+    }
+  }
 }
 
 // parámetros por tipo de paso (ganancias de talón/punta/peso/tick + freq base)

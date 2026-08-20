@@ -223,8 +223,18 @@ wss.on('connection', (ws) => {
     }
     if (msg.t === 'lobbyTeam') {
       if (phase !== 'lobby') { lobbyError(ws, 'locked'); return; }
-      if (!canJoinTeam(me, msg.team)) { lobbyError(ws, 'team-full'); return; }
-      me.team = msg.team; broadcastLobby(); return;
+      const team = msg.team === 'blue' ? 'blue' : 'red';
+      if (me.team === team) return;
+      if (!canJoinTeam(me, team)) {
+        // Una selección explícita puede intercambiar el slot con un bot del
+        // destino. No se elimina ni reasigna silenciosamente a nadie y el
+        // roster conserva exactamente el mismo tamaño/balance.
+        if (!isHost(me)) { lobbyError(ws, 'team-full'); return; }
+        const bot = [...bots.values()].find((b) => b.team === team);
+        if (!bot) { lobbyError(ws, 'team-full'); return; }
+        bot.team = me.team;
+      }
+      me.team = team; broadcastLobby(); return;
     }
     if (msg.t === 'lobbyBotAdd') {
       if (!isHost(me) || phase !== 'lobby') { lobbyError(ws, 'host-only'); return; }

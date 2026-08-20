@@ -148,11 +148,17 @@ export class Bot {
 
   _rememberGoalFailure(goal) {
     if (!goal) return;
+    const remembered = this.failedRoutes.find((f) => f.kind === 'goal' &&
+      Math.hypot(f.x - goal.x, f.z - goal.z) < 1.2);
+    if (remembered) { remembered.ttl = FAILED_ROUTE_TTL; return; }
     this.failedRoutes.push({ kind: 'goal', x: goal.x, z: goal.z, ttl: FAILED_ROUTE_TTL });
   }
 
   _rememberSideFailure(recovery) {
     if (!recovery) return;
+    const remembered = this.failedRoutes.find((f) => f.kind === 'side' &&
+      f.key === recovery.key && f.side === recovery.side);
+    if (remembered) { remembered.ttl = FAILED_ROUTE_TTL; return; }
     this.failedRoutes.push({
       kind: 'side', key: recovery.key, side: recovery.side, ttl: FAILED_ROUTE_TTL,
     });
@@ -224,6 +230,8 @@ export class Bot {
     if (!best) return false;
     this.recovery = {
       ...best, key, collider, age: 0,
+      forwardX: fx, forwardZ: fz, perpX: px, perpZ: pz,
+      targetP: best.x * px + best.z * pz,
       goalX: goal?.x ?? null, goalZ: goal?.z ?? null,
     };
     this.avoidSide = best.side;
@@ -231,12 +239,16 @@ export class Bot {
     return true;
   }
 
-  _recoverFromStuck(match, contact, requested, goal) {
+  _recoverFromStuck(match, contact, requested, goal, reason = 'blocked') {
+    this.lastRecoveryReason = reason;
     const previous = this.recovery;
     if (previous) this._rememberSideFailure(previous);
     this.recovery = null;
     const collider = contact?.collider || previous?.collider || null;
-    if (collider && this._startObstacleRecovery(collider, requested.x, requested.z, goal, match)) return;
+    const retry = previous
+      ? { x: previous.forwardX, z: previous.forwardZ }
+      : requested;
+    if (collider && this._startObstacleRecovery(collider, retry.x, retry.z, goal, match)) return;
 
     // Ambos lados fallaron o el bloqueo no pertenece al mundo estático:
     // descartar el destino y pedir otra decisión táctica, no invertir al azar.
@@ -267,6 +279,23 @@ export class Bot {
   // crea un waypoint persistente detrás de una de sus esquinas.
   _steer(dx, dz, match, goal) {
     _v1.set(this.pos.x, 0.7, this.pos.z);
+    if (this.recovery) {
+      const currentP = this.pos.x * this.recovery.perpX + this.pos.z * this.recovery.perpZ;
+      const lateral = this.recovery.targetP - currentP;
+      // Mantener la tangente hasta quedar realmente fuera de la proyección de
+      // la pared. Un look-ahead corto podía dejar de verla a mitad del rodeo y
+      // volver a cortar diagonalmente contra el mismo volumen.
+      if (Math.abs(lateral) > 0.42) {
+        const side = Math.sign(lateral);
+        let tx = this.recovery.perpX * side - this.recovery.forwardX * 0.12;
+        let tz = this.recovery.perpZ * side - this.recovery.forwardZ * 0.12;
+        const tl = Math.max(0.001, Math.hypot(tx, tz)); tx /= tl; tz /= tl;
+        _v2.set(tx, 0, tz);
+        if (this.world.raycast(_v1, _v2, 0.82) === null) {
+          return { x: tx, z: tz, blocked: true, hit: null };
+        }
+      }
+    }
     _v2.set(dx, 0, dz);
     const lowHit = this.world.raycastHit?.(_v1, _v2, 1.35);
     if (!lowHit) return { x: dx, z: dz, blocked: false, hit: null };
@@ -276,7 +305,9 @@ export class Bot {
     if (!highHit) return { x: dx, z: dz, blocked: false, hit: lowHit };
 
     const obstacle = lowHit.collider || highHit.collider;
-    if (!this.recovery || this.recovery.key !== this._obstacleKey(obstacle)) {
+    // No reemplazar un bypass activo por cada cara contigua de una esquina:
+    // ese ping-pong reiniciaba el detector de progreso y podía durar segundos.
+    if (!this.recovery) {
       this._startObstacleRecovery(obstacle, dx, dz, goal, match);
     }
     let rx = dx, rz = dz;
@@ -285,6 +316,22 @@ export class Bot {
       const rl = Math.max(0.001, Math.hypot(rx, rz)); rx /= rl; rz /= rl;
     }
     _v1.y = 0.7;
+    // Frente a una pared ancha, rotar alrededor del vector al waypoint aún
+    // puede apuntar a través del volumen. Primero prueba la tangente estable
+    // del lado elegido: gana espacio lateral hasta descubrir la esquina.
+    if (this.recovery) {
+      const tx = -this.recovery.forwardZ * this.recovery.side;
+      const tz = this.recovery.forwardX * this.recovery.side;
+      for (const forwardBias of [-0.16, 0, 0.16]) {
+        let nx = tx + this.recovery.forwardX * forwardBias;
+        let nz = tz + this.recovery.forwardZ * forwardBias;
+        const nl = Math.max(0.001, Math.hypot(nx, nz)); nx /= nl; nz /= nl;
+        _v2.set(nx, 0, nz);
+        if (this.world.raycast(_v1, _v2, 0.9) === null) {
+          return { x: nx, z: nz, blocked: true, hit: lowHit };
+        }
+      }
+    }
     for (const ang of [0, 0.42 * this.avoidSide, 0.85 * this.avoidSide,
                        -0.42 * this.avoidSide, 1.35 * this.avoidSide]) {
       const c = Math.cos(ang), s = Math.sin(ang);
@@ -583,10 +630,39 @@ export class Bot {
       const rx = this.recovery.x - this.pos.x, rz = this.recovery.z - this.pos.z;
       const rd = Math.hypot(rx, rz);
       if (rd < 0.65) {
+        const completed = this.recovery;
         this.recovery = null;
-        this._resetProgress();
-      } else if (this.recovery.age > 3.2) {
-        this._recoverFromStuck(match, null, { x: rx / rd, z: rz / rd }, activeGoal);
+        let chained = false;
+        if (activeGoal) {
+          const gx = activeGoal.x - this.pos.x, gz = activeGoal.z - this.pos.z;
+          const gl = Math.hypot(gx, gz);
+          if (gl > 0.8) {
+            _v1.set(this.pos.x, 1.55, this.pos.z);
+            _v2.set(gx / gl, 0, gz / gl);
+            const nextHit = this.world.raycastHit?.(_v1, _v2, Math.min(2.4, gl));
+            // Cajas, barandales y estructuras suelen estar formadas por
+            // colliders contiguos. Encadenarlos conserva el rodeo en vez de
+            // volver al waypoint final entre dos piezas de la misma barrera.
+            if (nextHit?.collider) {
+              const nextKey = this._obstacleKey(nextHit.collider);
+              if (nextKey === completed.key) {
+                completed.x += completed.perpX * completed.side * 1.25;
+                completed.z += completed.perpZ * completed.side * 1.25;
+                completed.targetP += completed.side * 1.25;
+                completed.age = 0;
+                this.recovery = completed;
+                this._resetProgress();
+                chained = true;
+              } else {
+                chained = this._startObstacleRecovery(nextHit.collider,
+                  completed.forwardX, completed.forwardZ, activeGoal, match);
+              }
+            }
+          }
+        }
+        if (!chained) this._resetProgress();
+      } else if (this.recovery.age > 3) {
+        this._recoverFromStuck(match, null, { x: rx / rd, z: rz / rd }, activeGoal, 'bypass-timeout');
       } else {
         mx = rx / rd; mz = rz / rd;
         this._face(mx, mz, dt, 9);
@@ -679,7 +755,8 @@ export class Bot {
         _v2.set(steering.x, 0, steering.z);
         const contact = steering.hit || this.world.raycastHit?.(_v1, _v2, 1.6) || null;
         this.speed = 0; this.velX = 0; this.velZ = 0;
-        this._recoverFromStuck(match, contact, steering, activeGoal);
+        this._recoverFromStuck(match, contact, steering, activeGoal,
+          repeatedContact ? 'repeated-contact' : 'no-progress');
       } else if (this.progressT >= STUCK_WINDOW) {
         this._resetProgress();
       }

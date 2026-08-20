@@ -388,6 +388,17 @@
   .btn-num { color: var(--dim); font-size: 9px; }
   .btn.primary .btn-num { color: #683115; }
   #btn-resume { margin-bottom: 8px; }
+  .pause-actions { display: none; gap: 8px; }
+  #main-card.in-match { width: min(520px, calc(100vw - 48px)); }
+  #main-card.in-match .menu-grid { grid-template-columns: 1fr; }
+  #main-card.in-match #btn-bots,
+  #main-card.in-match #btn-practice,
+  #main-card.in-match #btn-online,
+  #main-card.in-match .prep-panel,
+  #main-card.in-match .menu-note { display: none; }
+  #main-card.in-match .pause-actions { display: grid; }
+  #btn-leave-match { color: #ffb091; border-color: #6d3b31; }
+  #btn-leave-match:hover { color: #fff; border-color: #d94f3f; background: #42231f; }
 
   .prep-panel { background: rgba(17,20,25,.96); border-left: 1px solid var(--line); padding: 22px; }
   .prep-head { display: flex; justify-content: space-between; align-items: center; gap: 12px;
@@ -604,14 +615,19 @@
             <span class="btn-copy" data-i18n="common.resume">RESUME</span><span class="btn-num">→</span>
           </button>
           <button class="btn primary" id="btn-bots">
-            <span class="btn-copy"><span data-i18n="menu.bots">VS BOTS (4v4)</span><small data-i18n="menu.botsSub">ROUND-BASED MATCH · BEST OF 3</small></span><span class="btn-num">01</span>
+            <span class="btn-copy" data-i18n="menu.bots">VS BOTS (4v4)</span><span class="btn-num">01</span>
           </button>
           <button class="btn" id="btn-practice">
-            <span class="btn-copy"><span data-i18n="menu.practice">PRACTICE</span><small data-i18n="menu.practiceSub">MOVING TARGETS · NO SCORE</small></span><span class="btn-num">02</span>
+            <span class="btn-copy" data-i18n="menu.practice">PRACTICE</span><span class="btn-num">02</span>
           </button>
           <button class="btn" id="btn-online">
-            <span class="btn-copy"><span data-i18n="menu.multiplayer">MULTIPLAYER</span><small data-i18n="menu.multiplayerSub">DIRECT SERVER CONNECTION</small></span><span class="btn-num">03</span>
+            <span class="btn-copy" data-i18n="menu.multiplayer">MULTIPLAYER</span><span class="btn-num">03</span>
           </button>
+          <div class="pause-actions" id="pause-actions">
+            <button class="btn" id="btn-pause-controls" data-i18n="common.controls">CONTROLS</button>
+            <button class="btn" id="btn-pause-fullscreen" data-i18n="common.fullscreen">FULLSCREEN</button>
+            <button class="btn" id="btn-leave-match" data-i18n="common.leaveMatch">LEAVE MATCH</button>
+          </div>
         </div>
       </section>
       <aside class="prep-panel">

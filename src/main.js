@@ -16,7 +16,7 @@ import { resolveShot, resolveGuidedShot, applySpread, applyPelletPattern } from 
 import { muzzleHasClearance, segmentsHaveClearance } from './combat/cover-fire.js';
 import { requiredFireBuffer } from './combat/fire-control.js';
 import { Effects } from './fx/effects.js';
-import { Audio } from './fx/audio.js';
+import { Audio, selectAudioListener } from './fx/audio.js';
 import { HUD } from './ui/hud.js';
 import { NetClient } from './net/client.js';
 import { BotMatch } from './game/botmatch.js';
@@ -51,6 +51,7 @@ const camera = new THREE.PerspectiveCamera(TUNING.cam.fovNormal, 1, 0.1, 200);
 const world = new World(scene, 'azoteas');
 const effects = new Effects(scene);
 const audio = new Audio();
+audio.setAmbience('azoteas');
 const hud = new HUD();
 const input = new Input(canvas);
 const shoulderCam = new ShoulderCamera(camera, world);
@@ -77,6 +78,7 @@ function updateMenuBackdrop(now = performance.now()) {
 function showMenuBackdrop() {
   effects.clearImpacts();
   world.setLayout('azoteas');
+  audio.setAmbience('azoteas');
   updateMenuBackdrop();
 }
 
@@ -128,6 +130,7 @@ const G = {
     return v >= 0 && v <= 4 ? v : 0;
   })(),
   footAcc: 0,
+  presentationAudioKey: '',
 };
 
 const mapLabel = (map) => t(`map.${map || 'fortaleza'}`);
@@ -226,6 +229,23 @@ function onlinePresentation(now = Date.now() / 1000) {
 
 function activePresentation(now = Date.now() / 1000) {
   return G.mode === 'bots' ? botPresentation() : onlinePresentation(now);
+}
+
+function updatePresentationAudio(view) {
+  const key = !view ? 'gameplay' : view.phase === 'countdown'
+    ? `countdown:${view.count}`
+    : view.phase;
+  if (key === G.presentationAudioKey) return;
+  const previous = G.presentationAudioKey;
+  G.presentationAudioKey = key;
+  if (view?.phase === 'countdown') audio.countdown(view.count);
+  else if (view?.phase === 'result') {
+    const won = G.mode === 'bots'
+      ? G.botMatch?.matchWinner === G.team
+      : G.onlineFinal?.team === G.team;
+    if (won) audio.win(); else audio.defeat();
+  } else if (view?.phase === 'final-score' && previous !== 'result') audio.roundEnd();
+  else if (view?.phase === 'mvp') audio.mvp();
 }
 
 function updateMatchCamera(now, view) {
@@ -366,15 +386,27 @@ function updateSpectatorCamera(dt, now) {
 // confundir la propia cobertura del emisor con una pared intermedia.
 const audioOccOrigin = new THREE.Vector3();
 const audioOccDir = new THREE.Vector3();
+const audioListenerRight = new THREE.Vector3();
 audio.setSpatialContext(
   () => {
     if (!G.player) return null;
-    return {
+    // Al espectar, cámara y listener son literalmente la misma referencia.
+    // El callback se evalúa en cada evento, así que cycling y muerte del
+    // observado actualizan el espacio sonoro en el mismo frame que la cámara.
+    if (G.spectator.active && G.spectator.deathHold <= 0) {
+      audioListenerRight.set(1, 0, 0).applyQuaternion(camera.quaternion);
+      const rl = Math.max(0.001, Math.hypot(audioListenerRight.x, audioListenerRight.z));
+      return selectAudioListener(true, {
+        x: camera.position.x, y: camera.position.y, z: camera.position.z,
+        right: { x: audioListenerRight.x / rl, z: audioListenerRight.z / rl },
+      }, null);
+    }
+    return selectAudioListener(false, null, {
       x: G.player.pos.x,
       y: (G.player.y ?? 0) + 1.15,
       z: G.player.pos.z,
       right: shoulderCam.flatRight(),
-    };
+    });
   },
   (source, listener) => {
     audioOccOrigin.set(listener.x, listener.y, listener.z);
@@ -476,7 +508,22 @@ btnEnter.focus();
 
 const menuIsOpen = () => !hud.el.menu.classList.contains('off');
 
+let lastUiHover = null;
+document.addEventListener('pointerover', (e) => {
+  const button = e.target.closest?.('button:not(:disabled)');
+  if (!button || button === lastUiHover || !menuIsOpen()) return;
+  lastUiHover = button;
+  audio.uiMove();
+});
+document.addEventListener('pointerout', (e) => {
+  if (lastUiHover && !lastUiHover.contains(e.relatedTarget)) lastUiHover = null;
+});
+document.addEventListener('click', (e) => {
+  if (e.target.closest?.('button:not(:disabled)') && menuIsOpen()) audio.uiConfirm();
+});
+
 function openMenu() {
+  if (G.mode) lobbyUI.hide();
   hud.showMenu(true);
   showControls(false);
   hud.el.menu.classList.toggle('in-match-bg', !!G.mode);
@@ -580,6 +627,7 @@ function openLocalLobby() {
   G.lobby = defaultLocalLobby(); G.lobbyKind = 'local';
   hud.show(false); hud.showMenu(true); showControls(false); input.releaseLock();
   lobbyUI.show(G.lobby, 'player', 'local');
+  audio.lobbyEnter();
 }
 
 function lobbyAction(action, value) {
@@ -594,7 +642,16 @@ function lobbyAction(action, value) {
   }
   const slots = () => [...G.lobby.players, ...G.lobby.bots];
   const teamRoom = (team, skip = '') => slots().filter((p) => p.id !== skip && p.team === team).length < TEAM_CAPACITY;
-  if (action === 'team' && teamRoom(value.team, 'player')) G.lobby.players[0].team = value.team;
+  if (action === 'team' && G.lobby.players[0].team !== value.team) {
+    const player = G.lobby.players[0];
+    if (teamRoom(value.team, player.id)) player.team = value.team;
+    else {
+      // La acción de la UI dice explícitamente "cambiar con bot": conserva
+      // tamaño y balance sin borrar ni mover jugadores silenciosamente.
+      const bot = G.lobby.bots.find((b) => b.team === value.team);
+      if (bot) { bot.team = player.team; player.team = value.team; }
+    }
+  }
   if (action === 'settings') G.lobby.settings = normalizeLobbySettings({ ...G.lobby.settings, ...value });
   if (action === 'removeBot') G.lobby.bots = G.lobby.bots.filter((b) => b.id !== value.id);
   if (action === 'moveBot') {
@@ -618,6 +675,11 @@ function startLobbyMatch() {
 function showMainMenuFromLobby(message = '') {
   lobbyUI.hide(); mainCard.style.display = '';
   G.lobby = null; G.lobbyKind = null; G.mode = null;
+  hud.el.menu.classList.remove('in-match-bg');
+  mainCard.classList.remove('in-match');
+  btnResume.style.display = 'none';
+  document.getElementById('menu-title').textContent = t('common.play');
+  document.getElementById('menu-kicker').textContent = t('menu.selectMode');
   showMenuBackdrop(); hud.show(false); hud.showMenu(true); showControls(false);
   netStatus.textContent = message; input.releaseLock();
 }
@@ -649,6 +711,24 @@ btnMap.addEventListener('click', () => {
 updateMapBtn();
 btnResume.addEventListener('click', () => closeMenu());
 document.getElementById('btn-pause').addEventListener('click', () => openMenu());
+document.getElementById('btn-pause-controls').addEventListener('click', () => showControls(true));
+
+function leaveCurrentMatch() {
+  if (!G.mode) return;
+  startSeq++;
+  if (G.mode === 'bots' && G.lobby) {
+    G.mode = null;
+    teardown({ keepLobby: true });
+    showMenuBackdrop(); hud.show(false); hud.showMenu(true); input.releaseLock();
+    lobbyUI.show(G.lobby, 'player', 'local');
+    audio.lobbyEnter();
+    return;
+  }
+  G.mode = null;
+  teardown({ keepLobby: false });
+  showMainMenuFromLobby();
+}
+document.getElementById('btn-leave-match').addEventListener('click', leaveCurrentMatch);
 
 // pantalla completa (botón del menú + ícono del HUD)
 function toggleFullscreen() {
@@ -664,6 +744,7 @@ function toggleFullscreen() {
   } catch { /* sin soporte */ }
 }
 document.getElementById('btn-fullscreen').addEventListener('click', () => toggleFullscreen());
+document.getElementById('btn-pause-fullscreen').addEventListener('click', () => toggleFullscreen());
 document.getElementById('btn-fs').addEventListener('click', () => toggleFullscreen());
 document.addEventListener('fullscreenchange', () => {
   const on = !!document.fullscreenElement;
@@ -1147,6 +1228,7 @@ function teardown({ keepNet = false, keepLobby = true } = {}) {
   G.onlineRoundResult = null;
   G.onlinePhase = keepNet ? G.onlinePhase : 'lobby';
   G.flowLockedPrev = false;
+  G.presentationAudioKey = '';
   if (!keepLobby) { G.lobby = null; G.lobbyKind = null; }
 }
 
@@ -1235,6 +1317,7 @@ function startBots(lobby = G.lobby || defaultLocalLobby()) {
   const config = lobby.settings || DEFAULT_LOBBY_SETTINGS;
   G.mapChoice = config.map;
   world.setLayout(config.map);
+  audio.setAmbience(config.map);
   G.mode = 'bots';
   const localSlot = lobby.players.find((p) => p.id === 'player') || lobby.players[0];
   spawnLocal(localSlot.team, world.spawns[localSlot.team][0]);
@@ -1282,7 +1365,7 @@ function startBots(lobby = G.lobby || defaultLocalLobby()) {
       exitSpectator();
       if (protect) grantSpawnProtection();
     },
-    onRoundStart: () => grantSpawnProtection(),
+    onRoundStart: () => { grantSpawnProtection(); audio.roundStart(); },
     onMatchEnd: () => {
       const bm = G.botMatch; // identidad, no modo: el string 'bots' también
       setTimeout(() => {     // es cierto para una partida NUEVA (la mataba)
@@ -1304,6 +1387,7 @@ function startBots(lobby = G.lobby || defaultLocalLobby()) {
     playerTeam: localSlot.team, rounds: config.rounds, lives: config.lives,
     bots: lobby.bots.map((b) => ({ id: b.id, name: b.name, team: b.team, variant: b.v })),
   });
+  lobbyUI.hide();
   hud.showMenu(false);
   showControls(false);
   hud.show(true);
@@ -1320,6 +1404,7 @@ function startPractice() {
   G.name = saveName();
   effects.clearImpacts();
   world.setLayout(G.mapChoice); // mapa elegido en el menú
+  audio.setAmbience(G.mapChoice);
   G.mode = 'practice';
   spawnLocal('red', world.spawns.red[1]);
   G.dummies = new Dummies(scene, world);
@@ -1329,6 +1414,7 @@ function startPractice() {
   hud.show(true);
   hud.score(0, 0);
   hud.center(t('msg.practice'), t('msg.practiceSub'), 2600);
+  audio.roundStart();
   input.requestLock();
   setTimeout(() => hud.hint(t('msg.axisHint', { state: t(input.invertY ? 'msg.inverted' : 'msg.normal') }), 3000), 3000);
 }
@@ -1358,6 +1444,7 @@ async function connectOnlineLobby(action) {
     G.mode = null;
     hud.show(false); hud.showMenu(true); showControls(false); input.releaseLock();
     lobbyUI.show(G.lobby, net.id, 'online');
+    audio.lobbyEnter();
     netStatus.textContent = '';
   } catch (e) {
     netStatus.textContent = t('msg.error', { message: e.message });
@@ -1397,6 +1484,7 @@ function setupOnlineMatch(m) {
   G.onlinePhase = m.phase || 'intro'; G.onlineStartAt = m.startAt || 0;
   G.onlineWins = m.wins || { red: 0, blue: 0 }; G.scores = m.lives || { red: G.onlineSettings.lives, blue: G.onlineSettings.lives };
   G.mapChoice = G.onlineSettings.map; world.setLayout(G.mapChoice); effects.clearImpacts();
+  audio.setAmbience(G.mapChoice);
   const roster = m.players || [];
   const mine = roster.find((p) => p.id === net.id);
   if (!mine) return;
@@ -1683,7 +1771,6 @@ function bindNet(net) {
   });
   net.on('win', (m) => {
     if (!alive()) return;
-    audio.win();
     G.onlineStartAt = 0;
     G.onlineFinal = {
       team: m.team, at: Date.now() / 1000,
@@ -1721,13 +1808,14 @@ function bindNet(net) {
   net.on('start', () => {
     if (!alive()) return;
     G.onlineStartAt = 0; G.onlinePhase = 'playing'; G.onlineRoundResult = null;
+    audio.roundStart();
   });
   net.on('returnLobby', () => {
     if (!alive()) return;
     teardown({ keepNet: true, keepLobby: true });
     G.mode = null; G.onlinePhase = 'lobby';
     showMenuBackdrop(); hud.show(false); hud.showMenu(true); input.releaseLock();
-    if (G.lobby) lobbyUI.show(G.lobby, net.id, 'online');
+    if (G.lobby) { lobbyUI.show(G.lobby, net.id, 'online'); audio.lobbyEnter(); }
   });
   net.on('close', () => {
     if (!alive()) return; // un intento de conexión fallido no mata la partida en curso
@@ -2243,6 +2331,7 @@ function frame(now) {
     }
 
     const flowView = activePresentation(Date.now() / 1000);
+    updatePresentationAudio(flowView);
     hud.presentation(flowView);
     if (flowView && flowView.phase !== 'countdown') updateMatchCamera(now, flowView);
     else if (G.spectator.active) updateSpectatorCamera(dt, now);

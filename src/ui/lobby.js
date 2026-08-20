@@ -73,7 +73,10 @@ export class LobbyUI {
     }).join('');
     for (let i = members.length; i < cap; i++) rows += `<div class="lobby-slot empty"><span>${esc(t('lobby.openSlot'))}</span></div>`;
     const full = members.length >= cap;
-    return `<div class="lobby-team-head"><span>${esc(t(team === 'red' ? 'lobby.teamRed' : 'lobby.teamBlue'))}</span><span>${members.length}/${cap}</span></div><div class="lobby-slots">${rows}</div><button class="lobby-mini lobby-add" data-action="team" data-team="${team}" ${me?.team === team || full ? 'disabled' : ''}>${esc(full ? t('lobby.teamFull') : t('lobby.joinTeam'))}</button>${host ? `<button class="lobby-mini lobby-add" data-action="add" data-team="${team}" ${full ? 'disabled' : ''}>+ ${esc(t('lobby.addBot'))}</button>` : ''}`;
+    const canSwapBot = host && me?.team !== team && full && members.some((p) => p.bot);
+    const teamDisabled = me?.team === team || (full && !canSwapBot);
+    const teamAction = canSwapBot ? t('lobby.swapBot') : full ? t('lobby.teamFull') : t('lobby.joinTeam');
+    return `<div class="lobby-team-head"><span>${esc(t(team === 'red' ? 'lobby.teamRed' : 'lobby.teamBlue'))}</span><span>${members.length}/${cap}</span></div><div class="lobby-slots">${rows}</div><button class="lobby-mini lobby-add" data-action="team" data-team="${team}" ${teamDisabled ? 'disabled' : ''}>${esc(teamAction)}</button>${host ? `<button class="lobby-mini lobby-add" data-action="add" data-team="${team}" ${full ? 'disabled' : ''}>+ ${esc(t('lobby.addBot'))}</button>` : ''}`;
   }
 
   settingsMarkup(s, host, validation) {

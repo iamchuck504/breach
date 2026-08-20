@@ -82,6 +82,12 @@ try {
   assert.equal(full.validation.counts.blue, 4);
   b.send({ t: 'lobbyTeam', team: 'blue' });
   assert.equal((await b.wait('lobbyError')).code, 'team-full');
+  a.send({ t: 'lobbyTeam', team: 'red' });
+  const swapped = await a.wait('lobby', (m) =>
+    m.bots.length === 6 && m.players.find((p) => p.id === aw.id)?.team === 'red');
+  assert.equal(swapped.validation.counts.red, 4);
+  assert.equal(swapped.validation.counts.blue, 4);
+  assert.equal(swapped.bots.filter((bot) => bot.team === 'blue').length, 4);
 
   a.send({ t: 'lobbyStart' });
   const started = await a.wait('matchStart');
