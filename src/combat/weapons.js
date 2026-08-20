@@ -14,6 +14,7 @@ export class Weapons {
     this.swapT = 0;        // tiempo restante del cambio
     this._swapped = false; // ya se intercambió el modelo a mitad del gesto
     this.reloadInterrupted = false; // evento de un frame para audio/animación
+    this.reloadInserted = 0; // cartuchos insertados físicamente este frame
   }
 
   get def() { return TUNING.weapons[this.cur]; }
@@ -31,6 +32,7 @@ export class Weapons {
     this.swapT = 0;
     this._swapped = false;
     this.reloadInterrupted = false;
+    this.reloadInserted = 0;
   }
 
   // La muerte tiene prioridad absoluta sobre gestos del arma. Congelar el
@@ -71,6 +73,7 @@ export class Weapons {
   update(dt, wantsFire, wantsFirePressed, canFire) {
     const s = this.st, d = this.def;
     this.reloadInterrupted = false;
+    this.reloadInserted = 0;
     // el cooldown corre para AMBAS armas (guardar la escopeta no lo congela)
     this.state.smg.cd = Math.max(0, this.state.smg.cd - dt);
     this.state.shotgun.cd = Math.max(0, this.state.shotgun.cd - dt);
@@ -101,7 +104,17 @@ export class Weapons {
 
     if (s.reload > 0) {
       s.reload -= dt;
-      if (s.reload <= 0) {
+      if (d.perShell) {
+        // La escopeta confirma munición al cerrar cada ciclo de inserción. El
+        // carry conserva el tiempo sobrante sin regalar cartuchos al iniciar.
+        while (s.reload <= 0 && s.mag < d.mag && s.reserve > 0) {
+          s.mag++;
+          s.reserve--;
+          this.reloadInserted++;
+          if (s.mag < d.mag && s.reserve > 0) s.reload += d.reloadTime;
+          else s.reload = 0;
+        }
+      } else if (s.reload <= 0) {
         const take = Math.min(d.mag - s.mag, s.reserve);
         s.mag += take; s.reserve -= take;
         s.reload = 0;

@@ -23,6 +23,87 @@ function tacticalCancel(weapon) {
 tacticalCancel('smg');
 tacticalCancel('shotgun');
 
+function insertShell(w) {
+  assert.equal(w.cur, 'shotgun');
+  assert.ok(w.reloading, 'la escopeta debe estar recargando');
+  const before = w.st.mag;
+  w.update(w.st.reload + 0.001, false, false, true);
+  assert.equal(w.st.mag, before + 1, 'cada ciclo debe confirmar exactamente un cartucho');
+  assert.equal(w.reloadInserted, 1, 'debe emitir el evento físico de inserción');
+}
+
+for (const start of [7, 4, 1]) {
+  const w = new Weapons();
+  w.cur = 'shotgun'; w.st.mag = start; w.st.reserve = 24;
+  w.startReload();
+  const reserve = w.st.reserve;
+  assert.equal(w.update(0.18, false, true, true), true,
+    `${start}→fire debe cancelar y disparar la munición existente`);
+  assert.equal(w.st.mag, start - 1);
+  assert.equal(w.st.reserve, reserve, 'cancelar antes de insertar no puede tomar reserva');
+}
+
+{
+  const w = new Weapons();
+  w.cur = 'shotgun'; w.st.mag = 0; w.st.reserve = 8;
+  w.startReload();
+  const firstCycle = w.st.reload;
+  assert.equal(w.update(firstCycle * 0.45, false, true, true), false,
+    'disparar antes de insertar el primer cartucho no puede producir un tiro');
+  assert.equal(w.st.mag, 0, 'iniciar/avanzar parcialmente no puede regalar un cartucho');
+  assert.equal(w.reloadInterrupted, false, 'la recarga desde 0 debe continuar');
+  insertShell(w);
+  assert.equal(w.st.mag, 1);
+  assert.equal(w.st.reserve, 7);
+  assert.equal(w.update(1 / 60, false, true, true), true,
+    '0→insertar 1→fire debe interrumpir y disparar inmediatamente');
+  assert.equal(w.st.mag, 0);
+  assert.equal(w.reloading, false);
+}
+
+{
+  const w = new Weapons();
+  w.cur = 'shotgun'; w.st.mag = 0; w.st.reserve = 8;
+  w.startReload();
+  insertShell(w); insertShell(w);
+  assert.equal(w.st.mag, 2, 'dos ciclos deben dejar dos cartuchos utilizables');
+  assert.equal(w.update(1 / 60, false, true, true), true);
+  assert.equal(w.st.mag, 1, 'interrumpir después de dos inserciones consume solo el disparo');
+}
+
+{
+  const w = new Weapons();
+  w.cur = 'shotgun'; w.st.mag = 0; w.st.reserve = 8;
+  w.startReload();
+  for (let i = 0; i < 8; i++) insertShell(w);
+  assert.equal(w.st.mag, 8, '0→8 debe completar el tubo cartucho por cartucho');
+  assert.equal(w.st.reserve, 0);
+  assert.equal(w.reloading, false);
+}
+
+{
+  const w = new Weapons();
+  w.cur = 'shotgun'; w.st.mag = 0; w.st.reserve = 8;
+  w.startReload();
+  for (let i = 0; i < 5; i++) {
+    assert.equal(w.update(w.def.reloadTime / 6, false, true, true), false,
+      'spam durante la primera inserción no debe disparar');
+    assert.equal(w.st.mag, 0, 'spam temprano no debe conceder munición');
+  }
+  insertShell(w);
+  assert.equal(w.update(1 / 60, false, true, true), true,
+    'el siguiente click tras la inserción sí debe disparar');
+}
+
+{
+  const w = new Weapons();
+  w.cur = 'shotgun'; w.st.mag = 0; w.st.reserve = 8;
+  w.startReload(); insertShell(w);
+  assert.equal(w.startSwap(), true, 'cambiar de arma debe cancelar la recarga por cartucho');
+  assert.equal(w.state.shotgun.mag, 1, 'el cartucho ya insertado debe conservarse al cambiar');
+  assert.equal(w.state.shotgun.reload, 0);
+}
+
 {
   const w = new Weapons();
   w.st.mag = 12; w.st.reserve = 60;
@@ -59,4 +140,4 @@ tacticalCancel('shotgun');
     'el disparo bufereado debe salir cuando ya existe una bala válida');
 }
 
-console.log('RELOAD CANCEL OK · SMG/escopeta · parcial/bloqueado/vacío · sin munición mágica');
+console.log('RELOAD CANCEL OK · SMG por cargador · escopeta 0→8 por cartucho · cancel/swap/spam');

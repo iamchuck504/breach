@@ -2174,7 +2174,8 @@ function simStep(dt) {
   // Sin munición físicamente disponible, el gatillo no debe forzar pose de
   // tiro: evita que una recarga vacía deje al jugador expuesto sobre el cover.
   // Una recarga táctica sí puede interrumpirse porque conserva balas en el mag.
-  const canInterruptReload = G.weapons.reloading && input.firePressed && G.weapons.st.mag > 0;
+  const canInterruptReload = G.weapons.reloading &&
+    (input.firePressed || G.fireBuffer > 0) && G.weapons.st.mag > 0;
   const hasAmmo = (!G.weapons.reloading || canInterruptReload) &&
     (G.weapons.st.mag > 0 || G.weapons.st.reserve > 0);
   // la intención de disparo SIEMPRE llega al controller: cancela el roadie
@@ -2188,6 +2189,9 @@ function simStep(dt) {
     coverPoseReady(p.aim, wantsFire) && (!wantsFire || coverFireClear());
   const fired = p.dead ? false
     : G.weapons.update(dt, input.fireHeld, input.firePressed || G.fireBuffer > 0, canFire);
+  // Tras la primera inserción desde 0, conservar margen para que cover/arma
+  // alcancen una pose válida antes de consumir el click que estaba esperando.
+  if (G.weapons.reloadInserted > 0 && G.fireBuffer > 0) G.fireBuffer = Math.max(G.fireBuffer, 0.3);
   if (fired) G.fireBuffer = 0;
   // Resolver después de actualizar el rig: con origen físico en el muzzle, un
   // tiro emitido antes de aplicar la pose del frame nacía en la postura vieja.
@@ -2197,7 +2201,8 @@ function simStep(dt) {
   if (!wasReloading && G.weapons.reloading) audio.reload(); // incluye auto-recarga
   // Una recarga interrumpida abandona el gesto sin reproducir el sonido que
   // comunica cargador completo.
-  if (wasReloading && !G.weapons.reloading && !G.weapons.reloadInterrupted) audio.reloadDone();
+  if (G.weapons.reloadInserted > 0) audio.reloadDone();
+  else if (wasReloading && !G.weapons.reloading && !G.weapons.reloadInterrupted) audio.reloadDone();
 
   // práctica = munición de reserva infinita (nunca te quedas sin disparar)
   if (G.mode === 'practice') {

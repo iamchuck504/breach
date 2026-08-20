@@ -41,6 +41,21 @@ try {
     await page.evaluate(([i, down]) => window.__padButton(i, down), [button, false]);
     await page.waitForTimeout(75);
   };
+  const tapMirrored = async (button, key) => {
+    await page.evaluate(({ button, key }) => {
+      window.__padButton(button, true);
+      document.dispatchEvent(new KeyboardEvent('keydown', { key, code: key, bubbles: true }));
+      for (let i = 0; i < 5; i++) {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key, code: key, repeat: true, bubbles: true }));
+      }
+    }, { button, key });
+    await page.waitForTimeout(120);
+    await page.evaluate(({ button, key }) => {
+      window.__padButton(button, false);
+      document.dispatchEvent(new KeyboardEvent('keyup', { key, code: key, bubbles: true }));
+    }, { button, key });
+    await page.waitForTimeout(75);
+  };
   const focus = (selector) => page.$eval(selector, (el) => el.focus());
   const active = () => page.evaluate(() => ({
     tag: document.activeElement?.tagName || '',
@@ -84,7 +99,9 @@ try {
     throw new Error('el foco/prompts de controller no son suficientemente visibles');
   }
 
-  await tap(13); // D-pad down: VS Bots -> Practice
+  // Arranque frío con Steam/Input mapper: el mismo gesto llega como D-pad y
+  // ArrowDown (incluyendo repeats). Debe seguir siendo exactamente un paso.
+  await tapMirrored(13, 'ArrowDown');
   await expectFocus({ id: 'btn-practice' }, 'D-pad vertical no siguió la jerarquía del main menu');
   await tap(15); // Practice -> Map, relación explícita entre columnas
   await expectFocus({ id: 'btn-map' }, 'derecha desde Practice no llegó a Map');
@@ -190,8 +207,16 @@ try {
   }
   const keyboardPrompts = await page.$eval('#menu-prompts', (el) => getComputedStyle(el).display);
   if (keyboardPrompts !== 'none') throw new Error('prompts de controller siguieron visibles con mouse');
+
+  // Reinicio completo: la inicialización debe conservar el mismo debounce.
+  await page.reload({ waitUntil: 'networkidle' });
+  await tap(0);
+  await page.waitForSelector('#splash.off', { state: 'attached' });
+  await page.waitForTimeout(80);
+  await tapMirrored(13, 'ArrowDown');
+  await expectFocus({ id: 'btn-practice' }, 'tras reiniciar, una pulsación volvió a producir múltiples saltos');
   if (errors.length) throw new Error(errors.join(' · '));
-  console.log('MENU CONTROLLER OK · splash/main/lobby/team/settings/character/pause · device swap');
+  console.log('MENU CONTROLLER OK · cold boot/reload · D-pad+Steam dedupe · stick · pantallas · device swap');
 } finally {
   await browser?.close();
   server.kill();

@@ -221,6 +221,9 @@ export class MenuControllerNavigator {
     this.stickLatched = false;
     this.repeatT = 0;
     this.pointer = null;
+    this.lastMoveAt = 0;
+    this.lastMoveDirection = null;
+    this.lastMoveSource = null;
 
     document.addEventListener('pointermove', (e) => this._pointerMove(e), { passive: true });
     document.addEventListener('mousedown', () => this.setMode('keyboard'), { passive: true });
@@ -263,7 +266,7 @@ export class MenuControllerNavigator {
     else if (pad.justPressed.has(PAD.RIGHT)) dpad = 'right';
     if (dpad) {
       this._blockStick(magnitude);
-      this.move(dpad); // exactamente un paso por flanco del botón
+      this.move(dpad, 'gamepad'); // exactamente un paso por flanco del botón
       return;
     }
 
@@ -278,7 +281,7 @@ export class MenuControllerNavigator {
       this.repeatT -= dt;
       if (this.repeatT <= 0) {
         this.repeatT = .18;
-        this.move(this.stickDir);
+        this.move(this.stickDir, 'gamepad');
       }
       return;
     }
@@ -288,7 +291,7 @@ export class MenuControllerNavigator {
       : (pad.moveZ > 0 ? 'up' : 'down');
     this.stickLatched = true;
     this.repeatT = .46;
-    this.move(this.stickDir);
+    this.move(this.stickDir, 'gamepad');
   }
 
   _blockStick(magnitude) {
@@ -321,9 +324,18 @@ export class MenuControllerNavigator {
     queueMicrotask(() => this._ensureFocus(true, true));
   }
 
-  move(direction) {
+  move(direction, source = 'programmatic') {
     const el = this._ensureFocus(true);
     if (!el) return;
+    const now = performance.now();
+    // Steam Input y algunos drivers presentan el mismo D-pad/stick como
+    // Gamepad API + flecha de teclado. La segunda señal del mismo gesto no
+    // puede mover el foco otra vez.
+    if (source !== this.lastMoveSource && direction === this.lastMoveDirection &&
+        now - this.lastMoveAt < 90) return;
+    this.lastMoveAt = now;
+    this.lastMoveDirection = direction;
+    this.lastMoveSource = source;
     if ((direction === 'left' || direction === 'right') &&
         el.matches('select, input[type="range"]')) {
       this._adjust(el, direction === 'right' ? 1 : -1);
@@ -378,7 +390,13 @@ export class MenuControllerNavigator {
   _ensureFocus(force, changed = false) {
     const scope = this._scope();
     const id = scope.id || 'menu';
-    if (id !== this.scopeId) { this.scopeId = id; changed = true; }
+    if (id !== this.scopeId) {
+      this.scopeId = id; changed = true;
+      // Una inclinación que nació en la pantalla anterior no debe repetir en
+      // la recién abierta. Permanece bloqueada hasta volver a neutral.
+      if (this.stickLatched) { this.stickDir = null; this.repeatT = 0; }
+      this.lastMoveAt = 0;
+    }
     if (visible(this.focused) && scope.contains(this.focused) && !changed) return this.focused;
     const items = this._items();
     if (!items.length) { this._clearFocus(); return null; }
@@ -438,9 +456,29 @@ export class MenuControllerNavigator {
 
   _key(e) {
     if (!this.active() || e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.repeat) return;
+    const map = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' };
+    const direction = map[e.key];
+    if (direction && this._padDirectionHeld(direction)) { e.preventDefault(); return; }
     this.setMode('keyboard');
     if (e.target?.matches?.('input:not([type="range"]), select')) return;
-    const map = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' };
-    if (map[e.key]) { e.preventDefault(); this._ensureFocus(true); this.move(map[e.key]); }
+    if (direction) {
+      e.preventDefault();
+      this._ensureFocus(true);
+      this.move(direction, 'keyboard');
+    }
+  }
+
+  _padDirectionHeld(direction) {
+    const pads = navigator.getGamepads?.() || [];
+    const button = { up: PAD.UP, down: PAD.DOWN, left: PAD.LEFT, right: PAD.RIGHT }[direction];
+    for (const gp of pads) {
+      if (!gp?.connected) continue;
+      if (gp.buttons?.[button]?.pressed || gp.buttons?.[button]?.value > .5) return true;
+      const x = gp.axes?.[0] || 0, y = gp.axes?.[1] || 0;
+      if (direction === 'left' && x < -.62 || direction === 'right' && x > .62 ||
+          direction === 'up' && y < -.62 || direction === 'down' && y > .62) return true;
+    }
+    return false;
   }
 }

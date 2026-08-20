@@ -98,7 +98,9 @@ export class HUD {
     const rel = w.reloading ? 1 - w.st.reload / w.def.reloadTime : null;
     bar.classList.toggle('reloading', w.reloading);
     if (cap <= 12) {
-      const filled = rel !== null ? Math.round(rel * cap) : w.st.mag;
+      // En per-shell solo se encienden cartuchos ya insertados; la animación
+      // por sí sola nunca debe representar munición todavía inutilizable.
+      const filled = w.def.perShell ? w.st.mag : (rel !== null ? Math.round(rel * cap) : w.st.mag);
       const segs = bar.children;
       for (let i = 0; i < segs.length; i++) segs[i].classList.toggle('on', i < filled);
     } else {

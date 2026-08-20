@@ -89,7 +89,7 @@ export const TUNING = {
     },
     shotgun: {
       nameKey: 'weapon.shotgun', rpm: 95, dmg: 13, headMult: 1.0,
-      mag: 8, reserve: 24, reloadTime: 2.1,
+      mag: 8, reserve: 24, reloadTime: 0.46, perShell: true,
       spreadAim: 4.6, spreadHip: 6.4, spreadBlind: 8.0,
       recoil: 1.6, range: 24, pellets: 8, auto: false,
       falloffStart: 6, falloffEnd: 19,  // dmg pleno hasta start, 0 en end
