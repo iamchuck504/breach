@@ -209,14 +209,27 @@ const sniperDmg = await page.evaluate(async () => {
   // y≈1.70 por su casquete superior y tapa casi toda la esfera de cabeza
   // (1.30..1.74). Barrido de altura para (a) confirmar que headMult ×2.2 se
   // aplica cuando el rayo SÍ entra por la cabeza y (b) medir esa franja.
+  // En ADS la cámara va sobre el HOMBRO (offset lateral 0.88): apuntar
+  // fijando el yaw desde el jugador deja el rayo fuera del blanco. Se apunta
+  // desde la posición REAL de la cámara, iterando porque mover el yaw la
+  // reubica en su órbita — igual que un jugador centrando la mira.
+  const aimAt = async (ty) => {
+    for (let i = 0; i < 4; i++) {
+      const c = window.BREACH_CAM.position;
+      const dx = d.x - c.x, dz = d.z - c.z, dy = ty - c.y;
+      p.cam.yaw = Math.atan2(-dx, -dz);
+      p.cam.pitch = Math.atan2(dy, Math.hypot(dx, dz));
+      p.yaw = p.cam.yaw;
+      await wait(110);
+    }
+  };
   let headDelta = 0, headAimY = null;
-  for (const aimY of [1.52, 1.62, 1.68, 1.71, 1.73]) {
+  for (const aimY of [1.52, 1.6, 1.66]) {
     d.hp = 400; d.alive = true;
     G.weapons.state.sniper.mag = 1;
     G.weapons.state.sniper.cd = 0;
     G.weapons.state.sniper.reload = 0;
-    p.cam.pitch = Math.atan2(aimY - 1.58, 4);
-    await wait(220);
+    await aimAt(aimY);
     const before = d.hp;
     window.BREACH_INPUT.firePressed = true;
     await wait(420);
@@ -233,13 +246,11 @@ check('sniper: un tiro al cuerpo hace 85 y NO mata',
   sniperDmg.hp1 > 0 && sniperDmg.hp0 - sniperDmg.hp1 === 85, JSON.stringify(sniperDmg));
 check('sniper: auto-recarga desde la reserva',
   sniperDmg.reloaded?.mag === 1 && sniperDmg.reloaded?.res === 4, JSON.stringify(sniperDmg));
-// MEDICIÓN (no aserción): con las hitboxes actuales la cápsula del cuerpo
-// (0.35..1.3 r0.4 → tope real 1.70) cubre casi toda la esfera de cabeza
-// (1.30..1.74), así que el barrido 1.52→1.73 devuelve SIEMPRE daño de
-// cuerpo. Es preexistente y afecta al headMult de TODAS las armas; queda
-// como dato para decidir balance, no como fallo de esta expansión.
-console.log(`INFO headshot: mejor delta=${sniperDmg.headDelta} @y=${sniperDmg.headAimY} ` +
-  `(cuerpo=85, headshot esperado=187 — franja de cabeza tapada por la cápsula)`);
+// El casquete superior de la cápsula ya no invade la cabeza: apuntar arriba
+// del cuello DEBE producir headshot (85 × 2.2 = 187).
+console.log(`INFO headshot: mejor delta=${sniperDmg.headDelta} @y=${sniperDmg.headAimY}`);
+check('sniper: headshot aplica ×2.2 (187 dmg)', sniperDmg.headDelta === 187,
+  JSON.stringify(sniperDmg));
 check('sniper: el daño nunca excede lo configurado (sin doble registro)',
   sniperDmg.headDelta <= 187 && sniperDmg.hp0 - sniperDmg.hp1 === 85, JSON.stringify(sniperDmg));
 

@@ -136,6 +136,40 @@ const still = {
 check('pistola dispara online sin romper la sesión', still.p1 === 'online' && still.mag < 12,
   JSON.stringify(still));
 
+// --- ARMA ESPECIAL online: el pedestal existe en ambos clientes y SOLO uno
+// se la lleva aunque los dos reclamen en el mismo instante
+const pedestalBoth = {
+  p1: await p1.evaluate(() => window.BREACH_SPECIALS.active?.wep ?? null),
+  p2: await p2.evaluate(() => window.BREACH_SPECIALS.active?.wep ?? null),
+};
+check('el pedestal existe en ambos clientes', pedestalBoth.p1 === 'sniper' && pedestalBoth.p2 === 'sniper',
+  JSON.stringify(pedestalBoth));
+
+// ambos se plantan encima y mantienen evadir a la vez
+for (const pg of [p1, p2]) {
+  await pg.evaluate(() => {
+    const S = window.BREACH_SPECIALS, p = window.BREACH.player;
+    if (S.active) { p.pos.x = S.active.x; p.pos.z = S.active.z; p.y = S.active.y; }
+    p.vel.x = 0; p.vel.z = 0; p.state = 'idle'; p.cover = null;
+    window.BREACH_INPUT.keys.add('Space');
+  });
+}
+await p1.waitForTimeout(1800);
+for (const pg of [p1, p2]) {
+  await pg.evaluate(() => window.BREACH_INPUT.keys.delete('Space'));
+}
+await p1.waitForTimeout(600);
+const claim = {
+  p1: await p1.evaluate(() => window.BREACH.weapons.slots.includes('sniper')),
+  p2: await p2.evaluate(() => window.BREACH.weapons.slots.includes('sniper')),
+  goneP1: await p1.evaluate(() => !window.BREACH_SPECIALS.active),
+  goneP2: await p2.evaluate(() => !window.BREACH_SPECIALS.active),
+};
+check('exactamente UN jugador se lleva la especial',
+  (claim.p1 ? 1 : 0) + (claim.p2 ? 1 : 0) === 1, JSON.stringify(claim));
+check('el pedestal desaparece en AMBOS clientes', claim.goneP1 && claim.goneP2,
+  JSON.stringify(claim));
+
 check('sin errores de página', pageErrors === 0, `errores=${pageErrors}`);
 
 await browser.close();

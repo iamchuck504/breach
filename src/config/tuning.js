@@ -122,6 +122,9 @@ export const TUNING = {
       spreadAim: 0.06, spreadHip: 5.2, spreadBlind: 7.0,
       recoil: 2.4, range: 130, pellets: 1, auto: false,
       special: true,
+      // mira telescópica: zoom real al apuntar (vs 41 normal). La cámara ya
+      // escala la sensibilidad por FOV, así que el pulso fino sale solo.
+      fovAim: 20,
     },
     bazooka: {
       nameKey: 'weapon.bazooka', rpm: 28, dmg: 115, headMult: 1,

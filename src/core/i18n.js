@@ -126,6 +126,7 @@ const en = {
   'menu.dpadWeapons': 'D-PAD: ↑ GRENADE · ↓ PISTOL · ← SMG · → SHOTGUN',
   'map.calle': 'CLOSED STREET', 'map.metro': 'SUBWAY STATION',
   'map.prision': 'PRISON', 'map.pueblo': 'ABANDONED TOWN',
+  'msg.specialTakenBy': '{name} TOOK THE {weapon}',
 };
 
 const es = {
@@ -243,6 +244,7 @@ const es = {
   'menu.dpadWeapons': 'D-PAD: ↑ GRANADA · ↓ PISTOLA · ← SMG · → ESCOPETA',
   'map.calle': 'CALLE CERRADA', 'map.metro': 'ESTACIÓN DE METRO',
   'map.prision': 'PRISIÓN', 'map.pueblo': 'PUEBLO ABANDONADO',
+  'msg.specialTakenBy': '{name} TOMÓ {weapon}',
 };
 
 const pt = { ...en,

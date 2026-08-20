@@ -104,14 +104,16 @@ export class Rockets {
     return g;
   }
 
-  fire(o, dir) {
+  // mine=false: cohete de OTRO jugador (online). Vuela y explota igual, pero
+  // su daño lo reclama su dueño — sin esto cada cliente aplicaría el splash.
+  fire(o, dir, mine = true) {
     const d = TUNING.weapons.bazooka;
     const mesh = this._buildMesh();
     mesh.position.set(o.x, o.y, o.z);
     mesh.lookAt(o.x + dir.x, o.y + dir.y, o.z + dir.z);
     this.scene.add(mesh);
     this.list.push({
-      mesh,
+      mesh, mine,
       x: o.x, y: o.y, z: o.z,
       vx: dir.x * d.projSpeed, vy: dir.y * d.projSpeed, vz: dir.z * d.projSpeed,
       t: 0, maxT: (d.range / d.projSpeed) + 0.2,
@@ -154,7 +156,7 @@ export class Rockets {
       if (boom) {
         this.scene.remove(r.mesh);
         this.list.splice(i, 1);
-        onExplode(boom);
+        onExplode(boom, r.mine);
       } else {
         r.mesh.position.set(r.x, r.y, r.z);
       }

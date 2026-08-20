@@ -16,6 +16,7 @@ import { TUNING } from '../config/tuning.js';
 import { ROUND_FINISH_HOLD } from './match-flow.js';
 import { Rig, RAGDOLL_R } from '../player/rig.js';
 import { resolveShot, applySpread, applyPelletPattern } from '../combat/ballistics.js';
+import { t } from '../core/i18n.js';
 
 const ROUND_TIME = 300;      // 5 minutos
 const DEFAULT_LIVES = 15;
@@ -85,9 +86,16 @@ export class Bot {
     this.strafeT = 0;
     this.burstT = 0; this.pauseT = 1 + Math.random();
     this.muzzleT = 0; // pose de fogonazo de la escopeta (separado de burstT)
+    this.meleeT = 0;    // gesto de golpe en curso
+    this.meleeCd = 0;
+    this.nadeCd = 4 + Math.random() * 5; // humo: no todos lo usan al segundo 0
+    this.nades = 1;     // botes de humo por vida
+    this.specialHoldT = 0; // progreso de recogida del arma especial
     this.shotCd = 0;
     this.lastDamage = 99; this.recentHit = 99;
     this.wep = 'smg';
+    this.specialAmmo = 0; // el arma especial NO sobrevive a la muerte
+    this.rig?.setWeapon?.('smg');
     this.swapCd = 0; this.swapAnim = 0;
     this.jumpCd = 0;
     this.cover = null;   // {x, z, tx, tz, low}
@@ -351,6 +359,9 @@ export class Bot {
 
   _trySwap(want) {
     if (this.wep === want || this.swapCd > 0) return;
+    // el arma ESPECIAL no se guarda por preferencia de distancia: se usa
+    // hasta agotarla (specialAmmo llega a 0 → vuelve a la primaria sola)
+    if (TUNING.weapons[this.wep]?.special && this.specialAmmo > 0) return;
     this.wep = want;
     this.swapCd = 2.5;
     this.swapAnim = 0.5;
@@ -373,6 +384,38 @@ export class Bot {
   }
 
   // ¿hay un obstáculo BAJO justo en el camino? → saltarlo
+  // Ir por el arma ESPECIAL del pedestal. Solo el SNIPER: darle un
+  // lanzacohetes a la IA produce splash indiscriminado sobre sus propios
+  // compañeros y suicidios a bocajarro, así que en rondas de bazooka el
+  // pedestal queda para el jugador. Devuelve true si está gestionándolo.
+  _seekSpecial(dt, match, enemy, dist) {
+    const specials = match.cb.specials;
+    const a = specials?.active;
+    if (!a || a.wep !== 'sniper') { this.specialHoldT = 0; return false; }
+    if (this.wep === 'sniper' || this.hp < 45) { this.specialHoldT = 0; return false; }
+    // con un enemigo encima, pelear manda sobre ir por el arma
+    if (enemy && dist < 9) { this.specialHoldT = 0; return false; }
+    const d = Math.hypot(a.x - this.pos.x, a.z - this.pos.z);
+    if (d > 16) { this.specialHoldT = 0; return false; }
+    if (d < 1.5 && Math.abs(this.y - a.y) < 1.2) {
+      this.specialHoldT += dt;
+      this.state = 'hold';
+      this.tacticalGoal = { x: a.x, z: a.z, role: 'special' };
+      if (this.specialHoldT >= 0.6) {
+        this.specialHoldT = 0;
+        match.botTakeSpecial(this);
+      }
+      return true;
+    }
+    this.specialHoldT = 0;
+    this.state = 'advance';
+    this.tacticalGoal = { x: a.x, z: a.z, role: 'special' };
+    this.wp = this.tacticalGoal;
+    this.commitMove = true;
+    this.decisionT = 0.4;
+    return true;
+  }
+
   // Colisión de CUERPOS: nadie atraviesa a nadie (aliados y enemigos, bots y
   // humanos). Corrección posicional SUAVE: la mitad del solape por paso con
   // tope de 3 m/s — sin empujones violentos ni atrapamientos permanentes.
@@ -424,6 +467,8 @@ export class Bot {
     this.protT = Math.max(0, this.protT - dt);
     this.swapCd = Math.max(0, this.swapCd - dt);
     this.swapAnim = Math.max(0, this.swapAnim - dt);
+    this.meleeCd = Math.max(0, this.meleeCd - dt);
+    this.nadeCd = Math.max(0, this.nadeCd - dt);
     this.jumpCd = Math.max(0, this.jumpCd - dt);
     this.coverCd = Math.max(0, this.coverCd - dt);
     this.roleT = Math.max(0, this.roleT - dt);
@@ -466,6 +511,15 @@ export class Bot {
     const threatRef = enemy ?? ghost;
     const wantsSafety = this.hp < 24 ||
       (this.hp < 48 && (this.recentHit < 2.2 || pressure > 0));
+    // HUMO defensivo: al romper contacto herido y con la amenaza a media
+    // distancia, cortar la línea de tiro vale más que correr expuesto. El
+    // bote es el mismo del jugador (también le tapa a él la visión).
+    if (wantsSafety && threatRef && this.nadeCd <= 0 && this.nades > 0 &&
+        this.grounded && this.meleeT <= 0) {
+      const td = Math.hypot(threatRef.x - this.pos.x, threatRef.z - this.pos.z);
+      if (td > 4 && td < 26) match.botThrowSmoke(this, threatRef);
+    }
+
     const spot = this.state !== 'cover' && this.coverCd <= 0 && wantsSafety && threatRef
       ? match.findCoverSpot(this, threatRef, { retreat: true, threats: match.threatsFor(this, threatRef) })
       : null;
@@ -488,6 +542,9 @@ export class Bot {
         match.coverClaims.delete(this.id);
         this.decisionT = 0;
       }
+    } else if (this._seekSpecial(dt, match, enemy, dist)) {
+      // yendo por el arma especial del pedestal (tiene prioridad sobre el
+      // plan táctico mientras dure y no haya un enemigo encima)
     } else {
       const reached = this.tacticalGoal &&
         Math.hypot(this.tacticalGoal.x - this.pos.x, this.tacticalGoal.z - this.pos.z) < 1.15;
@@ -517,7 +574,36 @@ export class Bot {
     // ---- comportamiento por estado ----
     let mx = 0, mz = 0, aiming = false, animOverride = null;
 
-    if (this.state === 'engage' && enemy) {
+    // MELEE: a bocajarro el disparo pierde sentido y el golpe es más rápido
+    // que reposicionarse. Corta cualquier otro comportamiento mientras dura.
+    if (this.meleeT > 0) {
+      this.meleeT -= dt;
+      const ml = TUNING.melee;
+      if (!this._meleeHit && this.meleeT <= ml.time - ml.hitAt) {
+        this._meleeHit = true;
+        match.botMelee(this);
+      }
+      const f = this.facing ? this.facing() : { x: -Math.sin(this.yaw), z: -Math.cos(this.yaw) };
+      const push = ml.lungeSpeed * Math.max(0, this.meleeT / ml.time);
+      this.pos.x += f.x * push * dt;
+      this.pos.z += f.z * push * dt;
+      this.world.resolveCircle(this.pos, 0.38, this.y);
+      this._bodyCollide(match, dt);
+      this.speed = push;
+      animOverride = 'melee';
+      if (this.meleeT <= 0) { this.meleeT = 0; this._meleeHit = false; }
+    } else if (enemy && dist < TUNING.melee.range * 0.85 && this.meleeCd <= 0 &&
+               this.grounded && this.state !== 'cover' && Math.abs((enemy.y ?? 0) - this.y) < 1.2) {
+      this.meleeT = TUNING.melee.time;
+      this.meleeCd = TUNING.melee.cooldown + Math.random() * 0.5;
+      this._meleeHit = false;
+      this._face(enemy.x - this.pos.x, enemy.z - this.pos.z, dt, 14);
+      animOverride = 'melee';
+    }
+
+    if (this.meleeT > 0) {
+      // el golpe manda: saltar el resto de estados este frame
+    } else if (this.state === 'engage' && enemy) {
       aiming = true;
       const ex = (enemy.x - this.pos.x) / dist, ez = (enemy.z - this.pos.z) / dist;
       this._face(ex, ez, dt);
@@ -863,6 +949,18 @@ export class Bot {
     if (da > Math.PI) da -= Math.PI * 2;
     if (da < -Math.PI) da += Math.PI * 2;
     if (Math.abs(da) > 0.45) return;
+    // FRANCOTIRADOR recogido del pedestal: cadencia lenta, munición contada.
+    // Al agotarla vuelve solo a su primaria (no se queda con un arma vacía).
+    if (this.wep === 'sniper') {
+      if (this.shotCd <= 0 && this.specialAmmo > 0) {
+        this.shotCd = (60 / TUNING.weapons.sniper.rpm) * 1.25;
+        this.muzzleT = 0.15;
+        this.specialAmmo--;
+        match.botShoot(this, enemy);
+        if (this.specialAmmo <= 0) { this.swapCd = 0; this._trySwap('smg'); }
+      }
+      return;
+    }
     if (this.wep === 'shotgun') {
       if (this.shotCd <= 0 && dist < 20) {
         this.shotCd = (60 / TUNING.weapons.shotgun.rpm) * 1.5;
@@ -1427,6 +1525,70 @@ export class BotMatch {
       bestScore = score;
     }
     return best;
+  }
+
+  // Golpe cuerpo a cuerpo de un bot: mismo arco y daño que el del jugador,
+  // con la misma comprobación de pared (no atraviesa cobertura).
+  botMelee(bot) {
+    const ml = TUNING.melee;
+    const f = { x: -Math.sin(bot.yaw), z: -Math.cos(bot.yaw) };
+    const cosHalf = Math.cos(ml.arcDeg * Math.PI / 360);
+    let best = null;
+    for (const e of this._enemiesOf(bot)) {
+      if (e.alive === false) continue;
+      const dx = e.x - bot.pos.x, dz = e.z - bot.pos.z;
+      const d = Math.hypot(dx, dz);
+      if (d > ml.range || Math.abs((e.y ?? 0) - bot.y) > 1.4) continue;
+      if (d > 0.001 && (dx * f.x + dz * f.z) / d < cosHalf) continue;
+      if (!best || d < best.d) best = { e, d, dx, dz };
+    }
+    if (!best) return;
+    _v1.set(bot.pos.x, bot.y + 1.1, bot.pos.z);
+    _v2.set(best.dx, 0, best.dz).normalize();
+    if (best.d > 0.4 && this.world.raycast(_v1, _v2, best.d - 0.2) !== null) return;
+    this.cb.audio?.thump?.();
+    const ctx = { weapon: 'melee', distance: best.d, damage: ml.dmg, part: 'body', gib: false };
+    if (best.e.id === 'player') {
+      this.cb.damagePlayer(ml.dmg * BOT_DMG, bot.name,
+        { x: bot.pos.x, z: bot.pos.z }, ctx);
+    } else {
+      this.damageBot(best.e.id, ml.dmg * BOT_DMG, bot.id, false, false, ctx);
+    }
+  }
+
+  // Humo defensivo: el bot lo lanza hacia la amenaza para cortar la línea de
+  // tiro mientras se reposiciona. Usa el MISMO sistema que el jugador, así
+  // que la nube también le tapa la visión a él y a sus compañeros.
+  botThrowSmoke(bot, threat) {
+    const smoke = this.cb.smoke;
+    if (!smoke || bot.nades <= 0) return false;
+    const dx = threat.x - bot.pos.x, dz = threat.z - bot.pos.z;
+    const d = Math.max(0.6, Math.hypot(dx, dz));
+    // apuntar a mitad de camino, con tope: la nube va delante del bot
+    const reach = Math.min(d * 0.55, 8);
+    const nx = dx / d, nz = dz / d;
+    const speed = TUNING.weapons.grenade.throwSpeed * Math.min(1, reach / 8);
+    bot.nades--;
+    bot.nadeCd = 12 + Math.random() * 8;
+    smoke.throwNade(
+      { x: bot.pos.x + nx * 0.5, y: bot.y + 1.2, z: bot.pos.z + nz * 0.5 },
+      { x: nx * speed, y: TUNING.weapons.grenade.throwUp * 0.8, z: nz * speed },
+    );
+    return true;
+  }
+
+  // El bot toma el arma especial del pedestal (mismo pedestal y misma regla
+  // de exclusividad que el jugador: quien completa el hold se la lleva).
+  botTakeSpecial(bot) {
+    const specials = this.cb.specials;
+    const wep = specials?.take?.();
+    if (!wep) return;
+    bot.wep = wep;
+    bot.specialAmmo = TUNING.weapons[wep].mag + TUNING.weapons[wep].reserve;
+    bot.swapCd = 2.5;
+    bot.swapAnim = 0.5;
+    bot.rig.setWeapon(wep);
+    this.cb.hud?.hint?.(t('msg.specialTakenBy', { name: bot.name, weapon: t(TUNING.weapons[wep].nameKey) }), 2000);
   }
 
   botShoot(bot, enemy) {

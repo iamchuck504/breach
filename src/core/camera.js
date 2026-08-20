@@ -46,13 +46,20 @@ export class ShoulderCamera {
   flatForward() { return { x: -Math.sin(this.yaw), z: -Math.cos(this.yaw) }; }
   flatRight() { return { x: Math.cos(this.yaw), z: -Math.sin(this.yaw) }; }
 
+  // FOV de apuntado del arma actual (el sniper cierra más que el resto).
+  // Lo inyecta main cada frame; null = valor global de TUNING.
+  setAimFov(fov) { this._aimFov = fov ?? null; }
+
   update(dt, player) {
     const c = TUNING.cam;
     const st = player.camState(); // { mode, side? }
 
     let shoulder = c.shoulder, height = c.height, dist = c.dist, fov = c.fovNormal;
     if (st.mode === 'roadie') { height = c.roadieHeight; dist = c.roadieDist; fov = c.fovRoadie; }
-    else if (st.mode === 'aim') { shoulder = c.aimShoulder; height = c.aimHeight; dist = c.aimDist; fov = c.fovAim; }
+    else if (st.mode === 'aim') {
+      shoulder = c.aimShoulder; height = c.aimHeight; dist = c.aimDist;
+      fov = this._aimFov ?? c.fovAim;
+    }
     else if (st.mode === 'cover') { dist = c.coverDist; }
 
     // shoulder swap suave (lean izquierdo en cover → cámara al hombro izquierdo)

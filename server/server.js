@@ -26,7 +26,9 @@ const FIRE_RULES = {
   shotgun: { interval: 60 / 95, range: 24, maxDamage: 8 * 13, gibRange: 4.2 },
   pistol: { interval: 60 / 260, range: 60, maxDamage: 44 },
   sniper: { interval: 60 / 34, range: 130, maxDamage: 187 },
-  bazooka: { interval: 60 / 28, range: 110, maxDamage: 115 },
+  // el splash puede alcanzar a varios: el presupuesto cubre 3 impactos y su
+  // "rango" al validar hits es el radio de la explosión, no el del vuelo
+  bazooka: { interval: 60 / 28, range: 110, maxDamage: 115 * 3, hitRange: 5 },
   // el golpe cuerpo a cuerpo viaja como "disparo" de rango mínimo
   melee: { interval: 0.55, range: 2.6, maxDamage: 60 },
 };
@@ -105,6 +107,11 @@ function lobbyPayload() {
 function broadcastLobby() { if (players.size) broadcastRaw(lobbyPayload()); }
 function lobbyError(ws, code, detail = '') { send(ws, { t: 'lobbyError', code, detail }); }
 function clearTimer() { if (phaseTimer) clearTimeout(phaseTimer); phaseTimer = null; }
+// Arma ESPECIAL del mapa: una por ronda, alternando (impar sniper, par
+// bazooka). El servidor es la ÚNICA autoridad de quién se la lleva: dos
+// jugadores que la reclaman a la vez producen un solo ganador.
+let special = { wep: null, taken: true, by: null };
+function specialForRound(r) { return r % 2 === 1 ? 'sniper' : 'bazooka'; }
 function resetWorld() { drops.clear(); for (const c of CRATES) { c.up = true; c.t = 0; } }
 function resetRoom() {
   clearTimer(); players.clear(); bots.clear(); drops.clear(); hostId = null;
@@ -135,9 +142,11 @@ function prepareRound(first = false) {
   pools = { red: Math.max(0, settings.lives - counts.red), blue: Math.max(0, settings.lives - counts.blue) };
   resetWorld(); startAt = nowSec() + (first ? INTRO_TIME : 0) + COUNTDOWN_TIME;
   for (const p of roster) freshCombatState(p, pickSpawn(p.team, indices[p.team]++));
+  special = { wep: specialForRound(round), taken: false, by: null };
   phase = first ? 'intro' : 'countdown';
   broadcastRaw({ t: first ? 'matchStart' : 'prepare', phase, startAt, round,
-    settings: { ...settings }, wins: { ...wins }, lives: livesState(), players: roster.map(pub), rows: statRows() });
+    settings: { ...settings }, wins: { ...wins }, lives: livesState(), players: roster.map(pub), rows: statRows(),
+    special: { wep: special.wep } });
   phaseTimer = setTimeout(() => { phaseTimer = null; phase = 'playing'; startAt = 0;
     broadcastRaw({ t: 'start', round, wins: { ...wins }, lives: livesState() });
   }, Math.max(0, (startAt - nowSec()) * 1000));
@@ -195,7 +204,12 @@ function registerFire(shooter, msg, isBotFire = false) {
   const weapon = FIREABLE.has(msg.w) ? msg.w : 'smg', rule = FIRE_RULES[weapon], now = nowSec();
   // el melee no depende del arma en mano; el resto debe coincidir con ella
   if ((weapon !== 'melee' && weapon !== shooter.w) || now - shooter.lastFireAt < rule.interval * .82) return false;
-  if (Math.hypot(o[0] - shooter.x, o[2] - shooter.z) > (isBotFire ? 6 : 5) || Math.abs(o[1] - ((shooter.y || 0) + 1.1)) > 4) return false;
+  // Un PROYECTIL explota lejos de quien lo lanzó: su "disparo" se registra en
+  // el punto de la explosión, así que no se le exige nacer junto al tirador
+  // (sí el resto: cadencia, arma en mano y alcance del splash).
+  const proj = weapon === 'bazooka';
+  if (!proj && (Math.hypot(o[0] - shooter.x, o[2] - shooter.z) > (isBotFire ? 6 : 5) || Math.abs(o[1] - ((shooter.y || 0) + 1.1)) > 4)) return false;
+  if (proj && Math.hypot(o[0] - shooter.x, o[2] - shooter.z) > rule.range + 4) return false;
   if (Math.hypot(pt[0] - o[0], pt[1] - o[1], pt[2] - o[2]) > rule.range + 2) return false;
   const decals = Array.isArray(msg.d) ? msg.d.slice(0, 8).map(vec3).filter(Boolean) : undefined;
   shooter.lastFireAt = now; shooter.pendingShot = { at: now, wep: weapon, origin: o, remainingDamage: rule.maxDamage, hitIds: new Set() };
@@ -208,7 +222,7 @@ function registerHit(shooter, msg) {
   const shot = shooter.pendingShot, rule = shot ? FIRE_RULES[shot.wep] : null, now = nowSec();
   if (!shot || !rule || now - shot.at > HIT_WINDOW || shot.hitIds.has(target.id)) return;
   const dist = Math.hypot(target.x - shot.origin[0], (target.y || 0) + 1 - shot.origin[1], target.z - shot.origin[2]);
-  if (dist > rule.range + 2) return;
+  if (dist > (rule.hitRange ?? rule.range) + 2) return;
   const dmg = Math.min(Math.max(0, num(msg.dmg)), shot.remainingDamage); if (dmg <= 0) return;
   shot.hitIds.add(target.id); shot.remainingDamage -= dmg; target.hp -= dmg; target.lastDamage = now;
   if (target.hp > 0) return;
@@ -316,6 +330,13 @@ wss.on('connection', (ws) => {
       const d = drops.get(msg.id);
       if (!d || !me.alive || phase !== 'playing' || Math.hypot(me.x - d.x, me.z - d.z) > 3) return;
       drops.delete(msg.id); broadcastRaw({ t: 'dropR', id: msg.id }); send(ws, { t: 'dropGive', wep: d.wep, mag: d.mag, res: d.res }); return;
+    }
+    // pickup del arma especial: gana el PRIMER reclamo válido y solo uno
+    if (msg.t === 'takeSpecial') {
+      if (!me?.alive || phase !== 'playing' || special.taken || !special.wep) return;
+      special.taken = true; special.by = me.id;
+      broadcastRaw({ t: 'specialTaken', id: me.id, wep: special.wep });
+      return;
     }
     if (msg.t === 'crate') {
       const c = CRATES[msg.i];

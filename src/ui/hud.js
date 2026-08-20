@@ -1,4 +1,5 @@
 import { t, getLanguage } from '../core/i18n.js';
+import { TUNING } from '../config/tuning.js';
 
 // HUD sobre DOM. La retícula de blindfire/hipfire se proyecta desde el cañón
 // (shoot from the barrel): #barrel-dot sigue el punto real de impacto del arma.
@@ -117,7 +118,14 @@ export class HUD {
     const chips = this.el.wepSlots.children;
     for (let i = 0; i < chips.length; i++) {
       const k = w.slots[i], st = w.state[k];
-      chips[i].lastChild.textContent = t('weapon.' + k + 'Short');
+      const d = TUNING.weapons[k];
+      // Consumibles (granadas) y especiales muestran cuánto QUEDA: son
+      // recursos limitados y decidir con ellos exige verlo sin equiparlos.
+      // Las primarias no lo muestran (el contador grande ya está arriba).
+      const left = d.thrown ? st?.mag ?? 0 : d.special ? (st?.mag ?? 0) + (st?.reserve ?? 0) : null;
+      chips[i].lastChild.textContent = left === null
+        ? t('weapon.' + k + 'Short')
+        : `${t('weapon.' + k + 'Short')} ×${left}`;
       chips[i].classList.toggle('cur', k === w.cur);
       chips[i].classList.toggle('dry', !!st && st.mag <= 0 && st.reserve <= 0);
     }

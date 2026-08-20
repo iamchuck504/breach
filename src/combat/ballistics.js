@@ -59,7 +59,15 @@ export function resolveShot(world, targets, origin, dir, maxRange, excludeId = n
     const cr = !!tg.crouch;
     const th = raySphere(origin, dir, tg.x, (cr ? 0.86 : 1.52) + ty, tg.z, 0.22);
     if (th !== null && th < bestT) { bestT = th; hit = { kind: 'player', t: th, id: tg.id, part: 'head' }; continue; }
-    const tb = rayCapsule(origin, dir, tg.x, tg.z, (cr ? 0.26 : 0.35) + ty, (cr ? 0.6 : 1.3) + ty, cr ? 0.42 : 0.4);
+    const bodyR = cr ? 0.42 : 0.4;
+    const bodyTop = (cr ? 0.6 : 1.3) + ty;
+    let tb = rayCapsule(origin, dir, tg.x, tg.z, (cr ? 0.26 : 0.35) + ty, bodyTop, bodyR);
+    // El casquete esférico superior de la cápsula sobresale por encima de los
+    // hombros (1.3 + r0.4 = 1.70) y cubría casi toda la esfera de cabeza
+    // (1.30..1.74): el rayo entraba antes por ese "aire" lateral y NINGÚN
+    // disparo contaba como headshot. Recortamos el casquete a la altura del
+    // hombro: arriba del cuello el volumen deja de ser cuerpo.
+    if (tb !== null && origin.y + dir.y * tb > bodyTop + 0.12) tb = null;
     if (tb !== null && tb < bestT) { bestT = tb; hit = { kind: 'player', t: tb, id: tg.id, part: 'body' }; }
   }
 

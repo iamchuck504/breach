@@ -105,6 +105,7 @@ const G = {
   pendingShots: 0,     // tiros aprobados que esperan la pose/muzzle de este frame
   pendingThrows: 0,    // granadas aprobadas que esperan la pose de este frame
   specialRound: 0,     // ronda cuyo arma especial ya fue colocada
+  specialClaimT: 0,    // anti-spam del reclamo online del pedestal
   mode: null,          // null | 'practice' | 'online'
   rig: null,           // rig local
   player: null,        // controller local
@@ -1453,7 +1454,7 @@ function startBots(lobby = G.lobby || defaultLocalLobby()) {
   G.crates = new AmmoCrates(scene, false, world.cratePos ?? undefined);
   G.drops = new WeaponDrops(scene);
   G.botMatch = new BotMatch(scene, world, {
-    smoke,
+    smoke, specials,
     effects, audio, hud,
     playerName: G.name,
     playerVariant: G.charVariant,
@@ -1593,7 +1594,7 @@ function setupOnlineBots(roster) {
   if (G.lobby?.hostId !== G.net?.id) return;
   const slots = roster.filter((p) => p.bot);
   G.botMatch = new BotMatch(scene, world, {
-    smoke,
+    smoke, specials,
     effects, audio, hud, humans: onlineHumanTargets,
     playing: () => G.onlinePhase === 'playing',
     stepSound,
@@ -1621,6 +1622,7 @@ function setupOnlineMatch(m) {
   spawnLocal(mine.team, { x: mine.x, z: mine.z, yaw: mine.team === 'red' ? Math.PI : 0 });
   G.crates = new AmmoCrates(scene, true, world.cratePos ?? undefined);
   G.drops = new WeaponDrops(scene);
+  spawnOnlineSpecial(m.special);
   G.onlineRows = roster.map((p) => ({ id: p.id, name: p.name, team: p.team, bot: p.bot,
     variant: p.v | 0, kills: p.kills || 0, deaths: p.deaths || 0, score: (p.kills || 0) * 100 }));
   const host = G.lobby?.hostId === net.id;
@@ -1756,6 +1758,29 @@ function bindNet(net) {
     audio.gun(m.w, remoteShot);
     const r = G.remotes.get(m.id);
     if (r) r.firing = 0.45;
+  });
+  net.on('rocket', (m) => {
+    if (!alive() || m.id === net.id) return;
+    const okVec = (v) => Array.isArray(v) && v.length === 3 && v.every((n) => typeof n === 'number' && isFinite(n));
+    if (!okVec(m.o) || !okVec(m.d)) return;
+    // mine=false: se ve y se oye, pero el daño lo reclama su dueño
+    rockets.fire(
+      { x: m.o[0], y: m.o[1], z: m.o[2] },
+      new THREE.Vector3(m.d[0], m.d[1], m.d[2]).normalize(),
+      false,
+    );
+  });
+  // arma especial online: el SERVIDOR decide quién se la lleva
+  net.on('specialTaken', (m) => {
+    specials.clear();
+    if (m.id !== net.id || !TUNING.weapons[m.wep]) return;
+    const removed = G.weapons.giveSpecial(m.wep);
+    audio.reloadDone();
+    hud.hint(t('msg.specialTaken', {
+      weapon: t(TUNING.weapons[m.wep].nameKey),
+      removed: t(TUNING.weapons[removed].nameKey),
+    }), 2400);
+    input.pad.rumble(80, 0.4, 0.6);
   });
   net.on('nade', (m) => {
     if (!alive() || m.id === net.id) return;
@@ -1928,6 +1953,7 @@ function bindNet(net) {
     G.onlineFinal = null;
     G.onlineRoundResult = null; G.onlinePhase = m.phase || 'countdown';
     G.onlineStartAt = m.startAt || (Date.now() / 1000 + INTRO_TIME + COUNTDOWN_TIME);
+    spawnOnlineSpecial(m.special);
     if (m.lives) G.scores = m.lives;
     if (m.wins) G.onlineWins = m.wins;
     if (m.players) G.onlineRows = m.players.map((p) => ({
@@ -2079,6 +2105,17 @@ function coverPoseReady(wantsAim, wantsFire) {
   return true;
 }
 
+// Online: el arma de la ronda la decide el SERVIDOR (llega en matchStart/
+// prepare). El cliente solo dibuja el pedestal.
+function spawnOnlineSpecial(info) {
+  const spot = world.specialSpot;
+  specials.clear();
+  rockets.clear();
+  if (!spot || !info?.wep || !TUNING.weapons[info.wep]) return;
+  specials.spawn(info.wep, spot.x, spot.z,
+    world.groundHeight({ x: spot.x, z: spot.z }, 0.4, 0.1));
+}
+
 // Coloca el arma especial de la ronda en el pedestal del mapa (si lo tiene)
 function spawnSpecialForRound() {
   const spot = world.specialSpot;
@@ -2089,7 +2126,7 @@ function spawnSpecialForRound() {
 
 // Explosión del cohete: splash con caída por distancia, línea de efecto (no
 // atraviesa paredes) y AUTODAÑO — dispararla cerca es un riesgo real.
-function explodeRocket(pos) {
+function explodeRocket(pos, mine = true) {
   const d = TUNING.weapons.bazooka;
   const R = d.splashRadius;
   _v1.set(pos.x, pos.y, pos.z);
@@ -2100,8 +2137,11 @@ function explodeRocket(pos) {
     const pd = Math.hypot(G.player.pos.x - pos.x, G.player.pos.z - pos.z);
     shoulderCam.addShake(Math.max(0, 1.6 - pd * 0.12));
   }
-  if (!G.mode) return;
+  // el cohete de OTRO jugador solo se ve y se oye: su daño lo reclama su
+  // dueño contra el servidor (si no, cada cliente aplicaría el splash)
+  if (!G.mode || !mine) return;
   const splash = (dist) => d.dmg * Math.max(0.25, 1 - (dist / R) * 0.75);
+  const onlineSplash = [];
   const losClear = (x, y, z) => {
     _v2.set(x - pos.x, y - pos.y, z - pos.z);
     const len = _v2.length();
@@ -2131,7 +2171,20 @@ function explodeRocket(pos) {
     } else if (G.mode === 'bots' && G.botMatch) {
       const killed = G.botMatch.damageBot(tg.id, dmg, 'player', ctx.gib, false, ctx);
       if (killed !== null) { hud.hitmarker(); if (!killed) audio.hit(); }
+    } else if (G.net) {
+      const r = G.remotes.get(tg.id);
+      const b = G.onlineBots?.botById(tg.id);
+      if ((!r && !b) || r?.inv || b?.protT > 0) continue;
+      effects.blood(_v3.set(tg.x, ty, tg.z), TEAM_HEX[r?.team || b.team]);
+      onlineSplash.push({ id: tg.id, dmg, point: { x: tg.x, y: ty, z: tg.z } });
+      hud.hitmarker();
     }
+  }
+  // el server valida el disparo (explosión) y luego cada reclamo de daño
+  if (G.net && onlineSplash.length) {
+    _v2.set(pos.x, pos.y, pos.z);
+    G.net.fire(_v1, _v2, 'bazooka', []);
+    for (const c of onlineSplash) G.net.hit(c.id, c.dmg, 'body', false, c.point);
   }
   // autodaño (70% del splash) — solo donde hay muerte real del jugador
   const p = G.player;
@@ -2277,6 +2330,12 @@ function fireShot() {
   // bazooka: proyectil REAL, sin hitscan — el cohete hace el daño al explotar
   if (def.projectile) {
     rockets.fire({ x: muzzle.x, y: muzzle.y, z: muzzle.z }, baseDir);
+    // replicar el proyectil: los demás clientes lo ven volar y explotar
+    G.net?.send({
+      t: 'rocket',
+      o: [muzzle.x, muzzle.y, muzzle.z],
+      d: [baseDir.x, baseDir.y, baseDir.z],
+    });
     if (G.spawnProt > 0) { G.spawnProt = 0; hud.hint(t('msg.protectionBroken'), 900); }
     effects.muzzleFlash(muzzle, true);
     audio.gun(w.cur);
@@ -2514,14 +2573,24 @@ function simStep(dt) {
     if (holding) {
       specials.holdT += dt;
       if (specials.holdT >= SPECIAL_HOLD_TIME) {
-        const wep = specials.take();
-        const removed = G.weapons.giveSpecial(wep);
-        audio.reloadDone();
-        hud.hint(t('msg.specialTaken', {
-          weapon: t(TUNING.weapons[wep].nameKey),
-          removed: t(TUNING.weapons[removed].nameKey),
-        }), 2400);
-        input.pad.rumble(80, 0.4, 0.6);
+        if (G.net) {
+          // ONLINE: el servidor decide. Se reclama y se espera 'specialTaken'
+          // (dos jugadores a la vez → un solo ganador, sin duplicados).
+          specials.holdT = 0;
+          if (!G.specialClaimT || G.specialClaimT <= 0) {
+            G.specialClaimT = 1.5;
+            G.net.send({ t: 'takeSpecial' });
+          }
+        } else {
+          const wep = specials.take();
+          const removed = G.weapons.giveSpecial(wep);
+          audio.reloadDone();
+          hud.hint(t('msg.specialTaken', {
+            weapon: t(TUNING.weapons[wep].nameKey),
+            removed: t(TUNING.weapons[removed].nameKey),
+          }), 2400);
+          input.pad.rumble(80, 0.4, 0.6);
+        }
       } else {
         hud.hint(t('msg.specialHold', {
           pct: Math.min(99, Math.round((specials.holdT / SPECIAL_HOLD_TIME) * 100)),
@@ -2536,6 +2605,7 @@ function simStep(dt) {
   } else if (specials.active) {
     specials.holdT = 0;
   }
+  if (G.specialClaimT > 0) G.specialClaimT -= dt;
 
   // la intención de disparo SIEMPRE llega al controller: cancela el roadie
   // (en tierra o en el aire) y gira el cuerpo para disparar
@@ -2817,6 +2887,9 @@ function frame(now) {
     const flowView = activePresentation(Date.now() / 1000);
     updatePresentationAudio(flowView);
     hud.presentation(flowView);
+    // zoom de apuntado del arma en mano (la mira del sniper cierra a 20°);
+    // durante el cambio manda el arma que YA está en la mano
+    shoulderCam.setAimFov(G.weapons.def.fovAim);
     if (flowView && flowView.phase !== 'countdown') updateMatchCamera(now, flowView);
     else if (G.spectator.active) updateSpectatorCamera(dt, now);
     else shoulderCam.update(dt, G.player);
