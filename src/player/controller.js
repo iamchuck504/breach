@@ -502,25 +502,32 @@ export class Controller {
         let aimLeanSide = 0;
         if (!low && this.aim) aimLeanSide = edgeSide;
 
-        // Blindfire contextual. En cover bajo, el centro dispara por arriba;
-        // cerca de una esquina solo cambia a lateral si la cámara realmente
-        // busca ese borde. Cover alto exige una orilla y dirección viable.
+        // Blindfire contextual. En cover alto la POSICIÓN en la orilla elige
+        // automáticamente el lado: la cámara guía el tiro, pero ya no hay que
+        // encontrar un ángulo estrecho para activar la pose. En cover bajo se
+        // conserva la distinción entre disparar por arriba y rodear una esquina.
         let blindEdgeSide = 0;
         if (!this.aim && this.firingBlind > 0) {
-          if (edgeSide && aroundEdge > (low ? 0.24 : 0.10)) blindEdgeSide = edgeSide;
+          if (!low && edgeSide) blindEdgeSide = edgeSide;
+          else if (low && edgeSide && aroundEdge > 0.24) blindEdgeSide = edgeSide;
           else if (low) this.blindMode = 'over';
           else this.blindMode = null;
         } else this.blindMode = null;
 
-        // movimiento lateral + auto-asomarse hacia la orilla al apuntar
+        // Movimiento lateral confinado al cover. La velocidad se deriva del
+        // desplazamiento REAL ya limitado, de modo que empujar hacia fuera en
+        // el extremo detiene naturalmente al personaje en vez de animar pasos
+        // o acumular una salida automática.
         const lat = hasInput ? (mw.x * ux + mw.z * uz) : 0;
+        const previousU = u;
         u += lat * M.coverStrafe * dt + aimLeanSide * 1.3 * dt;
         const leanOut = aimLeanSide !== 0 ? 0.45 : 0;
         u = Math.max(PLAYER_R * 0.7 - (aimLeanSide < 0 ? leanOut : 0),
           Math.min(len - PLAYER_R * 0.7 + (aimLeanSide > 0 ? leanOut : 0), u));
         this.pos.x = f.a.x + ux * u + n.x * PLAYER_R;
         this.pos.z = f.a.z + uz * u + n.z * PLAYER_R;
-        this.vel.x = lat * ux * M.coverStrafe; this.vel.z = lat * uz * M.coverStrafe;
+        const coverSpeed = dt > 0 ? (u - previousU) / dt : 0;
+        this.vel.x = coverSpeed * ux; this.vel.z = coverSpeed * uz;
 
         // orientación: DE ESPALDAS a la pared; al apuntar/disparar → cámara.
         // Blindfire gira más pesado para conservar la lectura del cover y no
@@ -532,25 +539,34 @@ export class Controller {
             TUNING.combat.bodyTurnFollowDeg * Math.PI / 180 * dt);
         }
 
-        // señal de lean para la animación, en el frame del personaje
+        // Señal de lean contra el frame de intención de la cámara, no contra el
+        // yaw corporal que todavía está interpolando. Así el rig elige desde el
+        // primer frame el brazo correcto para ESA orilla y no invierte la pose
+        // a mitad de la transición del cuerpo.
         const poseEdgeSide = aimLeanSide || blindEdgeSide;
         if (poseEdgeSide !== 0) {
-          const rx = Math.cos(this.yaw), rz = -Math.sin(this.yaw);
+          const rx = Math.cos(this.cam.yaw), rz = -Math.sin(this.cam.yaw);
           this.coverLeanAnim = (ux * poseEdgeSide) * rx + (uz * poseEdgeSide) * rz >= 0 ? 1 : -1;
           if (blindEdgeSide) this.blindMode = this.coverLeanAnim > 0 ? 'right' : 'left';
         } else this.coverLeanAnim = 0;
 
         const away = hasInput ? (mw.x * n.x + mw.z * n.z) : 0;
-        // zona de salida por extremo: MÁS AMPLIA que la de lean ("estoy en la
-        // orilla" empieza antes de tocar el tope), y detección de tope real
+        // Zona para acciones explícitas en el extremo. El stick lateral por sí
+        // solo nunca usa esta zona para abandonar la cobertura.
         const exitZone = C.cornerLean * 1.7 + PLAYER_R;
         const eSign = (len - u) < exitZone ? 1 : u < exitZone ? -1 : 0;
         const latOut = eSign !== 0 && hasInput ? (mw.x * ux + mw.z * uz) * eSign : 0;
-        const atTip = u <= PLAYER_R * 0.7 + 0.04 || u >= len - PLAYER_R * 0.7 - 0.04;
 
-        // Las acciones pulsadas ganan a la salida automática. Antes Shift+F
-        // o Shift+Space en el extremo se interpretaban como roadie y perdían
-        // por completo el salto/evade de ese frame.
+        // Salto/mantle hacia delante sobre cover bajo. Es una intención
+        // distinta del salto lateral en una esquina y se resuelve primero.
+        if (input.jumpPressed && low && hasInput) {
+          const im = Math.max(0.001, Math.hypot(mw.x, mw.z));
+          const into = -(mw.x * n.x + mw.z * n.z) / im;
+          const latIn = Math.abs((mw.x * ux + mw.z * uz) / im);
+          if (into >= 0.72 && latIn <= into * 0.75 && this._tryMantle(f, n)) break;
+        }
+
+        // Salto lateral explícito desde una orilla.
         if (input.jumpPressed && eSign !== 0) {
           const ox = ux * eSign, oz = uz * eSign;
           const wantOut = hasInput ? (mw.x * ox + mw.z * oz) : 1;
@@ -596,49 +612,44 @@ export class Controller {
           }
         }
 
-        // --- salir por el extremo, tres intenciones de locomoción:
-        //   1) CORRER + stick hacia fuera (cualquier ángulo razonable) →
-        //      salida INMEDIATA en roadie
-        //   2) diagonal clara hacia fuera → salir a run (sin sprint)
-        //   3) clavar el stick MÁS ALLÁ del tope ~0.12s (el strafe ya no
-        //      avanza) → caminar fuera de la cobertura, nada de quedarse
-        //      pegado empujando contra el aire
-        let exitMode = 0;
-        if (!this.aim && hasInput && eSign !== 0) {
-          if (input.sprintHeld && (latOut > 0.2 || away > 0.1)) exitMode = 2;
-          else if (away > 0.3) exitMode = 1;
-          else if (atTip && latOut > 0.6) {
-            this.edgePushT = (this.edgePushT ?? 0) + dt;
-            if (this.edgePushT > 0.12) exitMode = 1;
-          } else this.edgePushT = 0;
-        } else this.edgePushT = 0;
-        if (exitMode) {
+        // Correr + dirección clara es una salida explícita. A mitad de pared,
+        // solo acepta alejarse del cover; en la orilla también acepta continuar
+        // lateralmente hacia fuera. Un diagonal pequeño sin sprint no expulsa.
+        const runExit = input.sprintHeld && hasInput &&
+          (away > 0.28 || (eSign !== 0 && latOut > 0.35));
+        if (runExit) {
           this.cover = null;
           this.chain = 0;
-          this.edgePushT = 0;
           const im = Math.max(0.001, mw.mag);
           const dx2 = mw.x / im, dz2 = mw.z / im;
           // conservar continuidad corporal; el estado nuevo completa el giro
           // en los frames siguientes en vez de saltar 90° instantáneamente.
           this.yaw = lerpAngle(this.yaw, yawFromDir(dx2, dz2),
             1 - Math.exp(-M.turnLerp * dt));
-          this._setState(exitMode === 2 ? 'roadie' : 'run');
-          const spd = exitMode === 2 ? M.roadieSpeed * 0.78 : M.runSpeed * C.edgeExitBoost;
+          this._setState('roadie');
+          const spd = M.roadieSpeed * 0.78;
           this.vel.x = dx2 * spd;
           this.vel.z = dz2 * spd;
           this.ev.onDetach?.();
           break;
         }
 
-        // soltarse empujando lejos del cover (centro de la cara: el detach
-        // clásico de 0.11s sigue evitando salidas accidentales)
-        if (away > C.detachPush && !this.aim) {
+        // Stick claramente hacia atrás: detach deliberado desde cualquier
+        // punto de la cara. El breve filtro temporal absorbe diagonales/ruido,
+        // pero también funciona si ADS estaba activo porque la intención manda.
+        if (away > C.detachPush) {
           this.detachT += dt;
           if (this.detachT > C.detachTime) {
             this.cover = null;
             this._setState('run');
             this.chain = 0;
+            this.aim = false;
+            const im = Math.max(0.001, mw.mag);
+            const dx2 = mw.x / im, dz2 = mw.z / im;
+            this.vel.x = dx2 * M.runSpeed * C.edgeExitBoost;
+            this.vel.z = dz2 * M.runSpeed * C.edgeExitBoost;
             this.ev.onDetach?.();
+            break;
           }
         } else this.detachT = 0;
 

@@ -185,6 +185,63 @@ function putAtCoverEdge(controller, h = 1.1) {
     `evade diagonal de extremo terminó ${controller.state}`);
 }
 
+// El stick lateral queda locked-in incluso sostenido contra el extremo.
+{
+  const { controller } = makeController();
+  const input = new TestInput();
+  putAtCoverEdge(controller, 2.1);
+  input.mv = { x: 1, z: 0 };
+  frame(controller, input, 90);
+  check(controller.state === 'cover' && !!controller.cover,
+    `stick lateral expulsó del cover (${controller.state})`);
+  check(controller.speed < 0.05,
+    `stick contra el extremo dejó velocidad fantasma (${controller.speed})`);
+}
+
+// En cover alto, disparar desde la orilla activa blindfire contextual aunque
+// la cámara no apunte con precisión alrededor de la esquina.
+for (const side of [-1, 1]) {
+  const { controller } = makeController();
+  const input = new TestInput();
+  putAtCoverEdge(controller, 2.1);
+  if (side < 0) controller.pos.x = -3 + 0.38 * 0.7;
+  frame(controller, input, 1);
+  controller.update(DT, input, true);
+  check(controller.state === 'cover' && !!controller.blindMode,
+    `blindfire alto ${side < 0 ? 'izquierdo' : 'derecho'} no activó pose`);
+}
+
+// Salidas explícitas: sprint+lateral sale; stick atrás usa detach filtrado.
+{
+  const { controller } = makeController();
+  const input = new TestInput();
+  putAtCoverEdge(controller, 2.1);
+  input.mv = { x: 1, z: 0 };
+  input.sprintHeld = true;
+  frame(controller, input);
+  check(controller.state === 'roadie', `sprint+lateral terminó ${controller.state}`);
+}
+{
+  const { controller } = makeController();
+  const input = new TestInput();
+  putAtCoverEdge(controller, 2.1);
+  input.mv = { x: 0, z: -1 };
+  frame(controller, input, 12);
+  check(controller.state === 'run' && !controller.cover,
+    `stick atrás no hizo detach (${controller.state})`);
+}
+
+// Un diagonal principalmente lateral no debe confundirse con stick atrás.
+{
+  const { controller } = makeController();
+  const input = new TestInput();
+  putAtCoverEdge(controller, 2.1);
+  input.mv = { x: 1, z: -0.25 };
+  frame(controller, input, 30);
+  check(controller.state === 'cover' && !!controller.cover,
+    `diagonal lateral expulsó del cover (${controller.state})`);
+}
+
 // Muerte cancela swap/reload y conserva el arma visible en ese instante.
 {
   const weapons = new Weapons();

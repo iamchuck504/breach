@@ -47,6 +47,7 @@ await page.evaluate(() => {
   P.update = (dt, input, firing) => {
     const m = window.__mon;
     const wasState = P.state;
+    const wasCover = P.cover;
     const wasStateT = P.stateT;
     orig(dt, input, firing);
     // NaN / estado inválido / combos rotos
@@ -67,6 +68,16 @@ await page.evaluate(() => {
     if (P.speed > m.maxSpeed) m.maxSpeed = P.speed;
     if (P.speed > 15) m.issues.push('velocidad desbocada: ' + P.speed.toFixed(1));
     if (wasState === 'dive' && P.state === 'dive' && P.stateT < wasStateT) m.diveRestarts++;
+    if (wasState === 'cover' && P.state !== 'cover') {
+      const mv = input.moveVec(), f = P.cam.flatForward(), r = P.cam.flatRight();
+      const wx = f.x * mv.z + r.x * mv.x, wz = f.z * mv.z + r.z * mv.x;
+      m.lastCoverExit = {
+        to: P.state, sprint: input.sprintHeld, jump: input.jumpPressed,
+        evade: input.evadePressed, mv: { ...mv }, world: { x: wx, z: wz },
+        yaw: P.cam.yaw, normal: wasCover ? { ...wasCover.n } : null,
+        away: wasCover ? wx * wasCover.n.x + wz * wasCover.n.z : null,
+      };
+    }
   };
   window.__tp = (x, z, yaw = Math.PI) => {
     const p = window.BREACH.player;
@@ -146,32 +157,36 @@ await flush('pared');
 // ---- FASE 6: salidas por el extremo del cover (ambos extremos y ángulos) ----
 const coverExitTest = async (tag, keys, expect, holdMs) => {
   await page.evaluate(() => {
-    const W = window.BREACH_WORLD;
+    const W = window.BREACH_WORLD, P = window.BREACH.player;
     const f = W.faces.find((c) => c.h <= 1.2 && c.n.z < -0.9);
-    window.__tp((f.a.x + f.b.x) / 2, (f.a.z + f.b.z) / 2 - 1.2, Math.PI);
+    const x = (f.a.x + f.b.x) / 2 + f.n.x * 0.38;
+    const z = (f.a.z + f.b.z) / 2 + f.n.z * 0.38;
+    window.__tp(x, z, Math.PI);
+    P.cover = f; P.state = 'cover'; P.stateT = 0.5;
+    window.__mon.lastCoverExit = null;
   });
-  await page.waitForTimeout(250);
-  let st = '';
-  for (let i = 0; i < 3 && st !== 'cover'; i++) {
-    await page.keyboard.press('Space');
-    await page.waitForTimeout(300);
-    st = await page.evaluate(() => window.BREACH.player.state);
-  }
+  await page.waitForTimeout(120);
+  const st = await page.evaluate(() => window.BREACH.player.state);
   if (st !== 'cover') { problems.push(`SALIDA ${tag}: no entró a cover`); return; }
   for (const k of keys) await page.keyboard.down(k);
   await page.waitForTimeout(holdMs);
-  const out = await page.evaluate(() => window.BREACH.player.state);
+  const result = await page.evaluate(() => ({
+    state: window.BREACH.player.state,
+    exit: window.__mon.lastCoverExit ?? null,
+  }));
+  const out = result.state;
   for (const k of keys) await page.keyboard.up(k);
-  if (!expect.includes(out)) problems.push(`SALIDA ${tag}: esperaba ${expect.join('/')}, quedó en ${out}`);
+  if (!expect.includes(out)) problems.push(`SALIDA ${tag}: esperaba ${expect.join('/')}, quedó en ${out} ${JSON.stringify(result.exit)}`);
   console.log(`salida ${tag}: ${out}`);
   await page.waitForTimeout(300);
   await flush('salida-' + tag);
 };
 await coverExitTest('sprint+lateral-B', ['Shift', 'a'], ['roadie', 'run'], 1200);
 await coverExitTest('sprint+lateral-A', ['Shift', 'd'], ['roadie', 'run'], 1200);
-await coverExitTest('lateral-al-tope', ['a'], ['run', 'idle'], 1500);      // sin sprint: camina fuera
-await coverExitTest('diagonal-fuera', ['s', 'd'], ['run', 'idle', 'dive'], 700); // away>0.3 sale sin sprint
+await coverExitTest('lateral-al-tope-LOCK', ['a'], ['cover'], 1500);       // lateral sostenido: queda locked-in
+await coverExitTest('diagonal-atras-detach', ['s', 'd'], ['run', 'idle'], 700); // componente atrás claro: detach
 await coverExitTest('lateral-corto-NO-sale', ['d'], ['cover'], 150);       // pulso corto en centro: sigue cubierto
+await coverExitTest('atras-detach', ['s'], ['run', 'idle'], 700);          // atrás claro: salida explícita
 
 // ---- FASE 7: muertes en plena transición ----
 const dieIn = async (tag, prep, expectState = null, keepPosition = false) => {

@@ -27,6 +27,7 @@ try {
   const prepared = await page.evaluate(() => ({
     audio: Object.keys(window.BREACH_AUDIO.samples).sort(),
     audioPrepared: window.BREACH_AUDIO._prepared,
+    audioBuses: !!window.BREACH_AUDIO.combatBus && !!window.BREACH_AUDIO.worldBus,
     effectsPrepared: window.BREACH_EFFECTS._prepared,
     transient: window.BREACH_EFFECTS.items.length,
     tracersFree: window.BREACH_EFFECTS._tracerPool.free.length,
@@ -62,6 +63,7 @@ try {
 
   const fail = [];
   if (!prepared.audioPrepared || prepared.audio.join(',') !== 'shotgun,smg') fail.push('audio no preparado');
+  if (!prepared.audioBuses) fail.push('buses espaciales de audio no preparados');
   if (!prepared.effectsPrepared || prepared.transient !== 0) fail.push('efectos no limpiados');
   if (prepared.tracersFree !== 32 || prepared.flashesFree.some((n) => n !== 16)) fail.push('pool incompleto');
   if (lightResult.before.total !== lightResult.firing.total) fail.push('disparo agregó una PointLight');

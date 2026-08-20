@@ -110,6 +110,33 @@ const G = {
   footAcc: 0,
 };
 
+// El listener sigue al pecho del jugador, mientras la lateralidad sigue la
+// cámara (lo que el jugador percibe como izquierda/derecha). Un ray corto
+// contra el mundo alimenta la oclusión; se ignora el último tramo para no
+// confundir la propia cobertura del emisor con una pared intermedia.
+const audioOccOrigin = new THREE.Vector3();
+const audioOccDir = new THREE.Vector3();
+audio.setSpatialContext(
+  () => {
+    if (!G.player) return null;
+    return {
+      x: G.player.pos.x,
+      y: (G.player.y ?? 0) + 1.15,
+      z: G.player.pos.z,
+      right: shoulderCam.flatRight(),
+    };
+  },
+  (source, listener) => {
+    audioOccOrigin.set(listener.x, listener.y, listener.z);
+    audioOccDir.set(source.x - listener.x, source.y - listener.y, source.z - listener.z);
+    const distance = audioOccDir.length();
+    if (distance < 1.5) return false;
+    audioOccDir.multiplyScalar(1 / distance);
+    const hit = world.raycast(audioOccOrigin, audioOccDir, distance, 0.04);
+    return hit !== null && hit < distance - 0.6;
+  },
+);
+
 // ---------- eventos del controller (feel: sonido + polvo + shake) ----------
 const ctrlEvents = {
   onSlideStart: () => { audio.whoosh(); },
@@ -985,11 +1012,13 @@ function bindNet(net) {
         if (contact && Math.abs(contact.t - remoteLen) < 0.12) {
           const point = o.clone().addScaledVector(remoteDir, contact.t);
           effects.impact(point, contact.normal, contact.surface);
+          audio.impact(point, contact.surface);
         }
       }
     }
     effects.muzzleFlash(o, m.w === 'shotgun');
-    if (m.w === 'shotgun') audio.shotgun(); else audio.smg();
+    const remoteShot = { position: o };
+    if (m.w === 'shotgun') audio.shotgun(remoteShot); else audio.smg(remoteShot);
     const r = G.remotes.get(m.id);
     if (r) r.firing = 0.45;
   });
@@ -1116,17 +1145,10 @@ function bindNet(net) {
 }
 
 // ---------- pasos posicionales (bots / remotos) ----------
-// Volumen por distancia + paneo estéreo según el lado respecto a la cámara:
-// escuchas POR DÓNDE viene el que corre.
-function stepSound(x, z, kind) {
+// Todos los pasos ajenos usan la misma curva 3D que disparos e impactos.
+function stepSound(x, z, kind, y = 0) {
   if (!G.player) return;
-  const dx = x - G.player.pos.x, dz = z - G.player.pos.z;
-  const d = Math.hypot(dx, dz);
-  if (d > 24) return;
-  const vol = Math.pow(Math.max(0, 1 - d / 24), 1.4) * 0.8;
-  const rt = shoulderCam.flatRight();
-  const pan = Math.max(-0.85, Math.min(0.85, (dx * rt.x + dz * rt.z) / Math.max(3.5, d)));
-  audio.footstep(kind, vol, pan);
+  audio.footstep(kind, { position: { x, y: y + 0.22, z } });
 }
 
 // ---------- disparos ----------
@@ -1247,6 +1269,7 @@ function fireShot() {
     effects.tracer(muzzle, hit.point);
     if (hit.kind === 'world') {
       effects.impact(hit.point, hit.normal, hit.surface);
+      audio.impact(hit.point, hit.surface);
       worldImpacts.push(hit.point);
     }
     if (hit.kind === 'player') {
@@ -1606,12 +1629,12 @@ function frame(now) {
         const roadie = r.st === 'roadie';
         if (r._facc > (roadie ? 2.1 : 1.7)) {
           r._facc = 0;
-          stepSound(r.x, r.z, roadie ? 'roadie' : 'run');
+          stepSound(r.x, r.z, roadie ? 'roadie' : 'run', r.y ?? 0);
         }
       } else {
         r._facc = 0;
       }
-      if (r._wasAir && !airborne && r.alive) stepSound(r.x, r.z, 'land');
+      if (r._wasAir && !airborne && r.alive) stepSound(r.x, r.z, 'land', r.y ?? 0);
       r._wasAir = airborne;
     }
 

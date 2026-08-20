@@ -666,12 +666,15 @@ class Bot {
       this._facc = (this._facc ?? 0) + stepped;
       if (this._facc > (this.speed > 4.6 ? 1.9 : 1.6)) {
         this._facc = 0;
-        match.cb.stepSound?.(this.pos.x, this.pos.z, this.speed > 4.6 ? 'run' : 'walk');
+        match.cb.stepSound?.(this.pos.x, this.pos.z,
+          this.speed > 4.6 ? 'run' : 'walk', this.y);
       }
     } else {
       this._facc = 0;
     }
-    if (this._wasAir && this.grounded) match.cb.stepSound?.(this.pos.x, this.pos.z, 'land');
+    if (this._wasAir && this.grounded) {
+      match.cb.stepSound?.(this.pos.x, this.pos.z, 'land', this.y);
+    }
     this._wasAir = !this.grounded;
 
     let anim = animOverride;
@@ -1240,9 +1243,12 @@ export class BotMatch {
       } else if (hit.kind === 'world') {
         // Cada pellet deja su marca; Effects limita/presupuesta las partículas.
         this.cb.effects.impact(hit.point, hit.normal, hit.surface);
+        this.cb.audio.impact(hit.point, hit.surface);
       }
     }
-    if (bot.wep === 'shotgun') this.cb.audio.shotgun(); else this.cb.audio.smg();
+    const shotAudio = { position: { x: bot.pos.x, y: bot.y + 1.35, z: bot.pos.z } };
+    if (bot.wep === 'shotgun') this.cb.audio.shotgun(shotAudio);
+    else this.cb.audio.smg(shotAudio);
     for (const [id, dmg] of dmgAcc) {
       if (id === 'player') {
         this.cb.effects.blood(_v3.set(this.cb.player().x, 1, this.cb.player().z), TEAM_HEX.red);

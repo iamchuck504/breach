@@ -1,7 +1,46 @@
 // Audio WebAudio: sintético procedural + samples de armas (public/audio).
-// Las armas usan UN sample por disparo — a 620 RPM el uzi suena exactamente
-// al rate of fire real porque cada bala dispara su propia reproducción.
-// M = mute.
+// La mezcla separa eventos locales/UI de fuentes del mundo. Estas últimas
+// comparten una curva espacial coherente: distancia 3D, paneo, pérdida gradual
+// de agudos y oclusión por geometría. M = mute.
+
+export const AUDIO_PROFILES = Object.freeze({
+  footstep: Object.freeze({ near: 1.6, far: 26, rolloff: 0.16, farHz: 3200,
+    occludedGain: 0.62, occludedHz: 1450 }),
+  gunshot: Object.freeze({ near: 2.4, far: 82, rolloff: 0.09, farHz: 2600,
+    occludedGain: 0.48, occludedHz: 1850 }),
+  impact: Object.freeze({ near: 1.2, far: 30, rolloff: 0.16, farHz: 2300,
+    occludedGain: 0.5, occludedHz: 1300 }),
+});
+
+const clamp01 = (v) => Math.max(0, Math.min(1, v));
+
+// Función pura para poder verificar la mezcla sin depender de WebAudio.
+export function spatialAudioMix(distance, lateral = 0, occluded = false,
+  profileName = 'gunshot') {
+  const p = AUDIO_PROFILES[profileName] ?? AUDIO_PROFILES.gunshot;
+  const d = Math.max(0, Number.isFinite(distance) ? distance : p.far);
+  if (d >= p.far) return { gain: 0, pan: clamp01((lateral + 1) * 0.5) * 2 - 1,
+    cutoff: p.farHz, distance: d, occluded };
+  const delta = Math.max(0, d - p.near);
+  const inverse = 1 / (1 + delta * p.rolloff);
+  // Los últimos 25% se desvanecen suavemente hasta silencio, sin corte seco.
+  const edge = clamp01((p.far - d) / (p.far * 0.25));
+  let gain = inverse * Math.sqrt(edge);
+  const t = clamp01((d - p.near) / (p.far - p.near));
+  let cutoff = 19000 * Math.pow(p.farHz / 19000, t);
+  if (occluded) {
+    gain *= p.occludedGain;
+    cutoff = Math.min(cutoff, p.occludedHz);
+  }
+  return {
+    gain,
+    pan: Math.max(-0.92, Math.min(0.92, lateral)),
+    cutoff,
+    distance: d,
+    occluded,
+  };
+}
+
 export class Audio {
   constructor() {
     this.ctx = null;
@@ -13,6 +52,18 @@ export class Audio {
     this.samples = {};
     this._samplesReady = null;
     this._prepared = false;
+    this._listener = null;
+    this._occluded = null;
+    this.combatBus = null;
+    this.worldBus = null;
+    this._impactWindow = 0;
+    this._impactCount = 0;
+  }
+
+  // Los callbacks viven en main para que Audio no dependa de Three.js/World.
+  setSpatialContext(listener, occluded = null) {
+    this._listener = listener;
+    this._occluded = occluded;
   }
 
   setVolume(v) {
@@ -27,6 +78,19 @@ export class Audio {
       this.master = this.ctx.createGain();
       this.master.gain.value = this.muted ? 0 : this.volume;
       this.master.connect(this.ctx.destination);
+      // Los picos de varias armas simultáneas se controlan aquí; pasos y UI no
+      // quedan enterrados por el compresor del bus de combate.
+      this.combatBus = this.ctx.createGain();
+      const limiter = this.ctx.createDynamicsCompressor();
+      limiter.threshold.value = -10;
+      limiter.knee.value = 14;
+      limiter.ratio.value = 5;
+      limiter.attack.value = 0.004;
+      limiter.release.value = 0.16;
+      this.combatBus.connect(limiter).connect(this.master);
+      this.worldBus = this.ctx.createGain();
+      this.worldBus.gain.value = 1;
+      this.worldBus.connect(this.master);
       const len = this.ctx.sampleRate * 1;
       const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
       const d = buf.getChannelData(0);
@@ -80,15 +144,62 @@ export class Audio {
 
   // true si el sample sonó; rate con leve variación evita el efecto metralla
   // de fotocopia (mismo golpe idéntico 10 veces por segundo)
-  _sample(k, gain, rate = 1) {
+  _spatial(position, profileName) {
+    if (!position || !this._listener) return spatialAudioMix(0, 0, false, profileName);
+    const listener = this._listener();
+    if (!listener) return spatialAudioMix(0, 0, false, profileName);
+    const sx = position.x ?? 0, sy = position.y ?? 0, sz = position.z ?? 0;
+    const dx = sx - listener.x, dy = sy - listener.y, dz = sz - listener.z;
+    const distance = Math.hypot(dx, dy, dz);
+    const horizontal = Math.max(0.001, Math.hypot(dx, dz));
+    const right = listener.right ?? { x: 1, z: 0 };
+    const lateral = (dx * right.x + dz * right.z) / horizontal;
+    let blocked = false;
+    if (this._occluded && distance > 1.5) {
+      try { blocked = !!this._occluded({ x: sx, y: sy, z: sz }, listener); }
+      catch { blocked = false; }
+    }
+    return spatialAudioMix(distance, lateral, blocked, profileName);
+  }
+
+  _eventOutput(baseGain, options, profileName, destination) {
+    if (!this.ctx) return null;
+    const opts = options && typeof options === 'object' ? options : {};
+    const mix = this._spatial(opts.position, profileName);
+    const gain = baseGain * (opts.gain ?? 1) * mix.gain;
+    if (gain <= 0.001) return null;
+    const out = this.ctx.createGain();
+    out.gain.value = gain;
+    let tail = out;
+    if (mix.cutoff < 18500) {
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.Q.value = mix.occluded ? 0.72 : 0.25;
+      filter.frequency.value = Math.max(500, mix.cutoff);
+      tail.connect(filter);
+      tail = filter;
+    }
+    if (opts.position && this.ctx.createStereoPanner) {
+      const pan = this.ctx.createStereoPanner();
+      pan.pan.value = mix.pan;
+      tail.connect(pan);
+      tail = pan;
+    }
+    tail.connect(destination || this.master);
+    return out;
+  }
+
+  _sample(k, gain, rate = 1, options = null) {
     const buf = this.samples[k];
     if (!buf || !this.ctx) return false;
+    const out = this._eventOutput(gain, options, 'gunshot', this.combatBus || this.master);
+    // Fuente demasiado lejana: se considera atendida para no disparar el
+    // fallback sintético sin atenuación.
+    if (!out) return true;
     const src = this.ctx.createBufferSource();
     src.buffer = buf;
     src.playbackRate.value = rate;
-    const g = this.ctx.createGain();
-    g.gain.value = gain;
-    src.connect(g).connect(this.master);
+    src.connect(out);
     src.start(this.ctx.currentTime);
     return true;
   }
@@ -107,7 +218,7 @@ export class Audio {
     g.exponentialRampToValueAtTime(0.0001, t0 + a + dec);
   }
 
-  _noiseShot(peak, dec, freq0, freq1, q = 1) {
+  _noiseShot(peak, dec, freq0, freq1, q = 1, destination = null) {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
     const src = this.ctx.createBufferSource();
@@ -118,11 +229,11 @@ export class Audio {
     f.frequency.exponentialRampToValueAtTime(freq1, t + dec);
     const g = this.ctx.createGain();
     this._env(g, t, 0.004, peak, dec);
-    src.connect(f).connect(g).connect(this.master);
+    src.connect(f).connect(g).connect(destination || this.master);
     src.start(t); src.stop(t + dec + 0.05);
   }
 
-  _tone(type, f0, f1, peak, dec) {
+  _tone(type, f0, f1, peak, dec, destination = null) {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
     const o = this.ctx.createOscillator();
@@ -131,7 +242,7 @@ export class Audio {
     o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t + dec);
     const g = this.ctx.createGain();
     this._env(g, t, 0.004, peak, dec);
-    o.connect(g).connect(this.master);
+    o.connect(g).connect(destination || this.master);
     o.start(t); o.stop(t + dec + 0.05);
   }
 
@@ -139,20 +250,33 @@ export class Audio {
   // Paso sobre losa de piedra: golpe de talón (banda media) + toque de punta
   // más agudo un instante después + "tick" de suela dura + golpe de peso en
   // los pesados. Jitter aleatorio por paso: ningún paso suena igual al
-  // anterior. pan (-1..1) y vol permiten pasos POSICIONALES de bots/remotos.
-  footstep(kind = 'run', vol = 1, pan = 0) {
-    if (!this.ctx || vol <= 0.01) return;
+  // anterior. Para compatibilidad, también acepta (kind, vol, pan), aunque el
+  // gameplay usa {position, gain} para aplicar distancia/altura/oclusión.
+  footstep(kind = 'run', options = null, legacyPan = 0) {
+    if (!this.ctx) return;
     const P = STEP_KINDS[kind] ?? STEP_KINDS.run;
-    const out = this.ctx.createGain();
-    out.gain.value = vol;
-    if (pan && this.ctx.createStereoPanner) {
-      const sp = this.ctx.createStereoPanner();
-      sp.pan.value = Math.max(-1, Math.min(1, pan));
-      out.connect(sp);
-      sp.connect(this.master);
-    } else {
-      out.connect(this.master);
-    }
+    let opts;
+    if (typeof options === 'number') {
+      opts = { gain: options };
+      // La firma antigua ya traía paneo calculado externamente.
+      if (legacyPan && this.ctx.createStereoPanner) {
+        const out = this.ctx.createGain();
+        out.gain.value = options;
+        const sp = this.ctx.createStereoPanner();
+        sp.pan.value = Math.max(-1, Math.min(1, legacyPan));
+        out.connect(sp).connect(this.worldBus || this.master);
+        this._renderFootstep(P, kind, out);
+        return;
+      }
+    } else opts = options || {};
+    const localGain = opts.position ? 1.18 : 1.08;
+    const out = this._eventOutput(localGain, opts, 'footstep', this.worldBus || this.master);
+    if (!out) return;
+    this._renderFootstep(P, kind, out);
+  }
+
+  _renderFootstep(P, kind, out) {
+    if (!this.ctx) return;
     const j = (a, b) => a + Math.random() * (b - a);
     const f = P.f * j(0.85, 1.2);
     this._stepBurst(out, 0, P.heel, j(0.035, 0.05), f, 1.4);                                   // talón
@@ -188,15 +312,50 @@ export class Audio {
     src.stop(t + dec + 0.06);
   }
 
-  // ambos samples normalizados a pico 0dB: el balance vive en estas ganancias
-  // (bajadas 40% a pedido de Chuck: 0.75→0.45, 0.85→0.51)
-  smg() {
-    if (this._sample('smg', 0.45, 0.97 + Math.random() * 0.06)) return;
-    this._noiseShot(0.5, 0.09, 3200, 900); this._tone('square', 190, 90, 0.12, 0.06);
+  // El arma propia permanece frontal y con presencia. Una posición convierte
+  // el evento en disparo ajeno: espacial, atenuado y filtrado por el mundo.
+  smg(options = null) {
+    const remote = !!options?.position;
+    const gain = remote ? 0.34 : 0.39;
+    if (this._sample('smg', gain, 0.97 + Math.random() * 0.06, options)) return;
+    const out = this._eventOutput(remote ? 0.72 : 0.82, options, 'gunshot', this.combatBus || this.master);
+    if (!out) return;
+    this._noiseShot(0.5, 0.09, 3200, 900, 1, out);
+    this._tone('square', 190, 90, 0.12, 0.06, out);
   }
-  shotgun() {
-    if (this._sample('shotgun', 0.51, 0.98 + Math.random() * 0.04)) return;
-    this._noiseShot(0.85, 0.28, 1600, 220, 2); this._tone('sine', 130, 45, 0.55, 0.22);
+  shotgun(options = null) {
+    const remote = !!options?.position;
+    const gain = remote ? 0.39 : 0.46;
+    if (this._sample('shotgun', gain, 0.98 + Math.random() * 0.04, options)) return;
+    const out = this._eventOutput(remote ? 0.72 : 0.86, options, 'gunshot', this.combatBus || this.master);
+    if (!out) return;
+    this._noiseShot(0.85, 0.28, 1600, 220, 2, out);
+    this._tone('sine', 130, 45, 0.55, 0.22, out);
+  }
+
+  impact(position, surface = 'concrete') {
+    if (!this.ctx || !position) return;
+    const now = this.ctx.currentTime;
+    if (now - this._impactWindow > 0.055) {
+      this._impactWindow = now;
+      this._impactCount = 0;
+    }
+    // Una escopeta conserva varios contactos, pero no crea ocho transientes
+    // idénticos que tapen pasos/disparos.
+    if (this._impactCount >= 2) return;
+    const out = this._eventOutput(surface === 'metal' ? 0.52 : 0.42,
+      { position }, 'impact', this.combatBus || this.master);
+    if (!out) return;
+    this._impactCount++;
+    if (surface === 'metal') {
+      this._noiseShot(0.16, 0.055, 5200, 1900, 2.4, out);
+      this._tone('sine', 2100 + Math.random() * 650, 900, 0.1, 0.09, out);
+    } else {
+      const stone = surface === 'stone';
+      this._noiseShot(stone ? 0.2 : 0.16, 0.075,
+        stone ? 2300 : 1800, stone ? 520 : 380, 1.2, out);
+      this._tone('triangle', stone ? 180 : 135, 70, 0.055, 0.065, out);
+    }
   }
   reload() { this._tone('square', 700, 500, 0.07, 0.04); }
   reloadDone() { this._tone('square', 900, 1200, 0.08, 0.05); }
@@ -213,10 +372,10 @@ export class Audio {
 
 // parámetros por tipo de paso (ganancias de talón/punta/peso/tick + freq base)
 const STEP_KINDS = {
-  walk:    { heel: 0.11, toe: 0.06, thump: 0.03, tick: 0.02,  f: 520 },
-  run:     { heel: 0.17, toe: 0.09, thump: 0.06, tick: 0.035, f: 470 },
-  roadie:  { heel: 0.24, toe: 0.11, thump: 0.12, tick: 0.045, f: 420 },
-  shuffle: { heel: 0.08, toe: 0.07, thump: 0,    tick: 0.02,  f: 680 },
-  jump:    { heel: 0.12, toe: 0,    thump: 0,    tick: 0.03,  f: 750 },
-  land:    { heel: 0.3,  toe: 0.16, thump: 0.24, tick: 0.05,  f: 330 },
+  walk:    { heel: 0.14, toe: 0.075, thump: 0.04, tick: 0.025, f: 520 },
+  run:     { heel: 0.21, toe: 0.11,  thump: 0.075, tick: 0.04, f: 470 },
+  roadie:  { heel: 0.29, toe: 0.135, thump: 0.14, tick: 0.052, f: 420 },
+  shuffle: { heel: 0.1,  toe: 0.085, thump: 0,    tick: 0.025, f: 680 },
+  jump:    { heel: 0.14, toe: 0,     thump: 0,    tick: 0.035, f: 750 },
+  land:    { heel: 0.34, toe: 0.18,  thump: 0.27, tick: 0.058, f: 330 },
 };
