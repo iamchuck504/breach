@@ -105,8 +105,8 @@ for (let hit = 0; hit < 2; hit++) {
     const t = G.dummies.targets()[0];
     if (t) {
       const ang = Math.atan2(p.pos.x - t.x, p.pos.z - t.z);
-      p.pos.x = t.x + Math.sin(ang) * 1.2;
-      p.pos.z = t.z + Math.cos(ang) * 1.2;
+      p.pos.x = t.x + Math.sin(ang) * 1.0;
+      p.pos.z = t.z + Math.cos(ang) * 1.0;
       p.yaw = Math.atan2(-(t.x - p.pos.x), -(t.z - p.pos.z));
       p.cam.yaw = p.yaw;
     }

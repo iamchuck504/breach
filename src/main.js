@@ -2140,8 +2140,11 @@ function explodeRocket(pos) {
     const sd = Math.hypot(p.pos.x - pos.x, sy - pos.y, p.pos.z - pos.z);
     if (sd < R && losClear(p.pos.x, sy, p.pos.z)) {
       const dmg = splash(sd) * 0.7;
-      damagePlayerLocal(dmg, G.name, { x: pos.x, z: pos.z },
+      const died = damagePlayerLocal(dmg, G.name, { x: pos.x, z: pos.z },
         { weapon: 'bazooka', distance: sd, damage: dmg, part: 'body', gib: false });
+      // el suicidio también consume vida y agenda respawn (sin esto el
+      // jugador quedaba espectando para siempre)
+      if (died && G.botMatch) G.botMatch.playerSelfDeath();
     }
   }
 }

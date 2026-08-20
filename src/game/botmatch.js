@@ -1534,6 +1534,11 @@ export class BotMatch {
     return false;
   }
 
+  // Muerte del jugador SIN bot asesino (autodaño de bazooka): registra la
+  // baja, consume vida del pool y agenda el respawn igual que cualquier kill.
+  // killerId null: sin killfeed y sin regalar un kill por suicidarse.
+  playerSelfDeath() { this._onDeath('player', null, false); }
+
   _onDeath(victimId, killerId, gib) {
     this.coverClaims.delete(victimId); // el muerto suelta su reserva de cover
     this.releaseTacticalClaim(victimId);

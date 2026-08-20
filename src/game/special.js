@@ -129,7 +129,15 @@ export class Rockets {
       const hit = this.world.raycastHit(TMP_V, TMP_D, step + 0.12);
       let boom = null;
       if (hit) {
-        boom = { x: r.x + TMP_D.x * hit.t, y: r.y + TMP_D.y * hit.t, z: r.z + TMP_D.z * hit.t };
+        // separar la explosión de la superficie por la NORMAL del impacto:
+        // detonar exactamente sobre el collider auto-ocluía la línea de
+        // efecto contra esa misma pared y el splash no dañaba a nadie
+        const n = hit.normal ?? { x: 0, y: 1, z: 0 };
+        boom = {
+          x: r.x + TMP_D.x * hit.t + (n.x ?? 0) * 0.3,
+          y: r.y + TMP_D.y * hit.t + (n.y ?? 0) * 0.3,
+          z: r.z + TMP_D.z * hit.t + (n.z ?? 0) * 0.3,
+        };
       } else {
         r.x += r.vx * dt; r.y += r.vy * dt; r.z += r.vz * dt;
         // espoleta de proximidad: pasar a <0.7m del torso de un objetivo
