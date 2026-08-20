@@ -52,6 +52,8 @@ export class Controller {
     this.runDist = 0;
     this.evadeMom = 0;      // impulso ganado aplicado a la evasión en curso
     this.mantle = null;     // vault sobre cover bajo en progreso
+    this.meleeT = 0;        // progreso del golpe melee en curso
+    this.meleeCd = 0;
     this.detachT = 0;
     this.aim = false;
     this.firingBlind = 0;   // timer para mantener pose de blindfire
@@ -111,6 +113,7 @@ export class Controller {
       case 'flip': return 'flip';
       case 'mantle': return 'mantle';
       case 'roadie': return this.grounded ? 'roadie' : 'jump';
+      case 'melee': return 'melee';
       case 'dive': return 'dive';
       case 'slide': return 'slide';
       default:
@@ -262,6 +265,7 @@ export class Controller {
     this.evadeCooldown = Math.max(0, this.evadeCooldown - dt);
     this.bounceWindow = Math.max(0, this.bounceWindow - dt);
     this.firingBlind = Math.max(0, this.firingBlind - dt);
+    this.meleeCd = Math.max(0, this.meleeCd - dt);
 
     if (this.dead) { this.aim = false; return; }
 
@@ -374,6 +378,32 @@ export class Controller {
           const snap = this.world.findCover(this.pos, dir, C.snapRange, PLAYER_R, 0.3);
           if (snap && snap.dist <= C.directAttachRange) this._enterCover(snap.face, snap.target);
           else this._tryEvade(dir, range);
+        }
+
+        // melee: golpe rápido y pesado con el arma. Solo en el suelo y con el
+        // cooldown listo; corta el sprint (el golpe manda sobre correr) pero
+        // una evasión resuelta este mismo frame tiene prioridad.
+        if (input.meleePressed && this.grounded && this.meleeCd <= 0 &&
+            (this.state === 'idle' || this.state === 'run' || this.state === 'roadie')) {
+          this.meleeT = 0;
+          this.meleeCd = TUNING.melee.cooldown;
+          this._setState('melee');
+        }
+        break;
+      }
+
+      case 'melee': {
+        const ml = TUNING.melee;
+        this.meleeT += dt;
+        // embiste un paso al frente mientras el golpe conecta, y se apaga
+        const push = ml.lungeSpeed * Math.max(0, 1 - (this.meleeT / ml.time) * 1.4);
+        const f = this.facing();
+        this.vel.x = f.x * push;
+        this.vel.z = f.z * push;
+        // corrección leve hacia la cámara: el golpe se puede apuntar un poco
+        this.yaw = lerpAngle(this.yaw, this.cam.yaw, 1 - Math.exp(-10 * dt));
+        if (this.meleeT >= ml.time) {
+          this._setState(hasInput ? 'run' : 'idle');
         }
         break;
       }

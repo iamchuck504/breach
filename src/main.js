@@ -20,6 +20,7 @@ import { Audio, selectAudioListener } from './fx/audio.js';
 import { HUD } from './ui/hud.js';
 import { NetClient } from './net/client.js';
 import { BotMatch } from './game/botmatch.js';
+import { SmokeSystem } from './game/smoke.js';
 import {
   DEFAULT_LOBBY_SETTINGS, MAX_PLAYERS, TEAM_CAPACITY, makeBotName,
   nextLobbyMap, normalizeLobbySettings, validateLobby,
@@ -52,6 +53,7 @@ const camera = new THREE.PerspectiveCamera(TUNING.cam.fovNormal, 1, 0.1, 200);
 const world = new World(scene, 'azoteas');
 const effects = new Effects(scene);
 const audio = new Audio();
+const smoke = new SmokeSystem(scene, world, audio);
 audio.setAmbience('azoteas');
 const hud = new HUD();
 const input = new Input(canvas);
@@ -95,6 +97,7 @@ resize();
 const G = {
   fireBuffer: 0,       // click de disparo pendiente mientras el cuerpo gira
   pendingShots: 0,     // tiros aprobados que esperan la pose/muzzle de este frame
+  pendingThrows: 0,    // granadas aprobadas que esperan la pose de este frame
   mode: null,          // null | 'practice' | 'online'
   rig: null,           // rig local
   player: null,        // controller local
@@ -337,7 +340,7 @@ function spectatorView() {
   return {
     name: target?.name || t('hud.waitingTeammate'),
     controls: target
-      ? `${keyLabel(BINDS.kb.swap)}/${keyLabel(BINDS.kb.reload)} · ${padBtnName(BINDS.pad.swap)}/${padBtnName(BINDS.pad.reload)} ${t('spectator.switch')}`
+      ? `${keyLabel(BINDS.kb.swap)}/${keyLabel(BINDS.kb.reload)} · ${padBtnName(BINDS.pad.reload)} ${t('spectator.switch')}`
       : t('spectator.noTeammates'),
     respawn,
     ready: G.respawnT > 0 && G.respawnT <= 1,
@@ -979,7 +982,7 @@ function buildCharUI() {
           G.rig = new Rig(scene, G.team, null, v);
           G.rig.groundFn = (x, z, y) => world.groundHeight({ x, z }, PLAYER_R, y);
           G.rig.collideFn = (p, y, r = RAGDOLL_R) => world.resolveCircle(p, r, y);
-          G.rig.setWeapon(G.weapons.cur);
+          G.rig.setWeapon(G.weapons.cur, backWeapon());
         }
       });
       charSlots.append(b);
@@ -1235,6 +1238,8 @@ function teardown({ keepNet = false, keepLobby = true } = {}) {
   G.player = null; // sin referencias a caras de un mapa destruido
   G.fireBuffer = 0;
   G.pendingShots = 0;
+  G.pendingThrows = 0;
+  smoke.clear();
   G.spawnProt = 0;
   G.respawnT = 0;
   hud.respawnTick(null);
@@ -1320,7 +1325,9 @@ function damagePlayerLocal(dmg, fromName, shooter, hitCtx = null) {
     // El drop nace cuando desaparece el arma de la mano y en la posición
     // ACTUAL del cadáver; antes aparecía 60 ms tarde en el punto inicial.
     const dropAt = { x: G.player.pos.x, z: G.player.pos.z, y: world.groundHeight(G.player.pos, PLAYER_R, G.player.y) };
-    const wep = G.weapons.cur, mag = G.weapons.st.mag, res = G.weapons.st.reserve;
+    // la granada no es un arma soltable: si estaba en mano, cae la primaria
+    const dropWep = G.weapons.def.thrown ? G.weapons.primary : G.weapons.cur;
+    const wep = dropWep, mag = G.weapons.state[dropWep].mag, res = G.weapons.state[dropWep].reserve;
     const id = 'p' + G.dropSeq++;
     const deathRig = G.rig, deathDrops = G.drops;
     setTimeout(() => {
@@ -1358,6 +1365,7 @@ function startBots(lobby = G.lobby || defaultLocalLobby()) {
   G.crates = new AmmoCrates(scene, false, world.cratePos ?? undefined);
   G.drops = new WeaponDrops(scene);
   G.botMatch = new BotMatch(scene, world, {
+    smoke,
     effects, audio, hud,
     playerName: G.name,
     playerVariant: G.charVariant,
@@ -1495,6 +1503,7 @@ function setupOnlineBots(roster) {
   if (G.lobby?.hostId !== G.net?.id) return;
   const slots = roster.filter((p) => p.bot);
   G.botMatch = new BotMatch(scene, world, {
+    smoke,
     effects, audio, hud, humans: onlineHumanTargets,
     playing: () => G.onlinePhase === 'playing',
     stepSound,
@@ -1631,6 +1640,9 @@ function bindNet(net) {
     const okVec = (v) => Array.isArray(v) && v.length === 3 && v.every((n) => typeof n === 'number' && isFinite(n));
     if (!okVec(m.o) || !okVec(m.p)) return;
     const o = new THREE.Vector3(...m.o), p = new THREE.Vector3(...m.p);
+    // un melee ajeno no es un disparo: la animación viaja por el estado y el
+    // resultado por 'death'; sin trazadora, flash ni sonido de bala
+    if (m.w === 'melee') return;
     effects.tracer(o, p);
     // Servidores nuevos reenvían todos los impactos estáticos de la escopeta;
     // con servidores anteriores, el endpoint único mantiene compatibilidad.
@@ -1649,11 +1661,22 @@ function bindNet(net) {
         }
       }
     }
-    effects.muzzleFlash(o, m.w === 'shotgun');
+    effects.muzzleFlash(o, m.w === 'shotgun' || !!TUNING.weapons[m.w]?.special);
     const remoteShot = { position: o };
-    if (m.w === 'shotgun') audio.shotgun(remoteShot); else audio.smg(remoteShot);
+    audio.gun(m.w, remoteShot);
     const r = G.remotes.get(m.id);
     if (r) r.firing = 0.45;
+  });
+  net.on('nade', (m) => {
+    if (!alive() || m.id === net.id) return;
+    const okVec = (v) => Array.isArray(v) && v.length === 3 && v.every((n) => typeof n === 'number' && isFinite(n));
+    if (!okVec(m.o) || !okVec(m.v)) return;
+    // cada cliente simula el mismo proyectil desde el mismo estado inicial:
+    // la física es determinista y la nube cae en el mismo lugar para todos
+    smoke.throwNade(
+      { x: m.o[0], y: m.o[1], z: m.o[2] },
+      { x: m.v[0], y: m.v[1], z: m.v[2] },
+    );
   });
   net.on('death', (m) => {
     if (!alive() || !G.player) return;
@@ -1945,6 +1968,108 @@ function coverPoseReady(wantsAim, wantsFire) {
   return true;
 }
 
+// Lanzar la granada de humo: sale de la mano con arco balístico. La nube la
+// gestiona SmokeSystem (rebotes, delay, disipación). Si era la última, el
+// personaje vuelve solo a su primaria.
+function throwSmoke() {
+  const p = G.player;
+  const d = TUNING.weapons.grenade;
+  G.rig.setTransform(p.pos.x, p.pos.z, p.yaw, p.y);
+  const muzzle = G.rig.muzzleWorld(_v1);
+  const dir = p.aim ? shoulderCam.aimRay().dir.clone() : hipDir();
+  const o = { x: muzzle.x, y: muzzle.y, z: muzzle.z };
+  const v = {
+    x: dir.x * d.throwSpeed,
+    y: dir.y * d.throwSpeed + d.throwUp,
+    z: dir.z * d.throwSpeed,
+  };
+  smoke.throwNade(o, v);
+  audio.whoosh();
+  input.pad.rumble(45, 0.25, 0.35);
+  G.rig.kick(0.5);
+  G.net?.send({ t: 'nade', o: [o.x, o.y, o.z], v: [v.x, v.y, v.z] });
+  // sin botes restantes: cambiar solo a la primaria (nunca quedarse
+  // apuntando con la mano vacía)
+  if (G.weapons.st.mag <= 0) G.weapons.startSwap(G.weapons.primary);
+}
+
+// Golpe melee: arco frontal corto. Pega al enemigo MÁS CERCANO dentro del
+// arco (un objetivo por golpe), con línea al pecho para no golpear a través
+// de paredes.
+function resolveMelee() {
+  const ml = TUNING.melee;
+  const p = G.player;
+  const f = p.facing();
+  const cosHalf = Math.cos(ml.arcDeg * Math.PI / 360);
+  let best = null;
+  for (const tg of currentTargets()) {
+    if (tg.alive === false || tg.protected) continue;
+    const dx = tg.x - p.pos.x, dz = tg.z - p.pos.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist > ml.range) continue;
+    if (Math.abs((tg.y ?? 0) - p.y) > 1.4) continue;
+    const dot = dist < 0.001 ? 1 : (dx * f.x + dz * f.z) / dist;
+    if (dot < cosHalf) continue;
+    if (!best || dist < best.dist) best = { tg, dist, dx, dz };
+  }
+  // el golpe rompe la protección de spawn propia aunque pegue al aire
+  if (G.spawnProt > 0) { G.spawnProt = 0; hud.hint(t('msg.protectionBroken'), 900); }
+  if (!best) return;
+  const { tg, dist } = best;
+  _v1.set(p.pos.x, p.y + 1.1, p.pos.z);
+  _v2.set(best.dx, 0, best.dz).normalize();
+  if (dist > 0.4 && world.raycast(_v1, _v2, dist - 0.2) !== null) return;
+  const dmg = ml.dmg;
+  const point = _v3.set(tg.x, (tg.y ?? 0) + 1.05, tg.z);
+  const ctx = { weapon: 'melee', distance: dist, damage: dmg, part: 'body', gib: false };
+  let connected = false;
+  if (G.mode === 'practice' && G.dummies) {
+    connected = true;
+    effects.blood(point, TEAM_HEX.blue);
+    const killed = G.dummies.damage(tg.id, dmg, (d) => {
+      d.rig.setDeathContext({
+        impact: { x: d.x - p.pos.x, z: d.z - p.pos.z },
+        power: Math.min(1, dmg / 55),
+        vel: { x: 0, z: 0 },
+        state: 'run',
+        ...ctx,
+      });
+      G.scores.red++;
+      hud.score(G.scores.red, G.scores.blue);
+      hud.kill(G.name, 'red', d.name, 'blue');
+      audio.kill();
+    });
+    if (!killed) audio.hit();
+  } else if (G.mode === 'bots' && G.botMatch) {
+    const killed = G.botMatch.damageBot(tg.id, dmg, 'player', false, false, ctx);
+    if (killed !== null) { connected = true; if (!killed) audio.hit(); }
+  } else if (G.net) {
+    const r = G.remotes.get(tg.id);
+    const b = G.onlineBots?.botById(tg.id);
+    if ((r || b) && !r?.inv && !(b?.protT > 0)) {
+      connected = true;
+      effects.blood(point, TEAM_HEX[r?.team || b.team]);
+      // el golpe viaja como disparo validable de corto alcance + su claim
+      G.net.fire(_v1, point, 'melee', []);
+      G.net.hit(tg.id, dmg, 'body', false, point);
+      audio.hit();
+    }
+  }
+  if (connected) {
+    hud.hitmarker();
+    audio.thump();
+    input.pad.rumble(70, 0.6, 0.8);
+    shoulderCam.addShake(0.5);
+  }
+}
+
+// primaria que se ve cargada a la espalda: la que no está en mano (con
+// pistola o granada en mano se muestra la del segundo slot)
+function backWeapon() {
+  const w = G.weapons;
+  return w.cur === w.slots[1] ? w.slots[0] : w.slots[1];
+}
+
 function fireShot() {
   const w = G.weapons, def = w.def;
   const aiming = G.player.aim;
@@ -2000,10 +2125,12 @@ function fireShot() {
   // disparar rompe la protección de spawn
   if (G.spawnProt > 0) { G.spawnProt = 0; hud.hint(t('msg.protectionBroken'), 900); }
 
-  // feedback de disparo
-  effects.muzzleFlash(muzzle, w.cur === 'shotgun');
-  if (w.cur === 'shotgun') { audio.shotgun(); input.pad.rumble(90, 0.5, 0.9); }
-  else { audio.smg(); input.pad.rumble(45, 0.2, 0.4); }
+  // feedback de disparo (flash grande + rumble fuerte para armas pesadas)
+  effects.muzzleFlash(muzzle, w.cur === 'shotgun' || !!def.special);
+  audio.gun(w.cur);
+  if (def.recoil >= 1.5) input.pad.rumble(90, 0.5, 0.9);
+  else if (def.recoil >= 0.5) input.pad.rumble(55, 0.28, 0.5);
+  else input.pad.rumble(45, 0.2, 0.4);
   G.rig.kick(def.recoil * 0.5);
   shoulderCam.addShake(def.recoil * TUNING.cam.shakeFire);
   shoulderCam.pitch = Math.min(TUNING.cam.pitchMax * Math.PI / 180,
@@ -2014,7 +2141,7 @@ function fireShot() {
   const onlineClaims = [];
   for (const [id, e] of dmgByTarget) {
     if (e.dmg <= 0) continue;
-    const gib = w.cur === 'shotgun' && e.dist <= TUNING.weapons.shotgun.gibRange;
+    const gib = def.gibRange != null && e.dist <= def.gibRange;
     if (G.mode === 'practice') {
       hitSomeone = true;
       effects.blood(e.point, TEAM_HEX.blue);
@@ -2069,7 +2196,8 @@ function fireShot() {
 function updateReticle() {
   const p = G.player;
   const canShow = p && !p.dead && G.mode && !menuIsOpen() &&
-    p.state !== 'roadie' && p.state !== 'dive' && p.state !== 'slide';
+    p.state !== 'roadie' && p.state !== 'dive' && p.state !== 'slide' &&
+    p.state !== 'melee';
   if (!canShow) { hud.reticle(false, null); return; }
 
   // shoulderCam.update cambia position/rotation antes de llegar aquí, pero
@@ -2112,6 +2240,7 @@ window.BREACH_CAM = camera;
 window.BREACH_AUDIO = audio;
 window.BREACH_WORLD = world;
 window.BREACH_EFFECTS = effects;
+window.BREACH_SMOKE = smoke;
 window.BREACH_RIG = Rig; // para tests visuales de poses/animaciones
 window.THREE = THREE;
 
@@ -2125,6 +2254,7 @@ function simStep(dt) {
   if (matchControlsLocked()) {
     G.fireBuffer = 0;
     G.pendingShots = 0;
+    G.pendingThrows = 0;
     p.update(dt, input, false);
     if (G.botMatch) G.botMatch.update(dt);
     if (G.net) { G.net.tickState(dt, p, G.weapons); G.net.tickBotState(dt, G.onlineBots?.bots); }
@@ -2151,7 +2281,7 @@ function simStep(dt) {
 
   // (el flip Matrix SÍ permite disparar en el aire)
   const stateOk = !p.dead && p.state !== 'dive' && p.state !== 'slide' &&
-    p.state !== 'roadie' && p.state !== 'mantle' && input.anyDevice;
+    p.state !== 'roadie' && p.state !== 'mantle' && p.state !== 'melee' && input.anyDevice;
   // Un giro grande se resuelve como rotación progresiva y buffer de disparo.
   // ADS y blindfire usan el mismo criterio: la cámara manda, pero el cañón
   // debe poder representarla visualmente antes de emitir el proyectil.
@@ -2184,7 +2314,7 @@ function simStep(dt) {
   // El controller puede haber recuperado control o terminado de alinearse en
   // este mismo paso. Revalidar evita añadir un frame artificial de latencia.
   const stateOkAfter = !p.dead && p.state !== 'dive' && p.state !== 'slide' &&
-    p.state !== 'roadie' && p.state !== 'mantle' && input.anyDevice;
+    p.state !== 'roadie' && p.state !== 'mantle' && p.state !== 'melee' && input.anyDevice;
   canFire = stateOkAfter && p.fireAligned() &&
     coverPoseReady(p.aim, wantsFire) && (!wantsFire || coverFireClear());
   const fired = p.dead ? false
@@ -2195,9 +2325,13 @@ function simStep(dt) {
   if (fired) G.fireBuffer = 0;
   // Resolver después de actualizar el rig: con origen físico en el muzzle, un
   // tiro emitido antes de aplicar la pose del frame nacía en la postura vieja.
-  if (fired) G.pendingShots++;
+  // La granada no es hitscan: va por su propio canal de lanzamiento.
+  if (fired) {
+    if (G.weapons.def.thrown) G.pendingThrows++;
+    else G.pendingShots++;
+  }
 
-  if (input.reloadPressed) G.weapons.startReload();
+  if (input.reloadPressed && p.state !== 'melee') G.weapons.startReload();
   if (!wasReloading && G.weapons.reloading) audio.reload(); // incluye auto-recarga
   // Una recarga interrumpida abandona el gesto sin reproducir el sonido que
   // comunica cargador completo.
@@ -2206,11 +2340,44 @@ function simStep(dt) {
 
   // práctica = munición de reserva infinita (nunca te quedas sin disparar)
   if (G.mode === 'practice') {
-    for (const k of ['smg', 'shotgun']) {
-      G.weapons.state[k].reserve = TUNING.weapons[k].reserve;
+    for (const k of G.weapons.slots) {
+      const d = TUNING.weapons[k];
+      if (d.thrown) { if (G.weapons.state[k].mag <= 0) G.weapons.state[k].mag = d.mag; }
+      else if (!d.special) G.weapons.state[k].reserve = d.reserve;
     }
   }
-  if (input.swapPressed && !p.dead && G.weapons.startSwap()) audio.reload();
+  // selección de arma: Q y la rueda CICLAN; 1-4 y el d-pad seleccionan
+  // directo por slot. Un cambio ya en curso ignora inputs nuevos (sin
+  // dobles cambios ni exploits de animación); durante el melee el arma
+  // está ocupada en el golpe.
+  if (!p.dead && p.state !== 'melee') {
+    let swapped = false;
+    if (input.slotPressed >= 0) {
+      const target = G.weapons.slots[input.slotPressed];
+      swapped = !!target && G.weapons.startSwap(target);
+    } else if (input.cycleDir !== 0) {
+      swapped = G.weapons.startSwap(G.weapons.cycleTarget(Math.sign(input.cycleDir)));
+    } else if (input.swapPressed) {
+      swapped = G.weapons.startSwap();
+    }
+    if (swapped) audio.reload();
+  }
+
+  // melee: whoosh al armar el golpe y UNA sola ventana de impacto por gesto
+  if (p.state === 'melee') {
+    if (!G.meleeSwung) {
+      G.meleeSwung = true;
+      audio.whoosh();
+      input.pad.rumble(40, 0.3, 0.2);
+    }
+    if (!G.meleeHitDone && p.meleeT >= TUNING.melee.hitAt) {
+      G.meleeHitDone = true;
+      resolveMelee();
+    }
+  } else {
+    G.meleeSwung = false;
+    G.meleeHitDone = false;
+  }
 
   // pasos: por distancia recorrida; el tipo según estado y velocidad
   if ((p.state === 'run' || p.state === 'roadie') && p.speed > 1 && p.grounded) {
@@ -2237,6 +2404,7 @@ function simStep(dt) {
     G.drops.update(dt, p.pos.x, p.pos.z, p.y, G.selfAlive && !p.dead, (id, d) => {
       const def = TUNING.weapons[d.wep];
       const s = G.weapons.state[d.wep];
+      if (!s) return; // arma que no llevas (p.ej. tu primaria fue reemplazada)
       if (s.reserve >= def.reserve) return; // reserva llena: no desperdiciarla
       if (G.mode === 'online') {
         d.claimed = true;
@@ -2293,7 +2461,11 @@ function frame(now) {
   const menuOpen = menuIsOpen();
   if (!G.mode) updateMenuBackdrop(now);
   const flowLocked = matchControlsLocked();
-  if (G.flowLockedPrev && !flowLocked && G.mode === 'online') grantSpawnProtection();
+  // al desbloquear el despliegue arranca la protección REAL: la otorgada al
+  // spawnear se quemaba entera durante el intro (bots y online por igual)
+  if (G.flowLockedPrev && !flowLocked && (G.mode === 'online' || G.mode === 'bots')) {
+    grantSpawnProtection();
+  }
   G.flowLockedPrev = flowLocked;
   input.suppress = menuOpen || flowLocked; // presentación y menú bloquean el gameplay
   input.pollPad(dt, !!G.mode && !menuOpen && !flowLocked);
@@ -2376,7 +2548,7 @@ function frame(now) {
     if (flowView && flowView.phase !== 'countdown') updateMatchCamera(now, flowView);
     else if (G.spectator.active) updateSpectatorCamera(dt, now);
     else shoulderCam.update(dt, G.player);
-    G.rig.setWeapon(G.weapons.cur); // el intercambio real ocurre a mitad del gesto
+    G.rig.setWeapon(G.weapons.cur, backWeapon()); // el intercambio real ocurre a mitad del gesto
     // protección de spawn: highlight sutil en el color del equipo
     G.rig.root.visible = true;
     G.rig.setProtected(G.spawnProt > 0);
@@ -2390,6 +2562,10 @@ function frame(now) {
     while (G.pendingShots > 0) {
       fireShot();
       G.pendingShots--;
+    }
+    while (G.pendingThrows > 0) {
+      throwSmoke();
+      G.pendingThrows--;
     }
     for (const r of G.remotes.values()) {
       r.update(dt);
@@ -2436,6 +2612,7 @@ function frame(now) {
   }
 
   effects.update(dt);
+  smoke.update(dt);
   renderer.render(scene, camera);
   input.endFrame();
 }

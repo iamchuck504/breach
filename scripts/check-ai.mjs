@@ -24,8 +24,16 @@ const LAYOUT = process.argv[2] || 'fortaleza';
 const DURATION = Math.max(10, Number(process.argv[3]) || 30);
 await page.goto('http://localhost:8789/?nolock=1', { waitUntil: 'networkidle' });
 await page.evaluate((l) => { window.BREACH.mapChoice = l; }, LAYOUT);
+// btn-bots abre el LOBBY local; iniciar y esperar el fin del despliegue
+await page.evaluate(() => document.getElementById('btn-enter')?.click());
+await page.waitForSelector('#splash.off', { state: 'attached' });
 await page.evaluate(() => document.getElementById('btn-bots').click());
-await page.waitForTimeout(1200);
+await page.waitForTimeout(600);
+await page.evaluate(() => document.getElementById('btn-lobby-start').click());
+await page.waitForFunction(
+  () => window.BREACH.botMatch && !window.BREACH.botMatch.controlsLocked(),
+  null, { timeout: 30000 },
+);
 
 let flips = 0, covers = 0, minDistAcc = 0, samples = 0;
 let goalDistAcc = 0, goalSamples = 0, spanAcc = 0, spanSamples = 0;

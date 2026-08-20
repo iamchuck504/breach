@@ -96,8 +96,18 @@
     gap: 12px; padding-bottom: 7px; border-bottom: 1px solid var(--hud-line); }
   #weapon .weapon-icon { width: 116px; height: 40px; color: #d8dde1; opacity: .94; flex: 0 0 116px; }
   #weapon .weapon-icon svg { width: 100%; height: 100%; overflow: visible; }
-  #weapon .icon-smg, #weapon .icon-shotgun { display: none; }
-  #weapon[data-weapon="smg"] .icon-smg, #weapon[data-weapon="shotgun"] .icon-shotgun { display: block; }
+  #weapon .weapon-icon svg { display: none; }
+  #weapon[data-weapon="smg"] .icon-smg, #weapon[data-weapon="shotgun"] .icon-shotgun,
+  #weapon[data-weapon="pistol"] .icon-pistol, #weapon[data-weapon="grenade"] .icon-grenade,
+  #weapon[data-weapon="sniper"] .icon-sniper, #weapon[data-weapon="bazooka"] .icon-bazooka { display: block; }
+  #weapon .slots { display: flex; justify-content: flex-end; gap: 5px; margin-top: 9px; }
+  #weapon .slots .slot { display: flex; align-items: center; gap: 5px; padding: 3px 7px;
+    border: 1px solid var(--hud-line); color: var(--dim); font-size: 9px; letter-spacing: .1em;
+    background: rgba(10, 14, 17, .5); }
+  #weapon .slots .slot .k { color: #89939c; font-size: 8px; }
+  #weapon .slots .slot.cur { border-color: var(--accent); color: #e2e5e7; }
+  #weapon .slots .slot.cur .k { color: var(--accent); }
+  #weapon .slots .slot.dry { opacity: .45; }
   #weapon .name { font-size: 12px; font-weight: 600; letter-spacing: .1em; color: #e2e5e7;
     text-transform: uppercase; }
   #weapon .weapon-kicker { margin-top: 3px; color: var(--accent); font-size: 9px; letter-spacing: .14em; }
@@ -609,11 +619,36 @@
           <path fill="#ff7a2f" d="M79 17h34v5H79zM119 17h28v3h-28z"/>
           <path stroke="#89939c" stroke-width="2.5" d="M46 17l9-5h12M75 24h70M91 25v7M113 24v6"/>
         </svg>
+        <svg class="icon-pistol" viewBox="0 0 160 48" fill="none">
+          <path fill="currentColor" d="M34 14h96v13H80l-7 17H56l7-17H44l-5-5h-5z"/>
+          <path fill="#ff7a2f" d="M40 14h22v4H40z"/>
+          <path fill="#232a31" d="M60 30h14l-5 14H55z"/>
+          <path stroke="#89939c" stroke-width="2.5" d="M34 21h92M122 14v13"/>
+        </svg>
+        <svg class="icon-grenade" viewBox="0 0 160 48" fill="none">
+          <rect fill="currentColor" x="64" y="12" width="30" height="32" rx="5"/>
+          <rect fill="#232a31" x="68" y="5" width="10" height="9"/>
+          <path fill="#ff7a2f" d="M64 26h30v6H64z"/>
+          <path stroke="#89939c" stroke-width="2.5" d="M80 5h13l5 6"/>
+        </svg>
+        <svg class="icon-sniper" viewBox="0 0 160 48" fill="none">
+          <path fill="currentColor" d="M2 20h34l8-6h22l6 4h86v7h-42l-10 8H86l-8 12H64l7-14H48l-6-5H2z"/>
+          <circle cx="70" cy="9" r="7" stroke="#89939c" stroke-width="2.5"/>
+          <path fill="#ff7a2f" d="M98 18h46v4H98z"/>
+          <path fill="#232a31" d="M84 30h14l-6 14H78z"/>
+        </svg>
+        <svg class="icon-bazooka" viewBox="0 0 160 48" fill="none">
+          <path fill="currentColor" d="M6 16h122v14H6z"/>
+          <path fill="#232a31" d="M128 11h22v24h-22zM60 30h14l-4 14H56zM88 30h12l6 12H92z"/>
+          <path fill="#ff7a2f" d="M14 16h18v14H14z"/>
+          <path stroke="#89939c" stroke-width="2.5" d="M42 11h30M42 11v5"/>
+        </svg>
       </div>
       <div><div class="name" id="wep-name" data-i18n="weapon.smg">SUBMACHINE GUN</div><div class="weapon-kicker" data-i18n="hud.activeWeapon">ACTIVE WEAPON</div></div>
     </div>
     <div class="ammo"><span class="mag" id="wep-mag">50</span><span class="res"><span class="res-label" data-i18n="hud.reserve">RESERVE</span><span class="res-value" id="wep-res">150</span></span></div>
     <div id="wep-bar"></div>
+    <div class="slots" id="wep-slots"></div>
     <div class="reload" id="wep-msg"></div>
   </div>
   <div id="feed"></div>

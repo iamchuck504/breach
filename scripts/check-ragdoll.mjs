@@ -19,8 +19,16 @@ const browser = await chromium.launch({ executablePath: CHROME, headless: true }
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 page.on('pageerror', (e) => console.log('PAGEERROR:', e.message));
 await page.goto('http://localhost:8796/?nolock=1', { waitUntil: 'networkidle' });
+// btn-bots abre el LOBBY local; iniciar y esperar el fin del despliegue
+await page.evaluate(() => document.getElementById('btn-enter')?.click());
+await page.waitForSelector('#splash.off', { state: 'attached' });
 await page.evaluate(() => document.getElementById('btn-bots').click());
-await page.waitForTimeout(1500);
+await page.waitForTimeout(600);
+await page.evaluate(() => document.getElementById('btn-lobby-start').click());
+await page.waitForFunction(
+  () => window.BREACH.botMatch && !window.BREACH.botMatch.controlsLocked(),
+  null, { timeout: 30000 },
+);
 await page.screenshot({ path: path.join(root, 'scripts', 'shot-outline.png') });
 
 // esperar la primera muerte de un bot y seguir su cadáver

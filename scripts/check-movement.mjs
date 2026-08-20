@@ -44,7 +44,7 @@ await page.evaluate(() => {
   const oldSlide = P.ev.onSlideStart;
   P.ev.onDive = (...args) => { window.__mon.evades++; oldDive?.(...args); };
   P.ev.onSlideStart = (...args) => { window.__mon.evades++; oldSlide?.(...args); };
-  const VALID = new Set(['idle', 'run', 'roadie', 'dive', 'slide', 'cover', 'flip', 'mantle', 'dead']);
+  const VALID = new Set(['idle', 'run', 'roadie', 'dive', 'slide', 'cover', 'flip', 'mantle', 'melee', 'dead']);
   P.update = (dt, input, firing) => {
     const m = window.__mon;
     const wasState = P.state;
@@ -65,7 +65,11 @@ await page.evaluate(() => {
     if (ignoringTeleport) m.ignoreTeleport--;
     else if (moved > 15 * dt + 0.08) m.issues.push('teleport: ' + moved.toFixed(2) + 'm en un paso');
     const rose = P.y - m.lastY;
-    if (!ignoringTeleport && m.lastGrounded && P.grounded && rose > 0.2) {
+    // el mantle sube GUIADO con grounded=true: su tramo empinado llega a
+    // +0.27m por paso a dt=1/30 y es legítimo (el detector busca subir
+    // desniveles caminando SIN transición, y el mantle es la transición)
+    if (!ignoringTeleport && m.lastGrounded && P.grounded && rose > 0.2 &&
+        P.state !== 'mantle' && wasState !== 'mantle') {
       m.issues.push('step-up sin transición: +' + rose.toFixed(2) + 'm');
     }
     m.lastX = P.pos.x; m.lastZ = P.pos.z;
@@ -231,7 +235,8 @@ const dieIn = async (tag, prep, expectState = null, keepPosition = false) => {
       nan: !isFinite(px) || !isFinite(pz) || !isFinite(r.by),
       corpseMaterials: R._corpseVisual?.entries.length || 0,
       corpseAmount: +(R._corpseVisual?.amount ?? 0).toFixed(2),
-      gunsHidden: !R.gunSMG.visible && !R.gunShotgun.visible,
+      // la pistola ENFUNDADA se queda con el cuerpo; mano/espalda deben caer
+      gunsHidden: Object.values(R.guns).every((g) => g.parent === R.holsterMount || !g.visible),
       hiddenParts: R._deathHidden.length,
     };
   });
@@ -258,7 +263,7 @@ const dieIn = async (tag, prep, expectState = null, keepPosition = false) => {
     mant: !!window.BREACH.player.mantle,
     corpseVisual: !!window.BREACH.rig._corpseVisual,
     hiddenParts: window.BREACH.rig._deathHidden.length,
-    gunsVisible: window.BREACH.rig.gunSMG.visible && window.BREACH.rig.gunShotgun.visible,
+    gunsVisible: Object.values(window.BREACH.rig.guns).every((g) => g.visible),
   }));
   if (revived.rag) problems.push(`MUERTE ${tag}: el ragdoll no se limpió al revivir`);
   if (revived.mant) problems.push(`MUERTE ${tag}: mantle pegado tras revivir`);

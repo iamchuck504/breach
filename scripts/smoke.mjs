@@ -322,7 +322,7 @@ try {
     }));
     errors.push('RETICLE: anillo de escopeta no es mayor (' + rSmg + ' vs ' + rSg.r + ') dbg=' + JSON.stringify(dbg));
   }
-  await page.keyboard.press('q'); // volver a metralleta
+  await page.keyboard.press('1'); // volver a metralleta (selección directa)
   await page.waitForTimeout(700);
 
   // recarga manual: barra en modo "reloading" + animación
@@ -340,7 +340,7 @@ try {
   if (magFull !== 50) errors.push('RELOAD: no rellenó el cargador (mag=' + magFull + ')');
 
   // cadencia de escopeta: clicks rápidos → un bombazo por cooldown, sin comerse clicks
-  await page.keyboard.press('q');
+  await page.keyboard.press('2'); // escopeta por selección directa
   await page.waitForTimeout(750);
   const sg0 = await page.evaluate(() => window.BREACH.weapons.st.mag);
   for (let i = 0; i < 9; i++) {
@@ -352,7 +352,7 @@ try {
   console.log('SHOTGUN-RATE:', JSON.stringify({ antes: sg0, despues: sg1.mag, wep: sg1.wep }));
   // 2.25s de clicks con cd 0.63s → deben salir al menos 3 bombazos
   if (sg0 - sg1.mag < 3) errors.push('SHOTGUN-RATE: salieron ' + (sg0 - sg1.mag) + ' tiros, esperaba >= 3');
-  await page.keyboard.press('q');
+  await page.keyboard.press('1');
   await page.waitForTimeout(750);
 
   // disparar corriendo HACIA ATRÁS (el cuerpo debe encarar a la cámara y tirar)
@@ -409,7 +409,8 @@ try {
     padRows: document.getElementById('pad-rows').children.length,
   }));
   console.log('CONTROLS:', JSON.stringify(ctrls));
-  if (ctrls.kbRows !== 10 || ctrls.padRows !== 9) errors.push('CONTROLS: filas esperadas 10/9, got ' + ctrls.kbRows + '/' + ctrls.padRows);
+  // v3: teclado suma melee + armas 1-4 (15); el pad cambia swap por melee (9)
+  if (ctrls.kbRows !== 15 || ctrls.padRows !== 9) errors.push('CONTROLS: filas esperadas 15/9, got ' + ctrls.kbRows + '/' + ctrls.padRows);
   await page.screenshot({ path: path.join(root, 'scripts', 'shot-controls.png') });
   await page.evaluate(() => document.getElementById('btn-back').click());
   await page.evaluate(() => document.getElementById('btn-resume').click());
@@ -427,8 +428,16 @@ try {
   // ---- modo VS BOTS: mapa arena, 7 bots, vidas 15/15, scoreboard con Tab ----
   await page.keyboard.press('Escape');
   await page.waitForTimeout(300);
+  // btn-bots abre el LOBBY local; la partida arranca con su botón de inicio
   await page.evaluate(() => document.getElementById('btn-bots').click());
-  await page.waitForTimeout(1500);
+  await page.waitForTimeout(600);
+  await page.evaluate(() => document.getElementById('btn-lobby-start').click());
+  // despliegue (intro + countdown): esperar a que los controles se liberen
+  await page.waitForFunction(
+    () => window.BREACH.botMatch && !window.BREACH.botMatch.controlsLocked(),
+    null, { timeout: 30000 },
+  );
+  await page.waitForTimeout(400);
   const bots = await page.evaluate(() => ({
     mode: window.BREACH.mode,
     bots: window.BREACH.botMatch.bots.length,
@@ -514,15 +523,36 @@ try {
   const p2 = await ctx2.newPage();
   p2.on('pageerror', (e) => errors.push('P2 PAGEERROR: ' + e.message));
   await p2.goto('http://localhost:8791/?nolock=1', { waitUntil: 'networkidle' });
+  await p2.evaluate(() => document.getElementById('btn-enter')?.click());
+  await p2.waitForSelector('#splash.off', { state: 'attached' });
+  // p1 sale de la partida de bots al menú principal
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+  await page.evaluate(() => document.getElementById('btn-leave-match').click());
+  await page.waitForTimeout(600);
+  // flujo de lobby online: p1 crea, p2 se une, p1 (host) inicia
+  await page.evaluate(() => {
+    document.getElementById('in-server').value = 'ws://localhost:8791';
+    document.getElementById('btn-lobby-create').click();
+  });
+  await page.waitForTimeout(900);
+  await p2.evaluate(() => {
+    document.getElementById('in-server').value = 'ws://localhost:8791';
+    document.getElementById('btn-lobby-join').click();
+  });
+  // con 2 jugadores (uno por equipo) la configuración es válida y el host
+  // puede iniciar; esperar a que el botón se habilite
+  await page.waitForFunction(() => {
+    const b = document.getElementById('btn-lobby-start');
+    return b && !b.disabled;
+  }, null, { timeout: 15000 });
+  await page.evaluate(() => document.getElementById('btn-lobby-start').click());
+  // despliegue online (intro + countdown) y primer sync de remotos
   for (const pg of [page, p2]) {
-    // si el juego está corriendo, abrir el menú con Esc primero
-    const menuOff = await pg.evaluate(() => document.getElementById('menu').classList.contains('off'));
-    if (menuOff) { await pg.keyboard.press('Escape'); await pg.waitForTimeout(300); }
-    await pg.evaluate(() => {
-      document.getElementById('in-server').value = 'ws://localhost:8791';
-      document.getElementById('btn-online').click();
-    });
-    await pg.waitForTimeout(800);
+    await pg.waitForFunction(
+      () => window.BREACH.mode === 'online' && window.BREACH.remotes.size > 0,
+      null, { timeout: 40000 },
+    );
   }
   await page.keyboard.down('w');
   await page.waitForTimeout(1200);

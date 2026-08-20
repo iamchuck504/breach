@@ -28,6 +28,7 @@ export class HUD {
       wepRes: document.getElementById('wep-res'),
       wepMsg: document.getElementById('wep-msg'),
       wepBar: document.getElementById('wep-bar'),
+      wepSlots: document.getElementById('wep-slots'),
       feed: document.getElementById('feed'),
       center: document.getElementById('center-msg'),
       hint: document.getElementById('context-hint'),
@@ -95,6 +96,32 @@ export class HUD {
         bar.innerHTML = '<div class="cont"><div class="fill"></div></div>';
       }
     }
+    // barra de slots (1-4): nombre corto por arma, el actual resaltado,
+    // atenuado si se quedó completamente sin munición
+    const sig = w.slots.join(',');
+    if (this._slotSig !== sig) {
+      this._slotSig = sig;
+      this.el.wepSlots.innerHTML = '';
+      for (let i = 0; i < w.slots.length; i++) {
+        const chip = document.createElement('div');
+        chip.className = 'slot';
+        const k = document.createElement('span');
+        k.className = 'k';
+        k.textContent = i + 1;
+        const label = document.createElement('span');
+        label.className = 'w';
+        chip.append(k, label);
+        this.el.wepSlots.append(chip);
+      }
+    }
+    const chips = this.el.wepSlots.children;
+    for (let i = 0; i < chips.length; i++) {
+      const k = w.slots[i], st = w.state[k];
+      chips[i].lastChild.textContent = t('weapon.' + k + 'Short');
+      chips[i].classList.toggle('cur', k === w.cur);
+      chips[i].classList.toggle('dry', !!st && st.mag <= 0 && st.reserve <= 0);
+    }
+
     const rel = w.reloading ? 1 - w.st.reload / w.def.reloadTime : null;
     bar.classList.toggle('reloading', w.reloading);
     if (cap <= 12) {

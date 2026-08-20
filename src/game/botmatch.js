@@ -1244,6 +1244,11 @@ export class BotMatch {
       const len = _v2.length();
       _v2.normalize();
       if (this.world.raycast(_v1, _v2, len - 0.5) !== null) continue; // sin LOS
+      // el humo es obstrucción visual REAL para los bots: mismo criterio que
+      // una pared (segmento ojo→ojo contra las nubes activas)
+      if (this.cb.smoke?.blocksSegment(
+        bot.pos.x, bot.y + 1.3, bot.pos.z,
+        e.x, e.y + eyeT, e.z)) continue;
       out.push({ ...e, d });
       this.enemyHeat[bot.team][this._third(e.x)] += 0.25;
     }

@@ -8,6 +8,7 @@
 // analítico de dos huesos — ambas manos siempre en contacto, sin poses
 // robóticas. El pitch de la cámara inclina el aimRig completo (brazos+arma).
 import * as THREE from 'three';
+import { TUNING } from '../config/tuning.js';
 import { coverAimPose, coverBlindPose } from '../combat/cover-fire.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
@@ -296,6 +297,98 @@ export function buildShotgun(teamColor) {
   return g;
 }
 
+// PISTOLA: compacta, de una mano — corredera robusta, cañón corto y
+// empuñadura inclinada. oneHand: el brazo izquierdo NO la sostiene.
+export function buildPistol(teamColor) {
+  const g = new THREE.Group();
+  g.add(armorBox(0.09, 0.11, 0.24, DARK, 0, 0.02, -0.04));    // corredera
+  g.add(box(0.075, 0.05, 0.2, MID, 0, 0.09, -0.05));          // lomo de la corredera
+  g.add(tube(0.026, 0.08, METAL, 0, 0.035, -0.19));           // boca del cañón
+  g.add(box(0.05, 0.035, 0.04, PLATE, 0, 0.125, -0.12));      // mira frontal
+  g.add(glowBox(0.02, 0.02, 0.015, teamColor, 0, 0.09, -0.155));
+  const grip = box(0.068, 0.15, 0.078, RUBBER, 0, -0.075, 0.05);
+  grip.rotation.x = -0.28;
+  g.add(grip);
+  g.add(box(0.072, 0.05, 0.05, teamColor, 0, -0.005, 0.035)); // placa de facción
+  g.add(box(0.05, 0.045, 0.09, MID, 0, -0.03, -0.075));       // guardamonte
+  g.userData.muzzle = anchor(g, 0, 0.035, -0.24);
+  g.userData.grip = anchor(g, 0, -0.065, 0.035);
+  g.userData.mag = anchor(g, 0, -0.14, 0.06);                 // base del cargador
+  g.userData.oneHand = true;
+  return g;
+}
+
+// GRANADA DE HUMO: bote compacto en la mano — cuerpo cilíndrico, tapa con
+// espoleta y banda del color de equipo.
+export function buildGrenade(teamColor) {
+  const g = new THREE.Group();
+  g.add(rod(0.05, 0.15, MID, 0, 0, 0));                       // cuerpo del bote
+  g.add(rod(0.052, 0.03, DARK, 0, 0.085, 0));                 // tapa
+  g.add(box(0.028, 0.045, 0.028, PLATE, 0, 0.115, 0));        // espoleta
+  g.add(box(0.05, 0.022, 0.014, METAL, 0.03, 0.1, 0));        // palanca
+  g.add(glowBox(0.052, 0.02, 0.052, teamColor, 0, -0.045, 0));// banda de equipo
+  g.userData.muzzle = anchor(g, 0, 0.1, 0);
+  g.userData.grip = anchor(g, 0, -0.01, 0.02);
+  g.userData.mag = anchor(g, 0, -0.07, 0);
+  g.userData.oneHand = true;
+  g.userData.thrown = true;
+  return g;
+}
+
+// FRANCOTIRADOR (especial de mapa): cañón largo, mira telescópica y culata
+// completa. Silueta claramente MÁS larga que cualquier primaria.
+export function buildSniper(teamColor) {
+  const g = new THREE.Group();
+  g.add(armorBox(0.12, 0.15, 0.4, DARK, 0, 0, 0.02));         // receptor largo
+  g.add(tube(0.028, 0.6, METAL, 0, 0.03, -0.5));              // cañón
+  g.add(tube(0.05, 0.09, RUBBER, 0, 0.03, -0.81));            // freno de boca
+  g.add(tube(0.045, 0.24, DARK, 0, 0.16, -0.04));             // mira telescópica
+  g.add(glowBox(0.03, 0.03, 0.02, teamColor, 0, 0.16, -0.17));// lente frontal
+  g.add(box(0.05, 0.06, 0.05, MID, 0, 0.105, -0.04));         // montura de la mira
+  g.add(box(0.08, 0.16, 0.1, MID, 0, -0.13, 0.02));           // cargador
+  const stock = box(0.1, 0.16, 0.26, MID, 0, -0.02, 0.3);
+  stock.rotation.x = -0.1;
+  g.add(stock);
+  g.add(box(0.09, 0.05, 0.1, teamColor, 0, 0.065, 0.12));     // placa de facción
+  g.userData.muzzle = anchor(g, 0, 0.03, -0.85);
+  g.userData.grip = anchor(g, 0, -0.08, 0.14);
+  g.userData.forend = anchor(g, 0, -0.06, -0.3);
+  g.userData.mag = anchor(g, 0, -0.2, 0.02);
+  return g;
+}
+
+// BAZOOKA (especial de mapa): tubo lanzacohetes al hombro con boca
+// acampanada y escape trasero.
+export function buildBazooka(teamColor) {
+  const g = new THREE.Group();
+  g.add(tube(0.085, 0.8, DARK, 0, 0.03, -0.08));              // tubo principal
+  g.add(tube(0.102, 0.12, MID, 0, 0.03, -0.46));              // boca acampanada
+  g.add(tube(0.096, 0.1, MID, 0, 0.03, 0.3));                 // escape trasero
+  g.add(box(0.05, 0.1, 0.15, PLATE, 0, 0.17, -0.06));         // mira superior
+  g.add(glowBox(0.028, 0.02, 0.02, teamColor, 0, 0.23, -0.1));
+  const grip = box(0.06, 0.12, 0.07, RUBBER, 0, -0.08, 0.06);
+  grip.rotation.x = -0.2;
+  g.add(grip);
+  g.add(box(0.06, 0.1, 0.07, RUBBER, 0, -0.075, -0.2));       // agarre frontal
+  g.add(box(0.09, 0.05, 0.2, teamColor, 0, 0.135, 0.12));     // banda de facción
+  g.userData.muzzle = anchor(g, 0, 0.03, -0.54);
+  g.userData.grip = anchor(g, 0, -0.06, 0.06);
+  g.userData.forend = anchor(g, 0, -0.06, -0.2);
+  g.userData.mag = anchor(g, 0, -0.04, 0.1);
+  return g;
+}
+
+// Registro central de constructores + escalas de presentación (silueta
+// legible desde atrás). drops.js y el rig montan modelos desde aquí.
+export const WEAPON_BUILDERS = {
+  smg: buildSMG, shotgun: buildShotgun, pistol: buildPistol,
+  grenade: buildGrenade, sniper: buildSniper, bazooka: buildBazooka,
+};
+export const WEAPON_SCALES = {
+  smg: [1.3, 1.3, 1.35], shotgun: [1.35, 1.35, 1.4], pistol: [1.25, 1.25, 1.25],
+  grenade: [1.2, 1.2, 1.2], sniper: [1.32, 1.32, 1.42], bazooka: [1.32, 1.32, 1.38],
+};
+
 // temporales del IK
 const IK_S = new THREE.Vector3(), IK_V = new THREE.Vector3(), IK_POLE = new THREE.Vector3();
 const IK_N = new THREE.Vector3(), IK_U = new THREE.Vector3();
@@ -422,7 +515,8 @@ export class Rig {
     this._variantExtras(tc, variant);
 
     // arma activa montada al pecho (las manos la alcanzan por IK);
-    // la otra va cargada a la ESPALDA en diagonal
+    // la primaria guardada va cargada a la ESPALDA en diagonal y la pistola
+    // enfundada en la cadera derecha
     this.gunMount = new THREE.Group();
     this.aimRig.add(this.gunMount);
     this.backMount = new THREE.Group();
@@ -431,8 +525,10 @@ export class Rig {
     this.backMount.position.set(-0.06, 0.3, variant === 2 ? 0.44 : 0.34);
     this.backMount.rotation.set(Math.PI / 2, 0, 0.4);
     this.torso.add(this.backMount);
-    this.gunSMG = buildSMG(tc);
-    this.gunShotgun = buildShotgun(tc);
+    this.holsterMount = new THREE.Group();
+    this.holsterMount.position.set(0.26, 0.04, 0.1);
+    this.holsterMount.rotation.set(1.35, 0, -0.12);
+    this.hips.add(this.holsterMount);
     // Los detalles se conservan, pero quedan agrupados por material dentro de
     // cada pieza animada: menos draw calls sin congelar brazos, piernas o armas.
     for (const group of [
@@ -440,12 +536,16 @@ export class Rig {
       this.armL.shoulder, this.armL.elbow, this.armL.hand,
       this.armR.shoulder, this.armR.elbow, this.armR.hand,
       this.legL.hip, this.legL.knee, this.legR.hip, this.legR.knee,
-      this.gunSMG, this.gunShotgun,
     ]) mergeDirectMeshes(group);
-    // armas ligeramente sobredimensionadas: su silueta se lee desde atrás
-    this.gunSMG.scale.set(1.3, 1.3, 1.35);
-    this.gunShotgun.scale.set(1.35, 1.35, 1.4);
+    // Modelos de arma bajo demanda (_gunModel): todos los rigs llevan smg,
+    // escopeta y pistola de fábrica; granada/especiales se crean al usarse.
+    this._teamHex = tc;
+    this.guns = {};
+    this._gunModel('smg');
+    this._gunModel('shotgun');
+    this._gunModel('pistol');
     this._wep = null;
+    this._backWep = null;
     this.setWeapon('smg');
 
     if (name) this._addNameTag(name, tc);
@@ -453,6 +553,7 @@ export class Rig {
     this.phase = 0;
     this._recoil = 0;
     this._deadT = 0;
+    this._meleeT = 0;
     this.rag = null; // estado del ragdoll de muerte
     this.groundFn = null;  // (x,z,y)->alturaSuelo — lo inyecta quien tiene el world
     this.collideFn = null; // (p,y)->muta p fuera de los AABBs (colisión del cadáver)
@@ -719,8 +820,7 @@ export class Rig {
     for (const node of this._deathHidden) node.visible = true;
     this._deathHidden.length = 0;
     if (this.nameTag) this.nameTag.visible = true;
-    this.gunSMG.visible = true;
-    this.gunShotgun.visible = true;
+    for (const k in this.guns) this.guns[k].visible = true;
   }
 
   _startRagdoll() {
@@ -832,20 +932,52 @@ export class Rig {
     this.nameTag = sp;
   }
 
-  setWeapon(wep) {
-    if (this._wep === wep) return;
+  // construye (y cachea) el modelo de un arma con su merge y escala
+  _gunModel(wep) {
+    let g = this.guns[wep];
+    if (!g) {
+      const build = WEAPON_BUILDERS[wep] ?? buildSMG;
+      g = build(this._teamHex);
+      mergeDirectMeshes(g);
+      const s = WEAPON_SCALES[wep] ?? [1.3, 1.3, 1.3];
+      g.scale.set(s[0], s[1], s[2]);
+      this.guns[wep] = g;
+    }
+    return g;
+  }
+
+  // backWep: qué arma mostrar cargada a la espalda. null = regla por defecto
+  // (la primaria de fábrica que no está en mano); main pasa la real cuando
+  // una especial ocupa un slot.
+  setWeapon(wep, backWep = null) {
+    const back = backWep ?? (wep === 'shotgun' ? 'smg' : 'shotgun');
+    if (this._wep === wep && this._backWep === back) return;
     this._wep = wep;
-    const act = wep === 'smg' ? this.gunSMG : this.gunShotgun;
-    const back = wep === 'smg' ? this.gunShotgun : this.gunSMG;
+    this._backWep = back;
+    const act = this._gunModel(wep);
+    // desmontar todo y recolocar: mano, espalda y funda de la cadera
+    for (const k in this.guns) {
+      const g = this.guns[k];
+      if (g.parent) g.parent.remove(g);
+    }
     this.gunMount.add(act);
     act.position.set(0, 0, 0);
     act.rotation.set(0, 0, 0);
-    this.backMount.add(back);
-    back.position.set(0, 0, 0);
-    back.rotation.set(0, 0, 0);
+    if (back && back !== wep) {
+      const bg = this._gunModel(back);
+      this.backMount.add(bg);
+      bg.position.set(0, 0, 0);
+      bg.rotation.set(0, 0, 0);
+    }
+    const pistol = this.guns.pistol;
+    if (pistol && !pistol.parent) {
+      this.holsterMount.add(pistol);
+      pistol.position.set(0, 0, 0);
+      pistol.rotation.set(0, 0, 0);
+    }
   }
 
-  get activeGun() { return this._wep === 'smg' ? this.gunSMG : this.gunShotgun; }
+  get activeGun() { return this.guns[this._wep] ?? this.guns.smg; }
 
   muzzleWorld(out) {
     this.root.updateWorldMatrix(true, true);
@@ -1108,12 +1240,45 @@ export class Rig {
           hipsY = 0.62;
           aimRigY = 0.52 + down * 0.06;
         }
-        const longGun = this._wep === 'shotgun' ? 0.06 : 0;
+        const longGun = this._wep === 'shotgun' ? 0.06
+          : (this._wep === 'sniper' || this._wep === 'bazooka') ? 0.1 : 0;
         aimRigX = side * (low ? 0.14 : 0.08);
         M(side * (low ? 0.48 : 0.54), low ? 0.25 : 0.04,
           -0.34 - longGun, 0, 0, -side * 0.04);
         break;
       }
+      case 'melee': {
+        // golpe con el arma en tres tiempos: carga corta, estocada violenta
+        // y recuperación. Timer interno del rig: los remotos solo mandan el
+        // estado, así que el gesto no depende de datos del controller local.
+        this._meleeT += dt;
+        damp = 26; // gesto seco: los targets se alcanzan casi de inmediato
+        const ph = Math.min(1, this._meleeT / TUNING.melee.time);
+        hipsY = 0.6;
+        if (ph < 0.35) {
+          // carga: arma atrás y arriba junto al hombro, torso armado
+          R(this.torso, 0.06, 0.4, 0);
+          R(this.head, 0.04, -0.28, 0);
+          M(0.3, 0.16, -0.06, 0.55, -0.35, 0.3);
+        } else if (ph < 0.62) {
+          // estocada: la culata cruza al frente con el torso volcado
+          R(this.torso, 0.26, -0.42, 0);
+          R(this.head, 0.1, 0.18, 0);
+          M(-0.04, 0.04, -0.5, -0.5, 0.12, -0.25);
+        } else {
+          // recuperación a ready
+          R(this.torso, 0.1, -0.05, 0);
+          R(this.head, 0.03, 0, 0);
+          M(0.06, -0.02, -0.32, 0.1, 0, 0);
+        }
+        // zancada plantada durante la embestida
+        R(this.legL.hip, -0.3, 0, 0.05); R(this.legL.knee, -0.5, 0, 0);
+        R(this.legR.hip, 0.28, 0, -0.05); R(this.legR.knee, -0.25, 0, 0);
+        set(this.aimRig.rotation, 'x', 0);
+        set(this.aimRig.rotation, 'y', 0);
+        break;
+      }
+
       case 'dead': {
         // ragdoll de PESO MUERTO en dos fases: rodillas que ceden y caída
         // ACELERADA por gravedad (tope seco), y al impactar un flop de
@@ -1143,12 +1308,13 @@ export class Rig {
       }
     }
     if (p.state !== 'dead') this._deadT = 0;
+    if (p.state !== 'melee') this._meleeT = 0;
 
     // ADS: postura pronunciada — arma al hombro, pitch completo de cámara.
     // roadie/blind_over excluidos: su brazo izq. es pose Euler y el IK de
     // aquí peleaba con ella (temblor) si un remoto llegaba con st+aim juntos
     if (p.aim && p.state !== 'dead' && p.state !== 'dive' && p.state !== 'slide' &&
-        p.state !== 'roadie' && p.state !== 'blind_over') {
+        p.state !== 'roadie' && p.state !== 'blind_over' && p.state !== 'melee') {
       damp = 18;
       leftOnGun = true;
       const lean = p.coverLean ?? 0; // asomarse en la orilla de pared alta
@@ -1188,8 +1354,9 @@ export class Rig {
         // anterior y el arma quedaba apuntando al cielo mientras ruedas
         set(this.aimRig.rotation, 'x', 0);
         set(this.aimRig.rotation, 'y', 0);
-      } else if (p.state !== 'roadie' && p.state !== 'flip' && p.state !== 'mantle') {
-        // (roadie, flip y mantle fijan su propio aimRig dentro del switch)
+      } else if (p.state !== 'roadie' && p.state !== 'flip' && p.state !== 'mantle' &&
+                 p.state !== 'melee') {
+        // (roadie, flip, mantle y melee fijan su propio aimRig dentro del switch)
         set(this.aimRig.rotation, 'x', pitch * (p.firing ? 1 : 0.5));
         set(this.aimRig.rotation, 'y', p.firing ? yawErr : 0);
       }
@@ -1334,10 +1501,13 @@ export class Rig {
       }
       this.root.position.set(r.bx + r.ox, r.by, r.bz + r.oz);
       this.root.rotation.y = r.byaw + r.spin * fall;
-      // Ambas armas abandonan la silueta corporal; el pickup separado queda
-      // junto al cadáver y comunica de inmediato que ya no puede combatir.
-      this.gunSMG.visible = r.t < 0.22;
-      this.gunShotgun.visible = r.t < 0.22;
+      // Las armas en mano/espalda abandonan la silueta corporal; el pickup
+      // separado queda junto al cadáver y comunica que ya no puede combatir.
+      // La pistola enfundada se queda con el cuerpo (es parte de la silueta).
+      for (const k in this.guns) {
+        const g = this.guns[k];
+        if (g.parent !== this.holsterMount) g.visible = r.t < 0.22;
+      }
     } else if (p.state !== 'dead') {
       if (this.rag) {
         this.rag = null;
@@ -1353,9 +1523,11 @@ export class Rig {
       gun.userData.grip.getWorldPosition(TMP_A);
       this._ikArm(this.armR, 1, this.aimRig.worldToLocal(TMP_A));
       // el gesto de recarga solo aplica en posturas con el arma al frente
-      // (misma whitelist que reloadPose, calculada arriba)
+      // (misma whitelist que reloadPose, calculada arriba). Las armas de una
+      // mano (pistola/granada) no llevan la izquierda al arma salvo recarga.
       const reloadIk = reloadPose;
-      if (leftOnGun || reloadIk) {
+      const oneHand = !!gun.userData.oneHand;
+      if ((leftOnGun && !oneHand) || reloadIk) {
         const a = reloadIk ? (gun.userData.mag ?? gun.userData.forend) : gun.userData.forend;
         a.getWorldPosition(TMP_B);
         const tgt = this.aimRig.worldToLocal(TMP_B);

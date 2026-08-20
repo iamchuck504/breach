@@ -95,6 +95,51 @@ export const TUNING = {
       falloffStart: 6, falloffEnd: 19,  // dmg pleno hasta start, 0 en end
       gibRange: 4.2,                    // one-shot gib si mata dentro de este rango
     },
+    pistol: {
+      nameKey: 'weapon.pistol', rpm: 260, dmg: 22, headMult: 2.0,
+      mag: 12, reserve: 48, reloadTime: 1.35,
+      spreadAim: 0.7, spreadHip: 2.4, spreadBlind: 4.2,
+      recoil: 0.55, range: 60, pellets: 1, auto: false,
+      oneHand: true,
+    },
+    grenade: {
+      nameKey: 'weapon.grenade', rpm: 40, dmg: 0, headMult: 1,
+      mag: 2, reserve: 0, reloadTime: 0,
+      spreadAim: 0, spreadHip: 0, spreadBlind: 0,
+      recoil: 0.2, range: 0, pellets: 0, auto: false,
+      oneHand: true, thrown: true,
+      throwSpeed: 12, throwUp: 4.2,   // velocidad inicial del lanzamiento
+      fuse: 1.5,                      // seg desde el lanzamiento hasta activarse
+      smokeTime: 7,                   // seg de nube plena
+      smokeRadius: 2.9,               // radio de la nube (bloquea visión)
+    },
+    // Armas ESPECIALES de mapa: no van en el loadout inicial, se recogen en el
+    // punto marcado del mapa (una por ronda, alternando) y su munición NO se
+    // rellena en cajas.
+    sniper: {
+      nameKey: 'weapon.sniper', rpm: 34, dmg: 85, headMult: 2.2, // headshot letal
+      mag: 1, reserve: 5, reloadTime: 1.7,
+      spreadAim: 0.06, spreadHip: 5.2, spreadBlind: 7.0,
+      recoil: 2.4, range: 130, pellets: 1, auto: false,
+      special: true,
+    },
+    bazooka: {
+      nameKey: 'weapon.bazooka', rpm: 28, dmg: 115, headMult: 1,
+      mag: 1, reserve: 2, reloadTime: 2.3,
+      spreadAim: 0.4, spreadHip: 1.8, spreadBlind: 3.0,
+      recoil: 2.8, range: 110, pellets: 1, auto: false,
+      special: true, projectile: true,
+      projSpeed: 26, splashRadius: 4.2, // el splash también daña al tirador
+    },
+  },
+  melee: {
+    dmg: 60,          // dos golpes matan a un rival sano
+    range: 1.7,       // alcance del arco frontal
+    arcDeg: 100,      // apertura total del arco
+    time: 0.34,       // duración del gesto completo
+    hitAt: 0.14,      // momento del impacto dentro del gesto
+    cooldown: 0.7,
+    lungeSpeed: 2.6,  // empujoncito hacia adelante durante el golpe
   },
   combat: {
     spawnProtection: 5,   // seg de invulnerabilidad al nacer (se rompe al disparar)

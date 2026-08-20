@@ -24,11 +24,22 @@ const CRATES = [{ x: 7, z: 0, up: true, t: 0 }, { x: -7, z: 0, up: true, t: 0 }]
 const FIRE_RULES = {
   smg: { interval: 60 / 620, range: 80, maxDamage: 16 },
   shotgun: { interval: 60 / 95, range: 24, maxDamage: 8 * 13, gibRange: 4.2 },
+  pistol: { interval: 60 / 260, range: 60, maxDamage: 44 },
+  sniper: { interval: 60 / 34, range: 130, maxDamage: 187 },
+  bazooka: { interval: 60 / 28, range: 110, maxDamage: 115 },
+  // el golpe cuerpo a cuerpo viaja como "disparo" de rango mínimo
+  melee: { interval: 0.55, range: 2.6, maxDamage: 60 },
 };
+// ids replicables en 'w' (la granada solo aparece EN MANO, nunca dispara aquí)
+const VALID_WEAPONS = new Set(['smg', 'shotgun', 'pistol', 'grenade', 'sniper', 'bazooka']);
+const FIREABLE = new Set(Object.keys(FIRE_RULES));
+const clampWep = (w) => (VALID_WEAPONS.has(w) ? w : 'smg');
+// la granada no es un arma soltable: el drop degrada a smg
+const clampDropWep = (w) => (VALID_WEAPONS.has(w) && w !== 'grenade' ? w : 'smg');
 const HIT_WINDOW = .28;
 const VALID_STATES = new Set(['idle', 'run', 'roadie', 'dive', 'slide', 'cover_low',
   'cover_high', 'blind_over', 'blind_low_left', 'blind_low_right',
-  'blind_high_left', 'blind_high_right', 'jump', 'flip', 'mantle', 'dead']);
+  'blind_high_left', 'blind_high_right', 'jump', 'flip', 'mantle', 'melee', 'dead']);
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.join(dirname, '..', 'dist');
@@ -170,15 +181,16 @@ function checkRoundEnd() {
 }
 function dropWeapon(target) {
   const id = 'd' + nextDropId++;
-  const d = { wep: target.w || 'smg', x: target.x, z: target.z, y: target.y || 0,
+  const d = { wep: clampDropWep(target.w), x: target.x, z: target.z, y: target.y || 0,
     team: target.team, mag: target.am || 0, res: target.ar || 0, t: DROP_LIFE };
   drops.set(id, d); broadcastRaw({ t: 'dropA', id, wep: d.wep, x: d.x, z: d.z, y: d.y, team: d.team, life: DROP_LIFE });
 }
 function registerFire(shooter, msg, isBotFire = false) {
   if (!shooter?.alive || phase !== 'playing') return false;
   const o = vec3(msg.o), pt = vec3(msg.p); if (!o || !pt) return false;
-  const weapon = msg.w === 'shotgun' ? 'shotgun' : 'smg', rule = FIRE_RULES[weapon], now = nowSec();
-  if (weapon !== shooter.w || now - shooter.lastFireAt < rule.interval * .82) return false;
+  const weapon = FIREABLE.has(msg.w) ? msg.w : 'smg', rule = FIRE_RULES[weapon], now = nowSec();
+  // el melee no depende del arma en mano; el resto debe coincidir con ella
+  if ((weapon !== 'melee' && weapon !== shooter.w) || now - shooter.lastFireAt < rule.interval * .82) return false;
   if (Math.hypot(o[0] - shooter.x, o[2] - shooter.z) > (isBotFire ? 6 : 5) || Math.abs(o[1] - ((shooter.y || 0) + 1.1)) > 4) return false;
   if (Math.hypot(pt[0] - o[0], pt[1] - o[1], pt[2] - o[2]) > rule.range + 2) return false;
   const decals = Array.isArray(msg.d) ? msg.d.slice(0, 8).map(vec3).filter(Boolean) : undefined;
@@ -273,7 +285,7 @@ wss.on('connection', (ws) => {
       if (phase !== 'playing' || !me.alive) { me.st = 'idle'; me.aim = 0; me.sp = 0; return; }
       me.x = clamp(msg.x, -60, 60); me.z = clamp(msg.z, -60, 60); me.y = clamp(msg.y, 0, 20); me.yaw = clamp(msg.yaw, -10, 10);
       me.st = VALID_STATES.has(String(msg.st)) && msg.st !== 'dead' ? msg.st : 'idle';
-      me.aim = msg.aim ? 1 : 0; me.p = clamp(msg.p, -1.6, 1.6); me.w = msg.w === 'shotgun' ? 'shotgun' : 'smg';
+      me.aim = msg.aim ? 1 : 0; me.p = clamp(msg.p, -1.6, 1.6); me.w = clampWep(msg.w);
       me.am = clamp(msg.am, 0, 500); me.ar = clamp(msg.ar, 0, 500); me.sp = clamp(msg.sp, 0, 1); return;
     }
     if (msg.t === 'botState') {
@@ -282,11 +294,18 @@ wss.on('connection', (ws) => {
         const b = bots.get(s.id); if (!b || !b.alive) continue;
         b.x = clamp(s.x, -60, 60); b.z = clamp(s.z, -60, 60); b.y = clamp(s.y, 0, 20); b.yaw = clamp(s.yaw, -10, 10);
         b.st = VALID_STATES.has(String(s.st)) && s.st !== 'dead' ? s.st : 'idle';
-        b.aim = s.aim ? 1 : 0; b.p = clamp(s.p, -1.6, 1.6); b.w = s.w === 'shotgun' ? 'shotgun' : 'smg'; b.sp = clamp(s.sp, 0, 1);
+        b.aim = s.aim ? 1 : 0; b.p = clamp(s.p, -1.6, 1.6); b.w = clampWep(s.w); b.sp = clamp(s.sp, 0, 1);
       } return;
     }
     if (msg.t === 'fire') { registerFire(me, msg); return; }
-    if (msg.t === 'botFire') { if (isHost(me)) { const b = bots.get(msg.id); if (b) { b.w = msg.w === 'shotgun' ? 'shotgun' : 'smg'; registerFire(b, msg, true); } } return; }
+    if (msg.t === 'botFire') { if (isHost(me)) { const b = bots.get(msg.id); if (b) { b.w = FIREABLE.has(msg.w) ? msg.w : 'smg'; registerFire(b, msg, true); } } return; }
+    // granada de humo: solo visual/oclusión — el server la reenvía y cada
+    // cliente simula el mismo proyectil determinista
+    if (msg.t === 'nade') {
+      const o = vec3(msg.o), v = vec3(msg.v);
+      if (me?.alive && phase === 'playing' && o && v) broadcastRaw({ t: 'nade', id: me.id, o, v });
+      return;
+    }
     if (msg.t === 'hit') { registerHit(me, msg); return; }
     if (msg.t === 'botHit') { if (isHost(me)) { const b = bots.get(msg.id); if (b) registerHit(b, msg); } return; }
     if (msg.t === 'takeDrop') {

@@ -1,20 +1,29 @@
-// Estado de armas del jugador local: cadencia, cargador, recarga y cambio
-// de arma con animación (el modelo se intercambia a mitad del gesto).
+// Estado de armas del jugador local: loadout multi-slot, cadencia, cargador,
+// recarga y cambio de arma con animación (el modelo se intercambia a mitad
+// del gesto). Slots 0/1 = primarias (un arma especial del mapa puede ocupar
+// uno), 2 = pistola, 3 = granada de humo.
 import { TUNING } from '../config/tuning.js';
 
 const SWAP_TIME = 0.55;
+export const DEFAULT_LOADOUT = ['smg', 'shotgun', 'pistol', 'grenade'];
+export const SPECIAL_WEAPONS = ['sniper', 'bazooka'];
 
 export class Weapons {
   constructor() {
+    this.slots = [...DEFAULT_LOADOUT];
+    this.state = {};
+    for (const k of this.slots) this.state[k] = this._freshState(k);
     this.cur = 'smg';
-    this.state = {
-      smg: { mag: TUNING.weapons.smg.mag, reserve: TUNING.weapons.smg.reserve, cd: 0, reload: 0 },
-      shotgun: { mag: TUNING.weapons.shotgun.mag, reserve: TUNING.weapons.shotgun.reserve, cd: 0, reload: 0 },
-    };
     this.swapT = 0;        // tiempo restante del cambio
     this._swapped = false; // ya se intercambió el modelo a mitad del gesto
+    this._swapTarget = null;
     this.reloadInterrupted = false; // evento de un frame para audio/animación
     this.reloadInserted = 0; // cartuchos insertados físicamente este frame
+  }
+
+  _freshState(k) {
+    const d = TUNING.weapons[k];
+    return { mag: d.mag, reserve: d.reserve, cd: 0, reload: 0 };
   }
 
   get def() { return TUNING.weapons[this.cur]; }
@@ -23,14 +32,13 @@ export class Weapons {
   get swapping() { return this.swapT > 0; }
 
   reset() {
-    for (const k of ['smg', 'shotgun']) {
-      this.state[k].mag = TUNING.weapons[k].mag;
-      this.state[k].reserve = TUNING.weapons[k].reserve;
-      this.state[k].cd = 0; this.state[k].reload = 0;
-    }
+    this.slots = [...DEFAULT_LOADOUT];
+    this.state = {};
+    for (const k of this.slots) this.state[k] = this._freshState(k);
     this.cur = 'smg';
     this.swapT = 0;
     this._swapped = false;
+    this._swapTarget = null;
     this.reloadInterrupted = false;
     this.reloadInserted = 0;
   }
@@ -41,45 +49,91 @@ export class Weapons {
   cancelActions() {
     this.swapT = 0;
     this._swapped = false;
-    this.state.smg.reload = 0;
-    this.state.shotgun.reload = 0;
+    this._swapTarget = null;
+    for (const k of this.slots) this.state[k].reload = 0;
   }
 
-  // caja de munición: rellena TODO (ambas armas) sin tocar el arma actual
+  // caja de munición: rellena todo el loadout sin tocar el arma actual.
+  // La munición de un arma ESPECIAL nunca se rellena.
   refill() {
-    for (const k of ['smg', 'shotgun']) {
-      this.state[k].mag = TUNING.weapons[k].mag;
-      this.state[k].reserve = TUNING.weapons[k].reserve;
+    for (const k of this.slots) {
+      const d = TUNING.weapons[k];
+      if (d.special) continue;
+      this.state[k].mag = d.mag;
+      this.state[k].reserve = d.reserve;
     }
     this.st.reload = 0;
   }
 
-  startSwap() {
+  // Arma primaria de referencia (para drops cuando la actual no es soltable)
+  get primary() { return this.slots[0]; }
+
+  hasWeapon(k) { return this.slots.includes(k); }
+
+  // El arma especial del mapa reemplaza la primaria EN MANO (o el slot 0 si
+  // llevas pistola/granada). Devuelve el id del arma que salió del loadout.
+  giveSpecial(k) {
+    const curIdx = this.slots.indexOf(this.cur);
+    const idx = curIdx === 0 || curIdx === 1 ? curIdx : 0;
+    const removed = this.slots[idx];
+    delete this.state[removed];
+    this.slots[idx] = k;
+    this.state[k] = this._freshState(k);
+    this.cur = k;
+    this.swapT = 0;
+    this._swapped = false;
+    this._swapTarget = null;
+    return removed;
+  }
+
+  // Recuperar una primaria normal (drop del suelo) soltando la especial vacía
+  replaceSlot(idx, k, mag = null, reserve = null) {
+    const removed = this.slots[idx];
+    delete this.state[removed];
+    this.slots[idx] = k;
+    this.state[k] = this._freshState(k);
+    if (mag !== null) this.state[k].mag = mag;
+    if (reserve !== null) this.state[k].reserve = reserve;
+    if (this.cur === removed) this.cur = k;
+    return removed;
+  }
+
+  // Siguiente slot al ciclar (Q / rueda del mouse)
+  cycleTarget(dir = 1) {
+    const i = Math.max(0, this.slots.indexOf(this.cur));
+    return this.slots[(i + dir + this.slots.length) % this.slots.length];
+  }
+
+  // target = id de arma (selección directa) o null para ciclar +1
+  startSwap(target = null) {
     if (this.swapT > 0) return false;
+    const next = target ?? this.cycleTarget(1);
+    if (!next || next === this.cur || !this.state[next]) return false;
     this.swapT = SWAP_TIME;
     this._swapped = false;
+    this._swapTarget = next;
     this.st.reload = 0; // cambiar cancela la recarga
     return true;
   }
 
   startReload() {
     const s = this.st, d = this.def;
+    if (d.thrown) return false; // la granada no recarga
     if (s.reload > 0 || this.swapT > 0 || s.mag >= d.mag || s.reserve <= 0) return false;
     s.reload = d.reloadTime;
     return true;
   }
 
-  // Devuelve true si disparó este frame.
+  // Devuelve true si disparó (o lanzó) este frame.
   update(dt, wantsFire, wantsFirePressed, canFire) {
     const s = this.st, d = this.def;
     this.reloadInterrupted = false;
     this.reloadInserted = 0;
-    // el cooldown corre para AMBAS armas (guardar la escopeta no lo congela)
-    this.state.smg.cd = Math.max(0, this.state.smg.cd - dt);
-    this.state.shotgun.cd = Math.max(0, this.state.shotgun.cd - dt);
+    // el cooldown corre para TODAS las armas (guardarlas no lo congela)
+    for (const k of this.slots) this.state[k].cd = Math.max(0, this.state[k].cd - dt);
 
     // auto-recarga al quedarse sin balas (sin esperar otro click)
-    if (s.mag === 0 && s.reload === 0 && this.swapT === 0 && s.reserve > 0) {
+    if (s.mag === 0 && s.reload === 0 && this.swapT === 0 && s.reserve > 0 && !d.thrown) {
       this.startReload();
     }
 
@@ -87,7 +141,8 @@ export class Weapons {
       this.swapT -= dt;
       if (!this._swapped && this.swapT <= SWAP_TIME / 2) {
         this._swapped = true;
-        this.cur = this.cur === 'smg' ? 'shotgun' : 'smg';
+        if (this._swapTarget && this.state[this._swapTarget]) this.cur = this._swapTarget;
+        this._swapTarget = null;
       }
       if (this.swapT < 0) this.swapT = 0;
       return false; // sin disparo durante el cambio

@@ -433,6 +433,64 @@ export class Audio {
     this._noiseShot(0.85, 0.28, 1600, 220, 2, out);
     this._tone('sine', 130, 45, 0.55, 0.22, out);
   }
+  // pistola: crack seco y corto, más agudo que la SMG (sin sample: síntesis)
+  pistol(options = null) {
+    const remote = !!options?.position;
+    const out = this._eventOutput(remote ? 0.66 : 0.76, options, 'gunshot', this.combatBus || this.master);
+    if (!out) return;
+    this._noiseShot(0.5, 0.06, 4200, 1400, 1.1, out);
+    this._tone('square', 300, 130, 0.1, 0.045, out);
+  }
+  // francotirador: crack violento con cola grave (eco de cañón largo)
+  sniper(options = null) {
+    const remote = !!options?.position;
+    const out = this._eventOutput(remote ? 0.8 : 0.9, options, 'gunshot', this.combatBus || this.master);
+    if (!out) return;
+    this._noiseShot(0.95, 0.12, 2600, 700, 1.4, out);
+    this._noiseShot(0.4, 0.34, 700, 140, 1.8, out);
+    this._tone('sine', 100, 40, 0.5, 0.3, out);
+  }
+  // bazooka: golpe sordo del lanzamiento + whoosh del cohete saliendo
+  bazooka(options = null) {
+    const remote = !!options?.position;
+    const out = this._eventOutput(remote ? 0.78 : 0.88, options, 'gunshot', this.combatBus || this.master);
+    if (!out) return;
+    this._noiseShot(0.7, 0.2, 900, 180, 1.6, out);
+    this._noiseShot(0.35, 0.4, 1900, 2600, 0.7, out);
+    this._tone('sine', 85, 40, 0.5, 0.28, out);
+  }
+  // explosión del cohete: impacto grave con escombros
+  explosion(options = null) {
+    const out = this._eventOutput(0.95, options, 'gunshot', this.combatBus || this.master);
+    if (!out) return;
+    this._noiseShot(1.0, 0.5, 700, 90, 1.6, out);
+    this._noiseShot(0.45, 0.22, 2400, 600, 1.1, out);
+    this._tone('sine', 70, 32, 0.7, 0.5, out);
+  }
+  // rebote metálico del bote de humo contra el suelo/paredes
+  nadeBounce(options = null) {
+    const out = this._eventOutput(0.5, options, 'impact', this.combatBus || this.master);
+    if (!out) return;
+    this._noiseShot(0.18, 0.05, 4800, 1700, 2.2, out);
+    this._tone('sine', 1500 + Math.random() * 500, 700, 0.09, 0.08, out);
+  }
+  // siseo del humo activándose
+  smokePop(options = null) {
+    const out = this._eventOutput(0.6, options, 'impact', this.combatBus || this.master);
+    if (!out) return;
+    this._noiseShot(0.4, 0.6, 2400, 3200, 0.5, out);
+    this._tone('sine', 220, 90, 0.12, 0.1, out);
+  }
+  // despachador genérico por id de arma (tabla, sin ifs repartidos por main)
+  gun(wep, options = null) {
+    switch (wep) {
+      case 'shotgun': return this.shotgun(options);
+      case 'pistol': return this.pistol(options);
+      case 'sniper': return this.sniper(options);
+      case 'bazooka': return this.bazooka(options);
+      default: return this.smg(options);
+    }
+  }
 
   impact(position, surface = 'concrete') {
     if (!this.ctx || !position) return;

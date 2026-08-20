@@ -1,7 +1,7 @@
 // Input unificado: teclado + ratón (pointer lock) + gamepad, con bindings
 // configurables (BINDS). Y invertido por default (preferencia de Chuck),
 // toggle F9 persistido en localStorage.
-import { BINDS } from './bindings.js';
+import { BINDS, PAD_DPAD_SLOTS } from './bindings.js';
 import { PadInput } from './gamepad.js';
 
 export class Input {
@@ -16,6 +16,10 @@ export class Input {
     this.jumpPressed = false;
     this.reloadPressed = false;
     this.swapPressed = false;
+    this.meleePressed = false;
+    this.slotPressed = -1;   // índice de slot pedido por selección directa (1-4 / d-pad)
+    this.cycleDir = 0;       // ±1 por muesca de la rueda del mouse
+    this._wheelAcc = 0;
     this.locked = false;
     this.suppress = false; // true con el menú abierto: los inputs de juego se ignoran
     this.onLockedMouseDown = null;
@@ -54,6 +58,17 @@ export class Input {
       this.mouseDX += e.movementX;
       this.mouseDY += e.movementY;
     });
+    // Rueda del mouse = ciclar arma. Acumula deltas (trackpads reportan pasos
+    // chicos) y emite un edge por muesca; el scroll del menú no pasa por aquí
+    // porque con el menú abierto no hay lock y suppress corta el consumo.
+    window.addEventListener('wheel', (e) => {
+      if (!this.locked && !this.lockDisabled) return;
+      if (this.suppress) return;
+      this._wheelAcc += e.deltaY;
+      while (this._wheelAcc >= 60) { this.cycleDir += 1; this._wheelAcc -= 60; }
+      while (this._wheelAcc <= -60) { this.cycleDir -= 1; this._wheelAcc += 60; }
+      if (Math.abs(this.cycleDir) > 2) this.cycleDir = Math.sign(this.cycleDir) * 2;
+    }, { passive: true });
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     document.addEventListener('pointerlockchange', () => {
       this.locked = document.pointerLockElement === canvas;
@@ -145,6 +160,11 @@ export class Input {
       if (c === BINDS.kb.jump) this.jumpPressed = true;
       if (c === BINDS.kb.reload) this.reloadPressed = true;
       if (c === BINDS.kb.swap) this.swapPressed = true;
+      if (c === BINDS.kb.melee) this.meleePressed = true;
+      if (c === BINDS.kb.slot1) this.slotPressed = 0;
+      if (c === BINDS.kb.slot2) this.slotPressed = 1;
+      if (c === BINDS.kb.slot3) this.slotPressed = 2;
+      if (c === BINDS.kb.slot4) this.slotPressed = 3;
     } else {
       this.keys.delete(c);
     }
@@ -161,7 +181,10 @@ export class Input {
     if (this.pad.justPressed.has(BINDS.pad.evade)) this.evadePressed = true;
     if (this.pad.justPressed.has(BINDS.pad.jump)) this.jumpPressed = true;
     if (this.pad.justPressed.has(BINDS.pad.reload)) this.reloadPressed = true;
-    if (this.pad.justPressed.has(BINDS.pad.swap)) this.swapPressed = true;
+    if (this.pad.justPressed.has(BINDS.pad.melee)) this.meleePressed = true;
+    for (const btn in PAD_DPAD_SLOTS) {
+      if (this.pad.justPressed.has(+btn)) this.slotPressed = PAD_DPAD_SLOTS[btn];
+    }
     if (!wasFire && this.pad.fireHeld) this.firePressed = true;
   }
 
@@ -202,6 +225,9 @@ export class Input {
     this.jumpPressed = false;
     this.reloadPressed = false;
     this.swapPressed = false;
+    this.meleePressed = false;
+    this.slotPressed = -1;
+    this.cycleDir = 0;
   }
 
   // Deltas de ratón: consumir una vez por frame de render

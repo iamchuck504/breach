@@ -110,6 +110,12 @@ const en = {
   'lobby.error.no-lobby': 'THERE IS NO LOBBY TO JOIN', 'lobby.error.in-progress': 'THE MATCH IS ALREADY IN PROGRESS',
   'lobby.error.locked': 'THE LOBBY IS LOCKED', 'lobby.error.bot-missing': 'THAT BOT IS NO LONGER AVAILABLE',
   'flow.bestOfN': 'BEST OF {count}',
+  'weapon.pistol': 'PISTOL', 'weapon.grenade': 'SMOKE GRENADE',
+  'weapon.sniper': 'SNIPER RIFLE', 'weapon.bazooka': 'BAZOOKA',
+  'weapon.smgShort': 'SMG', 'weapon.shotgunShort': 'SHTG', 'weapon.pistolShort': 'PSTL',
+  'weapon.grenadeShort': 'SMK', 'weapon.sniperShort': 'SNPR', 'weapon.bazookaShort': 'RCKT',
+  'binding.melee': 'MELEE', 'binding.slot1': 'WEAPON 1', 'binding.slot2': 'WEAPON 2',
+  'binding.slot3': 'WEAPON 3', 'binding.slot4': 'WEAPON 4',
 };
 
 const es = {
@@ -211,6 +217,12 @@ const es = {
   'lobby.error.no-lobby': 'NO HAY UN LOBBY DISPONIBLE', 'lobby.error.in-progress': 'LA PARTIDA YA COMENZÓ',
   'lobby.error.locked': 'EL LOBBY ESTÁ BLOQUEADO', 'lobby.error.bot-missing': 'ESE BOT YA NO ESTÁ DISPONIBLE',
   'flow.bestOfN': 'MEJOR DE {count}',
+  'weapon.pistol': 'PISTOLA', 'weapon.grenade': 'GRANADA DE HUMO',
+  'weapon.sniper': 'FRANCOTIRADOR', 'weapon.bazooka': 'BAZOOKA',
+  'weapon.smgShort': 'SMG', 'weapon.shotgunShort': 'ESC', 'weapon.pistolShort': 'PST',
+  'weapon.grenadeShort': 'HUMO', 'weapon.sniperShort': 'FRAN', 'weapon.bazookaShort': 'BAZ',
+  'binding.melee': 'MELEE', 'binding.slot1': 'ARMA 1', 'binding.slot2': 'ARMA 2',
+  'binding.slot3': 'ARMA 3', 'binding.slot4': 'ARMA 4',
 };
 
 const pt = { ...en,
@@ -287,6 +299,27 @@ Object.assign(ja, {
 Object.assign(zh, {
   'common.leaveMatch':'离开比赛','lobby.swapBot':'与机器人换队','nav.select':'选择','nav.back':'返回','nav.navigate':'导航','nav.change':'更改','nav.toggle':'切换','nav.edit':'编辑',
   'menu.mapNote':'新建本地大厅和训练的默认地图。','lobby.title':'比赛大厅','lobby.create':'创建大厅','lobby.join':'加入大厅','lobby.localSession':'本地会话','lobby.onlineSession':'在线会话','lobby.host':'房主','lobby.guest':'玩家','lobby.you':'你','lobby.player':'玩家','lobby.bot':'机器人','lobby.teamRed':'红队','lobby.teamBlue':'蓝队','lobby.openSlot':'空位','lobby.teamFull':'队伍已满','lobby.joinTeam':'加入队伍','lobby.addBot':'添加机器人','lobby.move':'移动','lobby.settings':'比赛设置','lobby.hostControls':'房主控制','lobby.readOnly':'只读','lobby.mode':'模式','lobby.map':'地图','lobby.rounds':'回合数','lobby.lives':'队伍生命','lobby.afterMatch':'比赛结束后','lobby.returnLobby':'返回大厅','lobby.nextMap':'下一地图 + 继续','lobby.ready':'设置有效 · 可以开始','lobby.start':'开始比赛','lobby.leave':'离开大厅','lobby.waitingHost':'等待房主','lobby.error.empty':'大厅为空','lobby.error.too-many-players':'玩家过多','lobby.error.red-full':'红队超过人数限制','lobby.error.blue-full':'蓝队超过人数限制','lobby.error.unassigned-team':'每位玩家都需要选择队伍','lobby.error.team-empty':'两队都至少需要一名玩家','lobby.error.teams-unbalanced':'两队人数必须相同','lobby.error.not-enough-lives':'队伍生命必须覆盖初始阵容','lobby.error.host-only':'只有房主可以更改此项','lobby.error.team-full':'该队伍已满','lobby.error.lobby-full':'大厅已满','lobby.error.invalid':'请先修正大厅设置','lobby.error.lobby-exists':'此服务器上已有大厅','lobby.error.no-lobby':'没有可加入的大厅','lobby.error.in-progress':'比赛已经开始','lobby.error.locked':'大厅已锁定','lobby.error.bot-missing':'该机器人已不可用','flow.bestOfN':'共 {count} 回合',
+});
+
+Object.assign(pt, {
+  'weapon.pistol':'PISTOLA','weapon.grenade':'GRANADA DE FUMAÇA','weapon.sniper':'RIFLE DE PRECISÃO','weapon.bazooka':'BAZUCA',
+  'binding.melee':'CORPO A CORPO','binding.slot1':'ARMA 1','binding.slot2':'ARMA 2','binding.slot3':'ARMA 3','binding.slot4':'ARMA 4',
+});
+Object.assign(fr, {
+  'weapon.pistol':'PISTOLET','weapon.grenade':'GRENADE FUMIGÈNE','weapon.sniper':'FUSIL DE PRÉCISION','weapon.bazooka':'BAZOOKA',
+  'binding.melee':'CORPS À CORPS','binding.slot1':'ARME 1','binding.slot2':'ARME 2','binding.slot3':'ARME 3','binding.slot4':'ARME 4',
+});
+Object.assign(it, {
+  'weapon.pistol':'PISTOLA','weapon.grenade':'GRANATA FUMOGENA','weapon.sniper':'FUCILE DI PRECISIONE','weapon.bazooka':'BAZOOKA',
+  'binding.melee':'CORPO A CORPO','binding.slot1':'ARMA 1','binding.slot2':'ARMA 2','binding.slot3':'ARMA 3','binding.slot4':'ARMA 4',
+});
+Object.assign(ja, {
+  'weapon.pistol':'ピストル','weapon.grenade':'スモークグレネード','weapon.sniper':'スナイパーライフル','weapon.bazooka':'バズーカ',
+  'binding.melee':'近接攻撃','binding.slot1':'武器 1','binding.slot2':'武器 2','binding.slot3':'武器 3','binding.slot4':'武器 4',
+});
+Object.assign(zh, {
+  'weapon.pistol':'手枪','weapon.grenade':'烟雾弹','weapon.sniper':'狙击步枪','weapon.bazooka':'火箭筒',
+  'binding.melee':'近战','binding.slot1':'武器 1','binding.slot2':'武器 2','binding.slot3':'武器 3','binding.slot4':'武器 4',
 });
 
 const DICTIONARIES = Object.freeze({ en, es, pt, fr, ja, it, zh });
