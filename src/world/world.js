@@ -95,8 +95,16 @@ export class World {
     }[layout] ?? null;
     // pedestal del arma ESPECIAL (sniper/bazooka alternando por ronda):
     // zona central de riesgo, equidistante de ambos spawns
+    // Descentrado sobre el eje X (equidistante de ambos spawns, que están en
+    // ±z): en el centro exacto todo el tráfico converge al mismo carril y la
+    // escuadra se amontona. Azoteas es la excepción: su centro es el
+    // helipuerto despejado, que ya es una zona de riesgo con rutas propias.
     this.specialSpot = layout === 'fortaleza' ? { x: 2.8, z: 0 }
-      : ['azoteas', 'calle', 'metro', 'prision', 'pueblo'].includes(layout) ? { x: 0, z: 0 }
+      : layout === 'prision' ? { x: 9, z: 0 }
+      : layout === 'pueblo' ? { x: 7.5, z: 0 }
+      : layout === 'calle' ? { x: 0, z: 0 }
+      : layout === 'metro' ? { x: 0, z: 0 }
+      : layout === 'azoteas' ? { x: 0, z: 0 }
       : null;
 
     this._buildFloor();

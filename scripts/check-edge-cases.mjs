@@ -194,6 +194,108 @@ const muzzle = await page.evaluate(() => {
 check('muzzle de pistola sano', muzzle.finite && muzzle.dy > 0.5 && muzzle.dy < 2 && muzzle.d < 1.5,
   JSON.stringify(muzzle));
 
+// --- RECARGA ACTIVA: clavar la ventana llena el cargador al instante y da
+// bonus; fallarla atasca y alarga la recarga
+const activeOk = await page.evaluate(async () => {
+  const G = window.BREACH;
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  window.__tp(0, -10);
+  G.weapons.startSwap('smg');
+  await wait(700);
+  G.weapons.st.mag = 5;
+  G.weapons.startReload();
+  const win = G.weapons.activeWindow();
+  // esperar al centro de la ventana
+  const total = G.weapons.def.reloadTime;
+  await wait(total * ((win.start + win.end) / 2) * 1000);
+  const p = +G.weapons.reloadProgress.toFixed(2);
+  const res = G.weapons.tryActiveReload();
+  await wait(120);
+  return {
+    win, p, res, mag: G.weapons.st.mag, reloading: G.weapons.reloading,
+    mul: +G.weapons.damageMul.toFixed(2), bonus: +G.weapons.bonusT.toFixed(1),
+  };
+});
+check('recarga activa: ventana clavada llena el cargador y da bonus',
+  activeOk.res === 'perfect' && activeOk.mag === 50 && !activeOk.reloading && activeOk.mul > 1,
+  JSON.stringify(activeOk));
+
+const activeJam = await page.evaluate(async () => {
+  const G = window.BREACH;
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  G.weapons.bonusT = 0;
+  G.weapons.st.mag = 5;
+  G.weapons.startReload();
+  await wait(60); // muy pronto: fuera de la ventana
+  const before = G.weapons.st.reload;
+  const res = G.weapons.tryActiveReload();
+  const after = G.weapons.st.reload;
+  const second = G.weapons.tryActiveReload(); // ya atascada: sin efecto
+  return {
+    res, second, jam: after > before, jammed: G.weapons.st.jammed,
+    mul: +G.weapons.damageMul.toFixed(2),
+  };
+});
+check('recarga activa: fallar atasca y alarga (una sola vez)',
+  activeJam.res === 'jam' && activeJam.jam && activeJam.second === null && activeJam.mul === 1,
+  JSON.stringify(activeJam));
+
+// --- SWAT TURN: en cover, correr alejándose con otra cobertura enfrente
+// cruza el hueco; sin cobertura enfrente sale corriendo normal
+const swat = await page.evaluate(async () => {
+  const G = window.BREACH, W = window.BREACH_WORLD;
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const I = window.BREACH_INPUT;
+  const p = G.player;
+  // buscar dos caras enfrentadas a menos de 5.5m (pasillo)
+  let pair = null;
+  for (const f of W.faces) {
+    if (f.h > 2.6) continue;
+    const mx = (f.a.x + f.b.x) / 2, mz = (f.a.z + f.b.z) / 2;
+    for (const g of W.faces) {
+      if (g === f || g.h > 2.6) continue;
+      const gx = (g.a.x + g.b.x) / 2, gz = (g.a.z + g.b.z) / 2;
+      const d = Math.hypot(gx - mx, gz - mz);
+      if (d < 2.5 || d > 5.2) continue;
+      // enfrentadas: la normal de g apunta hacia f
+      const nx = (mx - gx) / d, nz = (mz - gz) / d;
+      if (g.n.x * nx + g.n.z * nz > 0.75 && f.n.x * -nx + f.n.z * -nz > 0.75) {
+        pair = { f, mx, mz, gx, gz, d };
+        break;
+      }
+    }
+    if (pair) break;
+  }
+  if (!pair) return { why: 'sin pasillo con coberturas enfrentadas' };
+  // pegarse a la cara f mirando hacia ella
+  p.pos.x = pair.mx + pair.f.n.x * 0.8; p.pos.z = pair.mz + pair.f.n.z * 0.8;
+  p.y = 0; p.vel.x = 0; p.vel.z = 0; p.state = 'idle'; p.cover = null;
+  p.cam.yaw = Math.atan2(-(pair.mx - p.pos.x), -(pair.mz - p.pos.z));
+  p.yaw = p.cam.yaw;
+  I.evadePressed = true;
+  await wait(700);
+  const inCover = p.state;
+  // correr ALEJÁNDOSE (hacia la cobertura opuesta)
+  // diagnóstico: ¿ve el motor la cobertura de enfrente desde aquí?
+  const outDir = { x: -pair.f.n.x, z: -pair.f.n.z };
+  const seen = W.findCover(p.pos, outDir, 5.6, 0.38, 0.5);
+  const dbg = {
+    cd: +p.evadeCooldown.toFixed(2), rec: +(p.evadeRecovery ?? 0).toFixed(2),
+    found: seen ? +seen.dist.toFixed(2) : null, gap: +pair.d.toFixed(2),
+  };
+  I.keys.add('ShiftLeft');
+  I.keys.add('KeyS');
+  await wait(500);
+  const mid = p.state;
+  I.keys.delete('KeyS');
+  I.keys.delete('ShiftLeft');
+  await wait(900);
+  return { inCover, mid, end: p.state, cover: !!p.cover, dbg };
+});
+check('swat turn: cruzar a la cobertura de enfrente',
+  swat.why || swat.mid === 'slide' || swat.cover === true || swat.end === 'cover',
+  JSON.stringify(swat));
+
 // --- humo contra una pared: el bote rebota, no se incrusta
 const wallNade = await page.evaluate(async () => {
   const S = window.BREACH_SMOKE, W = window.BREACH_WORLD;

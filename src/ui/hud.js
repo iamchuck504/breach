@@ -39,6 +39,11 @@ export class HUD {
     this._hintT = null;
   }
 
+  // destello del panel al clavar o fallar la recarga activa
+  activeReloadFlash(kind) {
+    this._pulse(this.el.weapon, kind === 'perfect' ? 'ar-perfect' : 'ar-jam');
+  }
+
   _pulse(el, cls) {
     el.classList.remove(cls);
     void el.offsetWidth;
@@ -130,8 +135,26 @@ export class HUD {
       chips[i].classList.toggle('dry', !!st && st.mag <= 0 && st.reserve <= 0);
     }
 
-    const rel = w.reloading ? 1 - w.st.reload / w.def.reloadTime : null;
+    // progreso real (respeta el atasco, que alarga la recarga)
+    const rel = w.reloading ? w.reloadProgress : null;
     bar.classList.toggle('reloading', w.reloading);
+    bar.classList.toggle('jammed', !!w.st.jammed && w.reloading);
+    this.el.weapon.classList.toggle('dmg-bonus', w.bonusT > 0);
+    // ventana de recarga activa: banda marcada sobre la barra
+    const win = w.activeWindow?.();
+    if (win) {
+      if (!this._winEl) {
+        this._winEl = document.createElement('div');
+        this._winEl.className = 'ar-window';
+        bar.append(this._winEl);
+      }
+      if (this._winEl.parentElement !== bar) bar.append(this._winEl);
+      this._winEl.style.display = 'block';
+      this._winEl.style.left = (win.start * 100).toFixed(1) + '%';
+      this._winEl.style.width = ((win.end - win.start) * 100).toFixed(1) + '%';
+    } else if (this._winEl) {
+      this._winEl.style.display = 'none';
+    }
     if (cap <= 12) {
       // En per-shell solo se encienden cartuchos ya insertados; la animación
       // por sí sola nunca debe representar munición todavía inutilizable.

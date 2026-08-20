@@ -19,11 +19,12 @@ export class Weapons {
     this._swapTarget = null;
     this.reloadInterrupted = false; // evento de un frame para audio/animación
     this.reloadInserted = 0; // cartuchos insertados físicamente este frame
+    this.bonusT = 0;         // tiempo restante del bonus de recarga activa
   }
 
   _freshState(k) {
     const d = TUNING.weapons[k];
-    return { mag: d.mag, reserve: d.reserve, cd: 0, reload: 0 };
+    return { mag: d.mag, reserve: d.reserve, cd: 0, reload: 0, active: null, jammed: false };
   }
 
   get def() { return TUNING.weapons[this.cur]; }
@@ -41,6 +42,7 @@ export class Weapons {
     this._swapTarget = null;
     this.reloadInterrupted = false;
     this.reloadInserted = 0;
+    this.bonusT = 0;
   }
 
   // La muerte tiene prioridad absoluta sobre gestos del arma. Congelar el
@@ -121,14 +123,58 @@ export class Weapons {
     if (d.thrown) return false; // la granada no recarga
     if (s.reload > 0 || this.swapT > 0 || s.mag >= d.mag || s.reserve <= 0) return false;
     s.reload = d.reloadTime;
+    s.active = 'open';   // 'open' → aún se puede clavar | 'done' | 'jam'
+    s.jammed = false;
     return true;
   }
+
+  // Progreso 0..1 de la recarga en curso (para el HUD y la ventana activa)
+  get reloadProgress() {
+    const s = this.st, d = this.def;
+    if (s.reload <= 0) return 0;
+    const total = d.perShell ? d.reloadTime : d.reloadTime * (s.jammed ? TUNING.activeReload.jamMul : 1);
+    return Math.max(0, Math.min(1, 1 - s.reload / total));
+  }
+
+  // Ventana activa del arma actual: null si no aplica (per-shell o ya usada)
+  activeWindow() {
+    const d = this.def, s = this.st;
+    if (d.perShell || d.thrown || s.reload <= 0 || s.active !== 'open') return null;
+    const a = TUNING.activeReload;
+    return { start: a.windowStart, end: a.windowEnd };
+  }
+
+  // Intento de recarga activa. Devuelve 'perfect' | 'jam' | null (sin efecto)
+  tryActiveReload() {
+    const s = this.st, d = this.def;
+    if (d.perShell || d.thrown || s.reload <= 0 || s.active !== 'open') return null;
+    const a = TUNING.activeReload;
+    const p = this.reloadProgress;
+    if (p >= a.windowStart && p <= a.windowEnd + a.perfectPad) {
+      // clavada: cargador lleno YA + bonus temporal de daño
+      const take = Math.min(d.mag - s.mag, s.reserve);
+      s.mag += take; s.reserve -= take;
+      s.reload = 0;
+      s.active = 'done';
+      this.bonusT = a.bonusTime;
+      return 'perfect';
+    }
+    // fallada: se atasca y el resto de la recarga se alarga
+    s.active = 'jam';
+    s.jammed = true;
+    s.reload *= a.jamMul;
+    return 'jam';
+  }
+
+  // Multiplicador de daño vigente (bonus de recarga activa)
+  get damageMul() { return this.bonusT > 0 ? 1 + TUNING.activeReload.damageBonus : 1; }
 
   // Devuelve true si disparó (o lanzó) este frame.
   update(dt, wantsFire, wantsFirePressed, canFire) {
     const s = this.st, d = this.def;
     this.reloadInterrupted = false;
     this.reloadInserted = 0;
+    this.bonusT = Math.max(0, this.bonusT - dt);
     // el cooldown corre para TODAS las armas (guardarlas no lo congela)
     for (const k of this.slots) this.state[k].cd = Math.max(0, this.state[k].cd - dt);
 

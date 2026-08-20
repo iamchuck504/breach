@@ -1381,6 +1381,33 @@ export class Rig {
       set(this.aimRig.rotation, 'y', 0); // sin guiño lateral heredado del latch de tiro
     }
 
+    // LANZAMIENTO de granada: overlay (se puede lanzar corriendo). Brazo
+    // atrás por encima del hombro y latigazo al frente; el bote sale en el
+    // punto de release que controla main, así la mano y el proyectil
+    // coinciden.
+    if (p.throwT > 0 && p.state !== 'dead') {
+      const total = p.throwTotal || 0.5;
+      const ph = 1 - Math.max(0, Math.min(1, p.throwT / total)); // 0→1
+      if (ph < 0.42) {
+        // armar: el brazo carga hacia atrás
+        const k = ph / 0.42;
+        R(this.torso, -0.06, 0.34 * k, 0);
+        M(0.3 + 0.08 * k, 0.28 + 0.22 * k, 0.22 * k, -1.5 * k, -0.5 * k, 0);
+      } else {
+        // latigazo y acompañamiento
+        const k = (ph - 0.42) / 0.58;
+        R(this.torso, 0.16 * (1 - k), -0.4 * k, 0);
+        M(0.28 - 0.2 * k, 0.5 - 0.6 * k, 0.22 - 0.7 * k, -1.5 + 2.2 * k, -0.5 + 0.7 * k, 0);
+      }
+      set(this.aimRig.rotation, 'x', 0);
+      set(this.aimRig.rotation, 'y', 0);
+      leftOnGun = false;
+      // el bote ya voló: la mano queda vacía el resto del gesto
+      if (this.guns.grenade) this.guns.grenade.visible = !p.throwReleased;
+    } else if (this.guns.grenade && !this.rag) {
+      this.guns.grenade.visible = true;
+    }
+
     // recarga: el arma se inclina y la mano izquierda baja al cargador
     if (reloadPose && p.state !== 'dead') {
       set(this.gunMount.rotation, 'x', -0.12);

@@ -40,6 +40,21 @@ await page.waitForFunction(
   null, { timeout: 30000 },
 );
 await page.waitForTimeout(400);
+// Las fases matan bots: garantizar el roster vivo que cada escenario
+// necesita (respawnear no altera lo que se está midiendo).
+await page.evaluate(() => {
+  window.__ensure = (team, n) => {
+    const M = window.BREACH.botMatch, W = window.BREACH_WORLD;
+    const mine = M.bots.filter((b) => b.team === team);
+    let alive = mine.filter((b) => b.alive).length;
+    for (const b of mine) {
+      if (alive >= n) break;
+      if (!b.alive) { b.respawn(W.spawns[team][0]); alive++; }
+    }
+    for (const b of mine) { b.protT = 0; b.hp = 100; }
+    return mine.filter((b) => b.alive).length;
+  };
+});
 
 // 1) MELEE de bot contra bot: pegados, uno debe golpear y hacer daño
 const melee = await page.evaluate(async () => {
@@ -117,7 +132,9 @@ const special = await page.evaluate(async () => {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const a = S.active;
   if (!a || a.wep !== 'sniper') return { why: 'pedestal no es sniper' };
+  window.__ensure('red', 2); // las fases anteriores dejan bajas
   const near = M.bots.find((x) => x.alive && x.team === 'red');
+  if (!near) return { why: 'sin bots rojos' };
   near.hp = 100;
   near.pos.x = a.x - 3; near.pos.z = a.z; near.y = a.y;
   // CUALQUIER bot puede ganar la carrera al pedestal: el dueño es quien
@@ -157,7 +174,9 @@ check('al agotar la munición vuelve a su primaria', special.after === 'smg',
 const afterDeath = await page.evaluate(async () => {
   const M = window.BREACH.botMatch;
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  window.__ensure('red', 1);
   const b = M.bots.find((x) => x.team === 'red' && x.alive);
+  if (!b) return { why: 'sin bots rojos' };
   b.wep = 'sniper'; b.specialAmmo = 4;
   M.damageBot(b.id, 9999, 'player', false, true);
   await wait(200);
@@ -167,7 +186,85 @@ const afterDeath = await page.evaluate(async () => {
   return { dead, wep: b.wep, ammo: b.specialAmmo };
 });
 check('la especial no sobrevive al respawn del bot',
-  afterDeath.wep === 'smg' && afterDeath.ammo === 0, JSON.stringify(afterDeath));
+  !afterDeath.why && afterDeath.wep === 'smg' && afterDeath.ammo === 0,
+  JSON.stringify(afterDeath));
+
+// 6) BAZOOKA de bot: no dispara con un compañero en la línea/impacto, sí
+// con el camino limpio, y el splash respeta bandos
+const rocket = await page.evaluate(async () => {
+  const M = window.BREACH.botMatch, R = window.BREACH_ROCKETS;
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  R.clear();
+  window.__ensure('red', 2);
+  window.__ensure('blue', 1);
+  const b = M.bots.find((x) => x.alive && x.team === 'red');
+  const mate = M.bots.find((x) => x.alive && x.team === 'red' && x !== b);
+  const e = M.bots.find((x) => x.alive && x.team === 'blue');
+  if (!b || !mate || !e) return { why: 'roster incompleto' };
+  // línea de tiro VERIFICADA: el pilar central (0,0) y las coberturas hacen
+  // que un duelo a ciegas mida geometría, no la regla de seguridad
+  const W = window.BREACH_WORLD, T = window.THREE;
+  const _o = new T.Vector3(), _d = new T.Vector3();
+  const free = (x, z) => {
+    const p = { x, z };
+    W.resolveCircle(p, 0.8, 0);
+    return Math.hypot(p.x - x, p.z - z) < 0.02;
+  };
+  const pairs = [[-17, -10, -17, 4], [17, -10, 17, 4], [-14, -10, -14, 4],
+    [0, -18, 0, -6], [10, 6, 10, 18], [-6, 10, -6, 20]];
+  let spot = null;
+  for (const [bx, bz, ex, ez] of pairs) {
+    if (!free(bx, bz) || !free(ex, ez)) continue; // nacer pegado a un muro no vale
+    _o.set(bx, 1.35, bz);
+    _d.set(ex - bx, 0.9 - 1.35, ez - bz);
+    const len = _d.length();
+    _d.normalize();
+    if (W.raycastHit(_o, _d, len - 0.5) === null) { spot = { bx, bz, ex, ez, len }; break; }
+  }
+  if (!spot) return { why: 'sin línea limpia' };
+  b.pos.x = spot.bx; b.pos.z = spot.bz; b.y = 0;
+  e.pos.x = spot.ex; e.pos.z = spot.ez; e.y = 0; e.hp = 100; e.protT = 0;
+  const enemyRef = { id: e.id, x: e.pos.x, z: e.pos.z, y: e.y };
+  const dist = spot.len;
+  // compañero JUNTO al enemigo: debe vetar el disparo
+  mate.pos.x = e.pos.x + 1; mate.pos.z = e.pos.z;
+  const blockedByMate = M.rocketPathClear(b, enemyRef, dist);
+  // compañero EN LA LÍNEA de vuelo: también veta
+  mate.pos.x = (spot.bx + spot.ex) / 2; mate.pos.z = (spot.bz + spot.ez) / 2;
+  const blockedByLine = M.rocketPathClear(b, enemyRef, dist);
+  // camino limpio: compañero fuera de la línea y del radio
+  mate.pos.x = spot.bx + 14; mate.pos.z = spot.bz - 14;
+  const clear = M.rocketPathClear(b, enemyRef, dist);
+  // disparo real con camino limpio
+  const hpMate0 = mate.hp = 100;
+  const hpEnemy0 = e.hp;
+  M.botFireRocket(b, enemyRef);
+  const flying = R.list.length;
+  // los bots SIGUEN moviéndose: congelar a los tres durante el vuelo o el
+  // cohete persigue a un blanco que ya se fue (medición inestable)
+  for (let i = 0; i < 32; i++) {
+    e.pos.x = spot.ex; e.pos.z = spot.ez; e.y = 0;
+    mate.pos.x = spot.bx + 14; mate.pos.z = spot.bz - 14;
+    b.pos.x = spot.bx; b.pos.z = spot.bz;
+    await wait(50);
+    if (!R.list.length && i > 4) break;
+  }
+  return {
+    blockedByMate, blockedByLine, clear, flying,
+    left: R.list.length, hpEnemy0, hpEnemy: e.hp, hpMate0, hpMate: mate.hp,
+  };
+});
+check('bot NO dispara cohete con compañero en el impacto',
+  rocket.blockedByMate === false, JSON.stringify(rocket));
+check('bot NO dispara cohete con compañero en la línea',
+  rocket.blockedByLine === false, JSON.stringify(rocket));
+check('bot SÍ dispara con el camino limpio', rocket.clear === true, JSON.stringify(rocket));
+check('el cohete del bot vuela y explota', rocket.flying > 0 && rocket.left === 0,
+  JSON.stringify(rocket));
+check('el splash del bot daña al enemigo', rocket.hpEnemy < rocket.hpEnemy0,
+  JSON.stringify(rocket));
+check('el splash del bot NO daña a su compañero lejano',
+  rocket.hpMate === rocket.hpMate0, JSON.stringify(rocket));
 
 check('sin errores de página', pageErrors === 0, `errores=${pageErrors}`);
 

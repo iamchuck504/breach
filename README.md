@@ -38,8 +38,21 @@ selección directa (teclas 1-4, d-pad: ↑ granada · ↓ pistola · ← SMG ·
 → escopeta), ciclado con Q o la rueda del mouse, y **melee** en B/V.
 Cada mapa coloca un pedestal con un arma **especial por ronda** (impar =
 sniper, par = bazooka): se toma manteniendo evadir, reemplaza la primaria
-en mano y su munición no se rellena en cajas. Los cuerpos colisionan
-(empuje suave, sin atrapamientos).
+en mano y su munición no se rellena en cajas. En online el pedestal lo
+arbitra el servidor (dos jugadores a la vez = un solo ganador). Los
+cuerpos colisionan (empuje suave, sin atrapamientos).
+
+**Recarga activa:** pulsar recargar OTRA VEZ durante la recarga. Dentro de
+la banda marcada, el cargador se llena al instante y das +20% de daño
+durante 5 s; fuera de ella el arma se atasca y la recarga se alarga.
+
+**Swat turn:** desde cobertura, correr de frente hacia otra cobertura a
+menos de ~5 m cruza el hueco de un tirón y te pega a ella (si no hay nada
+enfrente, sales corriendo normal).
+
+El sniper lleva mira telescópica (FOV 20 al apuntar). Los bots usan el
+mismo kit: melee a bocajarro, humo defensivo al retirarse y las armas del
+pedestal — la bazooka solo con línea limpia y sin compañeros en el radio.
 
 ## Mapas
 

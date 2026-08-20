@@ -127,6 +127,8 @@ const en = {
   'map.calle': 'CLOSED STREET', 'map.metro': 'SUBWAY STATION',
   'map.prision': 'PRISON', 'map.pueblo': 'ABANDONED TOWN',
   'msg.specialTakenBy': '{name} TOOK THE {weapon}',
+  'msg.activeReload': 'ACTIVE RELOAD — DAMAGE UP',
+  'msg.jammed': 'JAMMED',
 };
 
 const es = {
@@ -245,6 +247,8 @@ const es = {
   'map.calle': 'CALLE CERRADA', 'map.metro': 'ESTACIÓN DE METRO',
   'map.prision': 'PRISIÓN', 'map.pueblo': 'PUEBLO ABANDONADO',
   'msg.specialTakenBy': '{name} TOMÓ {weapon}',
+  'msg.activeReload': 'RECARGA ACTIVA — MÁS DAÑO',
+  'msg.jammed': 'ARMA ATASCADA',
 };
 
 const pt = { ...en,

@@ -675,6 +675,40 @@ export class Controller {
         const runExit = input.sprintHeld && hasInput &&
           (away > 0.28 || (eSign !== 0 && latOut > 0.35));
         if (runExit) {
+          const im0 = Math.max(0.001, mw.mag);
+          const sx = mw.x / im0, sz = mw.z / im0;
+          // SWAT TURN: correr alejándose de la pared CON otra cobertura justo
+          // enfrente cruza el hueco de un tirón en vez de salir a campo
+          // abierto. Exige intención clara (away alto), estar a mitad de cara
+          // —la orilla es del edge-exit— y que exista cover real en línea.
+          // Intención de CRUZAR: perpendicular clara al muro y sin componente
+          // lateral de orilla (esa es del edge-exit). No se exige estar a
+          // mitad de cara: las coberturas cortas son casi todas orilla.
+          const awayN = away / Math.max(0.001, mw.mag);
+          if (awayN > 0.62 && latOut < 0.35 && this.evadeCooldown <= 0) {
+            const prevCover = this.cover, prevState = this.state;
+            // sondear POR DELANTE: desde la posición pegada, findCover
+            // devuelve la propia cara (dist 0). El punto adelantado y el
+            // filtro por collider garantizan que sea otra cobertura.
+            TMP_O.set(this.pos.x + sx * 1.4, this.y, this.pos.z + sz * 1.4);
+            const ahead = this.world.findCover(TMP_O, { x: sx, z: sz },
+              E.bounceRange - 1.4, PLAYER_R, 0.5);
+            if (ahead && ahead.face?.collider !== prevCover?.collider) {
+              this.cover = null;
+              const res = this._tryEvade({ x: sx, z: sz }, E.bounceRange);
+              if (res === 'slide') {
+                this.chain = 0;
+                this.evadeMom = 0;
+                this.ev.onDetach?.();
+                break;
+              }
+              // sin slide real: deshacer y salir corriendo como siempre
+              this.cover = prevCover;
+              this.state = prevState;
+              this.dive = null;
+              this.slide = null;
+            }
+          }
           this.cover = null;
           this.chain = 0;
           const im = Math.max(0.001, mw.mag);

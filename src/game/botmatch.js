@@ -384,19 +384,29 @@ export class Bot {
   }
 
   // ¿hay un obstáculo BAJO justo en el camino? → saltarlo
-  // Ir por el arma ESPECIAL del pedestal. Solo el SNIPER: darle un
-  // lanzacohetes a la IA produce splash indiscriminado sobre sus propios
-  // compañeros y suicidios a bocajarro, así que en rondas de bazooka el
-  // pedestal queda para el jugador. Devuelve true si está gestionándolo.
+  // Ir por el arma ESPECIAL del pedestal (sniper o bazooka). La bazooka solo
+  // se dispara con línea limpia, lejos y sin compañeros en el radio
+  // (rocketPathClear), así que en manos de la IA ya no es un peligro propio.
   _seekSpecial(dt, match, enemy, dist) {
     const specials = match.cb.specials;
     const a = specials?.active;
-    if (!a || a.wep !== 'sniper') { this.specialHoldT = 0; return false; }
-    if (this.wep === 'sniper' || this.hp < 45) { this.specialHoldT = 0; return false; }
+    // el pedestal está en el CENTRO: si todos van por él, la escuadra se
+    // amontona ahí. Solo UN bot por equipo lo reclama; el resto sigue su
+    // plan táctico normal.
+    const release = () => {
+      this.specialHoldT = 0;
+      if (match.specialSeeker[this.team] === this.id) match.specialSeeker[this.team] = null;
+      return false;
+    };
+    if (!a) return release();
+    if (TUNING.weapons[this.wep]?.special || this.hp < 45) return release();
     // con un enemigo encima, pelear manda sobre ir por el arma
-    if (enemy && dist < 9) { this.specialHoldT = 0; return false; }
+    if (enemy && dist < 9) return release();
     const d = Math.hypot(a.x - this.pos.x, a.z - this.pos.z);
-    if (d > 16) { this.specialHoldT = 0; return false; }
+    if (d > 16) return release();
+    const seeker = match.specialSeeker[this.team];
+    if (seeker && seeker !== this.id) { this.specialHoldT = 0; return false; }
+    match.specialSeeker[this.team] = this.id;
     if (d < 1.5 && Math.abs(this.y - a.y) < 1.2) {
       this.specialHoldT += dt;
       this.state = 'hold';
@@ -949,6 +959,20 @@ export class Bot {
     if (da > Math.PI) da -= Math.PI * 2;
     if (da < -Math.PI) da += Math.PI * 2;
     if (Math.abs(da) > 0.45) return;
+    // LANZACOHETES: solo con línea despejada, a distancia segura y sin
+    // compañeros cerca del punto de impacto. Un bot no debe reventar a su
+    // propio equipo ni suicidarse por disparar a bocajarro.
+    if (this.wep === 'bazooka') {
+      if (this.shotCd <= 0 && this.specialAmmo > 0 && dist > 8 &&
+          match.rocketPathClear(this, enemy, dist)) {
+        this.shotCd = (60 / TUNING.weapons.bazooka.rpm) * 1.3;
+        this.muzzleT = 0.18;
+        this.specialAmmo--;
+        match.botFireRocket(this, enemy);
+        if (this.specialAmmo <= 0) { this.swapCd = 0; this._trySwap('smg'); }
+      }
+      return;
+    }
     // FRANCOTIRADOR recogido del pedestal: cadencia lenta, munición contada.
     // Al agotarla vuelve solo a su primaria (no se queda con un arma vacía).
     if (this.wep === 'sniper') {
@@ -1015,6 +1039,7 @@ export class BotMatch {
     // calor de enemigos AVISTADOS por tercio del mapa (x), por equipo: la
     // base contextual para flanquear por el lado frío y no amontonarse
     this.enemyHeat = { red: [0, 0, 0], blue: [0, 0, 0] };
+    this.specialSeeker = { red: null, blue: null }; // un solo bot por equipo va al pedestal
     this.tacticalClaims = new Map(); // destinos/ángulos reservados por bot
 
     if (!this.external) this.stats.set('player', {
@@ -1064,6 +1089,7 @@ export class BotMatch {
     this.respawnQueue = [];
     this.coverClaims.clear();
     this.tacticalClaims.clear();
+    this.specialSeeker = { red: null, blue: null };
     this.phase = first ? 'intro' : 'countdown';
     this.phaseT = first ? INTRO_TIME : COUNTDOWN_TIME;
     this.roundWinner = null;
@@ -1577,6 +1603,56 @@ export class BotMatch {
     return true;
   }
 
+  // ¿Es seguro lanzar un cohete a este blanco? Exige línea limpia y que
+  // ningún COMPAÑERO (ni el propio bot) quede dentro del radio de la
+  // explosión estimada. Es la regla que hace usable la bazooka en la IA.
+  rocketPathClear(bot, enemy, dist) {
+    const R = TUNING.weapons.bazooka.splashRadius;
+    _v1.set(bot.pos.x, bot.y + 1.35, bot.pos.z);
+    _v2.set(enemy.x - bot.pos.x, (enemy.y ?? 0) + 0.9 - (bot.y + 1.35), enemy.z - bot.pos.z);
+    const len = _v2.length();
+    _v2.normalize();
+    // la trayectoria debe estar despejada: si pega en una pared cercana, el
+    // splash vuelve sobre el propio bot
+    const hit = this.world.raycast(_v1, _v2, len);
+    if (hit !== null && hit < len - 0.6) return false;
+    // pegado a una esquina el cohete nace DENTRO del bloque y detona en su
+    // cara: exigir que los primeros metros de vuelo estén libres de verdad
+    if (this.world.raycastHit) {
+      const near = this.world.raycastHit(_v1, _v2, Math.min(len, R + 1.5));
+      if (near) return false;
+    }
+    // compañeros cerca del punto de impacto o en la línea de vuelo
+    for (const o of this.bots) {
+      if (o === bot || !o.alive || o.team !== bot.team) continue;
+      if (Math.hypot(o.pos.x - enemy.x, o.pos.z - enemy.z) < R + 1.2) return false;
+      // proyección sobre la trayectoria: compañero atravesado por el cohete
+      const px = o.pos.x - bot.pos.x, pz = o.pos.z - bot.pos.z;
+      const proj = px * _v2.x + pz * _v2.z;
+      if (proj > 0 && proj < len) {
+        const perp = Math.hypot(px - _v2.x * proj, pz - _v2.z * proj);
+        if (perp < 1.2) return false;
+      }
+    }
+    // el jugador aliado también cuenta
+    const p = this.cb.player?.();
+    if (p?.alive && this.playerTeam === bot.team &&
+        Math.hypot(p.x - enemy.x, p.z - enemy.z) < R + 1.2) return false;
+    return true;
+  }
+
+  // Disparo de cohete de un bot: proyectil REAL (mismo sistema del jugador),
+  // con su bando para que el splash respete a los compañeros.
+  botFireRocket(bot, enemy) {
+    const rockets = this.cb.rockets;
+    if (!rockets) return;
+    _v1.set(bot.pos.x, bot.y + 1.35, bot.pos.z);
+    _v2.set(enemy.x - bot.pos.x, (enemy.y ?? 0) + 0.9 - (bot.y + 1.35), enemy.z - bot.pos.z).normalize();
+    this.cb.audio?.gun?.('bazooka', { position: _v1.clone() });
+    rockets.fire({ x: _v1.x, y: _v1.y, z: _v1.z }, _v2.clone(), true,
+      { team: bot.team, id: bot.id, name: bot.name });
+  }
+
   // El bot toma el arma especial del pedestal (mismo pedestal y misma regla
   // de exclusividad que el jugador: quien completa el hold se la lleva).
   botTakeSpecial(bot) {
@@ -1588,6 +1664,7 @@ export class BotMatch {
     bot.swapCd = 2.5;
     bot.swapAnim = 0.5;
     bot.rig.setWeapon(wep);
+    this.specialSeeker[bot.team] = null; // reclamo cumplido: liberar
     this.cb.hud?.hint?.(t('msg.specialTakenBy', { name: bot.name, weapon: t(TUNING.weapons[wep].nameKey) }), 2000);
   }
 
@@ -1704,6 +1781,10 @@ export class BotMatch {
   _onDeath(victimId, killerId, gib) {
     this.coverClaims.delete(victimId); // el muerto suelta su reserva de cover
     this.releaseTacticalClaim(victimId);
+    // el que iba por el arma especial ya no va: liberar para otro
+    for (const team of ['red', 'blue']) {
+      if (this.specialSeeker[team] === victimId) this.specialSeeker[team] = null;
+    }
     const v = this.stats.get(victimId), k = this.stats.get(killerId);
     if (v) v.deaths++;
     if (k) k.kills++;

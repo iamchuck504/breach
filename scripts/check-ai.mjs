@@ -73,7 +73,12 @@ for (let i = 0; i < DURATION * 2; i++) {
           _d.set(ne.pos.x - b.pos.x, 0.1, ne.pos.z - b.pos.z);
           const len = _d.length();
           _d.normalize();
-          if (W.raycast(_o, _d, len) !== null) coverSafe++; else coverUnsafe++;
+          // el humo TAMBIÉN protege: desde que los bots lo usan, contar solo
+          // paredes hacía parecer expuesto a quien está tapado por una nube
+          const S = window.BREACH_SMOKE;
+          const smoked = S?.blocksSegment?.(
+            b.pos.x, eye, b.pos.z, ne.pos.x, ne.y + 1.2, ne.pos.z) ?? false;
+          if (W.raycast(_o, _d, len) !== null || smoked) coverSafe++; else coverUnsafe++;
         }
       }
       roles.push(b.role);

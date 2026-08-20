@@ -104,6 +104,8 @@ const G = {
   fireBuffer: 0,       // click de disparo pendiente mientras el cuerpo gira
   pendingShots: 0,     // tiros aprobados que esperan la pose/muzzle de este frame
   pendingThrows: 0,    // granadas aprobadas que esperan la pose de este frame
+  throwT: 0,           // gesto de lanzamiento en curso
+  throwPending: false, // el bote aún no ha salido de la mano
   specialRound: 0,     // ronda cuyo arma especial ya fue colocada
   specialClaimT: 0,    // anti-spam del reclamo online del pedestal
   mode: null,          // null | 'practice' | 'online'
@@ -1385,6 +1387,8 @@ function damagePlayerLocal(dmg, fromName, shooter, hitCtx = null) {
     G.selfHp = 0;
     G.selfAlive = false;
     G.weapons.cancelActions();
+    // morir a mitad del lanzamiento: el bote NO sale de una mano muerta
+    G.throwT = 0; G.throwPending = false; G.pendingThrows = 0;
     // contexto físico de la muerte ANTES de matar (kill() borra la velocidad):
     // dirección del tiro, potencia del golpe final, momentum y estado
     G.rig.setDeathContext({
@@ -1454,7 +1458,7 @@ function startBots(lobby = G.lobby || defaultLocalLobby()) {
   G.crates = new AmmoCrates(scene, false, world.cratePos ?? undefined);
   G.drops = new WeaponDrops(scene);
   G.botMatch = new BotMatch(scene, world, {
-    smoke, specials,
+    smoke, specials, rockets,
     effects, audio, hud,
     playerName: G.name,
     playerVariant: G.charVariant,
@@ -1594,7 +1598,7 @@ function setupOnlineBots(roster) {
   if (G.lobby?.hostId !== G.net?.id) return;
   const slots = roster.filter((p) => p.bot);
   G.botMatch = new BotMatch(scene, world, {
-    smoke, specials,
+    smoke, specials, rockets,
     effects, audio, hud, humans: onlineHumanTargets,
     playing: () => G.onlinePhase === 'playing',
     stepSound,
@@ -2042,6 +2046,22 @@ function characterBodies() {
   return out;
 }
 
+// Todos los personajes vivos CON su equipo (para la espoleta de los cohetes,
+// que debe distinguir bandos sin importar quién lo lanzó).
+function allCharacterTargets() {
+  const out = [];
+  if (G.mode === 'bots' && G.botMatch) {
+    for (const b of G.botMatch.bots) {
+      if (b.alive) out.push({ id: b.id, x: b.pos.x, z: b.pos.z, y: b.y, alive: true, team: b.team });
+    }
+    if (G.selfAlive && G.player && !G.player.dead) {
+      out.push({ id: 'player', x: G.player.pos.x, z: G.player.pos.z, y: G.player.y, alive: true, team: G.team });
+    }
+    return out;
+  }
+  return currentTargets();
+}
+
 function falloff(def, dist) {
   if (!def.falloffStart) return 1;
   if (dist <= def.falloffStart) return 1;
@@ -2126,7 +2146,7 @@ function spawnSpecialForRound() {
 
 // Explosión del cohete: splash con caída por distancia, línea de efecto (no
 // atraviesa paredes) y AUTODAÑO — dispararla cerca es un riesgo real.
-function explodeRocket(pos, mine = true) {
+function explodeRocket(pos, mine = true, owner = null) {
   const d = TUNING.weapons.bazooka;
   const R = d.splashRadius;
   _v1.set(pos.x, pos.y, pos.z);
@@ -2142,6 +2162,49 @@ function explodeRocket(pos, mine = true) {
   if (!G.mode || !mine) return;
   const splash = (dist) => d.dmg * Math.max(0.25, 1 - (dist / R) * 0.75);
   const onlineSplash = [];
+
+  // Cohete lanzado por un BOT: daña al bando contrario (jugador incluido) y
+  // a su propio dueño si se pasó de cerca. No toca a sus compañeros.
+  if (owner && G.mode === 'bots' && G.botMatch) {
+    const losOK = (x, y, z) => {
+      _v2.set(x - pos.x, y - pos.y, z - pos.z);
+      const len = _v2.length();
+      return len <= 0.4 || world.raycast(_v1, _v2.normalize(), len - 0.2) === null;
+    };
+    for (const b of G.botMatch.bots) {
+      if (!b.alive || b.team === owner.team) continue;
+      const by = b.y + 0.9;
+      const dist = Math.hypot(b.pos.x - pos.x, by - pos.y, b.pos.z - pos.z);
+      if (dist > R || !losOK(b.pos.x, by, b.pos.z)) continue;
+      const dmg = splash(dist);
+      G.botMatch.damageBot(b.id, dmg, owner.id, dist < 1.6, false,
+        { weapon: 'bazooka', distance: dist, damage: dmg, part: 'body', gib: dist < 1.6 });
+    }
+    // al jugador solo si es del bando contrario
+    const p = G.player;
+    if (p && G.selfAlive && !p.dead && G.team !== owner.team) {
+      const sy = p.y + 0.9;
+      const sd = Math.hypot(p.pos.x - pos.x, sy - pos.y, p.pos.z - pos.z);
+      if (sd < R && losOK(p.pos.x, sy, p.pos.z)) {
+        const dmg = splash(sd);
+        const died = damagePlayerLocal(dmg, owner.name ?? 'BOT', { x: pos.x, z: pos.z },
+          { weapon: 'bazooka', distance: sd, damage: dmg, part: 'body', gib: false });
+        if (died) G.botMatch._onDeath('player', owner.id, false);
+      }
+    }
+    // autodaño del bot que lo disparó (mismo riesgo que el jugador)
+    const self = G.botMatch.bots.find((b) => b.id === owner.id);
+    if (self?.alive) {
+      const sy = self.y + 0.9;
+      const sd = Math.hypot(self.pos.x - pos.x, sy - pos.y, self.pos.z - pos.z);
+      if (sd < R && losOK(self.pos.x, sy, self.pos.z)) {
+        const dmg = splash(sd) * 0.7;
+        G.botMatch.damageBot(self.id, dmg, self.id, false, true,
+          { weapon: 'bazooka', distance: sd, damage: dmg, part: 'body', gib: false });
+      }
+    }
+    return;
+  }
   const losClear = (x, y, z) => {
     _v2.set(x - pos.x, y - pos.y, z - pos.z);
     const len = _v2.length();
@@ -2367,7 +2430,7 @@ function fireShot() {
       worldImpacts.push(hit.point);
     }
     if (hit.kind === 'player') {
-      let dmg = def.dmg * falloff(def, hit.t);
+      let dmg = def.dmg * falloff(def, hit.t) * w.damageMul;
       if (hit.part === 'head') dmg *= def.headMult;
       const e = dmgByTarget.get(hit.id) || { dmg: 0, part: hit.part, dist: hit.t, point: hit.point };
       e.dmg += dmg;
@@ -2643,11 +2706,40 @@ function simStep(dt) {
   // tiro emitido antes de aplicar la pose del frame nacía en la postura vieja.
   // La granada no es hitscan: va por su propio canal de lanzamiento.
   if (fired) {
-    if (G.weapons.def.thrown) G.pendingThrows++;
-    else G.pendingShots++;
+    // el bote NO sale en el frame del click: arranca el gesto y se suelta en
+    // el latigazo (throwRelease), como cualquier lanzamiento real
+    if (G.weapons.def.thrown) {
+      G.throwT = TUNING.weapons.grenade.throwTime;
+      G.throwPending = true;
+    } else G.pendingShots++;
+  }
+  if (G.throwT > 0) {
+    G.throwT = Math.max(0, G.throwT - dt);
+    const released = TUNING.weapons.grenade.throwTime - TUNING.weapons.grenade.throwRelease;
+    if (G.throwPending && G.throwT <= released) {
+      G.throwPending = false;
+      G.pendingThrows++;
+    }
   }
 
-  if (input.reloadPressed && p.state !== 'melee') G.weapons.startReload();
+  // RECARGA ACTIVA: el primer toque recarga; un segundo toque durante la
+  // recarga intenta clavar la ventana (perfecta = instantánea + bonus;
+  // fallada = atasco). Sin ventana disponible, el toque recarga normal.
+  if (input.reloadPressed && p.state !== 'melee') {
+    const active = G.weapons.reloading ? G.weapons.tryActiveReload() : null;
+    if (active === 'perfect') {
+      audio.reloadDone();
+      hud.hint(t('msg.activeReload'), 1200);
+      hud.activeReloadFlash?.('perfect');
+      input.pad.rumble(60, 0.3, 0.5);
+    } else if (active === 'jam') {
+      audio.reload();
+      hud.hint(t('msg.jammed'), 1200);
+      hud.activeReloadFlash?.('jam');
+    } else if (!G.weapons.reloading) {
+      G.weapons.startReload();
+    }
+  }
   if (!wasReloading && G.weapons.reloading) audio.reload(); // incluye auto-recarga
   // Una recarga interrumpida abandona el gesto sin reproducir el sonido que
   // comunica cargador completo.
@@ -2666,7 +2758,7 @@ function simStep(dt) {
   // directo por slot. Un cambio ya en curso ignora inputs nuevos (sin
   // dobles cambios ni exploits de animación); durante el melee el arma
   // está ocupada en el golpe.
-  if (!p.dead && p.state !== 'melee') {
+  if (!p.dead && p.state !== 'melee' && G.throwT <= 0) {
     let swapped = false;
     if (input.slotPressed >= 0) {
       const target = G.weapons.slots[input.slotPressed];
@@ -2901,6 +2993,9 @@ function frame(now) {
     G.rig.update(dt, {
       ...G.player.animParams(),
       swapping: G.weapons.swapping,
+      throwT: G.throwT,
+      throwTotal: TUNING.weapons.grenade.throwTime,
+      throwReleased: G.throwT > 0 && !G.throwPending,
       reloading: G.weapons.reloading,
       reloadT: G.weapons.reloading ? 1 - G.weapons.st.reload / G.weapons.def.reloadTime : 0,
     });
@@ -2959,7 +3054,9 @@ function frame(now) {
   effects.update(dt);
   smoke.update(dt);
   specials.update(dt);
-  rockets.update(dt, G.mode ? currentTargets() : [], explodeRocket);
+  // la espoleta necesita el bando de cada cuerpo: un cohete de bot no debe
+  // detonar al rozar a un compañero
+  rockets.update(dt, G.mode ? allCharacterTargets() : [], explodeRocket);
   renderer.render(scene, camera);
   input.endFrame();
 }

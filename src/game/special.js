@@ -106,14 +106,15 @@ export class Rockets {
 
   // mine=false: cohete de OTRO jugador (online). Vuela y explota igual, pero
   // su daño lo reclama su dueño — sin esto cada cliente aplicaría el splash.
-  fire(o, dir, mine = true) {
+  // owner: {team, id} cuando lo lanza un bot (el splash respeta bandos).
+  fire(o, dir, mine = true, owner = null) {
     const d = TUNING.weapons.bazooka;
     const mesh = this._buildMesh();
     mesh.position.set(o.x, o.y, o.z);
     mesh.lookAt(o.x + dir.x, o.y + dir.y, o.z + dir.z);
     this.scene.add(mesh);
     this.list.push({
-      mesh, mine,
+      mesh, mine, owner,
       x: o.x, y: o.y, z: o.z,
       vx: dir.x * d.projSpeed, vy: dir.y * d.projSpeed, vz: dir.z * d.projSpeed,
       t: 0, maxT: (d.range / d.projSpeed) + 0.2,
@@ -145,6 +146,8 @@ export class Rockets {
         // espoleta de proximidad: pasar a <0.7m del torso de un objetivo
         for (const tg of targets) {
           if (tg.alive === false) continue;
+          // la espoleta no se activa con el propio bando de quien lo lanzó
+          if (r.owner && tg.team && tg.team === r.owner.team) continue;
           const dx = tg.x - r.x, dy = (tg.y ?? 0) + 0.9 - r.y, dz = tg.z - r.z;
           if (dx * dx + dy * dy + dz * dz < 0.7 * 0.7) {
             boom = { x: r.x, y: r.y, z: r.z };
@@ -156,7 +159,7 @@ export class Rockets {
       if (boom) {
         this.scene.remove(r.mesh);
         this.list.splice(i, 1);
-        onExplode(boom, r.mine);
+        onExplode(boom, r.mine, r.owner);
       } else {
         r.mesh.position.set(r.x, r.y, r.z);
       }
