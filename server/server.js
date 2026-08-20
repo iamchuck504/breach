@@ -10,11 +10,13 @@ import {
   DEFAULT_LOBBY_SETTINGS, MAX_PLAYERS, TEAM_CAPACITY, makeBotName,
   nextLobbyMap, normalizeLobbySettings, teamCounts, validateLobby,
 } from '../src/game/lobby-rules.js';
+import { ROUND_FINISH_HOLD as DEFAULT_ROUND_FINISH_HOLD } from '../src/game/match-flow.js';
 
 const PORT = process.env.PORT || 8787;
 const HP = 100, REGEN_DELAY = 3.6, REGEN_RATE = 48, RESPAWN_TIME = 5;
 const INTRO_TIME = Number(process.env.INTRO_TIME ?? 10);
 const COUNTDOWN_TIME = Number(process.env.COUNTDOWN_TIME ?? 3);
+const ROUND_FINISH_HOLD = Number(process.env.ROUND_FINISH_HOLD ?? DEFAULT_ROUND_FINISH_HOLD);
 const INTERMISSION_TIME = Number(process.env.INTERMISSION_TIME ?? 5);
 const FINAL_TIME = Number(process.env.FINAL_PRESENTATION_TIME ?? 11);
 const SPAWN_PROT = 5, CRATE_RESPAWN = 30, DROP_LIFE = 8, TICK_HZ = 20;
@@ -54,7 +56,7 @@ const send = (ws, obj) => { if (ws?.readyState === 1) ws.send(JSON.stringify(obj
 function sendRaw(ws, data) { if (ws?.readyState === 1) ws.send(data); }
 function broadcastRaw(obj) { const data = JSON.stringify(obj); for (const p of players.values()) sendRaw(p.ws, data); }
 const allSlots = () => [...players.values(), ...bots.values()];
-const inMatch = () => ['intro', 'countdown', 'playing', 'intermission', 'final'].includes(phase);
+const inMatch = () => ['intro', 'countdown', 'playing', 'round-finish', 'intermission', 'final'].includes(phase);
 const isHost = (p) => !!p && p.id === hostId;
 
 function spawnSet(map, team) {
@@ -131,7 +133,7 @@ function startMatch() {
   prepareRound(true);
 }
 function finishRound(winner) {
-  if (phase !== 'playing') return;
+  if (phase !== 'playing' && phase !== 'round-finish') return;
   clearTimer(); phase = 'intermission'; wins[winner]++;
   const needed = Math.floor(settings.rounds / 2) + 1;
   broadcastRaw({ t: 'roundEnd', winner, round, wins: { ...wins }, lives: livesState(), rows: statRows() });
@@ -152,9 +154,17 @@ function finishMatch() {
     broadcastRaw({ t: 'returnLobby' }); broadcastLobby();
   }
 }
+function holdRoundResult(winner) {
+  if (phase !== 'playing') return;
+  clearTimer();
+  phase = 'round-finish';
+  // El servidor deja de aceptar combate inmediatamente, pero pospone el
+  // anuncio para que todos los clientes vean completa la reacción final.
+  phaseTimer = setTimeout(() => finishRound(winner), Math.max(0, ROUND_FINISH_HOLD) * 1000);
+}
 function checkRoundEnd() {
   for (const team of ['red', 'blue']) if (livesOf(team) <= 0) {
-    finishRound(team === 'red' ? 'blue' : 'red'); return true;
+    holdRoundResult(team === 'red' ? 'blue' : 'red'); return true;
   }
   return false;
 }

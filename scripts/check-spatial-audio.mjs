@@ -1,4 +1,4 @@
-import { AUDIO_PROFILES, selectAudioListener, spatialAudioMix } from '../src/fx/audio.js';
+import { AMBIENCE_PROFILES, AUDIO_PROFILES, selectAudioListener, spatialAudioMix } from '../src/fx/audio.js';
 
 const failures = [];
 const check = (ok, message) => { if (!ok) failures.push(message); };
@@ -43,6 +43,11 @@ check(selectAudioListener(false, spectatorCamera, corpse) === corpse,
   'el listener normal no sigue al jugador local');
 check(selectAudioListener(true, spectatorCamera, corpse) === spectatorCamera,
   'spectator sigue usando el cadáver en vez de la cámara observada');
+check(AMBIENCE_PROFILES.azoteas.continuousNoise === false,
+  'Azotea volvió a usar una cama constante de ruido blanco');
+check(AMBIENCE_PROFILES.azoteas.gain < AMBIENCE_PROFILES.fortaleza.gain &&
+  AMBIENCE_PROFILES.azoteas.pulseMinMs >= 4500,
+  'Azotea no conserva ambiente sutil y espaciado');
 
 if (failures.length) {
   failures.forEach((failure) => console.error('AUDIO FALLO:', failure));

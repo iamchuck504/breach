@@ -39,6 +39,7 @@ export class LobbyUI {
     document.getElementById('char-card').style.display = 'none';
     document.getElementById('controls-card').style.display = 'none';
     this.root.classList.remove('off');
+    document.getElementById('menu').scrollTop = 0;
     this.render();
   }
 
@@ -68,7 +69,7 @@ export class LobbyUI {
       if (p.id === this.localId) badges.push(t('lobby.you'));
       if (p.id === this.state.hostId) badges.push(t('lobby.host'));
       const botActions = host && p.bot
-        ? `<div class="lobby-slot-actions"><button class="lobby-mini" data-action="move" data-id="${esc(p.id)}" data-team="${other}">${esc(t('lobby.move'))}</button><button class="lobby-mini" data-action="remove" data-id="${esc(p.id)}">×</button></div>` : '';
+        ? `<div class="lobby-slot-actions"><button class="lobby-mini" data-action="move" data-id="${esc(p.id)}" data-team="${other}" data-nav-key="move:${esc(p.id)}">${esc(t('lobby.move'))}</button><button class="lobby-mini" data-action="remove" data-id="${esc(p.id)}" data-nav-key="remove:${esc(p.id)}">×</button></div>` : '';
       return `<div class="lobby-slot"><div><div class="lobby-name">${esc(p.name)}</div><div class="lobby-badges">${badges.map((b, i) => `<span class="lobby-badge ${i && p.id === this.state.hostId ? 'host' : ''}">${esc(b)}</span>`).join('')}</div></div>${botActions}</div>`;
     }).join('');
     for (let i = members.length; i < cap; i++) rows += `<div class="lobby-slot empty"><span>${esc(t('lobby.openSlot'))}</span></div>`;
@@ -76,7 +77,7 @@ export class LobbyUI {
     const canSwapBot = host && me?.team !== team && full && members.some((p) => p.bot);
     const teamDisabled = me?.team === team || (full && !canSwapBot);
     const teamAction = canSwapBot ? t('lobby.swapBot') : full ? t('lobby.teamFull') : t('lobby.joinTeam');
-    return `<div class="lobby-team-head"><span>${esc(t(team === 'red' ? 'lobby.teamRed' : 'lobby.teamBlue'))}</span><span>${members.length}/${cap}</span></div><div class="lobby-slots">${rows}</div><button class="lobby-mini lobby-add" data-action="team" data-team="${team}" ${teamDisabled ? 'disabled' : ''}>${esc(teamAction)}</button>${host ? `<button class="lobby-mini lobby-add" data-action="add" data-team="${team}" ${full ? 'disabled' : ''}>+ ${esc(t('lobby.addBot'))}</button>` : ''}`;
+    return `<div class="lobby-team-head"><span>${esc(t(team === 'red' ? 'lobby.teamRed' : 'lobby.teamBlue'))}</span><span>${members.length}/${cap}</span></div><div class="lobby-slots">${rows}</div><button class="lobby-mini lobby-add" data-action="team" data-team="${team}" data-nav-key="team:${team}" ${teamDisabled ? 'disabled' : ''}>${esc(teamAction)}</button>${host ? `<button class="lobby-mini lobby-add" data-action="add" data-team="${team}" data-nav-key="add:${team}" ${full ? 'disabled' : ''}>+ ${esc(t('lobby.addBot'))}</button>` : ''}`;
   }
 
   settingsMarkup(s, host, validation) {
@@ -86,10 +87,10 @@ export class LobbyUI {
     const status = errors.length ? errors.map((e) => t(`lobby.error.${e}`)).join(' · ') : t('lobby.ready');
     return `<div class="lobby-settings-head"><span>${esc(t('lobby.settings'))}</span><span>${esc(host ? t('lobby.hostControls') : t('lobby.readOnly'))}</span></div><div class="lobby-settings-body">
       <div class="lobby-field"><label>${esc(t('lobby.mode'))}</label><div class="lobby-value">${esc(t('mode.teamDeathmatch'))}</div></div>
-      <div class="lobby-field"><label>${esc(t('lobby.map'))}</label><select data-setting="map" ${disabled}>${opts(MAPS, s.map, (v) => t(`map.${v}`))}</select></div>
-      <div class="lobby-field"><label>${esc(t('lobby.rounds'))}</label><select data-setting="rounds" ${disabled}>${opts(ROUND_OPTIONS, s.rounds, String)}</select></div>
-      <div class="lobby-field"><label>${esc(t('lobby.lives'))}</label><select data-setting="lives" ${disabled}>${opts(LIFE_OPTIONS, s.lives, String)}</select></div>
-      <div class="lobby-field"><label>${esc(t('lobby.afterMatch'))}</label><select data-setting="postMatch" ${disabled}><option value="lobby" ${s.postMatch === 'lobby' ? 'selected' : ''}>${esc(t('lobby.returnLobby'))}</option><option value="next-map" ${s.postMatch === 'next-map' ? 'selected' : ''}>${esc(t('lobby.nextMap'))}</option></select></div>
+      <div class="lobby-field"><label>${esc(t('lobby.map'))}</label><select data-setting="map" data-nav-key="setting:map" ${disabled}>${opts(MAPS, s.map, (v) => t(`map.${v}`))}</select></div>
+      <div class="lobby-field"><label>${esc(t('lobby.rounds'))}</label><select data-setting="rounds" data-nav-key="setting:rounds" ${disabled}>${opts(ROUND_OPTIONS, s.rounds, String)}</select></div>
+      <div class="lobby-field"><label>${esc(t('lobby.lives'))}</label><select data-setting="lives" data-nav-key="setting:lives" ${disabled}>${opts(LIFE_OPTIONS, s.lives, String)}</select></div>
+      <div class="lobby-field"><label>${esc(t('lobby.afterMatch'))}</label><select data-setting="postMatch" data-nav-key="setting:postMatch" ${disabled}><option value="lobby" ${s.postMatch === 'lobby' ? 'selected' : ''}>${esc(t('lobby.returnLobby'))}</option><option value="next-map" ${s.postMatch === 'next-map' ? 'selected' : ''}>${esc(t('lobby.nextMap'))}</option></select></div>
       <div class="lobby-validation ${errors.length ? '' : 'ok'}">${esc(status)}</div>
     </div>`;
   }

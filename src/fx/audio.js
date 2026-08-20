@@ -12,6 +12,11 @@ export const AUDIO_PROFILES = Object.freeze({
     occludedGain: 0.5, occludedHz: 1300 }),
 });
 
+export const AMBIENCE_PROFILES = Object.freeze({
+  fortaleza: Object.freeze({ continuousNoise: true, gain: 0.016 }),
+  azoteas: Object.freeze({ continuousNoise: false, gain: 0.014, pulseMinMs: 4800 }),
+});
+
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
 
 // Selección pura de referencia: permite verificar que spectator nunca vuelva
@@ -239,9 +244,11 @@ export class Audio {
     nodes.gain.gain.cancelScheduledValues(now);
     nodes.gain.gain.setValueAtTime(Math.max(0.0001, nodes.gain.gain.value), now);
     nodes.gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.35);
+    for (const timer of nodes.timers || []) clearTimeout(timer);
     setTimeout(() => {
-      try { nodes.noise.stop(); } catch { /* ya detenido */ }
-      try { nodes.hum.stop(); } catch { /* ya detenido */ }
+      for (const source of nodes.sources || []) {
+        try { source.stop(); } catch { /* ya detenido */ }
+      }
       nodes.gain.disconnect();
     }, 420);
   }
@@ -251,26 +258,58 @@ export class Audio {
     const now = this.ctx.currentTime;
     const gain = this.ctx.createGain();
     gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(name === 'azoteas' ? 0.022 : 0.016, now + 0.8);
+    gain.gain.exponentialRampToValueAtTime(AMBIENCE_PROFILES[name].gain, now + 0.8);
     gain.connect(this.worldBus || this.master);
-
-    const noise = this.ctx.createBufferSource();
-    noise.buffer = this._noise; noise.loop = true;
-    const wind = this.ctx.createBiquadFilter();
-    wind.type = name === 'azoteas' ? 'bandpass' : 'lowpass';
-    wind.frequency.value = name === 'azoteas' ? 520 : 260;
-    wind.Q.value = name === 'azoteas' ? 0.42 : 0.7;
-    const noiseGain = this.ctx.createGain();
-    noiseGain.gain.value = name === 'azoteas' ? 0.7 : 0.22;
-    noise.connect(wind).connect(noiseGain).connect(gain);
-
+    const nodes = { gain, sources: [], timers: new Set() };
     const hum = this.ctx.createOscillator();
-    hum.type = 'sine'; hum.frequency.value = name === 'azoteas' ? 63 : 47;
+    hum.type = 'sine'; hum.frequency.value = name === 'azoteas' ? 49 : 47;
     const humGain = this.ctx.createGain();
-    humGain.gain.value = name === 'azoteas' ? 0.08 : 0.32;
+    humGain.gain.value = name === 'azoteas' ? 0.045 : 0.32;
     hum.connect(humGain).connect(gain);
-    noise.start(now); hum.start(now);
-    this._ambienceNodes = { gain, noise, hum };
+    hum.start(now); nodes.sources.push(hum);
+
+    if (AMBIENCE_PROFILES[name].continuousNoise) {
+      const noise = this.ctx.createBufferSource();
+      noise.buffer = this._noise; noise.loop = true;
+      const wind = this.ctx.createBiquadFilter();
+      wind.type = 'lowpass'; wind.frequency.value = 260; wind.Q.value = 0.7;
+      const noiseGain = this.ctx.createGain();
+      noiseGain.gain.value = 0.22;
+      noise.connect(wind).connect(noiseGain).connect(gain);
+      noise.start(now); nodes.sources.push(noise);
+    }
+    this._ambienceNodes = nodes;
+    if (name === 'azoteas') this._scheduleRooftopAmbience(nodes, 1800);
+  }
+
+  _scheduleRooftopAmbience(nodes, delay) {
+    const timer = setTimeout(() => {
+      nodes.timers.delete(timer);
+      if (this._ambienceNodes !== nodes || !this.ctx || !this._noise) return;
+      const now = this.ctx.currentTime;
+      const noise = this.ctx.createBufferSource();
+      noise.buffer = this._noise;
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.value = 190 + Math.random() * 150;
+      filter.Q.value = 0.65;
+      const gust = this.ctx.createGain();
+      gust.gain.setValueAtTime(0.0001, now);
+      gust.gain.exponentialRampToValueAtTime(0.13 + Math.random() * 0.07, now + 0.22);
+      gust.gain.exponentialRampToValueAtTime(0.0001, now + 0.9);
+      noise.connect(filter).connect(gust).connect(nodes.gain);
+      noise.start(now, Math.random() * 0.08, 0.95);
+      noise.stop(now + 1);
+      nodes.sources.push(noise);
+      noise.onended = () => {
+        const i = nodes.sources.indexOf(noise);
+        if (i >= 0) nodes.sources.splice(i, 1);
+      };
+      // Ráfagas bajas y separadas: sugieren viento/ciudad sin mantener un
+      // hiss continuo por encima de pasos y combate.
+      this._scheduleRooftopAmbience(nodes, AMBIENCE_PROFILES.azoteas.pulseMinMs + Math.random() * 5200);
+    }, delay);
+    nodes.timers.add(timer);
   }
 
   _env(gainNode, t0, a, peak, dec) {

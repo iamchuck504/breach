@@ -300,6 +300,33 @@
   #btn-enter::before { content: "[ "; color: var(--accent); }
   #btn-enter::after { content: " ]"; color: var(--accent); }
 
+  /* Navegación compartida teclado/control. El foco fuerte solo aparece al
+     usar gamepad para que nunca compita con hover o cursor virtual. */
+  .using-controller .menu-nav-focus {
+    border-color: #fff !important;
+    box-shadow: inset 0 0 0 1px #fff, 0 0 0 2px var(--accent), 0 0 24px rgba(255,122,47,.28) !important;
+    filter: brightness(1.12);
+  }
+  .using-controller button.menu-nav-focus { transform: translateX(4px); }
+  .using-controller input.menu-nav-focus, .using-controller select.menu-nav-focus {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+  .using-controller .lobby-mini, .using-controller .bind-btn { min-height: 34px; }
+  .using-controller .lobby-mini { padding: 7px 9px; }
+  #menu-prompts { position: fixed; z-index: 14; left: 50%; bottom: 14px;
+    transform: translateX(-50%); display: none; align-items: center; justify-content: center;
+    gap: 18px; width: max-content; max-width: calc(100vw - 28px); padding: 8px 13px;
+    border: 1px solid rgba(151,163,176,.2); background: rgba(7,9,12,.9);
+    color: var(--dim); font: 500 9px/1 var(--mono); letter-spacing: .1em;
+    text-transform: uppercase; pointer-events: none; backdrop-filter: blur(7px); }
+  #menu-prompts.on { display: none; }
+  .using-controller #menu-prompts.on { display: flex; }
+  .menu-prompt { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .menu-prompt b { min-width: 22px; padding: 4px 6px; border: 1px solid #59616b;
+    color: var(--text); text-align: center; font-weight: 600; }
+  .using-controller #menu-prompts { border-color: rgba(255,122,47,.35); }
+  .using-controller .menu-prompt:first-child b { color: #160d07; border-color: var(--accent); background: var(--accent); }
+
   #menu { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
     overflow: auto; padding: 24px; background:
       radial-gradient(circle at 81% 30%, rgba(255,166,73,.13), transparent 25%),
@@ -486,6 +513,13 @@
     .char-slot img { max-height: min(170px, calc(100vh - 250px)); }
     .bind-row { margin-bottom: 3px; }
   }
+  @media (max-height: 800px) {
+    /* La barra contextual reemplaza estos hints en pantallas 720p; mantener
+       ambos hacía competir dos filas de controles por el mismo espacio. */
+    #menu { align-items: flex-start; }
+    #menu .menu-card { margin-bottom: 52px; }
+    #main-card:not(.in-match) .menu-note { display: none; }
+  }
   @media (max-width: 760px) {
     #menu { align-items: flex-start; }
     #score { grid-template-columns: 86px 62px 86px; min-height: 56px; }
@@ -614,7 +648,7 @@
           <button class="btn primary" id="btn-resume" style="display:none">
             <span class="btn-copy" data-i18n="common.resume">RESUME</span><span class="btn-num">→</span>
           </button>
-          <button class="btn primary" id="btn-bots">
+          <button class="btn primary" id="btn-bots" data-nav-default>
             <span class="btn-copy" data-i18n="menu.bots">VS BOTS (4v4)</span><span class="btn-num">01</span>
           </button>
           <button class="btn" id="btn-practice">
@@ -677,7 +711,7 @@
     </div>
     <div class="lobby-actions">
       <button class="btn" id="btn-lobby-leave" data-i18n="lobby.leave">LEAVE LOBBY</button>
-      <button class="btn primary" id="btn-lobby-start" data-i18n="lobby.start">START MATCH</button>
+      <button class="btn primary" id="btn-lobby-start" data-i18n="lobby.start" data-nav-default>START MATCH</button>
     </div>
   </div>
 
@@ -714,6 +748,7 @@
       <button class="btn primary" id="btn-back" data-i18n="common.back">BACK</button>
     </div>
   </div>
+  <div id="menu-prompts" aria-live="polite"></div>
 </div>
 
 <div id="vcursor">

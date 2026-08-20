@@ -13,6 +13,7 @@
 // - Stats (kills/deaths, 100 pts por kill) para el scoreboard (Tab/VIEW).
 import * as THREE from 'three';
 import { TUNING } from '../config/tuning.js';
+import { ROUND_FINISH_HOLD } from './match-flow.js';
 import { Rig, RAGDOLL_R } from '../player/rig.js';
 import { resolveShot, applySpread, applyPelletPattern } from '../combat/ballistics.js';
 
@@ -912,6 +913,7 @@ export class BotMatch {
     }
     this.roundWinner = null;
     this.matchWinner = null;
+    this.pendingRoundWinner = null;
     if (this.external) {
       this.phase = 'playing';
       this.phaseT = 0;
@@ -944,7 +946,7 @@ export class BotMatch {
     this.cb.respawnPlayer(this.world.spawns[this.playerTeam][0], false);
   }
 
-  controlsLocked() { return this.phase !== 'playing'; }
+  controlsLocked() { return this.phase !== 'playing' && this.phase !== 'round-finish'; }
 
   _idleBots(dt) {
     for (const b of this.bots) {
@@ -1524,16 +1526,30 @@ export class BotMatch {
   _checkRoundEnd() {
     for (const team of ['red', 'blue']) {
       if (this.livesOf(team) <= 0) {
-        this._endRound(team === 'red' ? 'blue' : 'red');
+        this._holdRoundResult(team === 'red' ? 'blue' : 'red');
         return;
       }
     }
   }
 
-  _endRound(winner) {
+  _holdRoundResult(winner) {
     if (this.phase !== 'playing') return;
+    // La baja decisiva permanece en cámara antes de que aparezca cualquier
+    // overlay. Se detienen respawns/decisiones nuevas, pero el jugador conserva
+    // la cámara y los ragdolls continúan asentándose.
+    this.phase = 'round-finish';
+    this.phaseT = ROUND_FINISH_HOLD;
+    this.pendingRoundWinner = winner;
+    this.respawnQueue = [];
+    this.coverClaims.clear();
+    this.tacticalClaims.clear();
+  }
+
+  _endRound(winner) {
+    if (this.phase !== 'playing' && this.phase !== 'round-finish') return;
     this.phase = 'intermission';
     this.phaseT = ROUND_RESULT_TIME;
+    this.pendingRoundWinner = null;
     this.roundWinner = winner;
     this.respawnQueue = [];
     this.coverClaims.clear();
@@ -1594,6 +1610,14 @@ export class BotMatch {
         this.phase = 'over';
         this.cb.onMatchEnd(this.matchWinner);
       }
+      return;
+    }
+    if (this.phase === 'round-finish') {
+      this.phaseT -= dt;
+      // Mantener vivas las reacciones físicas sin permitir que la IA arranque
+      // otra decisión táctica después de la baja final.
+      this._idleBots(dt);
+      if (this.phaseT <= 0) this._endRound(this.pendingRoundWinner);
       return;
     }
     // el calor de zonas se enfría solo: información vieja pesa menos

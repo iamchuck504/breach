@@ -27,6 +27,7 @@ import {
 import { AmmoCrates } from './game/crates.js';
 import { WeaponDrops } from './game/drops.js';
 import { LobbyUI } from './ui/lobby.js';
+import { MenuControllerNavigator } from './ui/menu-controller.js';
 
 applyTranslations();
 
@@ -479,6 +480,8 @@ inServer.value = localStorage.getItem('breach.server') ||
 const mainCard = document.getElementById('main-card');
 const controlsCard = document.getElementById('controls-card');
 const btnResume = document.getElementById('btn-resume');
+const menuPrompts = document.getElementById('menu-prompts');
+let menuNavigator = null;
 
 function dismissSplash() { splash.classList.add('off'); }
 let preparePromise = null;
@@ -536,6 +539,7 @@ function openMenu() {
   // Chromium/Windows que deja el cursor confinado.)
   vc.x = innerWidth / 2;
   vc.y = innerHeight / 2;
+  hud.el.menu.scrollTop = 0;
 }
 function closeMenu() {
   if (!G.mode) return; // sin partida no hay a dónde volver
@@ -681,6 +685,7 @@ function showMainMenuFromLobby(message = '') {
   document.getElementById('menu-title').textContent = t('common.play');
   document.getElementById('menu-kicker').textContent = t('menu.selectMode');
   showMenuBackdrop(); hud.show(false); hud.showMenu(true); showControls(false);
+  hud.el.menu.scrollTop = 0;
   netStatus.textContent = message; input.releaseLock();
 }
 
@@ -769,6 +774,7 @@ document.addEventListener('fullscreenchange', () => {
 });
 
 input.onEscape = () => {
+  if ((menuIsOpen() || !splash.classList.contains('off')) && menuNavigator?.back()) return;
   if (!G.mode) return;
   if (menuIsOpen()) closeMenu(); else openMenu();
 };
@@ -909,6 +915,7 @@ function showControls(on) {
   mainCard.style.display = on ? 'none' : 'block';
   controlsCard.style.display = on ? 'block' : 'none';
   charCard.style.display = 'none';
+  hud.el.menu.scrollTop = 0;
   if (on) {
     renderBinds();
     slMouse.value = TUNING.cam.sens;
@@ -930,10 +937,28 @@ function showChar(on) {
   mainCard.style.display = on ? 'none' : 'block';
   controlsCard.style.display = 'none';
   charCard.style.display = on ? 'block' : 'none';
+  hud.el.menu.scrollTop = 0;
   if (on) buildCharUI();
 }
 document.getElementById('btn-character').addEventListener('click', () => showChar(true));
 document.getElementById('btn-char-back').addEventListener('click', () => showChar(false));
+
+function navigateMenuBack() {
+  if (!splash.classList.contains('off')) return false;
+  if (controlsCard.style.display === 'block') { showControls(false); return true; }
+  if (charCard.style.display === 'block') { showChar(false); return true; }
+  if (!lobbyUI.root.classList.contains('off')) { leaveLobby(); return true; }
+  if (G.mode && menuIsOpen()) { closeMenu(); return true; }
+  return false;
+}
+
+menuNavigator = new MenuControllerNavigator({
+  menu: hud.el.menu,
+  splash,
+  prompts: menuPrompts,
+  onMove: () => audio.uiMove(),
+  onBack: navigateMenuBack,
+});
 
 function buildCharUI() {
   if (!charSlots.children.length) {
@@ -1120,6 +1145,7 @@ onLanguageChange((language) => {
     ? 'common.exitFullscreen' : 'common.fullscreen');
   if (!input.pad.connected) padStatus.textContent = t('menu.noController');
   if (G.lobby) lobbyUI.render(G.lobby);
+  menuNavigator?.refreshPrompts();
 });
 
 function startRebindKb(action, btn) {
@@ -2258,6 +2284,7 @@ function frame(now) {
   G.flowLockedPrev = flowLocked;
   input.suppress = menuOpen || flowLocked; // presentación y menú bloquean el gameplay
   input.pollPad(dt, !!G.mode && !menuOpen && !flowLocked);
+  menuNavigator.poll(input.pad, dt, input.rebinding);
 
   // cursor virtual: menú abierto con pointer lock activo
   const vcOn = menuOpen && input.locked;
