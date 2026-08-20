@@ -77,6 +77,11 @@ export class World {
     // cajas de munición por mapa: en azoteas van sobre el eje del helipuerto,
     // libres de cover (las ±7,0 por defecto chocaban con el anillo)
     this.cratePos = layout === 'azoteas' ? [{ x: 0, z: -12.1 }, { x: 0, z: 12.1 }] : null;
+    // pedestal del arma ESPECIAL (sniper/bazooka alternando por ronda):
+    // zona central de riesgo, equidistante de ambos spawns
+    this.specialSpot = layout === 'fortaleza' ? { x: 2.8, z: 0 }
+      : layout === 'azoteas' ? { x: 0, z: 0 }
+      : null;
 
     this._buildFloor();
     if (layout === 'arena') this._buildArena();

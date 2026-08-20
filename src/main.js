@@ -21,6 +21,7 @@ import { HUD } from './ui/hud.js';
 import { NetClient } from './net/client.js';
 import { BotMatch } from './game/botmatch.js';
 import { SmokeSystem } from './game/smoke.js';
+import { SpecialPickup, Rockets, SPECIAL_HOLD_TIME } from './game/special.js';
 import {
   DEFAULT_LOBBY_SETTINGS, MAX_PLAYERS, TEAM_CAPACITY, makeBotName,
   nextLobbyMap, normalizeLobbySettings, validateLobby,
@@ -54,6 +55,8 @@ const world = new World(scene, 'azoteas');
 const effects = new Effects(scene);
 const audio = new Audio();
 const smoke = new SmokeSystem(scene, world, audio);
+const specials = new SpecialPickup(scene);
+const rockets = new Rockets(scene, world, audio);
 audio.setAmbience('azoteas');
 const hud = new HUD();
 const input = new Input(canvas);
@@ -98,6 +101,7 @@ const G = {
   fireBuffer: 0,       // click de disparo pendiente mientras el cuerpo gira
   pendingShots: 0,     // tiros aprobados que esperan la pose/muzzle de este frame
   pendingThrows: 0,    // granadas aprobadas que esperan la pose de este frame
+  specialRound: 0,     // ronda cuyo arma especial ya fue colocada
   mode: null,          // null | 'practice' | 'online'
   rig: null,           // rig local
   player: null,        // controller local
@@ -1240,6 +1244,9 @@ function teardown({ keepNet = false, keepLobby = true } = {}) {
   G.pendingShots = 0;
   G.pendingThrows = 0;
   smoke.clear();
+  specials.clear();
+  rockets.clear();
+  G.specialRound = 0;
   G.spawnProt = 0;
   G.respawnT = 0;
   hud.respawnTick(null);
@@ -1448,6 +1455,8 @@ function startPractice() {
   spawnLocal('red', world.spawns.red[1]);
   G.dummies = new Dummies(scene, world);
   G.crates = new AmmoCrates(scene, false, world.cratePos ?? undefined);
+  // en práctica el pedestal especial siempre ofrece el sniper (probar tiro)
+  if (world.specialSpot) { G.specialRound = 1; spawnSpecialForRound(); }
   hud.showMenu(false);
   showControls(false);
   hud.show(true);
@@ -1905,6 +1914,27 @@ function currentTargets() {
   return out;
 }
 
+// Cuerpos de TODOS los personajes vivos (ambos equipos) para la colisión
+// jugador-personaje; currentTargets() no sirve aquí porque excluye aliados.
+function characterBodies() {
+  const out = [];
+  if (G.mode === 'bots' && G.botMatch) {
+    for (const b of G.botMatch.bots) if (b.alive) out.push({ x: b.pos.x, z: b.pos.z, y: b.y });
+  } else if (G.mode === 'practice' && G.dummies) {
+    for (const tg of G.dummies.targets()) {
+      if (tg.alive !== false) out.push({ x: tg.x, z: tg.z, y: tg.y ?? 0 });
+    }
+  } else if (G.mode === 'online') {
+    for (const r of G.remotes.values()) {
+      if (r.alive) out.push({ x: r.x, z: r.z, y: r.y ?? 0 });
+    }
+    for (const b of G.onlineBots?.bots ?? []) {
+      if (b.alive) out.push({ x: b.pos.x, z: b.pos.z, y: b.y });
+    }
+  }
+  return out;
+}
+
 function falloff(def, dist) {
   if (!def.falloffStart) return 1;
   if (dist <= def.falloffStart) return 1;
@@ -1966,6 +1996,73 @@ function coverPoseReady(wantsAim, wantsFire) {
   if (wantsFire && !wantsAim &&
       (!p.blindMode || p.blindPoseExposure < TUNING.cover.blindFireReady)) return false;
   return true;
+}
+
+// Coloca el arma especial de la ronda en el pedestal del mapa (si lo tiene)
+function spawnSpecialForRound() {
+  const spot = world.specialSpot;
+  if (!spot) { specials.clear(); return; }
+  const wep = G.specialRound % 2 === 1 ? 'sniper' : 'bazooka';
+  specials.spawn(wep, spot.x, spot.z, world.groundHeight({ x: spot.x, z: spot.z }, 0.4, 0.1));
+}
+
+// Explosión del cohete: splash con caída por distancia, línea de efecto (no
+// atraviesa paredes) y AUTODAÑO — dispararla cerca es un riesgo real.
+function explodeRocket(pos) {
+  const d = TUNING.weapons.bazooka;
+  const R = d.splashRadius;
+  _v1.set(pos.x, pos.y, pos.z);
+  effects.muzzleFlash(_v1, true);
+  effects.dust(_v1);
+  audio.explosion({ position: _v1 });
+  if (G.player) {
+    const pd = Math.hypot(G.player.pos.x - pos.x, G.player.pos.z - pos.z);
+    shoulderCam.addShake(Math.max(0, 1.6 - pd * 0.12));
+  }
+  if (!G.mode) return;
+  const splash = (dist) => d.dmg * Math.max(0.25, 1 - (dist / R) * 0.75);
+  const losClear = (x, y, z) => {
+    _v2.set(x - pos.x, y - pos.y, z - pos.z);
+    const len = _v2.length();
+    return len <= 0.4 || world.raycast(_v1, _v2.normalize(), len - 0.2) === null;
+  };
+  for (const tg of currentTargets()) {
+    if (tg.alive === false) continue;
+    const ty = (tg.y ?? 0) + 0.9;
+    const dist = Math.hypot(tg.x - pos.x, ty - pos.y, tg.z - pos.z);
+    if (dist > R || !losClear(tg.x, ty, tg.z)) continue;
+    const dmg = splash(dist);
+    const ctx = { weapon: 'bazooka', distance: dist, damage: dmg, part: 'body', gib: dist < 1.6 };
+    if (G.mode === 'practice' && G.dummies) {
+      effects.blood(_v3.set(tg.x, ty, tg.z), TEAM_HEX.blue);
+      const killed = G.dummies.damage(tg.id, dmg, (dd) => {
+        dd.rig.setDeathContext({
+          impact: { x: dd.x - pos.x, z: dd.z - pos.z },
+          power: Math.min(1, dmg / 55), vel: { x: 0, z: 0 }, state: 'run', ...ctx,
+        });
+        G.scores.red++;
+        hud.score(G.scores.red, G.scores.blue);
+        hud.kill(G.name, 'red', dd.name, 'blue');
+        audio.kill();
+      });
+      hud.hitmarker();
+      if (!killed) audio.hit();
+    } else if (G.mode === 'bots' && G.botMatch) {
+      const killed = G.botMatch.damageBot(tg.id, dmg, 'player', ctx.gib, false, ctx);
+      if (killed !== null) { hud.hitmarker(); if (!killed) audio.hit(); }
+    }
+  }
+  // autodaño (70% del splash) — solo donde hay muerte real del jugador
+  const p = G.player;
+  if (G.mode === 'bots' && p && G.selfAlive && !p.dead) {
+    const sy = p.y + 0.9;
+    const sd = Math.hypot(p.pos.x - pos.x, sy - pos.y, p.pos.z - pos.z);
+    if (sd < R && losClear(p.pos.x, sy, p.pos.z)) {
+      const dmg = splash(sd) * 0.7;
+      damagePlayerLocal(dmg, G.name, { x: pos.x, z: pos.z },
+        { weapon: 'bazooka', distance: sd, damage: dmg, part: 'body', gib: false });
+    }
+  }
 }
 
 // Lanzar la granada de humo: sale de la mano con arco balístico. La nube la
@@ -2091,6 +2188,20 @@ function fireShot() {
   } else {
     baseDir = hipDir();
     origin = muzzle.clone();
+  }
+
+  // bazooka: proyectil REAL, sin hitscan — el cohete hace el daño al explotar
+  if (def.projectile) {
+    rockets.fire({ x: muzzle.x, y: muzzle.y, z: muzzle.z }, baseDir);
+    if (G.spawnProt > 0) { G.spawnProt = 0; hud.hint(t('msg.protectionBroken'), 900); }
+    effects.muzzleFlash(muzzle, true);
+    audio.gun(w.cur);
+    input.pad.rumble(110, 0.6, 1.0);
+    G.rig.kick(def.recoil * 0.5);
+    shoulderCam.addShake(def.recoil * TUNING.cam.shakeFire);
+    shoulderCam.pitch = Math.min(TUNING.cam.pitchMax * Math.PI / 180,
+      shoulderCam.pitch + def.recoil * 0.006);
+    return;
   }
 
   const targets = currentTargets();
@@ -2241,6 +2352,8 @@ window.BREACH_AUDIO = audio;
 window.BREACH_WORLD = world;
 window.BREACH_EFFECTS = effects;
 window.BREACH_SMOKE = smoke;
+window.BREACH_SPECIALS = specials;
+window.BREACH_ROCKETS = rockets;
 window.BREACH_RIG = Rig; // para tests visuales de poses/animaciones
 window.THREE = THREE;
 
@@ -2308,9 +2421,58 @@ function simStep(dt) {
     (input.firePressed || G.fireBuffer > 0) && G.weapons.st.mag > 0;
   const hasAmmo = (!G.weapons.reloading || canInterruptReload) &&
     (G.weapons.st.mag > 0 || G.weapons.st.reserve > 0);
+  // pickup del arma ESPECIAL: junto al pedestal, evadir se convierte en
+  // "tomar" (se consume el edge para no rodar encima) y hay que MANTENERLO
+  if (specials.active && G.selfAlive && !p.dead && p.grounded &&
+      specials.near(p.pos.x, p.pos.z, p.y)) {
+    const holding = input.keys.has(BINDS.kb.evade) || input.pad.pressed.has(BINDS.pad.evade);
+    input.evadePressed = false;
+    if (holding) {
+      specials.holdT += dt;
+      if (specials.holdT >= SPECIAL_HOLD_TIME) {
+        const wep = specials.take();
+        const removed = G.weapons.giveSpecial(wep);
+        audio.reloadDone();
+        hud.hint(t('msg.specialTaken', {
+          weapon: t(TUNING.weapons[wep].nameKey),
+          removed: t(TUNING.weapons[removed].nameKey),
+        }), 2400);
+        input.pad.rumble(80, 0.4, 0.6);
+      } else {
+        hud.hint(t('msg.specialHold', {
+          pct: Math.min(99, Math.round((specials.holdT / SPECIAL_HOLD_TIME) * 100)),
+        }), 400);
+      }
+    } else {
+      specials.holdT = 0;
+      hud.hint(t('msg.specialNear', {
+        weapon: t(TUNING.weapons[specials.active.wep].nameKey),
+      }), 700);
+    }
+  } else if (specials.active) {
+    specials.holdT = 0;
+  }
+
   // la intención de disparo SIEMPRE llega al controller: cancela el roadie
   // (en tierra o en el aire) y gira el cuerpo para disparar
   p.update(dt, input, (input.fireHeld || G.fireBuffer > 0) && !p.dead && hasAmmo);
+
+  // colisión de cuerpos del jugador: suave y sin atrapamiento (mitad del
+  // solape por paso, con tope). Cover y mantle gestionan su propia posición:
+  // empujar ahí rompería el snap contra la pared.
+  if (!p.dead && p.state !== 'cover' && p.state !== 'mantle') {
+    const bodyR = 0.72, maxBodyPush = 3 * dt;
+    for (const o of characterBodies()) {
+      if (Math.abs(o.y - p.y) > 1.4) continue;
+      const dx = p.pos.x - o.x, dz = p.pos.z - o.z;
+      const d = Math.hypot(dx, dz);
+      if (d >= bodyR || d < 0.001) continue;
+      const push = Math.min((bodyR - d) * 0.5, maxBodyPush);
+      p.pos.x += (dx / d) * push;
+      p.pos.z += (dz / d) * push;
+      world.resolveCircle(p.pos, PLAYER_R, p.y);
+    }
+  }
   // El controller puede haber recuperado control o terminado de alinearse en
   // este mismo paso. Revalidar evita añadir un frame artificial de latencia.
   const stateOkAfter = !p.dead && p.state !== 'dive' && p.state !== 'slide' &&
@@ -2404,7 +2566,26 @@ function simStep(dt) {
     G.drops.update(dt, p.pos.x, p.pos.z, p.y, G.selfAlive && !p.dead, (id, d) => {
       const def = TUNING.weapons[d.wep];
       const s = G.weapons.state[d.wep];
-      if (!s) return; // arma que no llevas (p.ej. tu primaria fue reemplazada)
+      if (!s) {
+        // no llevas esa arma: si es una primaria normal del suelo y tu slot
+        // primario carga una ESPECIAL ya vacía, la recuperas en su lugar
+        if (def.special || def.thrown) return;
+        for (const idx of [0, 1]) {
+          const curW = G.weapons.slots[idx];
+          const curDef = TUNING.weapons[curW];
+          const curSt = G.weapons.state[curW];
+          if (curDef.special && curSt.mag <= 0 && curSt.reserve <= 0) {
+            G.weapons.replaceSlot(idx, d.wep,
+              Math.min(d.mag, def.mag), Math.min(d.res, def.reserve));
+            G.drops.remove(id);
+            audio.reloadDone();
+            hud.hint(t('msg.weaponRecovered', { weapon: t(def.nameKey) }), 1600);
+            input.pad.rumble(50, 0.15, 0.25);
+            return;
+          }
+        }
+        return;
+      }
       if (s.reserve >= def.reserve) return; // reserva llena: no desperdiciarla
       if (G.mode === 'online') {
         d.claimed = true;
@@ -2438,6 +2619,13 @@ function simStep(dt) {
 
   if (G.botMatch) {
     G.botMatch.update(dt);
+    // arma especial del mapa: UNA por ronda, alternando (impar=sniper,
+    // par=bazooka); aparece cuando el despliegue libera los controles
+    if (G.mode === 'bots' && G.botMatch.round !== G.specialRound &&
+        !G.botMatch.controlsLocked()) {
+      G.specialRound = G.botMatch.round;
+      spawnSpecialForRound();
+    }
     // regen del jugador (igual que online, pero local)
     if (G.mode === 'bots') {
       G.playerLastHit += dt;
@@ -2613,6 +2801,8 @@ function frame(now) {
 
   effects.update(dt);
   smoke.update(dt);
+  specials.update(dt);
+  rockets.update(dt, G.mode ? currentTargets() : [], explodeRocket);
   renderer.render(scene, camera);
   input.endFrame();
 }

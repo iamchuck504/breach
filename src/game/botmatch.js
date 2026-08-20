@@ -373,6 +373,36 @@ export class Bot {
   }
 
   // ¿hay un obstáculo BAJO justo en el camino? → saltarlo
+  // Colisión de CUERPOS: nadie atraviesa a nadie (aliados y enemigos, bots y
+  // humanos). Corrección posicional SUAVE: la mitad del solape por paso con
+  // tope de 3 m/s — sin empujones violentos ni atrapamientos permanentes.
+  _bodyCollide(match, dt) {
+    if (!this.alive) return;
+    const R = 0.72;
+    const maxPush = 3 * dt;
+    let pushed = false;
+    const solve = (ox, oz, oy) => {
+      if (Math.abs((oy ?? 0) - this.y) > 1.4) return;
+      const dx = this.pos.x - ox, dz = this.pos.z - oz;
+      const d = Math.hypot(dx, dz);
+      if (d >= R || d < 0.001) return;
+      const push = Math.min((R - d) * 0.5, maxPush);
+      this.pos.x += (dx / d) * push;
+      this.pos.z += (dz / d) * push;
+      pushed = true;
+    };
+    for (const o of match.bots) {
+      if (o !== this && o.alive) solve(o.pos.x, o.pos.z, o.y);
+    }
+    const p = match.cb.player?.();
+    if (p?.alive) solve(p.x, p.z, p.y);
+    for (const h of match.cb.humans?.() ?? []) {
+      if (h.alive) solve(h.x, h.z, h.y);
+    }
+    // el empuje no puede meter al bot en una pared
+    if (pushed) this.world.resolveCircle(this.pos, 0.38, this.y);
+  }
+
   _jumpIfBlocked(mx, mz) {
     if (!this.grounded || this.jumpCd > 0) return;
     _v1.set(this.pos.x, 0.5, this.pos.z);
@@ -698,6 +728,7 @@ export class Bot {
       this.pos.z += steering.z * spd * dt;
     } else { this.speed = 0; this.velX = 0; this.velZ = 0; }
     this.world.resolveCircle(this.pos, 0.38, this.y);
+    this._bodyCollide(match, dt);
 
     // groundHeight da soporte a un círculo desde que toca la rampa. Sin este
     // guard, un bot que la rozaba de lado heredaba su altura instantáneamente.

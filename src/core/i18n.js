@@ -116,6 +116,10 @@ const en = {
   'weapon.grenadeShort': 'SMK', 'weapon.sniperShort': 'SNPR', 'weapon.bazookaShort': 'RCKT',
   'binding.melee': 'MELEE', 'binding.slot1': 'WEAPON 1', 'binding.slot2': 'WEAPON 2',
   'binding.slot3': 'WEAPON 3', 'binding.slot4': 'WEAPON 4',
+  'msg.specialNear': 'HOLD [COVER/EVADE] TO TAKE THE {weapon}',
+  'msg.specialHold': 'TAKING… {pct}%',
+  'msg.specialTaken': '{weapon} EQUIPPED — REPLACES {removed}',
+  'msg.weaponRecovered': '{weapon} RECOVERED',
 };
 
 const es = {
@@ -223,6 +227,10 @@ const es = {
   'weapon.grenadeShort': 'HUMO', 'weapon.sniperShort': 'FRAN', 'weapon.bazookaShort': 'BAZ',
   'binding.melee': 'MELEE', 'binding.slot1': 'ARMA 1', 'binding.slot2': 'ARMA 2',
   'binding.slot3': 'ARMA 3', 'binding.slot4': 'ARMA 4',
+  'msg.specialNear': 'MANTÉN [COBERTURA/EVADIR] PARA TOMAR {weapon}',
+  'msg.specialHold': 'TOMANDO… {pct}%',
+  'msg.specialTaken': '{weapon} EQUIPADA — REEMPLAZA {removed}',
+  'msg.weaponRecovered': 'RECUPERASTE {weapon}',
 };
 
 const pt = { ...en,

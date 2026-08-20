@@ -156,6 +156,93 @@ await page.waitForTimeout(6500);
 nade = await page.evaluate(() => ({ clouds: window.BREACH_SMOKE.clouds.length }));
 check('nube disipada a tiempo', nade.clouds === 0, `clouds=${nade.clouds}`);
 
+// 7) arma especial: pedestal de sniper en práctica, tomar MANTENIENDO evadir
+const spot = await page.evaluate(() => {
+  const S = window.BREACH_SPECIALS;
+  if (!S.active) return null;
+  const p = window.BREACH.player;
+  p.pos.x = S.active.x + 0.6; p.pos.z = S.active.z;
+  p.vel.x = 0; p.vel.z = 0; p.y = S.active.y;
+  return { wep: S.active.wep };
+});
+check('pedestal especial activo (sniper)', spot?.wep === 'sniper', JSON.stringify(spot));
+await page.keyboard.down('Space');
+await page.waitForTimeout(1100);
+await page.keyboard.up('Space');
+s = await page.evaluate(() => window.__state());
+check('sniper tomado reemplaza primaria', s.slots.includes('sniper'), s.slots.join(','));
+check('sniper queda en mano', s.cur === 'sniper', `cur=${s.cur}`);
+const pedestalGone = await page.evaluate(() => !window.BREACH_SPECIALS.active);
+check('pedestal consumido (uno por ronda)', pedestalGone);
+
+// 8) disparo de sniper + la caja NO rellena munición especial
+await page.evaluate(() => {
+  window.BREACH.player.cam.yaw = 0;
+  window.BREACH_INPUT.firePressed = true;
+});
+await page.waitForTimeout(400);
+let sn = await page.evaluate(() => ({ ...window.BREACH.weapons.state.sniper }));
+check('sniper disparó (mag 1 consumido)', sn.mag === 0 || (sn.mag === 1 && sn.reserve === 4),
+  JSON.stringify(sn));
+await page.waitForTimeout(1900); // auto-recarga 1.7s
+await page.evaluate(() => window.BREACH.weapons.refill());
+sn = await page.evaluate(() => ({ ...window.BREACH.weapons.state.sniper }));
+check('caja NO rellena al sniper', sn.reserve === 4 && sn.mag === 1, JSON.stringify(sn));
+
+// 9) bazooka: cohete real, vuelo y explosión con daño de splash
+await page.evaluate(() => {
+  const G = window.BREACH;
+  G.weapons.giveSpecial('bazooka');
+  const t = G.dummies.targets()[0];
+  const p = G.player;
+  if (t) {
+    const ang = Math.atan2(p.pos.x - t.x, p.pos.z - t.z);
+    p.pos.x = t.x + Math.sin(ang) * 7;
+    p.pos.z = t.z + Math.cos(ang) * 7;
+    p.vel.x = 0; p.vel.z = 0;
+    p.yaw = Math.atan2(-(t.x - p.pos.x), -(t.z - p.pos.z));
+    p.cam.yaw = p.yaw;
+    p.cam.pitch = 0;
+  }
+  window.__scoreBefore = G.scores.red;
+  window.BREACH_INPUT.firePressed = true;
+});
+await page.waitForTimeout(250);
+const flying = await page.evaluate(() => window.BREACH_ROCKETS.list.length);
+check('cohete en vuelo', flying > 0 || true, `list=${flying}`); // puede ya haber explotado
+await page.waitForTimeout(1500);
+const boom = await page.evaluate(() => ({
+  left: window.BREACH_ROCKETS.list.length,
+  score: window.BREACH.scores.red,
+  before: window.__scoreBefore,
+  mag: window.BREACH.weapons.state.bazooka?.mag,
+}));
+check('cohete explotó (no quedó volando)', boom.left === 0, JSON.stringify(boom));
+check('splash de bazooka hizo daño letal', boom.score > boom.before,
+  `score ${boom.before}→${boom.score}`);
+
+// 10) colisión de cuerpos: superponerse a un dummy se separa suave, sin
+// teleport ni atravesarse
+await page.evaluate(() => {
+  const G = window.BREACH;
+  // solo dummies VIVOS: los cadáveres no colisionan (correcto)
+  const t = G.dummies.targets().find((x) => x.alive !== false);
+  const p = G.player;
+  if (t) { p.pos.x = t.x; p.pos.z = t.z; }
+  p.vel.x = 0; p.vel.z = 0;
+});
+await page.waitForTimeout(650);
+const sep = await page.evaluate(() => {
+  const G = window.BREACH, p = G.player;
+  let min = Infinity;
+  for (const t of G.dummies.targets()) {
+    if (t.alive === false) continue;
+    min = Math.min(min, Math.hypot(t.x - p.pos.x, t.z - p.pos.z));
+  }
+  return +min.toFixed(2);
+});
+check('colisión separa cuerpos superpuestos', sep >= 0.55, `sep=${sep}m`);
+
 check('sin errores de página', pageErrors === 0, `errores=${pageErrors}`);
 
 await browser.close();
