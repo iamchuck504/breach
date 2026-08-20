@@ -8,6 +8,7 @@
 // analítico de dos huesos — ambas manos siempre en contacto, sin poses
 // robóticas. El pitch de la cámara inclina el aimRig completo (brazos+arma).
 import * as THREE from 'three';
+import { coverAimPose, coverBlindPose } from '../combat/cover-fire.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
@@ -625,7 +626,7 @@ export class Rig {
       imp = il > 0.01 ? { x: imp.x / il, z: imp.z / il } : null;
     }
     const st = ctx.state || 'idle';
-    const inCover = st === 'cover_low' || st === 'cover_high' || st === 'blind_over';
+    const inCover = st === 'cover_low' || st === 'cover_high' || st.startsWith('blind_');
     const evading = st === 'dive' || st === 'slide';
 
     // impulso inicial: el momentum que TRAÍA + el empuje del arma (potencia y
@@ -799,7 +800,7 @@ export class Rig {
       R(this.gunMount, rx, ry, rz);
     };
 
-    let hipsY = 0.66, rootRotX = 0, damp = 12;
+    let hipsY = 0.66, aimRigX = 0, aimRigY = 0.5, rootRotX = 0, damp = 12;
     let leftOnGun = false, ikArms = true;
     const sp = p.speed;
     this.phase += dt * (4.5 + sp * 8.5) * (sp > 0.02 ? 1 : 0);
@@ -947,14 +948,44 @@ export class Rig {
       }
       case 'blind_over': {
         damp = 15;
+        const blindPose = coverBlindPose({ kind: p.coverKind, h: 1.1 }, pitch);
         R(this.torso, -0.05, 0, 0);
         R(this.head, 0.25, 0, 0);
         R(this.legL.hip, 1.3, 0, 0); R(this.legL.knee, -1.7, 0, 0);
         R(this.legR.hip, 1.15, 0, 0); R(this.legR.knee, -1.65, 0, 0);
         // arma por encima del cover, mano izq. apoyada cerca del pecho
         R(this.armL.shoulder, 0.5, -0.5, -0.15); R(this.armL.elbow, 1.4, 0, 0);
-        M(0.06, 0.28, -0.32, 0, 0, 0);
-        hipsY = 0.42;
+        M(0.06, 0.28, -0.32 - blindPose.gunForward, 0, 0, 0);
+        hipsY = blindPose.hipsY;
+        aimRigY = blindPose.aimRigY;
+        break;
+      }
+      case 'blind_low_left': case 'blind_low_right':
+      case 'blind_high_left': case 'blind_high_right': {
+        damp = 17;
+        leftOnGun = true;
+        const low = p.state.startsWith('blind_low_');
+        const side = p.state.endsWith('_right') ? 1 : -1;
+        const down = Math.max(0, Math.min(1, -pitch / 0.55));
+        if (low) {
+          R(this.torso, -0.42, side * 0.08, -side * 0.08);
+          R(this.head, 0.36, 0, side * 0.04);
+          R(this.legL.hip, 1.82, 0, 0); R(this.legL.knee, -2.3, 0, 0);
+          R(this.legR.hip, 1.72, 0, 0); R(this.legR.knee, -2.25, 0, 0);
+          hipsY = 0.14;
+          aimRigY = 0.68 + down * 0.08;
+        } else {
+          R(this.torso, 0.12, side * 0.08, -side * 0.12);
+          R(this.head, 0.02, -side * 0.08, side * 0.05);
+          R(this.legL.hip, -0.04, 0, 0.08); R(this.legL.knee, -0.18, 0, 0);
+          R(this.legR.hip, 0.04, 0, -0.08); R(this.legR.knee, -0.16, 0, 0);
+          hipsY = 0.62;
+          aimRigY = 0.52 + down * 0.06;
+        }
+        const longGun = this._wep === 'shotgun' ? 0.06 : 0;
+        aimRigX = side * (low ? 0.14 : 0.08);
+        M(side * (low ? 0.48 : 0.54), low ? 0.25 : 0.04,
+          -0.34 - longGun, 0, 0, -side * 0.04);
         break;
       }
       case 'dead': {
@@ -995,12 +1026,19 @@ export class Rig {
       damp = 18;
       leftOnGun = true;
       const lean = p.coverLean ?? 0; // asomarse en la orilla de pared alta
+      const coverPose = p.state === 'cover_low'
+        ? coverAimPose({ kind: p.coverKind, h: 1.1 }, pitch,
+          p.coverAimExposure ?? 1)
+        : null;
       R(this.aimRig, pitch, (p.aimYawErr ?? 0) * 0.9, lean * 0.1);
-      R(this.torso, -0.12, -0.15, -lean * 0.22);
+      R(this.torso, -0.12 - (coverPose?.torsoLean ?? 0), -0.15, -lean * 0.22);
       R(this.head, pitch * 0.25, 0, lean * 0.08);
       // arma al hombro derecho, a la altura de la mejilla (pronunciada)
-      M(0.11, 0.05, -0.38, 0, 0.05, 0);
-      if (p.state === 'cover_low') hipsY = 0.56; // popover: se levanta y apunta
+      M(0.11, 0.05, -0.38 - (coverPose?.gunForward ?? 0), 0, 0.05, 0);
+      if (coverPose) {
+        hipsY = coverPose.hipsY;
+        aimRigY = coverPose.aimRigY;
+      }
       if (lean) {
         // piernas plantadas hacia la pared, torso fuera de la esquina
         R(this.legL.hip, 0, 0, 0.1 + lean * 0.12);
@@ -1011,8 +1049,10 @@ export class Rig {
       // de tiro (pitch completo + corrección de yaw mientras el cuerpo gira);
       // relajado, solo sigue la mitad del pitch (ready natural)
       const yawErr = p.aimYawErr ?? 0;
-      if (p.state === 'blind_over') {
-        set(this.aimRig.rotation, 'x', pitch);
+      if (p.state.startsWith('blind_')) {
+        const parentPitch = p.state.startsWith('blind_low_') ? -0.42
+          : p.state.startsWith('blind_high_') ? 0.12 : -0.05;
+        set(this.aimRig.rotation, 'x', pitch - parentPitch);
         set(this.aimRig.rotation, 'y', yawErr);
       } else if (p.state === 'cover_low' || p.state === 'cover_high') {
         set(this.aimRig.rotation, 'x', p.firing ? pitch : 0);
@@ -1057,6 +1097,8 @@ export class Rig {
     // recoil: empuja el conjunto brazos+arma hacia atrás
     this._recoil = Math.max(0, this._recoil - dt * 6);
     this.aimRig.position.z = this._recoil * 0.06;
+    set(this.aimRig.position, 'x', aimRigX);
+    set(this.aimRig.position, 'y', aimRigY);
 
     // aplicar targets con damping
     const k = 1 - Math.exp(-damp * dt);

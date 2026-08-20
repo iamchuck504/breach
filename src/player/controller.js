@@ -54,6 +54,10 @@ export class Controller {
     this.detachT = 0;
     this.aim = false;
     this.firingBlind = 0;   // timer para mantener pose de blindfire
+    this.coverAimExposure = 0; // 0 protegido, 1 asomado con muzzle libre
+    this.blindMode = null;  // 'over' | 'left' | 'right' según cover/cámara
+    this._blindModePrev = null;
+    this.blindPoseExposure = 0;
     this.dead = false;
   }
 
@@ -64,7 +68,10 @@ export class Controller {
   cameraYawError() { return angleDelta(this.yaw, this.cam.yaw); }
 
   fireAligned(maxDeg = TUNING.combat.fireAlignMaxDeg) {
-    return Math.abs(this.cameraYawError()) <= maxDeg * Math.PI / 180;
+    const lowAim = this.state === 'cover' && this.aim && this.cover &&
+      this.cover.h <= TUNING.cover.lowHeight;
+    return Math.abs(this.cameraYawError()) <= maxDeg * Math.PI / 180 &&
+      (!lowAim || this.coverAimExposure >= 0.82);
   }
 
   _turnToCamera(dt, blindfire = false) {
@@ -92,7 +99,11 @@ export class Controller {
     switch (this.state) {
       case 'cover': {
         const low = this.cover && this.cover.h <= TUNING.cover.lowHeight;
-        if (this.firingBlind > 0 && !this.aim && low) return 'blind_over';
+        if (this.firingBlind > 0 && !this.aim) {
+          if (this.blindMode === 'over' && low) return 'blind_over';
+          if (this.blindMode === 'left') return low ? 'blind_low_left' : 'blind_high_left';
+          if (this.blindMode === 'right') return low ? 'blind_low_right' : 'blind_high_right';
+        }
         return low ? 'cover_low' : 'cover_high';
       }
       case 'flip': return 'flip';
@@ -128,11 +139,16 @@ export class Controller {
       aimPitch: this.cam.pitch,
       aimYawErr: yawErr,
       twist,
-      firing: this.firingBlind > 0,
+      firing: this.firingBlind > 0 &&
+        (this.state !== 'cover' || !!this.blindMode),
       flipT: this.flip ? Math.min(1, this.flip.t / this.flip.dur) : 0,
       flipDir: this.flip?.dir ?? 1,
       flipAxis: this.flip?.axis ?? 'z',
       coverLean: this.coverLeanAnim ?? 0,
+      coverAimExposure: this.coverAimExposure,
+      blindPoseExposure: this.blindPoseExposure,
+      blindMode: this.blindMode,
+      coverKind: this.cover?.kind,
       latMove: this._latMove(),
     };
   }
@@ -148,6 +164,10 @@ export class Controller {
   // limpia TODO el estado transitorio (flags pegados = poses/gameplay rotos)
   _clearTransient() {
     this.firingBlind = 0;
+    this.coverAimExposure = 0;
+    this.blindMode = null;
+    this._blindModePrev = null;
+    this.blindPoseExposure = 0;
     this.coverLeanAnim = 0;
     this.detachT = 0;
     this.evadeCooldown = 0;
@@ -243,6 +263,12 @@ export class Controller {
     const aimAllowed = this.state !== 'dive' && this.state !== 'slide' &&
       this.state !== 'roadie' && this.state !== 'flip' && this.state !== 'mantle';
     this.aim = input.aimHeld && aimAllowed;
+    const lowCoverAim = this.state === 'cover' && this.aim && this.cover &&
+      this.cover.h <= C.lowHeight;
+    const exposeTarget = lowCoverAim ? 1 : 0;
+    const exposeRate = exposeTarget ? 18 : 25;
+    this.coverAimExposure += (exposeTarget - this.coverAimExposure) *
+      (1 - Math.exp(-exposeRate * dt));
     // Evaluar contra el input de ESTE frame, no contra this.aim anterior.
     // Así mantener fuego al soltar ADS entra a blindfire sin un frame ambiguo.
     if (firing && !this.aim) this.firingBlind = 0.7;
@@ -468,15 +494,30 @@ export class Controller {
         if (!low && this.aim && !nearA && !nearB) this.aim = false;
         // La restricción contextual pudo convertir ADS en blindfire este frame.
         if (firing && !this.aim) this.firingBlind = 0.7;
-        let leanSide = 0; // -1 = orilla A, +1 = orilla B (en frame del tangente)
-        if (!low && this.aim) leanSide = nearA && (!nearB || u < len - u) ? -1 : 1;
+        const edgeSide = nearA && (!nearB || u < len - u) ? -1 : nearB ? 1 : 0;
+        const camF = this.cam.flatForward();
+        const aroundEdge = edgeSide
+          ? camF.x * ux * edgeSide + camF.z * uz * edgeSide
+          : -1;
+        let aimLeanSide = 0;
+        if (!low && this.aim) aimLeanSide = edgeSide;
+
+        // Blindfire contextual. En cover bajo, el centro dispara por arriba;
+        // cerca de una esquina solo cambia a lateral si la cámara realmente
+        // busca ese borde. Cover alto exige una orilla y dirección viable.
+        let blindEdgeSide = 0;
+        if (!this.aim && this.firingBlind > 0) {
+          if (edgeSide && aroundEdge > (low ? 0.24 : 0.10)) blindEdgeSide = edgeSide;
+          else if (low) this.blindMode = 'over';
+          else this.blindMode = null;
+        } else this.blindMode = null;
 
         // movimiento lateral + auto-asomarse hacia la orilla al apuntar
         const lat = hasInput ? (mw.x * ux + mw.z * uz) : 0;
-        u += lat * M.coverStrafe * dt + leanSide * 1.3 * dt;
-        const leanOut = leanSide !== 0 ? 0.45 : 0;
-        u = Math.max(PLAYER_R * 0.7 - (leanSide < 0 ? leanOut : 0),
-          Math.min(len - PLAYER_R * 0.7 + (leanSide > 0 ? leanOut : 0), u));
+        u += lat * M.coverStrafe * dt + aimLeanSide * 1.3 * dt;
+        const leanOut = aimLeanSide !== 0 ? 0.45 : 0;
+        u = Math.max(PLAYER_R * 0.7 - (aimLeanSide < 0 ? leanOut : 0),
+          Math.min(len - PLAYER_R * 0.7 + (aimLeanSide > 0 ? leanOut : 0), u));
         this.pos.x = f.a.x + ux * u + n.x * PLAYER_R;
         this.pos.z = f.a.z + uz * u + n.z * PLAYER_R;
         this.vel.x = lat * ux * M.coverStrafe; this.vel.z = lat * uz * M.coverStrafe;
@@ -484,7 +525,7 @@ export class Controller {
         // orientación: DE ESPALDAS a la pared; al apuntar/disparar → cámara.
         // Blindfire gira más pesado para conservar la lectura del cover y no
         // invertir cuerpo/cañón de un frame al siguiente.
-        if (this.aim || this.firingBlind > 0) {
+        if (this.aim || (this.firingBlind > 0 && this.blindMode)) {
           this._turnToCamera(dt, !this.aim);
         } else {
           this.yaw = approachAngle(this.yaw, yawFromDir(n.x, n.z),
@@ -492,9 +533,11 @@ export class Controller {
         }
 
         // señal de lean para la animación, en el frame del personaje
-        if (leanSide !== 0) {
+        const poseEdgeSide = aimLeanSide || blindEdgeSide;
+        if (poseEdgeSide !== 0) {
           const rx = Math.cos(this.yaw), rz = -Math.sin(this.yaw);
-          this.coverLeanAnim = (ux * leanSide) * rx + (uz * leanSide) * rz >= 0 ? 1 : -1;
+          this.coverLeanAnim = (ux * poseEdgeSide) * rx + (uz * poseEdgeSide) * rz >= 0 ? 1 : -1;
+          if (blindEdgeSide) this.blindMode = this.coverLeanAnim > 0 ? 'right' : 'left';
         } else this.coverLeanAnim = 0;
 
         const away = hasInput ? (mw.x * n.x + mw.z * n.z) : 0;
@@ -602,6 +645,16 @@ export class Controller {
         break;
       }
     }
+
+    if (this.state !== 'cover') this.blindMode = null;
+    if (this.blindMode !== this._blindModePrev) {
+      this.blindPoseExposure = 0;
+      this._blindModePrev = this.blindMode;
+    }
+    const blindTarget = this.state === 'cover' && !this.aim && this.blindMode &&
+      this.firingBlind > 0 ? 1 : 0;
+    this.blindPoseExposure += ((blindTarget ? 1 : 0) - this.blindPoseExposure) *
+      (1 - Math.exp(-(blindTarget ? 22 : 28) * dt));
 
     // integrar + colisión (cover se pega manualmente, pero el resolve no estorba;
     // en mantle el movimiento es guiado y CRUZA el borde: el resolve pelearía)

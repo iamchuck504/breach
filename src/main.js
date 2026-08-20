@@ -12,6 +12,7 @@ import { RemotePlayer } from './player/remote.js';
 import { Dummies } from './player/practice.js';
 import { Weapons } from './combat/weapons.js';
 import { resolveShot, resolveGuidedShot, applySpread } from './combat/ballistics.js';
+import { muzzleHasClearance, segmentsHaveClearance } from './combat/cover-fire.js';
 import { requiredFireBuffer } from './combat/fire-control.js';
 import { Effects } from './fx/effects.js';
 import { Audio } from './fx/audio.js';
@@ -82,6 +83,7 @@ resize();
 // ---------- estado de juego ----------
 const G = {
   fireBuffer: 0,       // click de disparo pendiente mientras el cuerpo gira
+  pendingShots: 0,     // tiros aprobados que esperan la pose/muzzle de este frame
   mode: null,          // null | 'practice' | 'online'
   rig: null,           // rig local
   player: null,        // controller local
@@ -671,6 +673,7 @@ function teardown() {
   if (G.drops) { G.drops.dispose(); G.drops = null; }
   G.player = null; // sin referencias a caras de un mapa destruido
   G.fireBuffer = 0;
+  G.pendingShots = 0;
   G.spawnProt = 0;
   G.respawnT = 0;
   hud.respawnTick(null);
@@ -799,7 +802,7 @@ function startBots() {
       x: G.player.pos.x, z: G.player.pos.z, y: G.player.y, alive: G.selfAlive,
       // agachado tras cover bajo: hitbox reducida (la cabeza ya no flota
       // sobre el bloque invisible para los bots)
-      crouch: G.player.animState() === 'cover_low',
+      crouch: isCrouchState(G.player.animState()),
     }),
     damagePlayer: (dmg, fromName, shooter) => damagePlayerLocal(dmg, fromName, shooter),
     respawnPlayer: (spawn) => {
@@ -1110,6 +1113,8 @@ function stepSound(x, z, kind) {
 
 // ---------- disparos ----------
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
+const CROUCH_STATES = new Set(['cover_low', 'blind_over', 'blind_low_left', 'blind_low_right']);
+const isCrouchState = (st) => CROUCH_STATES.has(st);
 
 function currentTargets() {
   if (G.mode === 'practice') return G.dummies ? G.dummies.targets() : [];
@@ -1118,7 +1123,7 @@ function currentTargets() {
   for (const r of G.remotes.values()) {
     if (r.team !== G.team) out.push({
       id: r.id, x: r.x, z: r.z, y: r.y ?? 0, alive: r.alive,
-      crouch: r.st === 'cover_low', protected: !!r.inv,
+      crouch: isCrouchState(r.st), protected: !!r.inv,
     });
   }
   return out;
@@ -1140,34 +1145,51 @@ function hipDir() {
   return new THREE.Vector3(f.x * cp, sp, f.z * cp).normalize();
 }
 
-// Un solo origen BALÍSTICO para hipfire/blindfire y su retícula. El muzzle
-// animado se conserva para flash/tracer, pero no puede desplazar el impacto
-// respecto al punto que el jugador está viendo en pantalla.
-function hipBallisticOrigin(dir, out) {
-  const p = G.player;
-  const f = p.cover;
-  if (p.state === 'cover' && f && f.h <= TUNING.cover.lowHeight) {
-    // sobre cover bajo, dentro de la huella del bloque propio
-    return out.set(
-      p.pos.x - f.n.x * 0.45,
-      f.h + 0.14,
-      p.pos.z - f.n.z * 0.45,
-    );
-  }
-
-  const advance = p.state === 'cover' ? 0.9 : 0.3;
-  G.rig.aimRig.getWorldPosition(out);
-  // No adelantar el origen a través de una pared/cover cercano.
-  const blockT = world.raycast(out, dir, advance);
-  return out.addScaledVector(dir,
-    blockT !== null ? Math.max(0.05, blockT - 0.03) : advance);
-}
-
 function staticHitDistance(origin, dir, maxDist) {
   // raycastHit incluye suelo, helipuerto y rampas; raycast es el fallback
   // simplificado usado por locomoción. La retícula debe seguir balística.
   return world.raycastHit?.(origin, dir, maxDist)?.t ??
     world.raycast(origin, dir, maxDist) ?? maxDist;
+}
+
+function currentFireDirection(muzzle, maxRange = 80) {
+  if (!G.player.aim) return hipDir();
+  const ray = shoulderCam.aimRay();
+  const guide = resolveShot(world, currentTargets(), ray.origin, ray.dir, maxRange, null);
+  return _v3.copy(guide.point).sub(muzzle).normalize();
+}
+
+function coverFireClear() {
+  const p = G.player;
+  if (!p || p.state !== 'cover' || !p.cover) return true;
+  G.rig.setTransform(p.pos.x, p.pos.z, p.yaw, p.y);
+  G.rig.root.updateWorldMatrix(true, true);
+  const muzzle = G.rig.muzzleWorld(_v1);
+  const weaponRoot = G.rig.gunMount.getWorldPosition(_v2);
+  const dir = currentFireDirection(muzzle, G.weapons?.def?.range ?? 80);
+  if (!muzzleHasClearance(world, p.cover, weaponRoot, muzzle, dir)) return false;
+  if (p.blindMode === 'left' || p.blindMode === 'right') {
+    const point = (o) => o.getWorldPosition(new THREE.Vector3());
+    const segments = [];
+    for (const arm of [G.rig.armL, G.rig.armR]) {
+      const shoulder = point(arm.shoulder), elbow = point(arm.elbow), hand = point(arm.hand);
+      segments.push([shoulder, elbow], [elbow, hand]);
+    }
+    if (!segmentsHaveClearance(world, segments)) return false;
+  }
+  return true;
+}
+
+function coverPoseReady(wantsAim, wantsFire) {
+  const p = G.player;
+  if (!p || p.state !== 'cover' || !p.cover) return true;
+  // El primer click del mismo frame que inicia ADS/blindfire debe entrar al
+  // buffer, no consumirse ni perderse antes de que el rig adopte la pose.
+  const low = p.cover.h <= TUNING.cover.lowHeight;
+  if (wantsAim && low && p.coverAimExposure < 0.82) return false;
+  if (wantsFire && !wantsAim &&
+      (!p.blindMode || p.blindPoseExposure < 0.76)) return false;
+  return true;
 }
 
 function fireShot() {
@@ -1187,26 +1209,10 @@ function fireShot() {
     // La cámara elige el punto percibido; la balística sale desde el cuerpo
     // para que una esquina entre arma y objetivo sí pueda bloquear el tiro.
     cameraOrigin = ray.origin.clone();
-    origin = hipBallisticOrigin(baseDir, _v2).clone();
+    origin = muzzle.clone();
   } else {
     baseDir = hipDir();
-    origin = hipBallisticOrigin(baseDir, _v2).clone();
-    const f = G.player.cover;
-    if (!(inCover && f && f.h <= TUNING.cover.lowHeight)) {
-      // pegado a una pared el cañón la atraviesa: disparar desde el punto de
-      // contacto visual, sin alterar el origen balístico compartido
-      const chest = G.rig.aimRig.getWorldPosition(_v3);
-      const toM = _v2.copy(muzzle).sub(chest);
-      const mLen = toM.length();
-      if (mLen > 0.01) {
-        toM.normalize();
-        const tb = world.raycast(chest, toM, mLen);
-        if (tb !== null) {
-          origin.copy(chest).addScaledVector(toM, Math.max(0.05, tb - 0.03));
-          muzzle.copy(origin); // flash y tracer desde el punto visible
-        }
-      }
-    }
+    origin = muzzle.clone();
   }
 
   const targets = currentTargets();
@@ -1323,7 +1329,7 @@ function updateReticle() {
   // al girar rápido, una retícula atrasada también comunica un impacto falso.
   const dir = hipDir();
   G.rig.root.updateWorldMatrix(true, true);
-  const origin = hipBallisticOrigin(dir, _v1);
+  const origin = G.rig.muzzleWorld(_v1);
   const t = staticHitDistance(origin, dir, 60);
   _v3.copy(origin).addScaledVector(dir, t).project(camera);
   if (_v3.z > 1) { hud.reticle(false, null); return; }
@@ -1356,7 +1362,9 @@ function simStep(dt) {
   // ADS y blindfire usan el mismo criterio: la cámara manda, pero el cañón
   // debe poder representarla visualmente antes de emitir el proyectil.
   const aligned = p.fireAligned();
-  let canFire = stateOk && aligned;
+  const wantsFire = input.fireHeld || input.firePressed || G.fireBuffer > 0;
+  let canFire = stateOk && aligned &&
+    coverPoseReady(input.aimHeld, wantsFire) && (!wantsFire || coverFireClear());
   // cualquier click que no pueda salir YA (roadie, cuerpo girando, cooldown,
   // dive/slide, final de recarga) queda bufereado — y el buffer dura AL MENOS
   // lo que falta de cooldown/recarga, para que el tiro encolado nunca se pierda
@@ -1381,11 +1389,14 @@ function simStep(dt) {
   // este mismo paso. Revalidar evita añadir un frame artificial de latencia.
   const stateOkAfter = !p.dead && p.state !== 'dive' && p.state !== 'slide' &&
     p.state !== 'roadie' && p.state !== 'mantle' && input.anyDevice;
-  canFire = stateOkAfter && p.fireAligned();
+  canFire = stateOkAfter && p.fireAligned() &&
+    coverPoseReady(p.aim, wantsFire) && (!wantsFire || coverFireClear());
   const fired = p.dead ? false
     : G.weapons.update(dt, input.fireHeld, input.firePressed || G.fireBuffer > 0, canFire);
   if (fired) G.fireBuffer = 0;
-  if (fired) fireShot();
+  // Resolver después de actualizar el rig: con origen físico en el muzzle, un
+  // tiro emitido antes de aplicar la pose del frame nacía en la postura vieja.
+  if (fired) G.pendingShots++;
 
   if (input.reloadPressed) G.weapons.startReload();
   if (!wasReloading && G.weapons.reloading) audio.reload(); // incluye auto-recarga
@@ -1562,6 +1573,10 @@ function frame(now) {
       reloading: G.weapons.reloading,
       reloadT: G.weapons.reloading ? 1 - G.weapons.st.reload / G.weapons.def.reloadTime : 0,
     });
+    while (G.pendingShots > 0) {
+      fireShot();
+      G.pendingShots--;
+    }
     for (const r of G.remotes.values()) {
       r.update(dt);
       // pasos de remotos: por distancia recorrida real, posicionales

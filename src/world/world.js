@@ -676,13 +676,15 @@ export class World {
       if (visual) this._batchBox(px, pz, w, d, h, c, t);
       const minx = px - w / 2, maxx = px + w / 2, minz = pz - d / 2, maxz = pz + d / 2;
       const material = surface || (this.layout === 'fortaleza' ? 'stone' : 'concrete');
-      this.colliders.push({ minx, minz, maxx, maxz, h, surface: material });
+      const collider = { minx, minz, maxx, maxz, h, surface: material };
+      this.colliders.push(collider);
       if (cover) {
+        const kind = h <= BLOCK.LOW ? 'low' : h <= BLOCK.MID ? 'medium' : 'high';
         this.faces.push(
-          { n: { x: 1, z: 0 }, a: { x: maxx, z: minz }, b: { x: maxx, z: maxz }, h },
-          { n: { x: -1, z: 0 }, a: { x: minx, z: minz }, b: { x: minx, z: maxz }, h },
-          { n: { x: 0, z: 1 }, a: { x: minx, z: maxz }, b: { x: maxx, z: maxz }, h },
-          { n: { x: 0, z: -1 }, a: { x: minx, z: minz }, b: { x: maxx, z: minz }, h },
+          { n: { x: 1, z: 0 }, a: { x: maxx, z: minz }, b: { x: maxx, z: maxz }, h, topY: h, kind, collider },
+          { n: { x: -1, z: 0 }, a: { x: minx, z: minz }, b: { x: minx, z: maxz }, h, topY: h, kind, collider },
+          { n: { x: 0, z: 1 }, a: { x: minx, z: maxz }, b: { x: maxx, z: maxz }, h, topY: h, kind, collider },
+          { n: { x: 0, z: -1 }, a: { x: minx, z: minz }, b: { x: maxx, z: minz }, h, topY: h, kind, collider },
         );
       }
     };
@@ -1366,6 +1368,10 @@ export class World {
           a: { x: a.x + n.x * off, z: a.z + n.z * off },
           b: { x: b.x + n.x * off, z: b.z + n.z * off },
           h: wall.coverH,
+          baseY: HELIPAD.height,
+          topY: wall.h,
+          kind: 'railing',
+          collider: wall,
         });
       }
     };
