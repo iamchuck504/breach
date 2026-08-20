@@ -1257,8 +1257,8 @@ export class BotMatch {
   // daño a un bot; from: 'player' | botId
   damageBot(id, dmg, from, gib, silent = false) {
     const b = this.bots.find((x) => x.id === id);
-    if (!b || !b.alive || this.phase !== 'playing') return false;
-    if (b.protT > 0) return false; // protección de spawn
+    if (!b || !b.alive || this.phase !== 'playing') return null;
+    if (b.protT > 0) return null; // protegido: rechazo distinguible de "no murió"
     b.hp -= dmg;
     b.lastDamage = 0;
     b.recentHit = 0;

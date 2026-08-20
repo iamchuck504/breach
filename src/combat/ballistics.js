@@ -71,6 +71,20 @@ export function resolveShot(world, targets, origin, dir, maxRange, excludeId = n
   return hit;
 }
 
+// La cámara define la intención, pero el segundo ray nace en el personaje.
+// Así ADS conserva precisión a distancia sin atravesar una esquina situada
+// entre el arma y el punto que la cámara alcanza a ver.
+export function resolveGuidedShot(world, targets, cameraOrigin, ballisticOrigin,
+  cameraDir, maxRange, excludeId = null) {
+  const guide = resolveShot(world, targets, cameraOrigin, cameraDir, maxRange, excludeId);
+  const dir = guide.point.clone().sub(ballisticOrigin);
+  const len = dir.length();
+  if (len <= 0.001) return guide;
+  dir.multiplyScalar(1 / len);
+  return resolveShot(world, targets, ballisticOrigin, dir,
+    Math.min(maxRange, len + 0.05), excludeId);
+}
+
 // Aplica dispersión cónica (grados) a una dirección
 export function applySpread(dir, spreadDeg) {
   const s = (spreadDeg * Math.PI / 180);

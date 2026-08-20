@@ -14,6 +14,11 @@ const SPAWN_PROT = 5;    // seg de invulnerabilidad al nacer (se rompe al dispar
 const CRATE_RESPAWN = 30;
 const CRATES = [{ x: 7, z: 0, up: true, t: 0 }, { x: -7, z: 0, up: true, t: 0 }];
 const TICK_HZ = 20;
+const FIRE_RULES = {
+  smg: { interval: 60 / 620, range: 80, maxDamage: 16 },
+  shotgun: { interval: 60 / 95, range: 24, maxDamage: 8 * 13, gibRange: 4.2 },
+};
+const HIT_WINDOW = 0.28;
 
 // espejo de world.js (mapa 'fortaleza': spawns fijos en ±23.4)
 const SPAWNS = { red: [], blue: [] };
@@ -83,6 +88,7 @@ wss.on('connection', (ws) => {
         x: spawn.x, z: spawn.z, yaw: spawn.yaw,
         st: 'idle', aim: 0, p: 0, w: 'smg', sp: 0,
         hp: HP, alive: true, lastDamage: 0, respawnAt: 0,
+        lastFireAt: -Infinity, pendingShot: null,
         prot: Date.now() / 1000 + SPAWN_PROT,
         kills: 0, deaths: 0,
       };
@@ -119,9 +125,24 @@ wss.on('connection', (ws) => {
       if (!me.alive) return; // los muertos no disparan
       const o = vec3(msg.o), pt = vec3(msg.p);
       if (!o || !pt) return; // malformado: descartar, no propagar el crash
+      const shotWep = msg.w === 'shotgun' ? 'shotgun' : 'smg';
+      const rule = FIRE_RULES[shotWep];
+      const now = Date.now() / 1000;
+      // Validación básica autoritativa: arma declarada coincide con el estado,
+      // cadencia válida, origen cerca del jugador y endpoint dentro de rango.
+      // La geometría completa del mapa aún no vive en el server.
+      if (shotWep !== me.w || now - me.lastFireAt < rule.interval * 0.82) return;
+      if (Math.hypot(o[0] - me.x, o[2] - me.z) > 5 ||
+          Math.abs(o[1] - ((me.y || 0) + 1.1)) > 4) return;
+      if (Math.hypot(pt[0] - o[0], pt[1] - o[1], pt[2] - o[2]) > rule.range + 2) return;
       // Hasta ocho impactos estáticos (los pellets de la escopeta). Se sanean
       // individualmente y el cliente receptor los valida contra su propio mapa.
       const decals = Array.isArray(msg.d) ? msg.d.slice(0, 8).map(vec3).filter(Boolean) : undefined;
+      me.lastFireAt = now;
+      me.pendingShot = {
+        at: now, wep: shotWep, origin: o,
+        remainingDamage: rule.maxDamage, hitIds: new Set(),
+      };
       me.prot = 0; // disparar rompe la protección de spawn
       broadcast({ t: 'fire', id: me.id, o, p: pt, w: me.w, ...(decals ? { d: decals } : {}) });
       return;
@@ -150,8 +171,19 @@ wss.on('connection', (ws) => {
       const target = players.get(msg.target);
       if (!target || !target.alive || !me.alive || target.team === me.team || resetting) return;
       if (target.prot > Date.now() / 1000) return; // protección de spawn
-      me.prot = 0; // atacar rompe la protección (no solo el 'fire' cosmético)
-      const dmg = Math.min(120, Math.max(0, num(msg.dmg)));
+      const now = Date.now() / 1000;
+      const shot = me.pendingShot;
+      const rule = shot ? FIRE_RULES[shot.wep] : null;
+      if (!shot || !rule || now - shot.at > HIT_WINDOW || shot.hitIds.has(target.id)) return;
+      const targetDist = Math.hypot(
+        target.x - shot.origin[0], (target.y || 0) + 1 - shot.origin[1],
+        target.z - shot.origin[2]);
+      if (targetDist > rule.range + 2) return;
+      const claimed = Math.max(0, num(msg.dmg));
+      const dmg = Math.min(claimed, shot.remainingDamage);
+      if (dmg <= 0) return;
+      shot.hitIds.add(target.id);
+      shot.remainingDamage -= dmg;
       target.hp -= dmg;
       target.lastDamage = Date.now() / 1000;
       if (target.hp <= 0) {
@@ -161,8 +193,9 @@ wss.on('connection', (ws) => {
         target.respawnAt = Date.now() / 1000 + RESPAWN_TIME;
         me.kills++;
         scores[me.team]++;
+        const gib = shot.wep === 'shotgun' && targetDist <= FIRE_RULES.shotgun.gibRange && !!msg.gib;
         broadcast({
-          t: 'death', target: target.id, from: me.id, gib: msg.gib ? 1 : 0,
+          t: 'death', target: target.id, from: me.id, gib: gib ? 1 : 0,
           kn: me.name, kt: me.team, vn: target.name, vt: target.team,
         });
         // el arma del muerto cae con sus balas restantes (8s para recogerla)

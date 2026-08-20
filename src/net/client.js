@@ -81,8 +81,12 @@ export class NetClient {
     this.send({ t: 'fire', o: pack(origin), p: pack(point), w: wep, d: impacts.slice(0, 8).map(pack) });
   }
 
-  hit(targetId, dmg, part, gib) {
-    this.send({ t: 'hit', target: targetId, dmg: Math.round(dmg), part, gib: gib ? 1 : 0 });
+  hit(targetId, dmg, part, gib, point = null) {
+    const p = point ? [+point.x.toFixed(2), +point.y.toFixed(2), +point.z.toFixed(2)] : undefined;
+    this.send({
+      t: 'hit', target: targetId, dmg: Math.round(dmg), part,
+      gib: gib ? 1 : 0, ...(p ? { p } : {}),
+    });
   }
 
   close() { this.dead = true; this.ws?.close(); }

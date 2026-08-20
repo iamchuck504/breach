@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { World } from '../src/world/world.js';
-import { resolveShot } from '../src/combat/ballistics.js';
+import { resolveShot, resolveGuidedShot } from '../src/combat/ballistics.js';
 import { Effects } from '../src/fx/effects.js';
 
 const fail = [];
@@ -51,6 +51,22 @@ shot = resolveShot(shotWorld, [{ id: 'p', x: 3, z: 0, alive: true }],
   new THREE.Vector3(0, 1, 0), new THREE.Vector3(1, 0, 0), 20);
 check(shot.kind === 'player' && !shot.normal && !shot.surface,
   'un impacto de personaje heredó datos de decal');
+
+// ADS: la cámara ve el blanco, pero el origen físico tiene una pared cerca.
+const cornerWorld = {
+  raycastHit(origin) {
+    return origin.x > 0.5
+      ? { t: 0.7, normal: { x: -1, y: 0, z: 0 }, surface: 'stone' }
+      : null;
+  },
+  raycast: () => null,
+};
+shot = resolveGuidedShot(cornerWorld,
+  [{ id: 'p', x: 0, z: -5, alive: true }],
+  new THREE.Vector3(0, 1, 0), new THREE.Vector3(1, 1, 0),
+  new THREE.Vector3(0, 0, -1), 20);
+check(shot.kind === 'world' && near(shot.t, 0.7),
+  'ADS atravesó una esquina entre el arma y el objetivo de cámara');
 
 const scene = new THREE.Scene();
 const effects = new Effects(scene);

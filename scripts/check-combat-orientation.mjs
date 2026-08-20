@@ -4,6 +4,8 @@ import * as THREE from 'three';
 import { ShoulderCamera } from '../src/core/camera.js';
 import { Controller } from '../src/player/controller.js';
 import { TUNING } from '../src/config/tuning.js';
+import { Weapons } from '../src/combat/weapons.js';
+import { requiredFireBuffer } from '../src/combat/fire-control.js';
 
 const DT = 1 / 60;
 const failures = [];
@@ -101,8 +103,33 @@ player.update(DT, input, true);
 check(!player.aim && player.firingBlind > 0.69,
   'ADS -> blindfire heredó la orientación/pose del frame anterior');
 
+// Un único click de escopeta a 180° debe sobrevivir hasta que blindfire se
+// alinee; antes el buffer de 0.30 s expiraba apenas un frame demasiado pronto.
+putInLowCover();
+camera.yaw = Math.PI;
+input.aimHeld = false;
+const weapons = new Weapons();
+weapons.cur = 'shotgun';
+let firePressed = true;
+let fireBuffer = 0;
+let firedFrame = -1;
+for (let i = 0; i < 60; i++) {
+  let canFire = player.fireAligned();
+  if (firePressed && (!canFire || weapons.st.cd > 0)) {
+    fireBuffer = requiredFireBuffer(player, weapons.st, 0);
+  }
+  fireBuffer = Math.max(0, fireBuffer - DT);
+  player.update(DT, input, fireBuffer > 0);
+  canFire = player.fireAligned();
+  const fired = weapons.update(DT, false, firePressed || fireBuffer > 0, canFire);
+  if (fired) { firedFrame = i; break; }
+  firePressed = false;
+}
+check(firedFrame >= 0 && weapons.st.mag === TUNING.weapons.shotgun.mag - 1,
+  `click semiauto se perdió durante giro 180° (frame=${firedFrame}, mag=${weapons.st.mag})`);
+
 if (failures.length) {
   for (const failure of failures) console.error('FALLO:', failure);
   process.exit(1);
 }
-console.log(`COMBAT ORIENTATION OK · 180° alineado en ${frames} frames`);
+console.log(`COMBAT ORIENTATION OK · 180° alineado en ${frames} frames · click en ${firedFrame}`);

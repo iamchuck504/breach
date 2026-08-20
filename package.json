@@ -11,6 +11,8 @@
     "check:controller": "node scripts/check-controller.mjs",
     "check:bot-stuck": "node scripts/check-bot-stuck.mjs",
     "check:combat-orientation": "node scripts/check-combat-orientation.mjs",
+    "check:online-fire": "node scripts/check-online-fire.mjs",
+    "check:reticle": "node scripts/check-reticle.mjs",
     "check:impacts": "node scripts/check-impacts.mjs",
     "check:movement": "node scripts/check-movement.mjs",
     "test": "npm run check:controller && npm run check:combat-orientation && npm run check:impacts"

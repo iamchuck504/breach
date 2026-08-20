@@ -11,7 +11,8 @@ import { Controller, PLAYER_R } from './player/controller.js';
 import { RemotePlayer } from './player/remote.js';
 import { Dummies } from './player/practice.js';
 import { Weapons } from './combat/weapons.js';
-import { resolveShot, applySpread } from './combat/ballistics.js';
+import { resolveShot, resolveGuidedShot, applySpread } from './combat/ballistics.js';
+import { requiredFireBuffer } from './combat/fire-control.js';
 import { Effects } from './fx/effects.js';
 import { Audio } from './fx/audio.js';
 import { HUD } from './ui/hud.js';
@@ -800,7 +801,7 @@ function startBots() {
       // sobre el bloque invisible para los bots)
       crouch: G.player.animState() === 'cover_low',
     }),
-    damagePlayer: (dmg) => damagePlayerLocal(dmg),
+    damagePlayer: (dmg, fromName, shooter) => damagePlayerLocal(dmg, fromName, shooter),
     respawnPlayer: (spawn) => {
       G.selfAlive = true;
       G.selfHp = TUNING.combat.hp;
@@ -1115,7 +1116,10 @@ function currentTargets() {
   if (G.mode === 'bots') return G.botMatch ? G.botMatch.targets() : [];
   const out = [];
   for (const r of G.remotes.values()) {
-    if (r.team !== G.team) out.push({ id: r.id, x: r.x, z: r.z, y: r.y ?? 0, alive: r.alive, crouch: r.st === 'cover_low' });
+    if (r.team !== G.team) out.push({
+      id: r.id, x: r.x, z: r.z, y: r.y ?? 0, alive: r.alive,
+      crouch: r.st === 'cover_low', protected: !!r.inv,
+    });
   }
   return out;
 }
@@ -1136,6 +1140,36 @@ function hipDir() {
   return new THREE.Vector3(f.x * cp, sp, f.z * cp).normalize();
 }
 
+// Un solo origen BALÍSTICO para hipfire/blindfire y su retícula. El muzzle
+// animado se conserva para flash/tracer, pero no puede desplazar el impacto
+// respecto al punto que el jugador está viendo en pantalla.
+function hipBallisticOrigin(dir, out) {
+  const p = G.player;
+  const f = p.cover;
+  if (p.state === 'cover' && f && f.h <= TUNING.cover.lowHeight) {
+    // sobre cover bajo, dentro de la huella del bloque propio
+    return out.set(
+      p.pos.x - f.n.x * 0.45,
+      f.h + 0.14,
+      p.pos.z - f.n.z * 0.45,
+    );
+  }
+
+  const advance = p.state === 'cover' ? 0.9 : 0.3;
+  G.rig.aimRig.getWorldPosition(out);
+  // No adelantar el origen a través de una pared/cover cercano.
+  const blockT = world.raycast(out, dir, advance);
+  return out.addScaledVector(dir,
+    blockT !== null ? Math.max(0.05, blockT - 0.03) : advance);
+}
+
+function staticHitDistance(origin, dir, maxDist) {
+  // raycastHit incluye suelo, helipuerto y rampas; raycast es el fallback
+  // simplificado usado por locomoción. La retícula debe seguir balística.
+  return world.raycastHit?.(origin, dir, maxDist)?.t ??
+    world.raycast(origin, dir, maxDist) ?? maxDist;
+}
+
 function fireShot() {
   const w = G.weapons, def = w.def;
   const aiming = G.player.aim;
@@ -1146,32 +1180,23 @@ function fireShot() {
   // el muzzle evita lanzar el tracer desde la pose espacial anterior.
   G.rig.setTransform(G.player.pos.x, G.player.pos.z, G.player.yaw, G.player.y);
   const muzzle = G.rig.muzzleWorld(_v1).clone();
-  let baseDir, origin;
+  let baseDir, origin, cameraOrigin = null;
   if (aiming) {
     const ray = shoulderCam.aimRay();
     baseDir = ray.dir.clone();
-    // origen en cámara para precisión, tracer desde el cañón
-    origin = ray.origin.clone();
+    // La cámara elige el punto percibido; la balística sale desde el cuerpo
+    // para que una esquina entre arma y objetivo sí pueda bloquear el tiro.
+    cameraOrigin = ray.origin.clone();
+    origin = hipBallisticOrigin(baseDir, _v2).clone();
   } else {
     baseDir = hipDir();
-    origin = muzzle.clone();
+    origin = hipBallisticOrigin(baseDir, _v2).clone();
     const f = G.player.cover;
-    if (inCover && f && f.h <= TUNING.cover.lowHeight) {
-      // blindfire SOBRE el bloque bajo: origen encima del borde, DENTRO de la
-      // huella del bloque propio (más allá del bloque permitía disparar a
-      // través de él contra blancos en esa banda)
-      origin.set(
-        G.player.pos.x - f.n.x * 0.45,
-        f.h + 0.14,
-        G.player.pos.z - f.n.z * 0.45,
-      );
-    } else {
-      // desde cover alto el cañón puede estar dentro del collider: adelantar
-      if (inCover) origin.addScaledVector(baseDir, 0.4);
+    if (!(inCover && f && f.h <= TUNING.cover.lowHeight)) {
       // pegado a una pared el cañón la atraviesa: disparar desde el punto de
-      // contacto (los impactos se ven en la pared en vez de "no disparar")
+      // contacto visual, sin alterar el origen balístico compartido
       const chest = G.rig.aimRig.getWorldPosition(_v3);
-      const toM = origin.clone().sub(chest);
+      const toM = _v2.copy(muzzle).sub(chest);
       const mLen = toM.length();
       if (mLen > 0.01) {
         toM.normalize();
@@ -1190,8 +1215,10 @@ function fireShot() {
   const worldImpacts = [];
 
   for (let i = 0; i < def.pellets; i++) {
-    const dir = applySpread(baseDir, spread);
-    const hit = resolveShot(world, targets, origin, dir, def.range, null);
+    let dir = applySpread(baseDir, spread);
+    const hit = aiming
+      ? resolveGuidedShot(world, targets, cameraOrigin, origin, dir, def.range, null)
+      : resolveShot(world, targets, origin, dir, def.range, null);
     anyPoint = hit.point;
     effects.tracer(muzzle, hit.point);
     if (hit.kind === 'world') {
@@ -1222,11 +1249,12 @@ function fireShot() {
 
   // aplicar daño
   let hitSomeone = false;
+  const onlineClaims = [];
   for (const [id, e] of dmgByTarget) {
     if (e.dmg <= 0) continue;
-    hitSomeone = true;
     const gib = w.cur === 'shotgun' && e.dist <= TUNING.weapons.shotgun.gibRange;
     if (G.mode === 'practice') {
+      hitSomeone = true;
       effects.blood(e.point, TEAM_HEX.blue);
       const killed = G.dummies.damage(id, e.dmg, (d) => {
         d.rig.setDeathContext({
@@ -1244,64 +1272,64 @@ function fireShot() {
       if (!killed) audio.hit();
     } else if (G.mode === 'bots' && G.botMatch) {
       const killed = G.botMatch.damageBot(id, e.dmg, 'player', gib);
+      if (killed === null) continue; // protegido o inválido: sin feedback falso
+      hitSomeone = true;
       if (!killed) audio.hit();
     } else if (G.net) {
       const r = G.remotes.get(id);
+      if (!r || r.inv) continue; // snapshot protegido: el server rechazará daño
+      hitSomeone = true;
       if (r) effects.blood(e.point, TEAM_HEX[r.team]);
-      G.net.hit(id, e.dmg, e.part, gib);
+      onlineClaims.push({ id, dmg: e.dmg, part: e.part, gib, point: e.point });
       audio.hit();
     }
   }
   if (hitSomeone) hud.hitmarker();
 
   // replicar visual
-  if (G.net && anyPoint) G.net.fire(muzzle, anyPoint, w.cur, worldImpacts);
+  if (G.net && anyPoint) {
+    // WebSocket conserva orden: registrar primero el disparo validable y luego
+    // sus claims de daño. Antes los hits llegaban al server sin disparo asociado.
+    G.net.fire(muzzle, anyPoint, w.cur, worldImpacts);
+    for (const c of onlineClaims) G.net.hit(c.id, c.dmg, c.part, c.gib, c.point);
+  }
 }
 
 // ---------- retícula de cañón (shoot from the barrel) ----------
-let dotX = 0, dotY = 0, dotWasOn = false;
-
 function updateReticle() {
   const p = G.player;
   const canShow = p && !p.dead && G.mode && !menuIsOpen() &&
     p.state !== 'roadie' && p.state !== 'dive' && p.state !== 'slide';
-  if (!canShow) { hud.reticle(false, null); dotWasOn = false; return; }
+  if (!canShow) { hud.reticle(false, null); return; }
+
+  // shoulderCam.update cambia position/rotation antes de llegar aquí, pero
+  // renderer.render actualiza matrices DESPUÉS. Proyectar sin esto usaba la
+  // cámara del frame anterior, muy visible durante un giro rápido.
+  camera.updateMatrixWorld();
 
   if (p.aim) {
     // ADS: anillo del tamaño real del cono de dispersión del arma,
     // atenuado si el punto apuntado queda fuera de su rango efectivo
-    dotWasOn = false;
     const def = G.weapons.def;
     const ringPx = Math.tan(def.spreadAim * Math.PI / 180) /
       Math.tan(camera.fov * Math.PI / 360) * (innerHeight / 2);
     const ray = shoulderCam.aimRay();
-    const t = world.raycast(ray.origin, ray.dir, 200) ?? 200;
+    const t = staticHitDistance(ray.origin, ray.dir, 200);
     hud.reticle(true, null, { r: Math.min(190, ringPx), inRange: t <= def.range });
     return;
   }
 
-  // hip/blind: punto proyectado ESTABLE — origen fijo en el pecho (no cambia
-  // con la pose del arma), solo contra geometría (no "pesca" enemigos) y
-  // con suavizado de pantalla para que nunca brinque
+  // Hip/blind: proyectar el MISMO rayo central que usa fireShot. Sin smoothing:
+  // al girar rápido, una retícula atrasada también comunica un impacto falso.
   const dir = hipDir();
   G.rig.root.updateWorldMatrix(true, true);
-  let origin;
-  const cf = p.cover;
-  if (p.state === 'cover' && cf && cf.h <= TUNING.cover.lowHeight) {
-    // la retícula usa el mismo origen que el blindfire: sobre el borde del bloque
-    origin = _v1.set(p.pos.x - cf.n.x * 0.45, cf.h + 0.14, p.pos.z - cf.n.z * 0.45);
-  } else {
-    origin = G.rig.aimRig.getWorldPosition(_v1)
-      .addScaledVector(dir, p.state === 'cover' ? 0.9 : 0.3);
-  }
-  const t = world.raycast(origin, dir, 60) ?? 60;
+  const origin = hipBallisticOrigin(dir, _v1);
+  const t = staticHitDistance(origin, dir, 60);
   _v3.copy(origin).addScaledVector(dir, t).project(camera);
-  if (_v3.z > 1) { hud.reticle(false, null); dotWasOn = false; return; }
+  if (_v3.z > 1) { hud.reticle(false, null); return; }
   const tx = (_v3.x * 0.5 + 0.5) * innerWidth;
   const ty = (-_v3.y * 0.5 + 0.5) * innerHeight;
-  if (!dotWasOn) { dotX = tx; dotY = ty; dotWasOn = true; }
-  else { dotX += (tx - dotX) * 0.4; dotY += (ty - dotY) * 0.4; }
-  hud.reticle(false, { x: dotX, y: dotY });
+  hud.reticle(false, { x: tx, y: ty });
 }
 
 // ---------- loop principal ----------
@@ -1336,7 +1364,7 @@ function simStep(dt) {
   const relRemain = G.weapons.reloading ? wst.reload : 0;
   if (input.firePressed && !p.dead &&
       (!canFire || wst.cd > 0 || (relRemain > 0 && relRemain < 0.45))) {
-    G.fireBuffer = Math.max(0.3, wst.cd + 0.06, relRemain + 0.06);
+    G.fireBuffer = requiredFireBuffer(p, wst, relRemain);
   }
   G.fireBuffer = Math.max(0, G.fireBuffer - dt);
   const wasReloading = G.weapons.reloading;
