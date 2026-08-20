@@ -20,8 +20,13 @@ import { Audio } from './fx/audio.js';
 import { HUD } from './ui/hud.js';
 import { NetClient } from './net/client.js';
 import { BotMatch } from './game/botmatch.js';
+import {
+  DEFAULT_LOBBY_SETTINGS, MAX_PLAYERS, TEAM_CAPACITY, makeBotName,
+  nextLobbyMap, normalizeLobbySettings, validateLobby,
+} from './game/lobby-rules.js';
 import { AmmoCrates } from './game/crates.js';
 import { WeaponDrops } from './game/drops.js';
+import { LobbyUI } from './ui/lobby.js';
 
 applyTranslations();
 
@@ -103,6 +108,13 @@ const G = {
   onlineRows: [],      // kills/deaths autoritativos expuestos por el servidor
   onlineStartAt: 0,    // epoch (s): el server bloquea combate hasta este instante
   onlineFinal: null,   // { team, rows, at } durante resultado/scoreboard/MVP
+  onlineRoundResult: null,
+  onlineSettings: { ...DEFAULT_LOBBY_SETTINGS },
+  onlineWins: { red: 0, blue: 0 },
+  onlinePhase: 'lobby',
+  onlineBots: null,    // IA de bots autoritativa solo en el cliente host
+  lobby: null,
+  lobbyKind: null,
   flowLockedPrev: false,
   spectator: { active: false, targetId: null, deathHold: 0, first: true },
   net: null,
@@ -149,7 +161,7 @@ function botPresentation() {
   const common = { rows: bm.statRows(), localId: 'player' };
   if (bm.phase === 'intro') return {
     phase: 'intro', kicker: t('flow.deploymentBots'), title: mapLabel(G.mapChoice),
-    sub: t('mode.teamDeathmatch'), meta: [t('flow.bestOf3'), t('flow.livesPerTeam', { count: 15 }), t('flow.round', { round: bm.round })],
+    sub: t('mode.teamDeathmatch'), meta: [t('flow.bestOfN', { count: bm.roundLimit }), t('flow.livesPerTeam', { count: bm.livesPerTeam }), t('flow.round', { round: bm.round })],
     progress: 1 - bm.phaseT / INTRO_TIME, wait: t('flow.scouting'), ...common,
   };
   if (bm.phase === 'countdown') return {
@@ -162,7 +174,7 @@ function botPresentation() {
   };
   if (bm.phase === 'final') {
     const elapsed = FINAL_PRESENTATION_TIME - bm.phaseT;
-    const won = bm.matchWinner === 'red';
+    const won = bm.matchWinner === G.team;
     if (elapsed < 2.8) return {
       phase: 'result', kicker: t('flow.matchEnded'), title: t(won ? 'flow.victory' : 'flow.defeat'),
       sub: t('flow.winnerTeam', { team: teamLabel(bm.matchWinner) }), red: bm.wins.red, blue: bm.wins.blue,
@@ -179,17 +191,23 @@ function botPresentation() {
 
 function onlinePresentation(now = Date.now() / 1000) {
   if (G.mode !== 'online') return null;
+  if (G.onlineRoundResult) {
+    const r = G.onlineRoundResult;
+    return { phase: 'final-score', kicker: t('flow.roundEnded'),
+      title: t('flow.roundFor', { team: teamLabel(r.winner) }), sub: t('flow.nextDeployment'),
+      red: r.wins.red, blue: r.wins.blue, rows: r.rows || G.onlineRows, localId: G.net?.id };
+  }
   if (G.onlineFinal) {
     const f = G.onlineFinal;
     const elapsed = now - f.at;
     const won = f.team === G.team;
     if (elapsed < 2.8) return {
       phase: 'result', kicker: t('flow.matchEnded'), title: t(won ? 'flow.victory' : 'flow.defeat'),
-      sub: t('flow.winnerTeam', { team: teamLabel(f.team) }), red: f.scores?.red ?? G.scores.red, blue: f.scores?.blue ?? G.scores.blue,
+      sub: t('flow.winnerTeam', { team: teamLabel(f.team) }), red: f.wins?.red ?? G.onlineWins.red, blue: f.wins?.blue ?? G.onlineWins.blue,
     };
     if (elapsed < 7.2) return {
       phase: 'final-score', kicker: t('flow.finalResult'), title: t(won ? 'flow.victory' : 'flow.defeat'),
-      sub: t('flow.matchScore'), red: f.scores?.red ?? G.scores.red, blue: f.scores?.blue ?? G.scores.blue,
+      sub: t('flow.matchScore'), red: f.wins?.red ?? G.onlineWins.red, blue: f.wins?.blue ?? G.onlineWins.blue,
       rows: f.rows || G.onlineRows, localId: G.net?.id,
     };
     const mvp = mvpOf(f.rows || G.onlineRows);
@@ -198,8 +216,8 @@ function onlinePresentation(now = Date.now() / 1000) {
   const remain = G.onlineStartAt - now;
   if (remain <= 0) return null;
   if (remain > COUNTDOWN_TIME) return {
-    phase: 'intro', kicker: t('flow.deploymentOnline'), title: mapLabel('fortaleza'), sub: t('mode.teamDeathmatch'),
-    meta: [t('flow.firstTo', { count: TUNING.combat.killLimit }), t('flow.players', { count: G.onlineRows.length })],
+    phase: 'intro', kicker: t('flow.deploymentOnline'), title: mapLabel(G.onlineSettings.map), sub: t('mode.teamDeathmatch'),
+    meta: [t('flow.bestOfN', { count: G.onlineSettings.rounds }), t('flow.livesPerTeam', { count: G.onlineSettings.lives }), t('flow.players', { count: G.onlineRows.length })],
     progress: 1 - (remain - COUNTDOWN_TIME) / INTRO_TIME, wait: t('flow.syncing'),
     rows: G.onlineRows, localId: G.net?.id,
   };
@@ -212,7 +230,7 @@ function activePresentation(now = Date.now() / 1000) {
 
 function updateMatchCamera(now, view) {
   const t = now * 0.00011;
-  const layout = G.mode === 'online' ? 'fortaleza' : G.mapChoice;
+  const layout = G.mapChoice;
   const wide = layout === 'azoteas';
   const radiusX = wide ? 25 : 22;
   const radiusZ = wide ? 31 : 28;
@@ -293,7 +311,7 @@ function spectatorView() {
   const target = spectatorTarget();
   let respawn = '';
   if (G.respawnT > 0) respawn = t('spectator.respawnsIn', { count: Math.ceil(G.respawnT) });
-  else if (G.mode === 'bots' && G.botMatch?.pool.red <= 0) respawn = t('spectator.noRespawns');
+  else if (G.mode === 'bots' && G.botMatch?.pool[G.team] <= 0) respawn = t('spectator.noRespawns');
   else if (!G.selfAlive) respawn = t('spectator.waitingRespawn');
   return {
     name: target?.name || t('hud.waitingTeammate'),
@@ -524,11 +542,100 @@ input.onLockedMouseDown = (btn) => {
 };
 input.onLockedMouseUp = () => { vDrag = null; };
 
-document.getElementById('btn-bots').addEventListener('click', () => startBots());
-document.getElementById('btn-practice').addEventListener('click', () => startPractice());
-document.getElementById('btn-online').addEventListener('click', () => startOnline());
+const lobbyUI = new LobbyUI({
+  leave: () => leaveLobby(),
+  start: () => startLobbyMatch(),
+  team: (team) => lobbyAction('team', { team }),
+  addBot: (team) => lobbyAction('addBot', { team }),
+  removeBot: (id) => lobbyAction('removeBot', { id }),
+  moveBot: (id, team) => lobbyAction('moveBot', { id, team }),
+  settings: (value) => lobbyAction('settings', value),
+});
 
-// selector de mapa (VS Bots y Práctica; online lo fija el server: Fortaleza)
+function defaultLocalLobby() {
+  const player = { id: 'player', name: saveName(), team: 'red', bot: 0, host: 1, v: G.charVariant, alive: true };
+  const bots = [];
+  for (const team of ['red', 'blue']) {
+    const count = team === 'red' ? 3 : 4;
+    for (let i = 0; i < count; i++) {
+      const occupied = [player, ...bots].map((p) => p.name);
+      bots.push({ id: `local-b${bots.length + 1}`, name: makeBotName(team, occupied), team, bot: 1, v: bots.length % 5, alive: true });
+    }
+  }
+  const state = { phase: 'lobby', hostId: 'player', settings: normalizeLobbySettings({ ...DEFAULT_LOBBY_SETTINGS, map: G.mapChoice }),
+    players: [player], bots, maxPlayers: MAX_PLAYERS, teamCapacity: TEAM_CAPACITY };
+  state.validation = validateLobby([...state.players, ...state.bots], state.settings);
+  return state;
+}
+
+function refreshLocalLobby() {
+  if (!G.lobby || G.lobbyKind !== 'local') return;
+  G.lobby.validation = validateLobby([...G.lobby.players, ...G.lobby.bots], G.lobby.settings);
+  lobbyUI.render(G.lobby);
+}
+
+function openLocalLobby() {
+  dismissSplash(); audio.ensure(); startSeq++;
+  teardown({ keepLobby: false });
+  G.lobby = defaultLocalLobby(); G.lobbyKind = 'local';
+  hud.show(false); hud.showMenu(true); showControls(false); input.releaseLock();
+  lobbyUI.show(G.lobby, 'player', 'local');
+}
+
+function lobbyAction(action, value) {
+  if (!G.lobby) return;
+  if (G.lobbyKind === 'online') {
+    if (action === 'team') G.net?.lobbyTeam(value.team);
+    if (action === 'addBot') G.net?.lobbyAddBot(value.team);
+    if (action === 'removeBot') G.net?.lobbyRemoveBot(value.id);
+    if (action === 'moveBot') G.net?.lobbyBotTeam(value.id, value.team);
+    if (action === 'settings') G.net?.lobbySettings(value);
+    return;
+  }
+  const slots = () => [...G.lobby.players, ...G.lobby.bots];
+  const teamRoom = (team, skip = '') => slots().filter((p) => p.id !== skip && p.team === team).length < TEAM_CAPACITY;
+  if (action === 'team' && teamRoom(value.team, 'player')) G.lobby.players[0].team = value.team;
+  if (action === 'settings') G.lobby.settings = normalizeLobbySettings({ ...G.lobby.settings, ...value });
+  if (action === 'removeBot') G.lobby.bots = G.lobby.bots.filter((b) => b.id !== value.id);
+  if (action === 'moveBot') {
+    const b = G.lobby.bots.find((x) => x.id === value.id);
+    if (b && teamRoom(value.team, b.id)) b.team = value.team;
+  }
+  if (action === 'addBot' && slots().length < MAX_PLAYERS && teamRoom(value.team)) {
+    const occupied = slots().map((p) => p.name);
+    const seq = 1 + Math.max(0, ...G.lobby.bots.map((b) => +(b.id.match(/\d+$/)?.[0] || 0)));
+    G.lobby.bots.push({ id: `local-b${seq}`, name: makeBotName(value.team, occupied), team: value.team, bot: 1, v: seq % 5, alive: true });
+  }
+  refreshLocalLobby();
+}
+
+function startLobbyMatch() {
+  if (!G.lobby?.validation?.ok) return;
+  if (G.lobbyKind === 'online') G.net?.lobbyStart();
+  else startBots(G.lobby);
+}
+
+function showMainMenuFromLobby(message = '') {
+  lobbyUI.hide(); mainCard.style.display = '';
+  G.lobby = null; G.lobbyKind = null; G.mode = null;
+  showMenuBackdrop(); hud.show(false); hud.showMenu(true); showControls(false);
+  netStatus.textContent = message; input.releaseLock();
+}
+
+function leaveLobby() {
+  startSeq++;
+  if (G.net) teardown({ keepLobby: false });
+  else { G.lobby = null; G.lobbyKind = null; }
+  showMainMenuFromLobby();
+}
+
+document.getElementById('btn-bots').addEventListener('click', openLocalLobby);
+document.getElementById('btn-practice').addEventListener('click', () => startPractice());
+document.getElementById('btn-online').addEventListener('click', () => { inServer.focus(); netStatus.textContent = t('lobby.create') + ' / ' + t('lobby.join'); });
+document.getElementById('btn-lobby-create').addEventListener('click', () => connectOnlineLobby('create'));
+document.getElementById('btn-lobby-join').addEventListener('click', () => connectOnlineLobby('join'));
+
+// selector de mapa: valor inicial de lobby local y mapa de Práctica.
 const btnMap = document.getElementById('btn-map');
 G.mapChoice = localStorage.getItem('breach.map') === 'azoteas' ? 'azoteas' : 'fortaleza';
 function updateMapBtn() {
@@ -931,6 +1038,7 @@ onLanguageChange((language) => {
   document.getElementById('fullscreen-label').textContent = t(document.fullscreenElement
     ? 'common.exitFullscreen' : 'common.fullscreen');
   if (!input.pad.connected) padStatus.textContent = t('menu.noController');
+  if (G.lobby) lobbyUI.render(G.lobby);
 });
 
 function startRebindKb(action, btn) {
@@ -1004,11 +1112,12 @@ function deepCopy(src, dst) {
 // ---------- ciclo de vida de partida ----------
 let startSeq = 0; // n° de arranque de partida: invalida continuaciones tardías
 
-function teardown() {
+function teardown({ keepNet = false, keepLobby = true } = {}) {
   resetSpectator();
   if (G.rig) { G.rig.dispose(scene); G.rig = null; }
   if (G.dummies) { G.dummies.dispose(); G.dummies = null; }
   if (G.botMatch) { G.botMatch.dispose(); G.botMatch = null; }
+  G.onlineBots = null;
   if (G.crates) { G.crates.dispose(); G.crates = null; }
   if (G.drops) { G.drops.dispose(); G.drops = null; }
   G.player = null; // sin referencias a caras de un mapa destruido
@@ -1025,7 +1134,7 @@ function teardown() {
   hud.presentation(null);
   for (const r of G.remotes.values()) r.dispose(scene);
   G.remotes.clear();
-  if (G.net) { G.net.close(); G.net = null; }
+  if (G.net && !keepNet) { G.net.close(); G.net = null; }
   G.scores = { red: 0, blue: 0 };
   G.selfHp = TUNING.combat.hp;
   G.selfAlive = true;
@@ -1035,7 +1144,10 @@ function teardown() {
   G.onlineRows = [];
   G.onlineStartAt = 0;
   G.onlineFinal = null;
+  G.onlineRoundResult = null;
+  G.onlinePhase = keepNet ? G.onlinePhase : 'lobby';
   G.flowLockedPrev = false;
+  if (!keepLobby) { G.lobby = null; G.lobbyKind = null; }
 }
 
 function spawnLocal(team, spawn) {
@@ -1086,7 +1198,7 @@ function damagePlayerLocal(dmg, fromName, shooter, hitCtx = null) {
     audio.death();
     input.pad.rumble(350, 0.8, 1.0);
     // countdown solo si de verdad queda respawn en el pool del equipo
-    if (!G.botMatch || G.botMatch.pool.red > 0) {
+    if (!G.botMatch || G.botMatch.pool[G.team] > 0) {
       G.respawnT = TUNING.combat.respawnTime;
     } else {
       G.respawnT = 0;
@@ -1104,24 +1216,28 @@ function damagePlayerLocal(dmg, fromName, shooter, hitCtx = null) {
       const x = rag ? rag.bx + rag.ox : dropAt.x;
       const z = rag ? rag.bz + rag.oz : dropAt.z;
       const y = rag ? world.groundHeight({ x, z }, PLAYER_R, rag.by) : dropAt.y;
-      deathDrops.spawn(id, wep, x, z, 'red', mag, res, undefined, y);
+      deathDrops.spawn(id, wep, x, z, G.team, mag, res, undefined, y);
     }, 220);
     return true;
   }
   return false;
 }
 
-function startBots() {
+function startBots(lobby = G.lobby || defaultLocalLobby()) {
   dismissSplash();
   audio.ensure();
   enterFullscreen();
   startSeq++;
-  teardown();
+  teardown({ keepLobby: true });
   G.name = saveName();
   effects.clearImpacts();
-  world.setLayout(G.mapChoice); // mapa elegido en el menú
+  G.lobby = lobby; G.lobbyKind = 'local';
+  const config = lobby.settings || DEFAULT_LOBBY_SETTINGS;
+  G.mapChoice = config.map;
+  world.setLayout(config.map);
   G.mode = 'bots';
-  spawnLocal('red', world.spawns.red[0]);
+  const localSlot = lobby.players.find((p) => p.id === 'player') || lobby.players[0];
+  spawnLocal(localSlot.team, world.spawns[localSlot.team][0]);
   G.selfHp = TUNING.combat.hp;
   G.selfAlive = true;
   G.playerLastHit = 99;
@@ -1171,14 +1287,22 @@ function startBots() {
       const bm = G.botMatch; // identidad, no modo: el string 'bots' también
       setTimeout(() => {     // es cierto para una partida NUEVA (la mataba)
         if (!bm || G.botMatch !== bm) return;
-        G.mode = null;
-        teardown();
-        showMenuBackdrop();
-        hud.show(false);
-        input.releaseLock(); // en el menú principal el cursor queda libre
-        openMenu();
+        const next = G.lobby?.settings?.postMatch;
+        if (next === 'next-map') {
+          G.lobby.settings.map = nextLobbyMap(G.lobby.settings.map);
+          G.lobby.validation = validateLobby([...G.lobby.players, ...G.lobby.bots], G.lobby.settings);
+          startBots(G.lobby);
+        } else {
+          G.mode = null;
+          teardown({ keepLobby: true });
+          showMenuBackdrop(); hud.show(false); hud.showMenu(true); input.releaseLock();
+          lobbyUI.show(G.lobby, 'player', 'local');
+        }
       }, 180);
     },
+  }, {
+    playerTeam: localSlot.team, rounds: config.rounds, lives: config.lives,
+    bots: lobby.bots.map((b) => ({ id: b.id, name: b.name, team: b.team, variant: b.v })),
   });
   hud.showMenu(false);
   showControls(false);
@@ -1209,7 +1333,7 @@ function startPractice() {
   setTimeout(() => hud.hint(t('msg.axisHint', { state: t(input.invertY ? 'msg.inverted' : 'msg.normal') }), 3000), 3000);
 }
 
-async function startOnline() {
+async function connectOnlineLobby(action) {
   dismissSplash();
   audio.ensure();
   enterFullscreen();
@@ -1222,41 +1346,71 @@ async function startOnline() {
   bindNet(net);
   const mySeq = ++startSeq;
   try {
-    const welcome = await net.connect(url, G.name, G.charVariant);
+    const welcome = await net.connect(url, G.name, G.charVariant, action);
     // si durante el await el usuario arrancó OTRA partida (vs bots, práctica),
     // este welcome tardío no debe secuestrarla
     if (startSeq !== mySeq) { net.close(); return; }
-    teardown();
-    effects.clearImpacts();
-    world.setLayout('fortaleza'); // mapa grande de multijugador
+    teardown({ keepLobby: false });
     G.net = net;
-    G.mode = 'online';
-    spawnLocal(welcome.team, welcome.spawn);
-    G.crates = new AmmoCrates(scene, true); // online: el server manda
-    if (welcome.crates) welcome.crates.forEach((up, i) => G.crates.setState(i, !!up));
-    G.drops = new WeaponDrops(scene);
-    if (welcome.drops) for (const d of welcome.drops) G.drops.spawn(d.id, d.wep, d.x, d.z, d.team, 0, 0, d.t, d.y || 0);
-    G.scores = welcome.scores;
-    G.onlineStartAt = welcome.startAt || (Date.now() / 1000 + INTRO_TIME + COUNTDOWN_TIME);
-    G.onlineRows = (welcome.players || []).map((p) => ({
-      id: p.id, name: p.name, team: p.team, variant: p.v | 0,
-      kills: p.kills || 0, deaths: p.deaths || 0, score: (p.kills || 0) * 100,
-    }));
-    for (const p of welcome.players) {
-      if (p.id !== net.id) addRemote(p);
-    }
-    hud.showMenu(false);
-    showControls(false);
-    hud.show(true);
-    hud.score(G.scores.red, G.scores.blue);
+    G.team = welcome.team;
+    G.lobby = welcome.lobby;
+    G.lobbyKind = 'online';
+    G.mode = null;
+    hud.show(false); hud.showMenu(true); showControls(false); input.releaseLock();
+    lobbyUI.show(G.lobby, net.id, 'online');
     netStatus.textContent = '';
-    input.requestLock();
-    setTimeout(() => hud.hint(t('msg.axisHint', { state: t(input.invertY ? 'msg.inverted' : 'msg.normal') }), 3000), 3000);
   } catch (e) {
-    if (netStatus.textContent !== t('msg.serverFull')) {
-      netStatus.textContent = t('msg.error', { message: e.message });
-    }
+    netStatus.textContent = t('msg.error', { message: e.message });
   }
+}
+
+function onlineHumanTargets() {
+  const out = [];
+  if (G.player) out.push({ id: G.net.id, team: G.team, x: G.player.pos.x, z: G.player.pos.z,
+    y: G.player.y, alive: G.selfAlive, hp: G.selfHp, crouch: isCrouchState(G.player.animState()) });
+  for (const r of G.remotes.values()) if (!r.bot) out.push({ id: r.id, team: r.team, x: r.x, z: r.z,
+    y: r.y || 0, alive: r.alive, hp: r.hp ?? 100, crouch: isCrouchState(r.st) });
+  return out;
+}
+
+function setupOnlineBots(roster) {
+  if (G.lobby?.hostId !== G.net?.id) return;
+  const slots = roster.filter((p) => p.bot);
+  G.botMatch = new BotMatch(scene, world, {
+    effects, audio, hud, humans: onlineHumanTargets,
+    playing: () => G.onlinePhase === 'playing',
+    stepSound,
+    botFire: (bot, origin, point, wep, impacts) => G.net?.botFire(bot.id, origin, point, wep, impacts),
+    botHit: (bot, targetId, dmg, part, gib) => G.net?.botHit(bot.id, targetId, dmg, part, gib),
+  }, {
+    external: true, playerTeam: G.team, rounds: G.onlineSettings.rounds, lives: G.onlineSettings.lives,
+    bots: slots.map((b) => ({ id: b.id, name: b.name, team: b.team, variant: b.v,
+      spawn: { x: b.x, z: b.z, yaw: b.team === 'red' ? Math.PI : 0 } })),
+  });
+  G.onlineBots = G.botMatch;
+}
+
+function setupOnlineMatch(m) {
+  const net = G.net; if (!net) return;
+  teardown({ keepNet: true, keepLobby: true });
+  G.mode = 'online'; G.onlineSettings = m.settings || G.lobby.settings;
+  G.onlinePhase = m.phase || 'intro'; G.onlineStartAt = m.startAt || 0;
+  G.onlineWins = m.wins || { red: 0, blue: 0 }; G.scores = m.lives || { red: G.onlineSettings.lives, blue: G.onlineSettings.lives };
+  G.mapChoice = G.onlineSettings.map; world.setLayout(G.mapChoice); effects.clearImpacts();
+  const roster = m.players || [];
+  const mine = roster.find((p) => p.id === net.id);
+  if (!mine) return;
+  spawnLocal(mine.team, { x: mine.x, z: mine.z, yaw: mine.team === 'red' ? Math.PI : 0 });
+  G.crates = new AmmoCrates(scene, true, world.cratePos ?? undefined);
+  G.drops = new WeaponDrops(scene);
+  G.onlineRows = roster.map((p) => ({ id: p.id, name: p.name, team: p.team, bot: p.bot,
+    variant: p.v | 0, kills: p.kills || 0, deaths: p.deaths || 0, score: (p.kills || 0) * 100 }));
+  const host = G.lobby?.hostId === net.id;
+  for (const p of roster) if (p.id !== net.id && !(host && p.bot)) addRemote(p);
+  setupOnlineBots(roster);
+  lobbyUI.hide(); hud.showMenu(false); showControls(false); hud.show(true);
+  hud.score(G.scores.red, G.scores.blue, 'hud.lives'); hud.roundPips(G.onlineWins.red, G.onlineWins.blue);
+  input.requestLock();
 }
 
 function saveName() {
@@ -1272,6 +1426,7 @@ function addRemote(p) {
   r.rig.groundFn = (x, z, y) => world.groundHeight({ x, z }, PLAYER_R, y);
   r.rig.collideFn = (pt, y, radius = RAGDOLL_R) => world.resolveCircle(pt, radius, y);
   r.alive = p.alive !== false;
+  r.bot = !!p.bot;
   // posición real desde el welcome: sin ella nacían apilados en (0,0)
   if (typeof p.x === 'number') { r.x = p.x; r.z = p.z; }
   G.remotes.set(p.id, r);
@@ -1283,6 +1438,40 @@ function bindNet(net) {
   // (sin esto, un reconectar fallido o mensajes bufereados del socket viejo
   // ejecutaban acciones — kill/respawn/teleport — sobre la partida NUEVA)
   const alive = () => G.net === net;
+  net.on('lobby', (m) => {
+    if (!alive()) return;
+    G.lobby = m; G.lobbyKind = 'online';
+    const mine = m.players?.find((p) => p.id === net.id); if (mine) G.team = mine.team;
+    if (!G.mode) lobbyUI.show(m, net.id, 'online');
+  });
+  net.on('lobbyError', (m) => {
+    if (!alive()) return;
+    const message = m.code === 'invalid' && m.detail
+      ? m.detail.split(',').map((code) => t(`lobby.error.${code}`)).join(' · ')
+      : t(`lobby.error.${m.code}`);
+    netStatus.textContent = message;
+    if (G.lobby) {
+      G.lobby.validation = { ...(G.lobby.validation || {}), ok: false,
+        errors: m.detail ? m.detail.split(',') : [m.code] };
+      lobbyUI.render(G.lobby);
+    }
+  });
+  net.on('matchStart', (m) => { if (alive()) setupOnlineMatch(m); });
+  net.on('host', (m) => {
+    if (!alive()) return;
+    if (G.lobby) G.lobby.hostId = m.id;
+    if (!G.mode) lobbyUI.render(G.lobby);
+    else if (m.id === net.id && !G.onlineBots) {
+      const roster = G.onlineRows.map((row) => {
+        const r = G.remotes.get(row.id);
+        return { ...row, v: row.variant, x: r?.x || 0, z: r?.z || 0 };
+      });
+      for (const p of roster) if (p.bot) {
+        const r = G.remotes.get(p.id); if (r) { r.dispose(scene); G.remotes.delete(p.id); }
+      }
+      setupOnlineBots(roster);
+    }
+  });
   net.on('joined', (m) => {
     if (!alive() || m.id === net.id) return;
     addRemote(m);
@@ -1299,6 +1488,9 @@ function bindNet(net) {
   });
   net.on('snap', (m) => {
     if (!alive()) return;
+    G.onlinePhase = m.phase || G.onlinePhase;
+    if (m.lives) G.scores = m.lives;
+    if (m.wins) G.onlineWins = m.wins;
     for (const p of m.ps) {
       if (p.id === net.id) {
         // G.selfAlive: el golpe mortal ya sonó con 'death' — sin el guard
@@ -1307,12 +1499,14 @@ function bindNet(net) {
         G.selfHp = p.hp;
         continue;
       }
+      const hosted = G.onlineBots?.botById(p.id);
+      if (hosted) { hosted.hp = p.hp; hosted.protT = p.inv ? Math.max(hosted.protT, .12) : 0; continue; }
       const r = G.remotes.get(p.id);
-      if (r) { r.push(p); r.alive = !!p.alive; }
+      if (r) { r.push(p); r.alive = !!p.alive; r.hp = p.hp; }
     }
   });
   net.on('fire', (m) => {
-    if (!alive() || m.id === net.id) return;
+    if (!alive() || m.id === net.id || G.onlineBots?.botById(m.id)) return;
     // validar: un cliente malicioso podía mandar o/p malformados y reventar
     // el handler de todos los demás
     const okVec = (v) => Array.isArray(v) && v.length === 3 && v.every((n) => typeof n === 'number' && isFinite(n));
@@ -1345,6 +1539,7 @@ function bindNet(net) {
   net.on('death', (m) => {
     if (!alive() || !G.player) return;
     const isSelf = m.target === net.id;
+    const hostedVictim = G.onlineBots?.botById(m.target);
     const victim = isSelf ? null : G.remotes.get(m.target);
     // sin víctima conocida y no soy yo: solo killfeed (el fallback anterior
     // reventaba la sangre encima del jugador local)
@@ -1354,6 +1549,15 @@ function bindNet(net) {
       if (m.gib) effects.gib(new THREE.Vector3(pos.x, 0, pos.z), TEAM_HEX[vteam]);
       else effects.blood(new THREE.Vector3(pos.x, 1, pos.z), TEAM_HEX[vteam]);
     }
+    if (hostedVictim) {
+      const attacker = m.from === net.id ? G.player?.pos : (G.onlineBots?.botById(m.from)?.pos || G.remotes.get(m.from));
+      G.onlineBots.killExternal(m.target, {
+        impact: attacker ? { x: hostedVictim.pos.x - attacker.x, z: hostedVictim.pos.z - attacker.z } : null,
+        weapon: m.w, distance: m.dist, damage: m.dmg, part: m.part, gib: !!m.gib,
+      });
+      if (m.gib) effects.gib(new THREE.Vector3(hostedVictim.pos.x, hostedVictim.y, hostedVictim.pos.z), TEAM_HEX[hostedVictim.team]);
+      else effects.blood(new THREE.Vector3(hostedVictim.pos.x, hostedVictim.y + 1, hostedVictim.pos.z), TEAM_HEX[hostedVictim.team]);
+    }
     hud.kill(m.kn, m.kt, m.vn, m.vt);
     const killerRow = G.onlineRows.find((r) => r.id === m.from);
     const victimRow = G.onlineRows.find((r) => r.id === m.target);
@@ -1362,7 +1566,10 @@ function bindNet(net) {
     // contexto físico para el ragdoll (dirección del tiro + momentum previo)
     const killer = m.from === net.id
       ? { x: G.player.pos.x, z: G.player.pos.z }
-      : (() => { const k = G.remotes.get(m.from); return k ? { x: k.x, z: k.z } : null; })();
+      : (() => {
+        const k = G.remotes.get(m.from) || G.onlineBots?.botById(m.from)?.pos;
+        return k ? { x: k.x, z: k.z } : null;
+      })();
     if (victim) {
       victim.alive = false; // cycling spectator no espera al siguiente snapshot
       // velocidad aproximada del remoto desde sus últimos snapshots
@@ -1451,6 +1658,8 @@ function bindNet(net) {
       // la protección empieza al terminar el 3…2…1, no 13 s antes.
       if (!G.onlineFinal && G.onlineStartAt <= Date.now() / 1000) grantSpawnProtection();
       hud.centerOff();
+    } else if (G.onlineBots?.botById(m.id)) {
+      G.onlineBots.respawnExternal(m.id, m.spawn);
     } else {
       const r = G.remotes.get(m.id);
       if (r) {
@@ -1462,7 +1671,16 @@ function bindNet(net) {
       }
     }
   });
-  net.on('score', (m) => { if (alive()) { G.scores = { red: m.red, blue: m.blue }; hud.score(m.red, m.blue); } });
+  net.on('score', (m) => { if (alive()) {
+    G.scores = { red: m.red, blue: m.blue }; if (m.wins) G.onlineWins = m.wins;
+    hud.score(m.red, m.blue, 'hud.lives'); hud.roundPips(G.onlineWins.red, G.onlineWins.blue);
+  } });
+  net.on('roundEnd', (m) => {
+    if (!alive()) return;
+    G.onlinePhase = 'intermission'; G.onlineWins = m.wins || G.onlineWins;
+    G.onlineRoundResult = { winner: m.winner, wins: G.onlineWins,
+      rows: (m.rows || G.onlineRows).map((r) => ({ ...r, score: r.score ?? (r.kills || 0) * 100 })) };
+  });
   net.on('win', (m) => {
     if (!alive()) return;
     audio.win();
@@ -1470,36 +1688,52 @@ function bindNet(net) {
     G.onlineFinal = {
       team: m.team, at: Date.now() / 1000,
       rows: (m.rows || G.onlineRows).map((r) => ({ ...r, score: r.score ?? (r.kills || 0) * 100 })),
-      scores: m.scores || { ...G.scores },
+      wins: m.wins || { ...G.onlineWins },
     };
+    G.onlineRoundResult = null; G.onlinePhase = 'final';
   });
   net.on('prepare', (m) => {
     if (!alive()) return;
     G.onlineFinal = null;
+    G.onlineRoundResult = null; G.onlinePhase = m.phase || 'countdown';
     G.onlineStartAt = m.startAt || (Date.now() / 1000 + INTRO_TIME + COUNTDOWN_TIME);
-    if (m.scores) G.scores = m.scores;
+    if (m.lives) G.scores = m.lives;
+    if (m.wins) G.onlineWins = m.wins;
     if (m.players) G.onlineRows = m.players.map((p) => ({
-      id: p.id, name: p.name, team: p.team, variant: p.v | 0,
+      id: p.id, name: p.name, team: p.team, bot: p.bot, variant: p.v | 0,
       kills: p.kills || 0, deaths: p.deaths || 0, score: (p.kills || 0) * 100,
     }));
+    if (m.players && G.player) {
+      for (const p of m.players) {
+        const spawn = { x: p.x, z: p.z, yaw: p.team === 'red' ? Math.PI : 0 };
+        if (p.id === net.id) {
+          G.selfAlive = true; G.selfHp = TUNING.combat.hp; G.respawnT = 0;
+          G.player.respawn(spawn); G.weapons.reset(); exitSpectator();
+        } else if (G.onlineBots?.botById(p.id)) G.onlineBots.respawnExternal(p.id, spawn);
+        else {
+          const r = G.remotes.get(p.id);
+          if (r) { r.alive = true; r.buf.length = 0; r.x = p.x; r.z = p.z; r.y = 0; }
+        }
+      }
+    }
     hud.centerOff();
   });
   net.on('start', () => {
     if (!alive()) return;
-    G.onlineStartAt = 0;
+    G.onlineStartAt = 0; G.onlinePhase = 'playing'; G.onlineRoundResult = null;
   });
-  net.on('full', () => { netStatus.textContent = t('msg.serverFull'); });
+  net.on('returnLobby', () => {
+    if (!alive()) return;
+    teardown({ keepNet: true, keepLobby: true });
+    G.mode = null; G.onlinePhase = 'lobby';
+    showMenuBackdrop(); hud.show(false); hud.showMenu(true); input.releaseLock();
+    if (G.lobby) lobbyUI.show(G.lobby, net.id, 'online');
+  });
   net.on('close', () => {
     if (!alive()) return; // un intento de conexión fallido no mata la partida en curso
-    if (G.mode === 'online') {
-      G.mode = null;
-      teardown(); // limpiar escena completa (rigs remotos, drops, cajas)
-      showMenuBackdrop();
-      hud.show(false);
-      openMenu(); // (no showMenu directo: dejaba visible un REANUDAR muerto)
-      netStatus.textContent = t('msg.serverDisconnected');
-      input.releaseLock();
-    }
+    G.mode = null;
+    teardown({ keepLobby: false });
+    showMainMenuFromLobby(t('msg.serverDisconnected'));
   });
 }
 
@@ -1519,6 +1753,7 @@ function currentTargets() {
   if (G.mode === 'practice') return G.dummies ? G.dummies.targets() : [];
   if (G.mode === 'bots') return G.botMatch ? G.botMatch.targets() : [];
   const out = [];
+  if (G.mode === 'online' && G.onlineBots) out.push(...G.onlineBots.targets());
   for (const r of G.remotes.values()) {
     if (r.team !== G.team) out.push({
       id: r.id, x: r.x, z: r.z, y: r.y ?? 0, alive: r.alive,
@@ -1692,9 +1927,10 @@ function fireShot() {
       if (!killed) audio.hit();
     } else if (G.net) {
       const r = G.remotes.get(id);
-      if (!r || r.inv) continue; // snapshot protegido: el server rechazará daño
+      const b = G.onlineBots?.botById(id);
+      if ((!r && !b) || r?.inv || b?.protT > 0) continue; // snapshot protegido: el server rechazará daño
       hitSomeone = true;
-      if (r) effects.blood(e.point, TEAM_HEX[r.team]);
+      effects.blood(e.point, TEAM_HEX[r?.team || b.team]);
       onlineClaims.push({ id, dmg: e.dmg, part: e.part, gib, point: e.point });
       audio.hit();
     }
@@ -1772,7 +2008,7 @@ function simStep(dt) {
     G.pendingShots = 0;
     p.update(dt, input, false);
     if (G.botMatch) G.botMatch.update(dt);
-    if (G.net) G.net.tickState(dt, p, G.weapons);
+    if (G.net) { G.net.tickState(dt, p, G.weapons); G.net.tickBotState(dt, G.onlineBots?.bots); }
     input.consumeEdges();
     return;
   }
@@ -1789,7 +2025,7 @@ function simStep(dt) {
     G.drops?.update(dt, p.pos.x, p.pos.z, p.y, false, () => {});
     G.crates?.update(dt, p.pos.x, p.pos.z, p.y, false, () => {});
     if (G.botMatch) G.botMatch.update(dt);
-    if (G.net) G.net.tickState(dt, p, G.weapons);
+    if (G.net) { G.net.tickState(dt, p, G.weapons); G.net.tickBotState(dt, G.onlineBots?.bots); }
     input.consumeEdges();
     return;
   }
@@ -1908,12 +2144,14 @@ function simStep(dt) {
   if (G.botMatch) {
     G.botMatch.update(dt);
     // regen del jugador (igual que online, pero local)
-    G.playerLastHit += dt;
-    if (G.selfAlive && G.playerLastHit > TUNING.combat.regenDelay && G.selfHp < TUNING.combat.hp) {
-      G.selfHp = Math.min(TUNING.combat.hp, G.selfHp + TUNING.combat.regenRate * dt);
+    if (G.mode === 'bots') {
+      G.playerLastHit += dt;
+      if (G.selfAlive && G.playerLastHit > TUNING.combat.regenDelay && G.selfHp < TUNING.combat.hp) {
+        G.selfHp = Math.min(TUNING.combat.hp, G.selfHp + TUNING.combat.regenRate * dt);
+      }
     }
   }
-  if (G.net) G.net.tickState(dt, p, G.weapons);
+  if (G.net) { G.net.tickState(dt, p, G.weapons); G.net.tickBotState(dt, G.onlineBots?.bots); }
 
   input.consumeEdges();
 }

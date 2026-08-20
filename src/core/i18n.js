@@ -22,7 +22,7 @@ const en = {
   'menu.practiceSub': 'MOVING TARGETS · NO SCORE', 'menu.multiplayer': 'MULTIPLAYER',
   'menu.multiplayerSub': 'DIRECT SERVER CONNECTION', 'menu.preparation': 'LOADOUT',
   'menu.name': 'NAME', 'menu.map': 'MAP', 'menu.mapValue': 'MAP: {map}',
-  'menu.mapNote': 'Affects VS Bots and Practice. Multiplayer uses Fortress.',
+  'menu.mapNote': 'Default map for new local lobbies and Practice.',
   'menu.server': 'MULTIPLAYER SERVER', 'menu.move': 'MOVE', 'menu.run': 'RUN',
   'menu.coverEvade': 'COVER / EVADE', 'menu.pauseHint': 'PAUSE',
   'menu.cosmetic': 'COSMETIC SELECTION', 'menu.sameHitbox': 'SAME HITBOX · SAME PROPORTIONS',
@@ -84,6 +84,28 @@ const en = {
   'character.3': 'HEAVY', 'character.4': 'GHOST',
   'network.timeout': 'CONNECTION TIMED OUT', 'network.failed': 'COULD NOT CONNECT',
   'network.closed': 'CONNECTION CLOSED',
+  'lobby.title': 'MATCH LOBBY', 'lobby.create': 'CREATE LOBBY', 'lobby.join': 'JOIN LOBBY',
+  'lobby.localSession': 'LOCAL SESSION', 'lobby.onlineSession': 'ONLINE SESSION',
+  'lobby.host': 'HOST', 'lobby.guest': 'PLAYER', 'lobby.you': 'YOU', 'lobby.player': 'PLAYER',
+  'lobby.bot': 'BOT', 'lobby.teamRed': 'TEAM RED', 'lobby.teamBlue': 'TEAM BLUE',
+  'lobby.openSlot': 'OPEN SLOT', 'lobby.teamFull': 'TEAM FULL', 'lobby.joinTeam': 'JOIN TEAM',
+  'lobby.addBot': 'ADD BOT', 'lobby.move': 'MOVE', 'lobby.settings': 'MATCH SETTINGS',
+  'lobby.hostControls': 'HOST CONTROLS', 'lobby.readOnly': 'READ ONLY', 'lobby.mode': 'MODE',
+  'lobby.map': 'MAP', 'lobby.rounds': 'ROUNDS', 'lobby.lives': 'TEAM LIVES',
+  'lobby.afterMatch': 'AFTER MATCH', 'lobby.returnLobby': 'RETURN TO LOBBY',
+  'lobby.nextMap': 'NEXT MAP + CONTINUE', 'lobby.ready': 'CONFIGURATION VALID · READY TO START',
+  'lobby.start': 'START MATCH', 'lobby.leave': 'LEAVE LOBBY', 'lobby.waitingHost': 'WAITING FOR HOST',
+  'lobby.error.empty': 'THE LOBBY IS EMPTY', 'lobby.error.too-many-players': 'TOO MANY PLAYERS',
+  'lobby.error.red-full': 'RED TEAM EXCEEDS ITS LIMIT', 'lobby.error.blue-full': 'BLUE TEAM EXCEEDS ITS LIMIT',
+  'lobby.error.unassigned-team': 'EVERY PLAYER NEEDS A TEAM', 'lobby.error.team-empty': 'BOTH TEAMS NEED A PLAYER',
+  'lobby.error.teams-unbalanced': 'TEAMS MUST HAVE THE SAME NUMBER OF SLOTS',
+  'lobby.error.not-enough-lives': 'TEAM LIVES MUST COVER THE STARTING ROSTER',
+  'lobby.error.host-only': 'ONLY THE HOST CAN CHANGE THIS', 'lobby.error.team-full': 'THAT TEAM IS FULL',
+  'lobby.error.lobby-full': 'THE LOBBY IS FULL', 'lobby.error.invalid': 'FIX THE LOBBY CONFIGURATION FIRST',
+  'lobby.error.lobby-exists': 'A LOBBY ALREADY EXISTS ON THIS SERVER',
+  'lobby.error.no-lobby': 'THERE IS NO LOBBY TO JOIN', 'lobby.error.in-progress': 'THE MATCH IS ALREADY IN PROGRESS',
+  'lobby.error.locked': 'THE LOBBY IS LOCKED', 'lobby.error.bot-missing': 'THAT BOT IS NO LONGER AVAILABLE',
+  'flow.bestOfN': 'BEST OF {count}',
 };
 
 const es = {
@@ -99,7 +121,7 @@ const es = {
   'menu.practiceSub': 'BLANCOS MÓVILES · SIN PUNTUACIÓN', 'menu.multiplayer': 'MULTIJUGADOR',
   'menu.multiplayerSub': 'CONEXIÓN DIRECTA A SERVIDOR', 'menu.preparation': 'PREPARACIÓN',
   'menu.name': 'NOMBRE', 'menu.map': 'MAPA', 'menu.mapValue': 'MAPA: {map}',
-  'menu.mapNote': 'Afecta VS Bots y Práctica. Multijugador usa Fortaleza.',
+  'menu.mapNote': 'Mapa inicial para lobbies locales y Práctica.',
   'menu.server': 'SERVIDOR MULTIJUGADOR', 'menu.move': 'MOVER', 'menu.run': 'CORRER',
   'menu.coverEvade': 'COBERTURA / EVADIR', 'menu.pauseHint': 'PAUSA',
   'menu.cosmetic': 'SELECCIÓN ESTÉTICA', 'menu.sameHitbox': 'MISMO HITBOX · MISMAS PROPORCIONES',
@@ -159,6 +181,28 @@ const es = {
   'character.3': 'PESADO', 'character.4': 'FANTASMA',
   'network.timeout': 'TIEMPO DE CONEXIÓN AGOTADO', 'network.failed': 'NO SE PUDO CONECTAR',
   'network.closed': 'CONEXIÓN CERRADA',
+  'lobby.title': 'LOBBY DE PARTIDA', 'lobby.create': 'CREAR LOBBY', 'lobby.join': 'UNIRSE AL LOBBY',
+  'lobby.localSession': 'SESIÓN LOCAL', 'lobby.onlineSession': 'SESIÓN ONLINE',
+  'lobby.host': 'HOST', 'lobby.guest': 'JUGADOR', 'lobby.you': 'TÚ', 'lobby.player': 'JUGADOR',
+  'lobby.bot': 'BOT', 'lobby.teamRed': 'EQUIPO ROJO', 'lobby.teamBlue': 'EQUIPO AZUL',
+  'lobby.openSlot': 'ESPACIO LIBRE', 'lobby.teamFull': 'EQUIPO LLENO', 'lobby.joinTeam': 'UNIRSE AL EQUIPO',
+  'lobby.addBot': 'AGREGAR BOT', 'lobby.move': 'MOVER', 'lobby.settings': 'AJUSTES DE PARTIDA',
+  'lobby.hostControls': 'CONTROLES DEL HOST', 'lobby.readOnly': 'SOLO LECTURA', 'lobby.mode': 'MODO',
+  'lobby.map': 'MAPA', 'lobby.rounds': 'RONDAS', 'lobby.lives': 'VIDAS POR EQUIPO',
+  'lobby.afterMatch': 'AL TERMINAR', 'lobby.returnLobby': 'VOLVER AL LOBBY',
+  'lobby.nextMap': 'SIGUIENTE MAPA + CONTINUAR', 'lobby.ready': 'CONFIGURACIÓN VÁLIDA · LISTO PARA INICIAR',
+  'lobby.start': 'INICIAR PARTIDA', 'lobby.leave': 'SALIR DEL LOBBY', 'lobby.waitingHost': 'ESPERANDO AL HOST',
+  'lobby.error.empty': 'EL LOBBY ESTÁ VACÍO', 'lobby.error.too-many-players': 'DEMASIADOS JUGADORES',
+  'lobby.error.red-full': 'EL EQUIPO ROJO SUPERA EL LÍMITE', 'lobby.error.blue-full': 'EL EQUIPO AZUL SUPERA EL LÍMITE',
+  'lobby.error.unassigned-team': 'TODOS NECESITAN EQUIPO', 'lobby.error.team-empty': 'AMBOS EQUIPOS NECESITAN UN JUGADOR',
+  'lobby.error.teams-unbalanced': 'LOS EQUIPOS DEBEN TENER LA MISMA CANTIDAD',
+  'lobby.error.not-enough-lives': 'LAS VIDAS DEBEN CUBRIR LA ALINEACIÓN INICIAL',
+  'lobby.error.host-only': 'SOLO EL HOST PUEDE CAMBIAR ESTO', 'lobby.error.team-full': 'ESE EQUIPO ESTÁ LLENO',
+  'lobby.error.lobby-full': 'EL LOBBY ESTÁ LLENO', 'lobby.error.invalid': 'CORRIGE LA CONFIGURACIÓN DEL LOBBY',
+  'lobby.error.lobby-exists': 'YA EXISTE UN LOBBY EN ESTE SERVIDOR',
+  'lobby.error.no-lobby': 'NO HAY UN LOBBY DISPONIBLE', 'lobby.error.in-progress': 'LA PARTIDA YA COMENZÓ',
+  'lobby.error.locked': 'EL LOBBY ESTÁ BLOQUEADO', 'lobby.error.bot-missing': 'ESE BOT YA NO ESTÁ DISPONIBLE',
+  'flow.bestOfN': 'MEJOR DE {count}',
 };
 
 const pt = { ...en,
@@ -215,6 +259,22 @@ const zh = { ...en,
   'msg.bounce':'反弹 ×{count}','msg.audioOn':'音频开启','msg.audioOff':'音频关闭','msg.mouseAxis':'鼠标Y轴：{state}','msg.normal':'正常','msg.inverted':'反转','msg.spawnProtection':'出生保护 — 开火后解除','msg.protectionBroken':'保护已解除','msg.noLives':'生命耗尽','msg.waitRound':'等待回合结束','msg.scoreboardHint':'TAB / VIEW：记分板','msg.practice':'训练','msg.practiceSub':'蓝方移动目标','msg.axisHint':'Y轴：{state} — F9 更改','msg.serverUrl':'输入服务器地址','msg.connecting':'正在连接…','msg.error':'错误：{message}','msg.joined':'{name} 已加入','msg.ammoFull':'弹药已满','msg.bulletsOf':'{weapon} +{count} 发','msg.controllerConnected':'控制器已连接','msg.controllerDisconnected':'控制器已断开','msg.serverFull':'服务器已满 (8/8)','msg.serverDisconnected':'已断开服务器连接',
   'binding.forward':'前进','binding.back':'后退','binding.left':'左','binding.right':'右','binding.sprint':'奔跑','binding.evade':'掩体 / 闪避','binding.jump':'跳跃','binding.reload':'装填','binding.swap':'切换武器','binding.score':'记分板','binding.aim':'瞄准','binding.fire':'射击','binding.pause':'暂停','key.left':'左','key.right':'右','key.space':'空格','key.arrow':'方向键','key.button':'按钮','character.0':'新兵','character.1':'哨兵','character.2':'侦察兵','character.3':'重装兵','character.4':'幽灵','network.timeout':'连接超时','network.failed':'无法连接','network.closed':'连接已关闭',
 };
+
+Object.assign(pt, {
+  'menu.mapNote':'Mapa inicial para novos lobbies locais e Treino.','lobby.title':'LOBBY DA PARTIDA','lobby.create':'CRIAR LOBBY','lobby.join':'ENTRAR NO LOBBY','lobby.localSession':'SESSÃO LOCAL','lobby.onlineSession':'SESSÃO ONLINE','lobby.host':'HOST','lobby.guest':'JOGADOR','lobby.you':'VOCÊ','lobby.player':'JOGADOR','lobby.bot':'BOT','lobby.teamRed':'EQUIPE VERMELHA','lobby.teamBlue':'EQUIPE AZUL','lobby.openSlot':'VAGA LIVRE','lobby.teamFull':'EQUIPE CHEIA','lobby.joinTeam':'ENTRAR NA EQUIPE','lobby.addBot':'ADICIONAR BOT','lobby.move':'MOVER','lobby.settings':'CONFIGURAÇÕES DA PARTIDA','lobby.hostControls':'CONTROLES DO HOST','lobby.readOnly':'SOMENTE LEITURA','lobby.mode':'MODO','lobby.map':'MAPA','lobby.rounds':'RODADAS','lobby.lives':'VIDAS DA EQUIPE','lobby.afterMatch':'APÓS A PARTIDA','lobby.returnLobby':'VOLTAR AO LOBBY','lobby.nextMap':'PRÓXIMO MAPA + CONTINUAR','lobby.ready':'CONFIGURAÇÃO VÁLIDA · PRONTO PARA INICIAR','lobby.start':'INICIAR PARTIDA','lobby.leave':'SAIR DO LOBBY','lobby.waitingHost':'AGUARDANDO O HOST','lobby.error.empty':'O LOBBY ESTÁ VAZIO','lobby.error.too-many-players':'JOGADORES DEMAIS','lobby.error.red-full':'EQUIPE VERMELHA ACIMA DO LIMITE','lobby.error.blue-full':'EQUIPE AZUL ACIMA DO LIMITE','lobby.error.unassigned-team':'TODOS PRECISAM DE UMA EQUIPE','lobby.error.team-empty':'AS DUAS EQUIPES PRECISAM DE UM JOGADOR','lobby.error.teams-unbalanced':'AS EQUIPES DEVEM TER O MESMO TAMANHO','lobby.error.not-enough-lives':'AS VIDAS DEVEM COBRIR A EQUIPE INICIAL','lobby.error.host-only':'SOMENTE O HOST PODE ALTERAR ISTO','lobby.error.team-full':'ESSA EQUIPE ESTÁ CHEIA','lobby.error.lobby-full':'O LOBBY ESTÁ CHEIO','lobby.error.invalid':'CORRIJA A CONFIGURAÇÃO DO LOBBY','lobby.error.lobby-exists':'JÁ EXISTE UM LOBBY NESTE SERVIDOR','lobby.error.no-lobby':'NÃO HÁ LOBBY DISPONÍVEL','lobby.error.in-progress':'A PARTIDA JÁ COMEÇOU','lobby.error.locked':'O LOBBY ESTÁ BLOQUEADO','lobby.error.bot-missing':'ESSE BOT NÃO ESTÁ MAIS DISPONÍVEL','flow.bestOfN':'MELHOR DE {count}',
+});
+Object.assign(fr, {
+  'menu.mapNote':'Carte initiale des nouveaux salons locaux et de l’Entraînement.','lobby.title':'SALON DE PARTIE','lobby.create':'CRÉER UN SALON','lobby.join':'REJOINDRE LE SALON','lobby.localSession':'SESSION LOCALE','lobby.onlineSession':'SESSION EN LIGNE','lobby.host':'HÔTE','lobby.guest':'JOUEUR','lobby.you':'VOUS','lobby.player':'JOUEUR','lobby.bot':'BOT','lobby.teamRed':'ÉQUIPE ROUGE','lobby.teamBlue':'ÉQUIPE BLEUE','lobby.openSlot':'PLACE LIBRE','lobby.teamFull':'ÉQUIPE COMPLÈTE','lobby.joinTeam':'REJOINDRE L’ÉQUIPE','lobby.addBot':'AJOUTER UN BOT','lobby.move':'DÉPLACER','lobby.settings':'PARAMÈTRES DE PARTIE','lobby.hostControls':'CONTRÔLES DE L’HÔTE','lobby.readOnly':'LECTURE SEULE','lobby.mode':'MODE','lobby.map':'CARTE','lobby.rounds':'MANCHES','lobby.lives':'VIES PAR ÉQUIPE','lobby.afterMatch':'APRÈS LA PARTIE','lobby.returnLobby':'RETOUR AU SALON','lobby.nextMap':'CARTE SUIVANTE + CONTINUER','lobby.ready':'CONFIGURATION VALIDE · PRÊT À LANCER','lobby.start':'LANCER LA PARTIE','lobby.leave':'QUITTER LE SALON','lobby.waitingHost':'EN ATTENTE DE L’HÔTE','lobby.error.empty':'LE SALON EST VIDE','lobby.error.too-many-players':'TROP DE JOUEURS','lobby.error.red-full':'L’ÉQUIPE ROUGE DÉPASSE LA LIMITE','lobby.error.blue-full':'L’ÉQUIPE BLEUE DÉPASSE LA LIMITE','lobby.error.unassigned-team':'CHAQUE JOUEUR DOIT AVOIR UNE ÉQUIPE','lobby.error.team-empty':'LES DEUX ÉQUIPES ONT BESOIN D’UN JOUEUR','lobby.error.teams-unbalanced':'LES ÉQUIPES DOIVENT AVOIR LA MÊME TAILLE','lobby.error.not-enough-lives':'LES VIES DOIVENT COUVRIR L’EFFECTIF INITIAL','lobby.error.host-only':'SEUL L’HÔTE PEUT MODIFIER CECI','lobby.error.team-full':'CETTE ÉQUIPE EST COMPLÈTE','lobby.error.lobby-full':'LE SALON EST COMPLET','lobby.error.invalid':'CORRIGEZ LA CONFIGURATION DU SALON','lobby.error.lobby-exists':'UN SALON EXISTE DÉJÀ SUR CE SERVEUR','lobby.error.no-lobby':'AUCUN SALON À REJOINDRE','lobby.error.in-progress':'LA PARTIE A DÉJÀ COMMENCÉ','lobby.error.locked':'LE SALON EST VERROUILLÉ','lobby.error.bot-missing':'CE BOT N’EST PLUS DISPONIBLE','flow.bestOfN':'AU MEILLEUR DE {count}',
+});
+Object.assign(it, {
+  'menu.mapNote':'Mappa iniziale per nuove lobby locali e Allenamento.','lobby.title':'LOBBY PARTITA','lobby.create':'CREA LOBBY','lobby.join':'ENTRA NELLA LOBBY','lobby.localSession':'SESSIONE LOCALE','lobby.onlineSession':'SESSIONE ONLINE','lobby.host':'HOST','lobby.guest':'GIOCATORE','lobby.you':'TU','lobby.player':'GIOCATORE','lobby.bot':'BOT','lobby.teamRed':'SQUADRA ROSSA','lobby.teamBlue':'SQUADRA BLU','lobby.openSlot':'POSTO LIBERO','lobby.teamFull':'SQUADRA COMPLETA','lobby.joinTeam':'ENTRA NELLA SQUADRA','lobby.addBot':'AGGIUNGI BOT','lobby.move':'SPOSTA','lobby.settings':'IMPOSTAZIONI PARTITA','lobby.hostControls':'CONTROLLI HOST','lobby.readOnly':'SOLA LETTURA','lobby.mode':'MODALITÀ','lobby.map':'MAPPA','lobby.rounds':'ROUND','lobby.lives':'VITE SQUADRA','lobby.afterMatch':'DOPO LA PARTITA','lobby.returnLobby':'TORNA ALLA LOBBY','lobby.nextMap':'MAPPA SUCCESSIVA + CONTINUA','lobby.ready':'CONFIGURAZIONE VALIDA · PRONTO','lobby.start':'AVVIA PARTITA','lobby.leave':'ESCI DALLA LOBBY','lobby.waitingHost':'IN ATTESA DELL’HOST','lobby.error.empty':'LA LOBBY È VUOTA','lobby.error.too-many-players':'TROPPI GIOCATORI','lobby.error.red-full':'LA SQUADRA ROSSA SUPERA IL LIMITE','lobby.error.blue-full':'LA SQUADRA BLU SUPERA IL LIMITE','lobby.error.unassigned-team':'OGNI GIOCATORE DEVE AVERE UNA SQUADRA','lobby.error.team-empty':'ENTRAMBE LE SQUADRE SERVONO UN GIOCATORE','lobby.error.teams-unbalanced':'LE SQUADRE DEVONO AVERE LA STESSA DIMENSIONE','lobby.error.not-enough-lives':'LE VITE DEVONO COPRIRE LA FORMAZIONE INIZIALE','lobby.error.host-only':'SOLO L’HOST PUÒ MODIFICARE QUESTO','lobby.error.team-full':'QUELLA SQUADRA È COMPLETA','lobby.error.lobby-full':'LA LOBBY È PIENA','lobby.error.invalid':'CORREGGI LA CONFIGURAZIONE DELLA LOBBY','lobby.error.lobby-exists':'ESISTE GIÀ UNA LOBBY SU QUESTO SERVER','lobby.error.no-lobby':'NON C’È UNA LOBBY DISPONIBILE','lobby.error.in-progress':'LA PARTITA È GIÀ IN CORSO','lobby.error.locked':'LA LOBBY È BLOCCATA','lobby.error.bot-missing':'QUEL BOT NON È PIÙ DISPONIBILE','flow.bestOfN':'AL MEGLIO DI {count}',
+});
+Object.assign(ja, {
+  'menu.mapNote':'新しいローカルロビーと練習の初期マップ。','lobby.title':'マッチロビー','lobby.create':'ロビーを作成','lobby.join':'ロビーに参加','lobby.localSession':'ローカルセッション','lobby.onlineSession':'オンラインセッション','lobby.host':'ホスト','lobby.guest':'プレイヤー','lobby.you':'自分','lobby.player':'プレイヤー','lobby.bot':'BOT','lobby.teamRed':'レッドチーム','lobby.teamBlue':'ブルーチーム','lobby.openSlot':'空きスロット','lobby.teamFull':'チーム満員','lobby.joinTeam':'チームに参加','lobby.addBot':'BOTを追加','lobby.move':'移動','lobby.settings':'マッチ設定','lobby.hostControls':'ホスト設定','lobby.readOnly':'閲覧のみ','lobby.mode':'モード','lobby.map':'マップ','lobby.rounds':'ラウンド数','lobby.lives':'チーム残機','lobby.afterMatch':'マッチ終了後','lobby.returnLobby':'ロビーに戻る','lobby.nextMap':'次のマップ + 続行','lobby.ready':'設定有効 · 開始可能','lobby.start':'マッチ開始','lobby.leave':'ロビーを退出','lobby.waitingHost':'ホストを待機中','lobby.error.empty':'ロビーが空です','lobby.error.too-many-players':'プレイヤー数が上限を超えています','lobby.error.red-full':'レッドチームが上限を超えています','lobby.error.blue-full':'ブルーチームが上限を超えています','lobby.error.unassigned-team':'全員がチームを選ぶ必要があります','lobby.error.team-empty':'両チームにプレイヤーが必要です','lobby.error.teams-unbalanced':'両チームを同じ人数にしてください','lobby.error.not-enough-lives':'初期メンバー以上の残機が必要です','lobby.error.host-only':'変更できるのはホストのみです','lobby.error.team-full':'このチームは満員です','lobby.error.lobby-full':'ロビーは満員です','lobby.error.invalid':'ロビー設定を修正してください','lobby.error.lobby-exists':'このサーバーには既にロビーがあります','lobby.error.no-lobby':'参加できるロビーがありません','lobby.error.in-progress':'マッチは既に進行中です','lobby.error.locked':'ロビーはロックされています','lobby.error.bot-missing':'そのBOTは利用できません','flow.bestOfN':'全{count}ラウンド',
+});
+Object.assign(zh, {
+  'menu.mapNote':'新建本地大厅和训练的默认地图。','lobby.title':'比赛大厅','lobby.create':'创建大厅','lobby.join':'加入大厅','lobby.localSession':'本地会话','lobby.onlineSession':'在线会话','lobby.host':'房主','lobby.guest':'玩家','lobby.you':'你','lobby.player':'玩家','lobby.bot':'机器人','lobby.teamRed':'红队','lobby.teamBlue':'蓝队','lobby.openSlot':'空位','lobby.teamFull':'队伍已满','lobby.joinTeam':'加入队伍','lobby.addBot':'添加机器人','lobby.move':'移动','lobby.settings':'比赛设置','lobby.hostControls':'房主控制','lobby.readOnly':'只读','lobby.mode':'模式','lobby.map':'地图','lobby.rounds':'回合数','lobby.lives':'队伍生命','lobby.afterMatch':'比赛结束后','lobby.returnLobby':'返回大厅','lobby.nextMap':'下一地图 + 继续','lobby.ready':'设置有效 · 可以开始','lobby.start':'开始比赛','lobby.leave':'离开大厅','lobby.waitingHost':'等待房主','lobby.error.empty':'大厅为空','lobby.error.too-many-players':'玩家过多','lobby.error.red-full':'红队超过人数限制','lobby.error.blue-full':'蓝队超过人数限制','lobby.error.unassigned-team':'每位玩家都需要选择队伍','lobby.error.team-empty':'两队都至少需要一名玩家','lobby.error.teams-unbalanced':'两队人数必须相同','lobby.error.not-enough-lives':'队伍生命必须覆盖初始阵容','lobby.error.host-only':'只有房主可以更改此项','lobby.error.team-full':'该队伍已满','lobby.error.lobby-full':'大厅已满','lobby.error.invalid':'请先修正大厅设置','lobby.error.lobby-exists':'此服务器上已有大厅','lobby.error.no-lobby':'没有可加入的大厅','lobby.error.in-progress':'比赛已经开始','lobby.error.locked':'大厅已锁定','lobby.error.bot-missing':'该机器人已不可用','flow.bestOfN':'共 {count} 回合',
+});
 
 const DICTIONARIES = Object.freeze({ en, es, pt, fr, ja, it, zh });
 const valid = new Set(LANGUAGES.map((l) => l.code));

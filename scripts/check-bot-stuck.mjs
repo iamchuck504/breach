@@ -25,6 +25,7 @@ try {
   await page.evaluate(() => {
     window.BREACH.mapChoice = 'fortaleza';
     document.getElementById('btn-bots').click();
+    document.getElementById('btn-lobby-start').click();
   });
   await page.waitForTimeout(700);
   await page.evaluate(() => {

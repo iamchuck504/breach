@@ -14,11 +14,11 @@ const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')],
 });
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function connect(name) {
+function connect(name, action) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}`);
     const peer = { ws, welcome: null, messages: [], waiters: [] };
-    ws.on('open', () => ws.send(JSON.stringify({ t: 'join', name, v: 0 })));
+    ws.on('open', () => ws.send(JSON.stringify({ t: 'join', action, name, v: 0 })));
     ws.on('error', reject);
     ws.on('message', (raw) => {
       const msg = JSON.parse(raw);
@@ -51,16 +51,22 @@ function waitFor(peer, pred, timeout = 1200) {
 const send = (peer, msg) => peer.ws.send(JSON.stringify(msg));
 const firePacket = (peer, target) => ({
   t: 'fire', w: 'smg',
-  o: [peer.welcome.spawn.x, 1.1, peer.welcome.spawn.z],
-  p: [target.welcome.spawn.x, 1.1, target.welcome.spawn.z], d: [],
+  o: [peer.self.x, 1.1, peer.self.z],
+  p: [target.self.x, 1.1, target.self.z], d: [],
 });
 const hpOf = (snap, id) => snap.ps.find((p) => p.id === id)?.hp;
 
 let a, b;
 try {
   await delay(700);
-  a = await connect('AUDIT-A');
-  b = await connect('AUDIT-B');
+  a = await connect('AUDIT-A', 'create');
+  b = await connect('AUDIT-B', 'join');
+  send(a, { t: 'lobbyStart' });
+  const match = await waitFor(a, (m) => m.t === 'matchStart');
+  const matchB = await waitFor(b, (m) => m.t === 'matchStart');
+  a.self = match.players.find((p) => p.id === a.welcome.id);
+  b.self = matchB.players.find((p) => p.id === b.welcome.id);
+  await waitFor(a, (m) => m.t === 'start');
 
   // El target rompe su protección para aislar la validación del atacante.
   send(b, firePacket(b, a));
@@ -90,7 +96,7 @@ try {
 
   // Un remate cercano de escopeta publica el contexto visual autoritativo.
   // Los clientes no deben decidir por su cuenta si una muerte desmiembra.
-  const bx = b.welcome.spawn.x, bz = b.welcome.spawn.z;
+  const bx = b.self.x, bz = b.self.z;
   send(a, { t: 's', x: bx, z: bz - 1.5, y: 0, yaw: 0, st: 'idle', w: 'shotgun', am: 8, ar: 24 });
   await delay(700);
   send(a, { t: 'fire', w: 'shotgun', o: [bx, 1.1, bz - 1.5], p: [bx, 1.1, bz], d: [] });

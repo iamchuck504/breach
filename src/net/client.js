@@ -10,13 +10,14 @@ export class NetClient {
     this.team = null;
     this.handlers = {};
     this._sendAcc = 0;
+    this._botSendAcc = 0;
     this.connected = false;
     this.dead = false; // tras close(): ni un mensaje más toca los handlers
   }
 
   on(type, cb) { this.handlers[type] = cb; }
 
-  connect(url, name, variant = 0) {
+  connect(url, name, variant = 0, action = 'join') {
     return new Promise((resolve, reject) => {
       let settled = false;
       try { this.ws = new WebSocket(url); }
@@ -25,7 +26,7 @@ export class NetClient {
         if (!settled) { settled = true; this.ws.close(); reject(new Error(t('network.timeout'))); }
       }, 6000);
       this.ws.onopen = () => {
-        this.send({ t: 'join', name, v: variant });
+        this.send({ t: 'join', action, name, v: variant });
       };
       this.ws.onmessage = (ev) => {
         if (this.dead) return; // sesión desechada: los mensajes bufereados
@@ -38,6 +39,14 @@ export class NetClient {
           this.team = msg.team;
           this.connected = true;
           resolve(msg);
+        }
+        if (msg.t === 'lobbyError' && !settled) {
+          settled = true;
+          clearTimeout(timeout);
+          this.dead = true;
+          this.ws.close();
+          reject(new Error(t(`lobby.error.${msg.code}`)));
+          return;
         }
         this.handlers[msg.t]?.(msg);
       };
@@ -88,6 +97,41 @@ export class NetClient {
       t: 'hit', target: targetId, dmg: Math.round(dmg), part,
       gib: gib ? 1 : 0, ...(p ? { p } : {}),
     });
+  }
+
+  lobbySettings(settings) { this.send({ t: 'lobbySettings', settings }); }
+  lobbyTeam(team) { this.send({ t: 'lobbyTeam', team }); }
+  lobbyAddBot(team) { this.send({ t: 'lobbyBotAdd', team }); }
+  lobbyRemoveBot(id) { this.send({ t: 'lobbyBotRemove', id }); }
+  lobbyBotTeam(id, team) { this.send({ t: 'lobbyBotTeam', id, team }); }
+  lobbyStart() { this.send({ t: 'lobbyStart' }); }
+
+  botState(bots) {
+    this.send({ t: 'botState', bots: bots.map((b) => ({
+      id: b.id, x: +b.pos.x.toFixed(3), z: +b.pos.z.toFixed(3), y: +b.y.toFixed(2),
+      yaw: +b.yaw.toFixed(3), st: b.animState(), aim: b.aim ? 1 : 0,
+      p: 0, w: b.wep, sp: +Math.min(1, Math.hypot(b.velX || 0, b.velZ || 0) / TUNING.move.roadieSpeed).toFixed(2),
+    })) });
+  }
+
+  tickBotState(dt, bots) {
+    if (!this.connected || !bots?.length) return;
+    this._botSendAcc += dt;
+    const interval = 1 / TUNING.net.sendHz;
+    if (this._botSendAcc < interval) return;
+    this._botSendAcc %= interval;
+    this.botState(bots);
+  }
+
+  botFire(id, origin, point, wep, impacts = []) {
+    const pack = (v) => [+v.x.toFixed(2), +v.y.toFixed(2), +v.z.toFixed(2)];
+    this.send({ t: 'botFire', id, o: pack(origin), p: pack(point), w: wep, d: impacts.slice(0, 8).map(pack) });
+  }
+
+  botHit(id, targetId, dmg, part, gib, point = null) {
+    const p = point ? [+point.x.toFixed(2), +point.y.toFixed(2), +point.z.toFixed(2)] : undefined;
+    this.send({ t: 'botHit', id, target: targetId, dmg: Math.round(dmg), part,
+      gib: gib ? 1 : 0, ...(p ? { p } : {}) });
   }
 
   close() { this.dead = true; this.ws?.close(); }
