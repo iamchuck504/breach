@@ -13,6 +13,7 @@ export class Weapons {
     };
     this.swapT = 0;        // tiempo restante del cambio
     this._swapped = false; // ya se intercambió el modelo a mitad del gesto
+    this.reloadInterrupted = false; // evento de un frame para audio/animación
   }
 
   get def() { return TUNING.weapons[this.cur]; }
@@ -29,6 +30,7 @@ export class Weapons {
     this.cur = 'smg';
     this.swapT = 0;
     this._swapped = false;
+    this.reloadInterrupted = false;
   }
 
   // La muerte tiene prioridad absoluta sobre gestos del arma. Congelar el
@@ -68,6 +70,7 @@ export class Weapons {
   // Devuelve true si disparó este frame.
   update(dt, wantsFire, wantsFirePressed, canFire) {
     const s = this.st, d = this.def;
+    this.reloadInterrupted = false;
     // el cooldown corre para AMBAS armas (guardar la escopeta no lo congela)
     this.state.smg.cd = Math.max(0, this.state.smg.cd - dt);
     this.state.shotgun.cd = Math.max(0, this.state.shotgun.cd - dt);
@@ -87,6 +90,15 @@ export class Weapons {
       return false; // sin disparo durante el cambio
     }
 
+    // Una pulsación NUEVA de disparo tiene prioridad sobre una recarga
+    // táctica. Conserva exactamente la munición que ya estaba en el cargador:
+    // no completa ni inventa balas a mitad de la animación. Con cargador vacío
+    // la recarga debe alcanzar su punto válido antes de que pueda salir el tiro.
+    if (s.reload > 0 && wantsFirePressed && s.mag > 0) {
+      s.reload = 0;
+      this.reloadInterrupted = true;
+    }
+
     if (s.reload > 0) {
       s.reload -= dt;
       if (s.reload <= 0) {
@@ -96,7 +108,10 @@ export class Weapons {
       }
       return false;
     }
-    const trigger = d.auto ? wantsFire : wantsFirePressed;
+    // Las automáticas aceptan tanto botón mantenido como una pulsación
+    // bufereada; antes ignoraban el click encolado si se soltaba Fire antes
+    // de recuperar control o terminar una recarga vacía.
+    const trigger = d.auto ? (wantsFire || wantsFirePressed) : wantsFirePressed;
     if (!trigger || !canFire || s.cd > 0) return false;
     if (s.mag <= 0) return false; // seco total (la auto-recarga ya corrió arriba)
     s.mag--;

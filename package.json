@@ -10,6 +10,7 @@
     "server": "node server/server.js",
     "check:controller": "node scripts/check-controller.mjs",
     "check:menu-controller": "node scripts/check-menu-controller.mjs",
+    "check:reload-cancel": "node scripts/check-reload-cancel.mjs",
     "check:round-flow": "node scripts/check-round-flow.mjs",
     "check:bot-stuck": "node scripts/check-bot-stuck.mjs",
     "check:combat-orientation": "node scripts/check-combat-orientation.mjs",
@@ -24,7 +25,7 @@
     "check:warmup": "node scripts/check-warmup.mjs",
     "check:movement": "node scripts/check-movement.mjs",
     "check:lobby": "node scripts/check-lobby.mjs",
-    "test": "npm run check:controller && npm run check:menu-controller && npm run check:round-flow && npm run check:combat-orientation && npm run check:cover-fire && npm run check:impacts && npm run check:spatial-audio && npm run check:i18n && npm run check:shotgun-pattern && npm run check:warmup && npm run check:lobby && npm run check:online-fire"
+    "test": "npm run check:controller && npm run check:menu-controller && npm run check:reload-cancel && npm run check:round-flow && npm run check:combat-orientation && npm run check:cover-fire && npm run check:impacts && npm run check:spatial-audio && npm run check:i18n && npm run check:shotgun-pattern && npm run check:warmup && npm run check:lobby && npm run check:online-fire"
   },
   "dependencies": {
     "lil-gui": "^0.20.0",

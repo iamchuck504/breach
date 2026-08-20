@@ -16,9 +16,8 @@ const center = (el) => {
   return { x: r.left + r.width / 2, y: r.top + r.height / 2, r };
 };
 
-// Navegación geométrica: la jerarquía visual del menú es la jerarquía de
-// control. Favorece elementos alineados en la dirección pedida y evita saltos
-// diagonales hacia controles que casualmente se crearon antes en el DOM.
+// Respaldo para controles nuevos que todavía no tengan ruta semántica. Los
+// menús actuales usan el grafo explícito de navigationGraph().
 export function directionalTarget(current, candidates, direction) {
   const [dx, dy] = DIRS[direction] || [0, 0];
   if (!current || (!dx && !dy)) return null;
@@ -56,6 +55,157 @@ function actionLabel(el) {
     .replace(/\s+/g, ' ').trim().slice(0, 34);
 }
 
+function navMap() { return new Map(); }
+
+function setRoute(graph, from, direction, to, overwrite = true) {
+  if (!from || !to || from === to) return;
+  const key = focusKey(from);
+  if (!key) return;
+  const routes = graph.get(key) || {};
+  if (overwrite || !routes[direction]) routes[direction] = to;
+  graph.set(key, routes);
+}
+
+function link(graph, a, direction, b) {
+  const opposite = { up: 'down', down: 'up', left: 'right', right: 'left' }[direction];
+  setRoute(graph, a, direction, b);
+  setRoute(graph, b, opposite, a);
+}
+
+function linkLine(graph, elements, direction) {
+  const list = elements.filter(visible);
+  for (let i = 0; i < list.length - 1; i++) link(graph, list[i], direction, list[i + 1]);
+}
+
+function query(scope, selector) { return scope.querySelector(selector); }
+function queryAll(scope, selector) { return [...scope.querySelectorAll(selector)].filter(visible); }
+
+function mapIndex(source, target, index) {
+  if (!target.length) return null;
+  if (source.length <= 1) return target[0];
+  return target[Math.round(index * (target.length - 1) / (source.length - 1))];
+}
+
+function mainGraph(scope) {
+  const graph = navMap();
+  if (scope.classList.contains('in-match')) {
+    linkLine(graph, ['#btn-resume', '#btn-pause-controls', '#btn-pause-fullscreen', '#btn-leave-match']
+      .map((s) => query(scope, s)), 'down');
+    return graph;
+  }
+
+  const modes = ['#btn-bots', '#btn-practice', '#btn-online'].map((s) => query(scope, s));
+  const name = query(scope, '#in-name'), map = query(scope, '#btn-map');
+  const server = query(scope, '#in-server'), create = query(scope, '#btn-lobby-create');
+  const join = query(scope, '#btn-lobby-join'), character = query(scope, '#btn-character');
+  const controls = query(scope, '#btn-controls'), fullscreen = query(scope, '#btn-fullscreen');
+  linkLine(graph, modes, 'down');
+  linkLine(graph, [name, map, server, create, character], 'down');
+  link(graph, create, 'right', join);
+  link(graph, character, 'right', controls);
+  link(graph, controls, 'right', fullscreen);
+  setRoute(graph, join, 'up', server); setRoute(graph, join, 'down', controls);
+  setRoute(graph, fullscreen, 'up', join);
+  [[modes[0], name], [modes[1], map], [modes[2], server]].forEach(([a, b]) => link(graph, a, 'right', b));
+  setRoute(graph, create, 'left', modes[2]);
+  setRoute(graph, character, 'left', modes[2]);
+  return graph;
+}
+
+function characterGraph(scope) {
+  const graph = navMap();
+  const slots = queryAll(scope, '.char-slot');
+  const back = query(scope, '#btn-char-back');
+  linkLine(graph, slots, 'right');
+  for (const slot of slots) setRoute(graph, slot, 'down', back);
+  const selected = slots.find((el) => el.classList.contains('sel')) || slots[0];
+  setRoute(graph, back, 'up', selected);
+  return graph;
+}
+
+function controlsGraph(scope) {
+  const graph = navMap();
+  const kb = queryAll(scope, '[data-nav-column="keyboard"]');
+  const pad = queryAll(scope, '[data-nav-column="controller"]');
+  linkLine(graph, kb, 'down'); linkLine(graph, pad, 'down');
+  const count = Math.max(kb.length, pad.length);
+  for (let i = 0; i < count; i++) {
+    const a = kb[Math.min(i, kb.length - 1)], b = pad[Math.min(i, pad.length - 1)];
+    if (a && b) link(graph, a, 'right', b);
+  }
+
+  const mouse = query(scope, '#sl-mouse'), stick = query(scope, '#sl-pad');
+  const volume = query(scope, '#sl-vol'), language = query(scope, '#sel-language');
+  const invertMouse = query(scope, '#chk-invert'), invertPad = query(scope, '#chk-invert-pad');
+  const reset = query(scope, '#btn-reset-binds'), back = query(scope, '#btn-back');
+  if (kb.length) link(graph, kb.at(-1), 'down', mouse);
+  if (pad.length) setRoute(graph, pad.at(-1), 'down', stick);
+  // Izquierda/derecha en sliders y selectores modifica el valor, por eso el
+  // cambio de columna sucede verticalmente y nunca roba un ajuste.
+  linkLine(graph, [mouse, stick, volume, language], 'down');
+  setRoute(graph, language, 'down', invertMouse);
+  link(graph, invertMouse, 'right', invertPad);
+  setRoute(graph, invertMouse, 'up', language); setRoute(graph, invertPad, 'up', language);
+  setRoute(graph, invertMouse, 'down', reset); setRoute(graph, invertPad, 'down', back);
+  link(graph, reset, 'right', back);
+  setRoute(graph, reset, 'up', invertMouse); setRoute(graph, back, 'up', invertPad);
+  return graph;
+}
+
+function teamRows(team) {
+  const rows = queryAll(team, '.lobby-slot-actions').map((row) => queryAll(row, UI));
+  for (const el of [...team.children]) {
+    if (el.matches?.('button:not(:disabled)')) rows.push([el]);
+  }
+  return rows.filter((row) => row.length);
+}
+
+function linkRows(graph, rows) {
+  for (const row of rows) linkLine(graph, row, 'right');
+  for (let i = 0; i < rows.length - 1; i++) {
+    for (let col = 0; col < rows[i].length; col++) {
+      const down = rows[i + 1][Math.min(col, rows[i + 1].length - 1)];
+      setRoute(graph, rows[i][col], 'down', down);
+    }
+    for (let col = 0; col < rows[i + 1].length; col++) {
+      const up = rows[i][Math.min(col, rows[i].length - 1)];
+      setRoute(graph, rows[i + 1][col], 'up', up);
+    }
+  }
+}
+
+function lobbyGraph(scope) {
+  const graph = navMap();
+  const redRows = teamRows(query(scope, '#lobby-red'));
+  const blueRows = teamRows(query(scope, '#lobby-blue'));
+  const settingRows = queryAll(scope, '#lobby-settings select').map((el) => [el]);
+  linkRows(graph, redRows); linkRows(graph, settingRows); linkRows(graph, blueRows);
+  const red = redRows.flat(), settings = settingRows.flat(), blue = blueRows.flat();
+
+  red.forEach((el, i) => setRoute(graph, el, 'right', mapIndex(red, settings, i), false));
+  settings.forEach((el, i) => {
+    setRoute(graph, el, 'left', mapIndex(settings, red, i));
+    setRoute(graph, el, 'right', mapIndex(settings, blue, i));
+  });
+  blue.forEach((el, i) => setRoute(graph, el, 'left', mapIndex(blue, settings, i), false));
+
+  const leave = query(scope, '#btn-lobby-leave'), start = query(scope, '#btn-lobby-start');
+  link(graph, leave, 'right', start);
+  if (red.length) { setRoute(graph, red.at(-1), 'down', leave); setRoute(graph, leave, 'up', red.at(-1)); }
+  if (settings.length) setRoute(graph, settings.at(-1), 'down', start);
+  if (blue.length) setRoute(graph, blue.at(-1), 'down', start);
+  setRoute(graph, start, 'up', settings.at(-1) || blue.at(-1) || red.at(-1));
+  return graph;
+}
+
+function navigationGraph(scope) {
+  if (scope.id === 'main-card') return mainGraph(scope);
+  if (scope.id === 'controls-card') return controlsGraph(scope);
+  if (scope.id === 'char-card') return characterGraph(scope);
+  if (scope.id === 'lobby-card') return lobbyGraph(scope);
+  return navMap();
+}
+
 export class MenuControllerNavigator {
   constructor({ menu, splash, prompts, onMove, onBack }) {
     this.menu = menu;
@@ -68,9 +218,11 @@ export class MenuControllerNavigator {
     this.saved = new Map();
     this.scopeId = '';
     this.stickDir = null;
+    this.stickLatched = false;
     this.repeatT = 0;
+    this.pointer = null;
 
-    document.addEventListener('pointermove', () => this.setMode('keyboard'), { passive: true });
+    document.addEventListener('pointermove', (e) => this._pointerMove(e), { passive: true });
     document.addEventListener('mousedown', () => this.setMode('keyboard'), { passive: true });
     document.addEventListener('keydown', (e) => this._key(e), true);
     document.addEventListener('focusin', (e) => {
@@ -85,13 +237,14 @@ export class MenuControllerNavigator {
     this.mode = mode;
     document.body.classList.toggle('using-controller', mode === 'controller');
     document.body.classList.toggle('using-keyboard', mode !== 'controller');
+    if (mode === 'controller') this._ensureFocus(true);
     this._renderPrompts();
   }
 
   poll(pad, dt, suspended = false) {
     if (!this.active()) { this._clearFocus(); this.prompts.classList.remove('on'); return; }
-    const padActivity = pad.connected && (pad.justPressed.size ||
-      Math.abs(pad.moveX) > .58 || Math.abs(pad.moveZ) > .58);
+    const magnitude = Math.hypot(pad.moveX || 0, pad.moveZ || 0);
+    const padActivity = pad.connected && (pad.justPressed.size || magnitude >= .67);
     if (padActivity) this.setMode('controller');
     this.prompts.classList.add('on');
     if (suspended || !pad.connected || this.mode !== 'controller') {
@@ -100,28 +253,49 @@ export class MenuControllerNavigator {
     }
 
     this._ensureFocus(true);
-    if (pad.justPressed.has(PAD.B)) { this.back(); return; }
-    if (pad.justPressed.has(PAD.A)) { this.confirm(); return; }
+    if (pad.justPressed.has(PAD.B)) { this._blockStick(magnitude); this.back(); return; }
+    if (pad.justPressed.has(PAD.A)) { this._blockStick(magnitude); this.confirm(); return; }
 
-    let dir = null;
-    if (pad.justPressed.has(PAD.UP)) dir = 'up';
-    else if (pad.justPressed.has(PAD.DOWN)) dir = 'down';
-    else if (pad.justPressed.has(PAD.LEFT)) dir = 'left';
-    else if (pad.justPressed.has(PAD.RIGHT)) dir = 'right';
-    const stickDir = Math.abs(pad.moveX) > Math.abs(pad.moveZ)
-      ? (pad.moveX > .62 ? 'right' : pad.moveX < -.62 ? 'left' : null)
-      : (pad.moveZ > .62 ? 'up' : pad.moveZ < -.62 ? 'down' : null);
-    if (dir) {
-      this.stickDir = null; this.repeatT = 0;
-      this.move(dir);
-    } else if (stickDir) {
-      if (stickDir !== this.stickDir) {
-        this.stickDir = stickDir; this.repeatT = .38; this.move(stickDir);
-      } else {
-        this.repeatT -= dt;
-        if (this.repeatT <= 0) { this.repeatT = .12; this.move(stickDir); }
+    let dpad = null;
+    if (pad.justPressed.has(PAD.UP)) dpad = 'up';
+    else if (pad.justPressed.has(PAD.DOWN)) dpad = 'down';
+    else if (pad.justPressed.has(PAD.LEFT)) dpad = 'left';
+    else if (pad.justPressed.has(PAD.RIGHT)) dpad = 'right';
+    if (dpad) {
+      this._blockStick(magnitude);
+      this.move(dpad); // exactamente un paso por flanco del botón
+      return;
+    }
+
+    // Histeresis: una inclinación no puede cambiar de eje a mitad del gesto.
+    // Hay que volver a neutral antes de iniciar otra dirección.
+    if (this.stickLatched) {
+      if (magnitude <= .34) {
+        this.stickLatched = false; this.stickDir = null; this.repeatT = 0;
+        return;
       }
-    } else { this.stickDir = null; this.repeatT = 0; }
+      if (!this.stickDir) return;
+      this.repeatT -= dt;
+      if (this.repeatT <= 0) {
+        this.repeatT = .18;
+        this.move(this.stickDir);
+      }
+      return;
+    }
+    if (magnitude < .67) return;
+    this.stickDir = Math.abs(pad.moveX) >= Math.abs(pad.moveZ)
+      ? (pad.moveX > 0 ? 'right' : 'left')
+      : (pad.moveZ > 0 ? 'up' : 'down');
+    this.stickLatched = true;
+    this.repeatT = .46;
+    this.move(this.stickDir);
+  }
+
+  _blockStick(magnitude) {
+    if (magnitude <= .34) return;
+    this.stickLatched = true;
+    this.stickDir = null;
+    this.repeatT = 0;
   }
 
   back() {
@@ -155,7 +329,13 @@ export class MenuControllerNavigator {
       this._adjust(el, direction === 'right' ? 1 : -1);
       return;
     }
-    const next = directionalTarget(el, this._items(), direction);
+    const scope = this._scope();
+    const routes = navigationGraph(scope).get(focusKey(el));
+    // Un elemento conocido se queda quieto si esa dirección no tiene salida.
+    // Solo los controles futuros sin entrada explícita usan geometría.
+    const explicit = routes?.[direction];
+    const next = visible(explicit) ? explicit
+      : routes ? null : directionalTarget(el, this._items(), direction);
     if (next) { this._setFocus(next, true); this.onMove?.(); }
   }
 
@@ -187,6 +367,14 @@ export class MenuControllerNavigator {
 
   _items() { return [...this._scope().querySelectorAll(UI)].filter(visible); }
 
+  _default(items, scope) {
+    if (scope.id === 'char-card') return items.find((el) => el.classList.contains('sel')) || items[0];
+    if (scope.id === 'lobby-card') return query(scope, '#btn-lobby-start:not(:disabled)') ||
+      items.find((el) => el.dataset.action === 'team') || items.find((el) => el.dataset.setting) || items[0];
+    if (scope.id === 'controls-card') return items.find((el) => el.dataset.navColumn === 'keyboard') || items[0];
+    return items.find((el) => el.hasAttribute('data-nav-default')) || items[0];
+  }
+
   _ensureFocus(force, changed = false) {
     const scope = this._scope();
     const id = scope.id || 'menu';
@@ -195,8 +383,7 @@ export class MenuControllerNavigator {
     const items = this._items();
     if (!items.length) { this._clearFocus(); return null; }
     const wanted = this.saved.get(id);
-    const next = items.find((el) => focusKey(el) === wanted) ||
-      items.find((el) => el.hasAttribute('data-nav-default')) || items[0];
+    const next = items.find((el) => focusKey(el) === wanted) || this._default(items, scope);
     if (force || this.mode === 'controller') this._setFocus(next, true);
     else this._setFocus(document.activeElement && items.includes(document.activeElement)
       ? document.activeElement : next, false);
@@ -239,6 +426,14 @@ export class MenuControllerNavigator {
       const badge = document.createElement('b'); badge.textContent = key;
       item.append(badge, document.createTextNode(label)); return item;
     }));
+  }
+
+  _pointerMove(e) {
+    const p = { x: e.clientX, y: e.clientY };
+    if (!this.pointer) { this.pointer = p; this.setMode('keyboard'); return; }
+    const moved = Math.hypot(p.x - this.pointer.x, p.y - this.pointer.y);
+    this.pointer = p;
+    if (moved >= 2) this.setMode('keyboard');
   }
 
   _key(e) {

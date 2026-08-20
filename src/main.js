@@ -966,6 +966,7 @@ function buildCharUI() {
       const b = document.createElement('button');
       b.className = 'char-slot';
       b.dataset.v = v;
+      b.dataset.navKey = `char:${v}`;
       const name = t(`character.${v}`);
       b.innerHTML = `<img alt="${name}"><span>${name}</span>`;
       b.addEventListener('click', () => {
@@ -1113,6 +1114,8 @@ function renderBinds() {
     label.textContent = t(KB_LABELS[action]);
     const btn = document.createElement('button');
     btn.className = 'bind-btn';
+    btn.dataset.navKey = `bind:keyboard:${action}`;
+    btn.dataset.navColumn = 'keyboard';
     btn.textContent = keyLabel(BINDS.kb[action]);
     btn.addEventListener('click', () => startRebindKb(action, btn));
     row.append(label, btn);
@@ -1126,6 +1129,8 @@ function renderBinds() {
     label.textContent = t(PAD_LABELS[action]);
     const btn = document.createElement('button');
     btn.className = 'bind-btn';
+    btn.dataset.navKey = `bind:controller:${action}`;
+    btn.dataset.navColumn = 'controller';
     btn.textContent = padBtnName(BINDS.pad[action]);
     btn.addEventListener('click', () => startRebindPad(action, btn));
     row.append(label, btn);
@@ -2155,21 +2160,22 @@ function simStep(dt) {
   let canFire = stateOk && aligned &&
     coverPoseReady(input.aimHeld, wantsFire) && (!wantsFire || coverFireClear());
   // cualquier click que no pueda salir YA (roadie, cuerpo girando, cooldown,
-  // dive/slide, final de recarga) queda bufereado — y el buffer dura AL MENOS
+  // dive/slide o recarga) queda bufereado — y el buffer dura AL MENOS
   // lo que falta de cooldown/recarga, para que el tiro encolado nunca se pierda
   const wst = G.weapons.st;
   const relRemain = G.weapons.reloading ? wst.reload : 0;
   if (input.firePressed && !p.dead &&
-      (!canFire || wst.cd > 0 || (relRemain > 0 && relRemain < 0.45))) {
+      (!canFire || wst.cd > 0 || relRemain > 0)) {
     G.fireBuffer = requiredFireBuffer(p, wst, relRemain);
   }
   G.fireBuffer = Math.max(0, G.fireBuffer - dt);
   const wasReloading = G.weapons.reloading;
 
-  // sin poder disparar YA, el gatillo no debe forzar pose de tiro: ni seco
-  // total (mantenía blind_over y bloqueaba el roadie) ni RECARGANDO (un click
-  // latcheaba la pose los ~2s de recarga, asomándote expuesto sobre el cover)
-  const hasAmmo = !G.weapons.reloading &&
+  // Sin munición físicamente disponible, el gatillo no debe forzar pose de
+  // tiro: evita que una recarga vacía deje al jugador expuesto sobre el cover.
+  // Una recarga táctica sí puede interrumpirse porque conserva balas en el mag.
+  const canInterruptReload = G.weapons.reloading && input.firePressed && G.weapons.st.mag > 0;
+  const hasAmmo = (!G.weapons.reloading || canInterruptReload) &&
     (G.weapons.st.mag > 0 || G.weapons.st.reserve > 0);
   // la intención de disparo SIEMPRE llega al controller: cancela el roadie
   // (en tierra o en el aire) y gira el cuerpo para disparar
@@ -2189,7 +2195,9 @@ function simStep(dt) {
 
   if (input.reloadPressed) G.weapons.startReload();
   if (!wasReloading && G.weapons.reloading) audio.reload(); // incluye auto-recarga
-  if (wasReloading && !G.weapons.reloading) audio.reloadDone();
+  // Una recarga interrumpida abandona el gesto sin reproducir el sonido que
+  // comunica cargador completo.
+  if (wasReloading && !G.weapons.reloading && !G.weapons.reloadInterrupted) audio.reloadDone();
 
   // práctica = munición de reserva infinita (nunca te quedas sin disparar)
   if (G.mode === 'practice') {
