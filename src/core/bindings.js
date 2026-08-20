@@ -1,4 +1,5 @@
 // Bindings configurables de teclado y control, persistidos en localStorage.
+import { t } from './i18n.js';
 const KB_DEFAULT = {
   forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD',
   sprint: 'ShiftLeft', evade: 'Space', jump: 'KeyF', reload: 'KeyR', swap: 'KeyQ',
@@ -11,14 +12,14 @@ const PAD_DEFAULT = { sprint: 0, evade: 2, jump: 1, reload: 5, swap: 3, aim: 6, 
 export const BINDS = { kb: { ...KB_DEFAULT }, pad: { ...PAD_DEFAULT } };
 
 export const KB_LABELS = {
-  forward: 'Adelante', back: 'Atrás', left: 'Izquierda', right: 'Derecha',
-  sprint: 'Roadie run', evade: 'Cover / Evadir', jump: 'Saltar',
-  reload: 'Recargar', swap: 'Cambiar arma', score: 'Marcador',
+  forward: 'binding.forward', back: 'binding.back', left: 'binding.left', right: 'binding.right',
+  sprint: 'binding.sprint', evade: 'binding.evade', jump: 'binding.jump',
+  reload: 'binding.reload', swap: 'binding.swap', score: 'binding.score',
 };
 export const PAD_LABELS = {
-  sprint: 'Roadie run', evade: 'Cover / Evadir', jump: 'Saltar',
-  aim: 'Apuntar', fire: 'Disparar', reload: 'Recargar',
-  swap: 'Cambiar arma', score: 'Marcador', pause: 'Pausa',
+  sprint: 'binding.sprint', evade: 'binding.evade', jump: 'binding.jump',
+  aim: 'binding.aim', fire: 'binding.fire', reload: 'binding.reload',
+  swap: 'binding.swap', score: 'binding.score', pause: 'binding.pause',
 };
 
 export const PAD_BTN_NAMES = [
@@ -26,16 +27,16 @@ export const PAD_BTN_NAMES = [
   'VIEW', 'MENU', 'L3', 'R3', 'D-ARR', 'D-ABA', 'D-IZQ', 'D-DER',
 ];
 
-export function padBtnName(i) { return PAD_BTN_NAMES[i] ?? 'BTN' + i; }
+export function padBtnName(i) { return PAD_BTN_NAMES[i] ?? t('key.button') + i; }
 
 export function keyLabel(code) {
   if (!code) return '—';
   return code
     .replace(/^Key/, '').replace(/^Digit/, '')
-    .replace('ShiftLeft', 'SHIFT IZQ').replace('ShiftRight', 'SHIFT DER')
-    .replace('ControlLeft', 'CTRL IZQ').replace('ControlRight', 'CTRL DER')
-    .replace('AltLeft', 'ALT IZQ').replace('AltRight', 'ALT DER')
-    .replace('Space', 'ESPACIO').replace('Arrow', 'FLECHA ')
+    .replace('ShiftLeft', 'SHIFT ' + t('key.left')).replace('ShiftRight', 'SHIFT ' + t('key.right'))
+    .replace('ControlLeft', 'CTRL ' + t('key.left')).replace('ControlRight', 'CTRL ' + t('key.right'))
+    .replace('AltLeft', 'ALT ' + t('key.left')).replace('AltRight', 'ALT ' + t('key.right'))
+    .replace('Space', t('key.space')).replace('Arrow', t('key.arrow') + ' ')
     .toUpperCase();
 }
 

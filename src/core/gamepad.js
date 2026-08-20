@@ -1,5 +1,5 @@
 // Gamepad API: stick izq mover, stick der cámara (curva cuadrática + deadzone),
-// gatillos analógicos, vibración. A mantenida = roadie run (estilo Gears).
+// gatillos analógicos, vibración. A mantenida = correr.
 import { BINDS } from './bindings.js';
 
 const DEADZONE = 0.16;

@@ -211,6 +211,92 @@ for (const side of [-1, 1]) {
     `blindfire alto ${side < 0 ? 'izquierdo' : 'derecho'} no activó pose`);
 }
 
+// Engancharse a una cobertura cercana absorbe distancia y momentum en varios
+// frames; nunca teletransporta ni borra en seco la componente paralela.
+{
+  const { controller } = makeController();
+  const input = new TestInput();
+  const face = {
+    a: { x: -3, z: 0 }, b: { x: 3, z: 0 }, n: { x: 0, z: 1 }, h: 2.1,
+  };
+  controller.pos = { x: 0, z: 1.05 };
+  controller.vel = { x: 2.2, z: -4.4 };
+  const before = { ...controller.pos };
+  controller._enterCover(face, { x: 0, z: 0.38 });
+  check(controller.pos.x === before.x && controller.pos.z === before.z,
+    'entrada a cover cambió la posición en el mismo frame');
+  check(controller.vel.x > 1 && Math.abs(controller.vel.z) < 0.01,
+    `entrada a cover no conservó momentum paralelo (${controller.vel.x}, ${controller.vel.z})`);
+  controller.update(DT, input, false);
+  const firstStep = Math.hypot(controller.pos.x - before.x, controller.pos.z - before.z);
+  check(firstStep > 0.001 && firstStep < 0.2,
+    `primer frame de entrada a cover fue inválido (${firstStep})`);
+  for (let i = 0; i < 20; i++) controller.update(DT, input, false);
+  check(Math.abs(controller.pos.z - 0.38) < 0.015 && !controller.coverEntry,
+    `entrada a cover no se asentó (${controller.pos.z}, entry=${!!controller.coverEntry})`);
+}
+
+// La transición lateral de blindfire queda lista temprano; el chequeo físico
+// de muzzle/brazos sigue siendo la autoridad final en el loop de combate.
+{
+  const { controller } = makeController();
+  const input = new TestInput();
+  putAtCoverEdge(controller, 2.1);
+  let readyFrame = 0;
+  while (controller.blindPoseExposure < TUNING.cover.blindFireReady && readyFrame < 10) {
+    controller.update(DT, input, true);
+    readyFrame++;
+  }
+  check(readyFrame <= 2 && !!controller.blindMode,
+    `blindfire lateral tardó ${readyFrame} frames en quedar listo`);
+}
+
+// Pendiente descendente: los pies permanecen adheridos al suelo y el rig
+// recibe pitch negativo, sin alternar entre grounded/airborne.
+{
+  const { controller, world } = makeController();
+  world.groundHeight = (p) => Math.max(0, Math.min(1, 1 + p.z * 0.2));
+  controller.respawn({ x: 0, z: 0, yaw: 0 });
+  controller.y = 1;
+  const input = new TestInput();
+  input.mv = { x: 0, z: 1 };
+  let airFrames = 0, minPitch = 0;
+  for (let i = 0; i < 80; i++) {
+    controller.update(DT, input, false);
+    if (!controller.grounded) airFrames++;
+    minPitch = Math.min(minPitch, controller.groundPitch);
+  }
+  check(airFrames === 0, `bajada de rampa produjo ${airFrames} frames en el aire`);
+  check(minPitch < -0.08, `bajada de rampa no inclinó el cuerpo (${minPitch})`);
+  check(Math.abs(controller.y - world.groundHeight(controller.pos)) < 0.01,
+    `pies se separaron de la rampa (${controller.y})`);
+}
+
+// Entrar de lado a una superficie alta no puede elevar al personaje sin una
+// transición válida. El movimiento queda bloqueado en el borde.
+{
+  const { controller, world } = makeController();
+  world.groundHeight = (p, r = 0) =>
+    (Math.abs(p.x) - r <= 1.55 && Math.abs(p.z) < 2 ? 0.9 : 0);
+  controller.respawn({ x: 2.05, z: 0, yaw: 0 });
+  const input = new TestInput();
+  input.mv = { x: -1, z: 0 };
+  frame(controller, input, 90);
+  check(controller.y < 0.02, `aproximación lateral subió sin animación (${controller.y})`);
+  check(controller.pos.x >= 1.9,
+    `personaje atravesó el costado elevado (${controller.pos.x})`);
+}
+
+// La adaptación visual de una pendiente no puede filtrarse a la vida
+// siguiente después de spectator/respawn.
+{
+  const { controller } = makeController();
+  controller.groundPitch = -0.24;
+  controller.respawn({ x: 2, z: 3, yaw: 0.5 });
+  check(controller.groundPitch === 0,
+    `respawn conservó la inclinación anterior (${controller.groundPitch})`);
+}
+
 // Salidas explícitas: sprint+lateral sale; stick atrás usa detach filtrado.
 {
   const { controller } = makeController();
@@ -252,6 +338,32 @@ for (const side of [-1, 1]) {
   weapons.update(0.3, false, false, false);
   check(weapons.cur === atDeath && !weapons.swapping && !weapons.reloading,
     `arma cambió tras morir (${atDeath} -> ${weapons.cur})`);
+}
+
+// La muerte tiene prioridad sobre cualquier transición de movimiento. Ningún
+// estado de cover/evade/mantle puede sobrevivir hasta spectator o respawn.
+for (const state of ['cover', 'slide', 'dive', 'mantle', 'roadie']) {
+  const { controller } = makeController();
+  controller.state = state;
+  controller.cover = { a: { x: -2, z: 0 }, b: { x: 2, z: 0 }, h: 2 };
+  controller.coverEntry = { target: { x: 0, z: 0.38 }, t: 0.02, dur: 0.15, tangentSpeed: 2 };
+  controller.slide = { target: { x: 1, z: 1 }, face: controller.cover, dir: { x: 1, z: 0 } };
+  controller.dive = { dir: { x: 1, z: 0 } };
+  controller.mantle = { t: 0.2, dur: 0.6 };
+  controller.aim = true;
+  controller.firingBlind = 0.25;
+  controller.blindMode = 'right';
+  controller.vel = { x: 5, z: -2 };
+  controller.kill();
+  check(controller.dead && controller.state === 'idle',
+    `muerte desde ${state} dejó estado ${controller.state}`);
+  check(!controller.cover && !controller.coverEntry && !controller.slide &&
+    !controller.dive && !controller.mantle && !controller.aim &&
+    !controller.blindMode && controller.firingBlind === 0 && controller.speed === 0,
+  `muerte desde ${state} conservó estado transitorio`);
+  controller.respawn({ x: 0, z: 0, yaw: 0 });
+  check(!controller.dead && controller.state === 'idle' && controller.grounded,
+    `respawn después de ${state} no recuperó control`);
 }
 
 if (failures.length) {

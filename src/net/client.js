@@ -1,6 +1,7 @@
 // Cliente WebSocket. Protocolo JSON simple; el server es autoridad de
 // hp / muertes / respawn / marcador. Posición client-authoritative (slice).
 import { TUNING } from '../config/tuning.js';
+import { t } from '../core/i18n.js';
 
 export class NetClient {
   constructor() {
@@ -21,7 +22,7 @@ export class NetClient {
       try { this.ws = new WebSocket(url); }
       catch (e) { reject(e); return; }
       const timeout = setTimeout(() => {
-        if (!settled) { settled = true; this.ws.close(); reject(new Error('timeout')); }
+        if (!settled) { settled = true; this.ws.close(); reject(new Error(t('network.timeout'))); }
       }, 6000);
       this.ws.onopen = () => {
         this.send({ t: 'join', name, v: variant });
@@ -41,11 +42,11 @@ export class NetClient {
         this.handlers[msg.t]?.(msg);
       };
       this.ws.onerror = () => {
-        if (!settled) { settled = true; clearTimeout(timeout); reject(new Error('no se pudo conectar')); }
+        if (!settled) { settled = true; clearTimeout(timeout); reject(new Error(t('network.failed'))); }
       };
       this.ws.onclose = () => {
         this.connected = false;
-        if (!settled) { settled = true; clearTimeout(timeout); reject(new Error('conexión cerrada')); }
+        if (!settled) { settled = true; clearTimeout(timeout); reject(new Error(t('network.closed'))); }
         else if (!this.dead) this.handlers['close']?.();
       };
     });

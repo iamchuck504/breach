@@ -3,15 +3,16 @@ import * as THREE from 'three';
 import GUI from 'lil-gui';
 import { TUNING, TUNING_DEFAULTS } from './config/tuning.js';
 import { BINDS, KB_LABELS, PAD_LABELS, keyLabel, padBtnName, loadBinds, saveBinds, resetBinds } from './core/bindings.js';
+import { LANGUAGES, t, getLanguage, setLanguage, applyTranslations, onLanguageChange } from './core/i18n.js';
 import { Input } from './core/input.js';
 import { ShoulderCamera } from './core/camera.js';
 import { World } from './world/world.js';
-import { Rig, CHAR_NAMES, RAGDOLL_R } from './player/rig.js';
+import { Rig, RAGDOLL_R } from './player/rig.js';
 import { Controller, PLAYER_R } from './player/controller.js';
 import { RemotePlayer } from './player/remote.js';
 import { Dummies } from './player/practice.js';
 import { Weapons } from './combat/weapons.js';
-import { resolveShot, resolveGuidedShot, applySpread } from './combat/ballistics.js';
+import { resolveShot, resolveGuidedShot, applySpread, applyPelletPattern } from './combat/ballistics.js';
 import { muzzleHasClearance, segmentsHaveClearance } from './combat/cover-fire.js';
 import { requiredFireBuffer } from './combat/fire-control.js';
 import { Effects } from './fx/effects.js';
@@ -21,6 +22,8 @@ import { NetClient } from './net/client.js';
 import { BotMatch } from './game/botmatch.js';
 import { AmmoCrates } from './game/crates.js';
 import { WeaponDrops } from './game/drops.js';
+
+applyTranslations();
 
 const TEAM_HEX = { red: 0xd94f3f, blue: 0x4f8de0 };
 
@@ -115,7 +118,8 @@ const G = {
   footAcc: 0,
 };
 
-const MAP_LABEL = { fortaleza: 'FORTALEZA', azoteas: 'AZOTEA' };
+const mapLabel = (map) => t(`map.${map || 'fortaleza'}`);
+const teamLabel = (team) => t(team === 'red' ? 'hud.red' : 'hud.blue');
 const INTRO_TIME = 10;
 const COUNTDOWN_TIME = 3;
 const FINAL_PRESENTATION_TIME = 11;
@@ -144,28 +148,28 @@ function botPresentation() {
   if (!bm) return null;
   const common = { rows: bm.statRows(), localId: 'player' };
   if (bm.phase === 'intro') return {
-    phase: 'intro', kicker: 'DESPLIEGUE // VS BOTS', title: MAP_LABEL[G.mapChoice] || 'FORTALEZA',
-    sub: 'TEAM DEATHMATCH', meta: ['MEJOR DE 3', '15 VIDAS POR EQUIPO', `ROUND ${bm.round}`],
-    progress: 1 - bm.phaseT / INTRO_TIME, wait: 'RECONOCIENDO EL CAMPO DE BATALLA', ...common,
+    phase: 'intro', kicker: t('flow.deploymentBots'), title: mapLabel(G.mapChoice),
+    sub: t('mode.teamDeathmatch'), meta: [t('flow.bestOf3'), t('flow.livesPerTeam', { count: 15 }), t('flow.round', { round: bm.round })],
+    progress: 1 - bm.phaseT / INTRO_TIME, wait: t('flow.scouting'), ...common,
   };
   if (bm.phase === 'countdown') return {
-    phase: 'countdown', count: Math.max(1, Math.ceil(bm.phaseT)), sub: `ROUND ${bm.round}`,
+    phase: 'countdown', count: Math.max(1, Math.ceil(bm.phaseT)), sub: t('flow.round', { round: bm.round }),
   };
   if (bm.phase === 'intermission') return {
-    phase: 'final-score', kicker: 'FIN DE ROUND',
-    title: bm.roundWinner ? `ROUND PARA ${bm.roundWinner === 'red' ? 'ROJO' : 'AZUL'}` : 'ROUND EMPATADO',
-    sub: 'SIGUIENTE DESPLIEGUE EN BREVE', red: bm.wins.red, blue: bm.wins.blue, ...common,
+    phase: 'final-score', kicker: t('flow.roundEnded'),
+    title: bm.roundWinner ? t('flow.roundFor', { team: teamLabel(bm.roundWinner) }) : t('flow.roundDraw'),
+    sub: t('flow.nextDeployment'), red: bm.wins.red, blue: bm.wins.blue, ...common,
   };
   if (bm.phase === 'final') {
     const elapsed = FINAL_PRESENTATION_TIME - bm.phaseT;
     const won = bm.matchWinner === 'red';
     if (elapsed < 2.8) return {
-      phase: 'result', kicker: 'PARTIDA TERMINADA', title: won ? 'VICTORIA' : 'DERROTA',
-      sub: bm.matchWinner === 'red' ? 'EQUIPO ROJO' : 'EQUIPO AZUL', red: bm.wins.red, blue: bm.wins.blue,
+      phase: 'result', kicker: t('flow.matchEnded'), title: t(won ? 'flow.victory' : 'flow.defeat'),
+      sub: t('flow.winnerTeam', { team: teamLabel(bm.matchWinner) }), red: bm.wins.red, blue: bm.wins.blue,
     };
     if (elapsed < 7.2) return {
-      phase: 'final-score', kicker: 'RESULTADO FINAL', title: won ? 'VICTORIA' : 'DERROTA',
-      sub: 'MARCADOR DE LA PARTIDA', red: bm.wins.red, blue: bm.wins.blue, ...common,
+      phase: 'final-score', kicker: t('flow.finalResult'), title: t(won ? 'flow.victory' : 'flow.defeat'),
+      sub: t('flow.matchScore'), red: bm.wins.red, blue: bm.wins.blue, ...common,
     };
     const mvp = mvpOf(common.rows);
     return { phase: 'mvp', mvp, portrait: mvp ? renderCharacterPortrait(mvp.variant, mvp.team) : null };
@@ -180,12 +184,12 @@ function onlinePresentation(now = Date.now() / 1000) {
     const elapsed = now - f.at;
     const won = f.team === G.team;
     if (elapsed < 2.8) return {
-      phase: 'result', kicker: 'PARTIDA TERMINADA', title: won ? 'VICTORIA' : 'DERROTA',
-      sub: `GANA EQUIPO ${f.team === 'red' ? 'ROJO' : 'AZUL'}`, red: f.scores?.red ?? G.scores.red, blue: f.scores?.blue ?? G.scores.blue,
+      phase: 'result', kicker: t('flow.matchEnded'), title: t(won ? 'flow.victory' : 'flow.defeat'),
+      sub: t('flow.winnerTeam', { team: teamLabel(f.team) }), red: f.scores?.red ?? G.scores.red, blue: f.scores?.blue ?? G.scores.blue,
     };
     if (elapsed < 7.2) return {
-      phase: 'final-score', kicker: 'RESULTADO FINAL', title: won ? 'VICTORIA' : 'DERROTA',
-      sub: 'MARCADOR DE LA PARTIDA', red: f.scores?.red ?? G.scores.red, blue: f.scores?.blue ?? G.scores.blue,
+      phase: 'final-score', kicker: t('flow.finalResult'), title: t(won ? 'flow.victory' : 'flow.defeat'),
+      sub: t('flow.matchScore'), red: f.scores?.red ?? G.scores.red, blue: f.scores?.blue ?? G.scores.blue,
       rows: f.rows || G.onlineRows, localId: G.net?.id,
     };
     const mvp = mvpOf(f.rows || G.onlineRows);
@@ -194,12 +198,12 @@ function onlinePresentation(now = Date.now() / 1000) {
   const remain = G.onlineStartAt - now;
   if (remain <= 0) return null;
   if (remain > COUNTDOWN_TIME) return {
-    phase: 'intro', kicker: 'DESPLIEGUE // ONLINE', title: 'FORTALEZA', sub: 'TEAM DEATHMATCH',
-    meta: [`PRIMERO A ${TUNING.combat.killLimit}`, `${G.onlineRows.length}/8 JUGADORES`],
-    progress: 1 - (remain - COUNTDOWN_TIME) / INTRO_TIME, wait: 'SINCRONIZANDO ESCUADRAS',
+    phase: 'intro', kicker: t('flow.deploymentOnline'), title: mapLabel('fortaleza'), sub: t('mode.teamDeathmatch'),
+    meta: [t('flow.firstTo', { count: TUNING.combat.killLimit }), t('flow.players', { count: G.onlineRows.length })],
+    progress: 1 - (remain - COUNTDOWN_TIME) / INTRO_TIME, wait: t('flow.syncing'),
     rows: G.onlineRows, localId: G.net?.id,
   };
-  return { phase: 'countdown', count: Math.max(1, Math.ceil(remain)), sub: 'PREPÁRATE' };
+  return { phase: 'countdown', count: Math.max(1, Math.ceil(remain)), sub: t('flow.prepare') };
 }
 
 function activePresentation(now = Date.now() / 1000) {
@@ -288,14 +292,14 @@ function spectatorView() {
   if (!G.spectator.active || G.spectator.deathHold > 0) return null;
   const target = spectatorTarget();
   let respawn = '';
-  if (G.respawnT > 0) respawn = `REAPARECES EN ${Math.ceil(G.respawnT)}`;
-  else if (G.mode === 'bots' && G.botMatch?.pool.red <= 0) respawn = 'SIN RESPAWNS · HASTA FIN DE ROUND';
-  else if (!G.selfAlive) respawn = 'ESPERANDO RESPAWN';
+  if (G.respawnT > 0) respawn = t('spectator.respawnsIn', { count: Math.ceil(G.respawnT) });
+  else if (G.mode === 'bots' && G.botMatch?.pool.red <= 0) respawn = t('spectator.noRespawns');
+  else if (!G.selfAlive) respawn = t('spectator.waitingRespawn');
   return {
-    name: target?.name || 'ESPERANDO COMPAÑERO',
+    name: target?.name || t('hud.waitingTeammate'),
     controls: target
-      ? `${keyLabel(BINDS.kb.swap)}/${keyLabel(BINDS.kb.reload)} · ${padBtnName(BINDS.pad.swap)}/${padBtnName(BINDS.pad.reload)} CAMBIAR`
-      : 'SIN COMPAÑEROS ACTIVOS',
+      ? `${keyLabel(BINDS.kb.swap)}/${keyLabel(BINDS.kb.reload)} · ${padBtnName(BINDS.pad.swap)}/${padBtnName(BINDS.pad.reload)} ${t('spectator.switch')}`
+      : t('spectator.noTeammates'),
     respawn,
     ready: G.respawnT > 0 && G.respawnT <= 1,
   };
@@ -377,7 +381,7 @@ const ctrlEvents = {
   onBounce: (chain) => {
     audio.whoosh();
     if (G.player) effects.dust(G.player.pos);
-    if (chain >= 2) hud.hint('BOUNCE ×' + chain, 700);
+    if (chain >= 2) hud.hint(t('msg.bounce', { count: chain }), 700);
   },
   onDive: () => { audio.whoosh(); },
   onJump: () => { audio.jump(); },
@@ -442,11 +446,11 @@ function prepareGame() {
 btnEnter.addEventListener('click', async () => {
   if (btnEnter.disabled) return;
   btnEnter.disabled = true;
-  btnEnter.textContent = 'Preparando…';
+  btnEnter.textContent = t('common.preparing');
   try { await prepareGame(); }
   catch (e) { console.warn('Warm-up parcial:', e); }
   dismissSplash();
-  btnEnter.textContent = 'Entrar';
+  btnEnter.textContent = t('common.enter');
   inName.focus();
   inName.select();
 });
@@ -460,8 +464,8 @@ function openMenu() {
   hud.el.menu.classList.toggle('in-match-bg', !!G.mode);
   btnResume.style.display = G.mode ? 'flex' : 'none';
   mainCard.classList.toggle('in-match', !!G.mode);
-  document.getElementById('menu-title').textContent = G.mode ? 'PAUSA' : 'JUGAR';
-  document.getElementById('menu-kicker').textContent = G.mode ? 'Partida actual' : 'Selecciona un modo';
+  document.getElementById('menu-title').textContent = t(G.mode ? 'common.pause' : 'common.play');
+  document.getElementById('menu-kicker').textContent = t(G.mode ? 'menu.currentMatch' : 'menu.selectMode');
   // NO soltamos el pointer lock: el menú se usa con el cursor virtual.
   // (Cada exit de lock es una oportunidad para el bug de ClipCursor de
   // Chromium/Windows que deja el cursor confinado.)
@@ -526,9 +530,10 @@ document.getElementById('btn-online').addEventListener('click', () => startOnlin
 
 // selector de mapa (VS Bots y Práctica; online lo fija el server: Fortaleza)
 const btnMap = document.getElementById('btn-map');
-const MAP_LABELS = { fortaleza: 'FORTALEZA', azoteas: 'AZOTEAS' };
 G.mapChoice = localStorage.getItem('breach.map') === 'azoteas' ? 'azoteas' : 'fortaleza';
-function updateMapBtn() { document.getElementById('map-label').textContent = 'Mapa: ' + MAP_LABELS[G.mapChoice]; }
+function updateMapBtn() {
+  document.getElementById('map-label').textContent = t('menu.mapValue', { map: mapLabel(G.mapChoice) });
+}
 btnMap.addEventListener('click', () => {
   G.mapChoice = G.mapChoice === 'fortaleza' ? 'azoteas' : 'fortaleza';
   localStorage.setItem('breach.map', G.mapChoice);
@@ -556,7 +561,7 @@ document.getElementById('btn-fs').addEventListener('click', () => toggleFullscre
 document.addEventListener('fullscreenchange', () => {
   const on = !!document.fullscreenElement;
   document.getElementById('fullscreen-label').textContent = on
-    ? 'Salir de pantalla completa' : 'Pantalla completa';
+    ? t('common.exitFullscreen') : t('common.fullscreen');
   // en fullscreen, capturar Esc (Keyboard Lock API): ni Esc suelta el pointer
   // lock → el bug de ClipCursor no tiene forma de dispararse jugando.
   // Registramos si fue CONCEDIDO: si falla, Esc mantiene el exit programático.
@@ -681,10 +686,10 @@ input.onFocusLost = () => {
 };
 input.onToggleMute = () => {
   const m = audio.toggleMute();
-  hud.hint(m ? 'AUDIO OFF' : 'AUDIO ON', 900);
+  hud.hint(t(m ? 'msg.audioOff' : 'msg.audioOn'), 900);
 };
 input.onInvertChanged = (inv) => {
-  hud.hint('EJE Y RATÓN: ' + (inv ? 'INVERTIDO' : 'NORMAL'), 1200);
+  hud.hint(t('msg.mouseAxis', { state: t(inv ? 'msg.inverted' : 'msg.normal') }), 1200);
   chkInvert.checked = inv;
 };
 
@@ -700,7 +705,17 @@ const slVol = document.getElementById('sl-vol');
 const slVolV = document.getElementById('sl-vol-v');
 const chkInvert = document.getElementById('chk-invert');
 const chkInvertPad = document.getElementById('chk-invert-pad');
+const selLanguage = document.getElementById('sel-language');
 let rebinding = null; // { cancel() }
+
+for (const language of LANGUAGES) {
+  const option = document.createElement('option');
+  option.value = language.code;
+  option.textContent = language.label;
+  selLanguage.append(option);
+}
+selLanguage.value = getLanguage();
+selLanguage.addEventListener('change', () => setLanguage(selLanguage.value));
 
 function showControls(on) {
   mainCard.style.display = on ? 'none' : 'block';
@@ -738,7 +753,8 @@ function buildCharUI() {
       const b = document.createElement('button');
       b.className = 'char-slot';
       b.dataset.v = v;
-      b.innerHTML = `<img alt="${CHAR_NAMES[v]}"><span>${CHAR_NAMES[v]}</span>`;
+      const name = t(`character.${v}`);
+      b.innerHTML = `<img alt="${name}"><span>${name}</span>`;
       b.addEventListener('click', () => {
         G.charVariant = v;
         localStorage.setItem('breach.character', String(v));
@@ -757,6 +773,16 @@ function buildCharUI() {
     renderCharPreviews();
   }
   updateCharSel();
+  translateCharacterSlots();
+}
+function translateCharacterSlots() {
+  for (const b of charSlots.children) {
+    const name = t(`character.${b.dataset.v}`);
+    const img = b.querySelector('img');
+    const label = b.querySelector('span');
+    if (img) img.alt = name;
+    if (label) label.textContent = name;
+  }
 }
 function updateCharSel() {
   for (const b of charSlots.children) b.classList.toggle('sel', +b.dataset.v === G.charVariant);
@@ -871,7 +897,7 @@ function renderBinds() {
     const row = document.createElement('div');
     row.className = 'bind-row';
     const label = document.createElement('span');
-    label.textContent = KB_LABELS[action];
+    label.textContent = t(KB_LABELS[action]);
     const btn = document.createElement('button');
     btn.className = 'bind-btn';
     btn.textContent = keyLabel(BINDS.kb[action]);
@@ -884,7 +910,7 @@ function renderBinds() {
     const row = document.createElement('div');
     row.className = 'bind-row';
     const label = document.createElement('span');
-    label.textContent = PAD_LABELS[action];
+    label.textContent = t(PAD_LABELS[action]);
     const btn = document.createElement('button');
     btn.className = 'bind-btn';
     btn.textContent = padBtnName(BINDS.pad[action]);
@@ -893,6 +919,19 @@ function renderBinds() {
     padRows.append(row);
   }
 }
+
+onLanguageChange((language) => {
+  selLanguage.value = language;
+  hud.invalidateLanguage();
+  updateMapBtn();
+  translateCharacterSlots();
+  renderBinds();
+  document.getElementById('menu-title').textContent = t(G.mode ? 'common.pause' : 'common.play');
+  document.getElementById('menu-kicker').textContent = t(G.mode ? 'menu.currentMatch' : 'menu.selectMode');
+  document.getElementById('fullscreen-label').textContent = t(document.fullscreenElement
+    ? 'common.exitFullscreen' : 'common.fullscreen');
+  if (!input.pad.connected) padStatus.textContent = t('menu.noController');
+});
 
 function startRebindKb(action, btn) {
   cancelRebind();
@@ -946,8 +985,9 @@ input.onToggleTuning = () => {
   gui = new GUI({ title: 'BREACH TUNING' });
   const addRec = (obj, folder) => {
     for (const k in obj) {
-      if (typeof obj[k] === 'number') folder.add(obj, k);
-      else if (typeof obj[k] === 'object') addRec(obj[k], folder.addFolder(k));
+      const visibleName = k.replace(/roadie/gi, 'run');
+      if (typeof obj[k] === 'number') folder.add(obj, k).name(visibleName);
+      else if (typeof obj[k] === 'object') addRec(obj[k], folder.addFolder(visibleName));
     }
   };
   addRec(TUNING, gui);
@@ -1011,7 +1051,7 @@ function spawnLocal(team, spawn) {
 
 function grantSpawnProtection() {
   G.spawnProt = TUNING.combat.spawnProtection;
-  hud.hint('PROTECCIÓN DE SPAWN — SE ROMPE AL DISPARAR', 2200);
+  hud.hint(t('msg.spawnProtection'), 2200);
 }
 
 function damagePlayerLocal(dmg, fromName, shooter, hitCtx = null) {
@@ -1050,7 +1090,7 @@ function damagePlayerLocal(dmg, fromName, shooter, hitCtx = null) {
       G.respawnT = TUNING.combat.respawnTime;
     } else {
       G.respawnT = 0;
-      hud.center('SIN VIDAS', 'esperando el final de la ronda', 4500);
+      hud.center(t('msg.noLives'), t('msg.waitRound'), 4500);
     }
     // El drop nace cuando desaparece el arma de la mano y en la posición
     // ACTUAL del cadáver; antes aparecía 60 ms tarde en el punto inicial.
@@ -1144,7 +1184,7 @@ function startBots() {
   showControls(false);
   hud.show(true);
   input.requestLock();
-  setTimeout(() => hud.hint('TAB / VIEW: MARCADOR', 2800), 3400);
+  setTimeout(() => hud.hint(t('msg.scoreboardHint'), 2800), 3400);
 }
 
 function startPractice() {
@@ -1164,9 +1204,9 @@ function startPractice() {
   showControls(false);
   hud.show(true);
   hud.score(0, 0);
-  hud.center('PRÁCTICA', 'blancos móviles en el lado azul', 2600);
+  hud.center(t('msg.practice'), t('msg.practiceSub'), 2600);
   input.requestLock();
-  setTimeout(() => hud.hint('EJE Y: ' + (input.invertY ? 'INVERTIDO' : 'NORMAL') + ' — F9 CAMBIA', 3000), 3000);
+  setTimeout(() => hud.hint(t('msg.axisHint', { state: t(input.invertY ? 'msg.inverted' : 'msg.normal') }), 3000), 3000);
 }
 
 async function startOnline() {
@@ -1175,9 +1215,9 @@ async function startOnline() {
   enterFullscreen();
   G.name = saveName();
   const url = inServer.value.trim();
-  if (!url) { netStatus.textContent = 'Escribe la URL del servidor (npm run server)'; return; }
+  if (!url) { netStatus.textContent = t('msg.serverUrl'); return; }
   localStorage.setItem('breach.server', url);
-  netStatus.textContent = 'Conectando…';
+  netStatus.textContent = t('msg.connecting');
   const net = new NetClient();
   bindNet(net);
   const mySeq = ++startSeq;
@@ -1211,10 +1251,10 @@ async function startOnline() {
     hud.score(G.scores.red, G.scores.blue);
     netStatus.textContent = '';
     input.requestLock();
-    setTimeout(() => hud.hint('EJE Y: ' + (input.invertY ? 'INVERTIDO' : 'NORMAL') + ' — F9 CAMBIA', 3000), 3000);
+    setTimeout(() => hud.hint(t('msg.axisHint', { state: t(input.invertY ? 'msg.inverted' : 'msg.normal') }), 3000), 3000);
   } catch (e) {
-    if (!netStatus.textContent.startsWith('Servidor lleno')) {
-      netStatus.textContent = 'Error: ' + e.message;
+    if (netStatus.textContent !== t('msg.serverFull')) {
+      netStatus.textContent = t('msg.error', { message: e.message });
     }
   }
 }
@@ -1249,7 +1289,7 @@ function bindNet(net) {
     if (!G.onlineRows.some((r) => r.id === m.id)) G.onlineRows.push({
       id: m.id, name: m.name, team: m.team, variant: m.v | 0, kills: 0, deaths: 0, score: 0,
     });
-    hud.hint(m.name + ' ENTRÓ', 1400);
+    hud.hint(t('msg.joined', { name: m.name }), 1400);
   });
   net.on('left', (m) => {
     if (!alive()) return;
@@ -1379,7 +1419,7 @@ function bindNet(net) {
     if (!m.up && m.by === net.id && G.weapons) {
       G.weapons.refill();
       audio.reloadDone();
-      hud.hint('MUNICIÓN COMPLETA', 1400);
+      hud.hint(t('msg.ammoFull'), 1400);
       input.pad.rumble(60, 0.2, 0.3);
     }
   });
@@ -1395,7 +1435,7 @@ function bindNet(net) {
     const gained = Math.min(def.reserve, s.reserve + total) - s.reserve;
     s.reserve += gained;
     audio.reloadDone();
-    hud.hint('+' + gained + ' BALAS DE ' + def.name, 1500);
+    hud.hint(t('msg.bulletsOf', { count: gained, weapon: t(def.nameKey) }), 1500);
   });
   net.on('respawn', (m) => {
     if (!alive() || !G.player || !G.rig) return;
@@ -1448,7 +1488,7 @@ function bindNet(net) {
     if (!alive()) return;
     G.onlineStartAt = 0;
   });
-  net.on('full', () => { netStatus.textContent = 'Servidor lleno (8/8)'; });
+  net.on('full', () => { netStatus.textContent = t('msg.serverFull'); });
   net.on('close', () => {
     if (!alive()) return; // un intento de conexión fallido no mata la partida en curso
     if (G.mode === 'online') {
@@ -1457,7 +1497,7 @@ function bindNet(net) {
       showMenuBackdrop();
       hud.show(false);
       openMenu(); // (no showMenu directo: dejaba visible un REANUDAR muerto)
-      netStatus.textContent = 'Desconectado del servidor';
+      netStatus.textContent = t('msg.serverDisconnected');
       input.releaseLock();
     }
   });
@@ -1496,7 +1536,7 @@ function falloff(def, dist) {
 }
 
 // Dirección de hipfire/blindfire: paralela a la cámara, con ORIGEN en el cañón
-// (Gears 5: la mira sigue a la cámara; el personaje rota para acompañarla).
+// La mira sigue a la cámara; el personaje rota para acompañarla.
 function hipDir() {
   const f = shoulderCam.flatForward();
   const p = shoulderCam.pitch;
@@ -1547,7 +1587,7 @@ function coverPoseReady(wantsAim, wantsFire) {
   const low = p.cover.h <= TUNING.cover.lowHeight;
   if (wantsAim && low && p.coverAimExposure < 0.82) return false;
   if (wantsFire && !wantsAim &&
-      (!p.blindMode || p.blindPoseExposure < 0.76)) return false;
+      (!p.blindMode || p.blindPoseExposure < TUNING.cover.blindFireReady)) return false;
   return true;
 }
 
@@ -1580,7 +1620,9 @@ function fireShot() {
   const worldImpacts = [];
 
   for (let i = 0; i < def.pellets; i++) {
-    let dir = applySpread(baseDir, spread);
+    let dir = def.pellets > 1
+      ? applyPelletPattern(baseDir, spread, i, def.pellets)
+      : applySpread(baseDir, spread);
     const hit = aiming
       ? resolveGuidedShot(world, targets, cameraOrigin, origin, dir, def.range, null)
       : resolveShot(world, targets, origin, dir, def.range, null);
@@ -1602,7 +1644,7 @@ function fireShot() {
   }
 
   // disparar rompe la protección de spawn
-  if (G.spawnProt > 0) { G.spawnProt = 0; hud.hint('PROTECCIÓN ROTA', 900); }
+  if (G.spawnProt > 0) { G.spawnProt = 0; hud.hint(t('msg.protectionBroken'), 900); }
 
   // feedback de disparo
   effects.muzzleFlash(muzzle, w.cur === 'shotgun');
@@ -1844,7 +1886,7 @@ function simStep(dt) {
       s.reserve += gained;
       G.drops.remove(id);
       audio.reloadDone();
-      hud.hint('+' + gained + ' BALAS DE ' + def.name, 1500);
+      hud.hint(t('msg.bulletsOf', { count: gained, weapon: t(def.nameKey) }), 1500);
       input.pad.rumble(50, 0.15, 0.25);
     });
   }
@@ -1858,7 +1900,7 @@ function simStep(dt) {
       }
       G.weapons.refill();
       audio.reloadDone();
-      hud.hint('MUNICIÓN COMPLETA', 1400);
+      hud.hint(t('msg.ammoFull'), 1400);
       input.pad.rumble(60, 0.2, 0.3);
     });
   }
@@ -1913,9 +1955,9 @@ function frame(now) {
   }
   if (input.pad.connected !== padWasConnected) {
     padWasConnected = input.pad.connected;
-    hud.hint(padWasConnected ? 'CONTROL CONECTADO' : 'CONTROL DESCONECTADO', 1600);
+    hud.hint(t(padWasConnected ? 'msg.controllerConnected' : 'msg.controllerDisconnected'), 1600);
     if (!padWasConnected) {
-      padStatus.textContent = 'SIN CONTROL DETECTADO';
+      padStatus.textContent = t('menu.noController');
       padStatus.classList.remove('on');
     }
   }
@@ -1925,8 +1967,8 @@ function frame(now) {
     const i = input.pad.info;
     padStatus.textContent =
       i.id + ' · ' + i.mapping +
-      ' · ejes [' + [...i.axes].slice(0, 4).map((a) => a.toFixed(1)).join(', ') + ']' +
-      ' · botones [' + (i.pressed.join(',') || '—') + ']';
+      ` · ${t('menu.axes')} [` + [...i.axes].slice(0, 4).map((a) => a.toFixed(1)).join(', ') + ']' +
+      ` · ${t('menu.buttons')} [` + (i.pressed.join(',') || '—') + ']';
     padStatus.classList.add('on');
   }
   if (menuOpen) input.consumeEdges();
@@ -2015,7 +2057,7 @@ function frame(now) {
     }
     hud.spectator(!flowView ? spectatorView() : null);
     if (G.mode === 'bots' && G.botMatch) {
-      hud.score(G.botMatch.livesOf('red'), G.botMatch.livesOf('blue'), 'VIDAS');
+      hud.score(G.botMatch.livesOf('red'), G.botMatch.livesOf('blue'), 'hud.lives');
       hud.timer(G.botMatch.timer);
       hud.roundPips(G.botMatch.wins.red, G.botMatch.wins.blue);
       hud.scoreboard(!flowView && input.scoreHeld && !menuOpen ? G.botMatch.statRows() : null);

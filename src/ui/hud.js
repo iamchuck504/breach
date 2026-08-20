@@ -1,3 +1,5 @@
+import { t, getLanguage } from '../core/i18n.js';
+
 // HUD sobre DOM. La retícula de blindfire/hipfire se proyecta desde el cañón
 // (shoot from the barrel): #barrel-dot sigue el punto real de impacto del arma.
 export class HUD {
@@ -44,25 +46,39 @@ export class HUD {
   show(on) { this.el.hud.classList.toggle('on', on); }
   showMenu(on) { this.el.menu.classList.toggle('off', !on); }
 
+  invalidateLanguage() {
+    this._scoreboardKey = null;
+    this._presentationKey = null;
+    this._spectatorKey = null;
+    this._resp = null;
+    clearTimeout(this._centerT);
+    clearTimeout(this._hintT);
+    this.el.center.textContent = '';
+    this.el.center.classList.remove('on', 'big');
+    this.el.hint.textContent = '';
+    this.el.hint.classList.remove('on');
+    if (this._scoreUnitKey) for (const el of this.el.scoreUnits) el.textContent = t(this._scoreUnitKey);
+  }
+
   ammo(w) {
     const weaponChanged = this._lastWep !== undefined && this._lastWep !== w.cur;
     const ammoChanged = !weaponChanged && this._lastMag !== undefined && this._lastMag !== w.st.mag;
     if (weaponChanged) this._pulse(this.el.weapon, 'weapon-change');
     if (ammoChanged) this._pulse(this.el.weapon, 'ammo-change');
     this.el.weapon.dataset.weapon = w.cur;
-    this.el.wepName.textContent = w.def.name;
+    this.el.wepName.textContent = t(w.def.nameKey);
     this.el.wepMag.textContent = w.st.mag;
     this.el.wepRes.textContent = w.st.reserve;
-    this.el.wepMsg.textContent = w.swapping ? 'CAMBIANDO ARMA'
-      : w.reloading ? 'RECARGANDO'
-      : (w.st.mag === 0 && w.st.reserve === 0 ? 'SIN MUNICIÓN' : '');
+    this.el.wepMsg.textContent = w.swapping ? t('hud.switching')
+      : w.reloading ? t('hud.reloading')
+      : (w.st.mag === 0 && w.st.reserve === 0 ? t('hud.noAmmo') : '');
     this.el.weapon.classList.toggle('reloading', w.reloading);
     this.el.weapon.classList.toggle('low-ammo', !w.reloading &&
       w.st.mag <= Math.max(2, Math.ceil(w.def.mag * 0.2)));
     this._lastWep = w.cur;
     this._lastMag = w.st.mag;
 
-    // barra de segmentos (ref. Gears): cargadores chicos = bloques discretos,
+    // Cargadores chicos = bloques discretos,
     // grandes = barra continua; en recarga barre en naranja
     const cap = w.def.mag;
     const bar = this.el.wepBar;
@@ -91,12 +107,13 @@ export class HUD {
     }
   }
 
-  score(r, b, unit = 'BAJAS') {
+  score(r, b, unit = 'hud.eliminations') {
     if (this._scoreR !== undefined && r !== this._scoreR) this._pulse(this.el.scoreRed, 'score-bump');
     if (this._scoreB !== undefined && b !== this._scoreB) this._pulse(this.el.scoreBlue, 'score-bump');
     this.el.scoreRed.textContent = r;
     this.el.scoreBlue.textContent = b;
-    for (const el of this.el.scoreUnits) el.textContent = unit;
+    this._scoreUnitKey = unit;
+    for (const el of this.el.scoreUnits) el.textContent = t(unit);
     this._scoreR = r;
     this._scoreB = b;
   }
@@ -124,10 +141,10 @@ export class HUD {
   scoreboard(rows, localId = 'player') {
     this.el.scoreboard.classList.toggle('on', !!rows);
     if (!rows) { this._scoreboardKey = null; return; }
-    const key = localId + '|' + rows.map((r) => `${r.id}:${r.kills}:${r.deaths}:${r.score}`).join('|');
+    const key = getLanguage() + '|' + localId + '|' + rows.map((r) => `${r.id}:${r.kills}:${r.deaths}:${r.score}`).join('|');
     if (this._scoreboardKey === key) return;
     this._scoreboardKey = key;
-    const head = '<div class="sb-row sb-cols-head"><span>NOMBRE</span><span>K</span><span>D</span><span>PTS</span></div>';
+    const head = `<div class="sb-row sb-cols-head"><span>${esc(t('hud.name'))}</span><span>K</span><span>D</span><span>${esc(t('hud.points'))}</span></div>`;
     for (const team of ['red', 'blue']) {
       const el = team === 'red' ? this.el.sbRed : this.el.sbBlue;
       const title = el.querySelector('.sb-title').outerHTML;
@@ -152,7 +169,7 @@ export class HUD {
     }
     const rows = view.rows || [];
     const count = view.count ?? '';
-    const key = [view.phase, view.title, view.sub, count, view.red, view.blue,
+    const key = [getLanguage(), view.phase, view.title, view.sub, count, view.red, view.blue,
       rows.map((r) => `${r.id}:${r.kills ?? ''}:${r.deaths ?? ''}:${r.score ?? ''}`).join('|')].join('~');
     root.className = `on ${view.phase}`;
     if (this._presentationKey === key) {
@@ -165,19 +182,19 @@ export class HUD {
     if (view.phase === 'intro') {
       root.innerHTML = `
         <section class="mf-card">
-          <div class="mf-kicker">${esc(view.kicker || 'DESPLIEGUE')}</div>
+          <div class="mf-kicker">${esc(view.kicker || t('hud.deployment'))}</div>
           <div class="mf-title">${esc(view.title)}</div>
           <div class="mf-sub">${esc(view.sub || '')}</div>
           <div class="mf-meta">${(view.meta || []).map((m) => `<span class="mf-chip">${esc(m)}</span>`).join('')}</div>
           ${flowTeams(rows, view.localId, false)}
           <div class="mf-progress"><span style="width:${Math.max(0, Math.min(100, (view.progress ?? 0) * 100))}%"></span></div>
-          <div class="mf-wait">${esc(view.wait || 'PREPARANDO COMBATE')}</div>
+          <div class="mf-wait">${esc(view.wait || t('hud.preparingCombat'))}</div>
         </section>`;
       return;
     }
 
     if (view.phase === 'countdown') {
-      root.innerHTML = `<div><div class="mf-count">${esc(count)}</div><div class="mf-count-label">${esc(view.sub || 'PREPÁRATE')}</div></div>`;
+      root.innerHTML = `<div><div class="mf-count">${esc(count)}</div><div class="mf-count-label">${esc(view.sub || t('hud.getReady'))}</div></div>`;
       return;
     }
 
@@ -187,11 +204,11 @@ export class HUD {
         <section class="mf-result-card mf-mvp">
           <div class="mf-portrait"><img alt="${esc(m.name || 'MVP')}"></div>
           <div>
-            <div class="mf-result-label">MVP DE LA PARTIDA</div>
+            <div class="mf-result-label">${esc(t('hud.matchMvp'))}</div>
             <div class="mf-result-title">${esc(m.name || '—')}</div>
-            <div class="mf-sub ${esc(m.team || '')}">EQUIPO ${m.team === 'blue' ? 'AZUL' : 'ROJO'}</div>
+            <div class="mf-sub ${esc(m.team || '')}">${esc(m.team === 'blue' ? t('hud.teamBlue') : t('hud.teamRed'))}</div>
             <div class="mf-mvp-stats">
-              ${flowStat(m.kills ?? 0, 'KILLS')}${flowStat(m.deaths ?? 0, 'DEATHS')}${flowStat(m.score ?? 0, 'PTS')}
+              ${flowStat(m.kills ?? 0, t('hud.kills'))}${flowStat(m.deaths ?? 0, t('hud.deaths'))}${flowStat(m.score ?? 0, t('hud.points'))}
             </div>
           </div>
         </section>`;
@@ -203,7 +220,7 @@ export class HUD {
     root.innerHTML = `
       <section class="mf-result-card">
         <div class="mf-result-top">
-          <div><div class="mf-result-label">${esc(view.kicker || 'RESULTADO')}</div><div class="mf-result-title">${esc(view.title)}</div><div class="mf-sub">${esc(view.sub || '')}</div></div>
+          <div><div class="mf-result-label">${esc(view.kicker || t('hud.result'))}</div><div class="mf-result-title">${esc(view.title)}</div><div class="mf-sub">${esc(view.sub || '')}</div></div>
           <div class="mf-result-score"><span class="red">${view.red ?? 0}</span><span> — </span><span class="blue">${view.blue ?? 0}</span></div>
         </div>
         ${view.phase === 'final-score' ? flowTeams(rows, view.localId, true) : ''}
@@ -219,12 +236,12 @@ export class HUD {
       this._spectatorKey = null;
       return;
     }
-    const key = [view.name, view.controls, view.respawn, view.waiting].join('|');
+    const key = [getLanguage(), view.name, view.controls, view.respawn, view.waiting].join('|');
     if (key === this._spectatorKey) return;
     this._spectatorKey = key;
     root.innerHTML = `<div class="spec-card">
-      <div class="spec-kicker">SPECTATING</div>
-      <div class="spec-name">${esc(view.name || 'ESPERANDO COMPAÑERO')}</div>
+      <div class="spec-kicker">${esc(t('hud.spectating'))}</div>
+      <div class="spec-name">${esc(view.name || t('hud.waitingTeammate'))}</div>
       <div class="spec-meta">
         <span>${esc(view.controls || '')}</span>
         ${view.respawn ? `<span class="spec-respawn${view.ready ? ' ready' : ''}">${esc(view.respawn)}</span>` : ''}
@@ -301,7 +318,7 @@ export class HUD {
     this._resp = sec;
     clearTimeout(this._centerT);
     this.el.center.classList.add('big', 'on');
-    this.el.center.innerHTML = sec + '<div class="sub">REAPARECIENDO</div>';
+    this.el.center.innerHTML = sec + `<div class="sub">${esc(t('hud.respawning'))}</div>`;
   }
 
   hint(text, ms = 1600) {
@@ -320,13 +337,13 @@ function flowTeams(rows, localId, stats) {
   return `<div class="mf-teams">${['red', 'blue'].map((team) => {
     const teamRows = rows.filter((r) => r.team === team);
     const head = stats
-      ? '<span class="mf-stat-head">K&nbsp;&nbsp;D&nbsp;&nbsp;&nbsp;PTS</span>'
+      ? `<span class="mf-stat-head">K&nbsp;&nbsp;D&nbsp;&nbsp;&nbsp;${esc(t('hud.points'))}</span>`
       : `<span>${teamRows.length}/4</span>`;
     const body = teamRows.length ? teamRows.map((r) => stats
       ? `<div class="mf-player${r.id === localId ? ' me' : ''}"><span>${esc(r.name)}</span><span>${r.kills ?? 0}</span><span>${r.deaths ?? 0}</span><span>${r.score ?? 0}</span></div>`
-      : `<div class="mf-player roster${r.id === localId ? ' me' : ''}"><span>${esc(r.name)}</span><span>${r.id === localId ? 'TÚ' : ''}</span></div>`).join('')
-      : '<div class="mf-player roster"><span>ESPERANDO JUGADORES</span><span>—</span></div>';
-    return `<div class="mf-team ${team}"><div class="mf-team-head"><span>EQUIPO ${team === 'red' ? 'ROJO' : 'AZUL'}</span>${head}</div>${body}</div>`;
+      : `<div class="mf-player roster${r.id === localId ? ' me' : ''}"><span>${esc(r.name)}</span><span>${r.id === localId ? esc(t('hud.you')) : ''}</span></div>`).join('')
+      : `<div class="mf-player roster"><span>${esc(t('hud.waitingPlayers'))}</span><span>—</span></div>`;
+    return `<div class="mf-team ${team}"><div class="mf-team-head"><span>${esc(team === 'red' ? t('hud.teamRed') : t('hud.teamBlue'))}</span>${head}</div>${body}</div>`;
   }).join('')}</div>`;
 }
 

@@ -101,3 +101,40 @@ export function applySpread(dir, spreadDeg) {
     .normalize();
   return u;
 }
+
+// Patrón fijo de ocho perdigones en el plano perpendicular al disparo.
+// Cuatro interiores ocupan los ejes y cuatro exteriores las diagonales:
+// simetría horizontal/vertical exacta, centro cubierto sin apilar pellets y
+// el mismo radio máximo que el cono anterior. El radio medio (0.69) también
+// permanece muy cerca del muestreo uniforme anterior (2/3).
+const D = Math.SQRT1_2;
+const SHOTGUN_PATTERN_8 = Object.freeze([
+  Object.freeze([0.38, 0]), Object.freeze([-0.38, 0]),
+  Object.freeze([0, 0.38]), Object.freeze([0, -0.38]),
+  Object.freeze([D, D]), Object.freeze([-D, D]),
+  Object.freeze([D, -D]), Object.freeze([-D, -D]),
+]);
+
+// Convierte un punto normalizado del patrón a una dirección del cono. La base
+// se deriva de `dir`: el patrón acompaña yaw/pitch del arma o cámara y nunca
+// queda fijado a direcciones X/Z del mundo. En tiros casi verticales se elige
+// un eje alterno estable para evitar degeneración.
+export function applyPelletPattern(dir, spreadDeg, pelletIndex, pelletCount = 8) {
+  let offset;
+  if (pelletCount === 8) {
+    offset = SHOTGUN_PATTERN_8[((pelletIndex % 8) + 8) % 8];
+  } else {
+    // Fallback determinista para futuras armas: anillo uniforme, sin RNG ni
+    // clusters. La escopeta actual siempre usa el patrón diseñado de arriba.
+    const a = Math.PI * 2 * (((pelletIndex % pelletCount) + pelletCount) % pelletCount) / pelletCount;
+    offset = [Math.cos(a), Math.sin(a)];
+  }
+  const up = Math.abs(dir.y) > 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+  const right = new THREE.Vector3().crossVectors(dir, up).normalize();
+  const vertical = new THREE.Vector3().crossVectors(dir, right).normalize();
+  const radius = Math.tan(spreadDeg * Math.PI / 180);
+  return new THREE.Vector3().copy(dir)
+    .addScaledVector(right, offset[0] * radius)
+    .addScaledVector(vertical, offset[1] * radius)
+    .normalize();
+}

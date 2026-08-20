@@ -123,7 +123,6 @@ function glowMaterial(color) {
 // Vanguard: cinco armaduras sobre EXACTAMENTE el mismo cuerpo, rig e hitbox.
 // La identidad de clase vive en accesorios desmontables (casco, peto, mochila,
 // hombreras y faldón), nunca en la escala de huesos o extremidades.
-export const CHAR_NAMES = ['RECLUTA', 'CENTINELA', 'EXPLORADOR', 'PESADO', 'FANTASMA'];
 // Radio exclusivo del cadáver: la armadura bulky ocupa más que el círculo de
 // gameplay del jugador vivo. El callback acepta un radio menor para el probe
 // de torso usado mientras el cuerpo cae.
@@ -443,7 +442,7 @@ export class Rig {
       this.legL.hip, this.legL.knee, this.legR.hip, this.legR.knee,
       this.gunSMG, this.gunShotgun,
     ]) mergeDirectMeshes(group);
-    // armas sobredimensionadas (estilo Ratchet/Gears): leen desde atrás
+    // armas ligeramente sobredimensionadas: su silueta se lee desde atrás
     this.gunSMG.scale.set(1.3, 1.3, 1.35);
     this.gunShotgun.scale.set(1.35, 1.35, 1.4);
     this._wep = null;
@@ -937,6 +936,7 @@ export class Rig {
     switch (p.state) {
       case 'roadie': {
         damp = 10;
+        rootRotX = (p.groundPitch ?? 0) * 0.58;
         R(this.torso, -0.55, 0, Math.sin(ph * 0.5) * 0.04);
         R(this.head, 0.42, 0, 0);
         R(this.legL.hip, swing * 1.05, 0, 0); R(this.legL.knee, -(Math.max(0, -swing) * 1.5 + 0.2), 0, 0);
@@ -951,6 +951,7 @@ export class Rig {
       case 'run': case 'idle': default: { // default: estados desconocidos (red) caen a idle
         const m = p.state === 'run' ? 1 : 0;
         const tw = p.twist ?? 0; // torso/cabeza giran hacia la cámara
+        rootRotX = (p.groundPitch ?? 0) * 0.72;
         R(this.torso, -0.1 * m + Math.sin(ph * 0.4) * 0.015, tw * 0.55, swing * 0.04 * m);
         R(this.head, 0.05 * m, tw * 0.35, 0);
         R(this.legL.hip, swing * 0.75 * m, 0, 0); R(this.legL.knee, -(Math.max(0, -swing) * 1.1 + 0.1) * m, 0, 0);
@@ -963,7 +964,7 @@ export class Rig {
           damp = 18;
           M(0.15, -0.08, -0.38, 0, 0, 0);
         } else {
-          // low-ready diagonal (Gears): cruzada e inclinada, el cañón asoma
+          // low-ready diagonal: cruzada e inclinada, el cañón asoma
           // sobre el hombro izquierdo visto desde atrás
           M(0.17, -0.2 + bob * 0.01 * m, -0.32, 0.3, 0.4, 0.05);
         }
@@ -1087,7 +1088,7 @@ export class Rig {
       }
       case 'blind_low_left': case 'blind_low_right':
       case 'blind_high_left': case 'blind_high_right': {
-        damp = 17;
+        damp = 26;
         leftOnGun = true;
         const low = p.state.startsWith('blind_low_');
         const side = p.state.endsWith('_right') ? 1 : -1;

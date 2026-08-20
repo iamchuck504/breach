@@ -14,7 +14,7 @@
 import * as THREE from 'three';
 import { TUNING } from '../config/tuning.js';
 import { Rig, RAGDOLL_R } from '../player/rig.js';
-import { resolveShot, applySpread } from '../combat/ballistics.js';
+import { resolveShot, applySpread, applyPelletPattern } from '../combat/ballistics.js';
 
 const ROUND_TIME = 300;      // 5 minutos
 const RESPAWN_POOL = 11;     // respawns por equipo (además de las 4 vidas
@@ -608,14 +608,44 @@ class Bot {
     mx += sepX * 0.9; mz += sepZ * 0.9;
     const mlen = Math.hypot(mx, mz);
     const beforeX = this.pos.x, beforeZ = this.pos.z;
+    let wasGrounded = this.grounded;
     let steering = null;
     if (mlen > 0.05) {
       steering = this._steer(mx / mlen, mz / mlen, match, activeGoal);
       this._jumpIfBlocked(steering.x, steering.z);
+      // Un salto deliberado deja de ser un movimiento pegado al suelo.
+      wasGrounded = this.grounded;
       this.pos.x += steering.x * spd * dt;
       this.pos.z += steering.z * spd * dt;
     } else { this.speed = 0; this.velX = 0; this.velZ = 0; }
     this.world.resolveCircle(this.pos, 0.38, this.y);
+
+    // groundHeight da soporte a un círculo desde que toca la rampa. Sin este
+    // guard, un bot que la rozaba de lado heredaba su altura instantáneamente.
+    // Reutilizamos la misma regla que el jugador y conservamos el eje válido
+    // para que pueda deslizarse por el borde en vez de quedar clavado.
+    if (wasGrounded) {
+      const maxStep = TUNING.move.maxStepUp;
+      const fullGround = this.world.groundHeight(this.pos, 0.38, this.y);
+      if (fullGround > this.y + maxStep) {
+        const candidate = (x, z) => {
+          const p = { x, z };
+          this.world.resolveCircle(p, 0.38, this.y);
+          const h = this.world.groundHeight(p, 0.38, this.y);
+          return h <= this.y + maxStep
+            ? { p, d2: (p.x - beforeX) ** 2 + (p.z - beforeZ) ** 2 }
+            : null;
+        };
+        const onlyX = candidate(this.pos.x, beforeZ);
+        const onlyZ = candidate(beforeX, this.pos.z);
+        const best = !onlyX ? onlyZ : !onlyZ ? onlyX : (onlyX.d2 >= onlyZ.d2 ? onlyX : onlyZ);
+        if (best) {
+          this.pos.x = best.p.x; this.pos.z = best.p.z;
+        } else {
+          this.pos.x = beforeX; this.pos.z = beforeZ;
+        }
+      }
+    }
 
     const actualX = this.pos.x - beforeX, actualZ = this.pos.z - beforeZ;
     const moved = Math.hypot(actualX, actualZ);
@@ -652,11 +682,19 @@ class Bot {
         this._resetProgress();
       }
     } else this._resetProgress();
-    this.vy -= 15 * dt;
-    this.y += this.vy * dt;
     const ground = this.world.groundHeight(this.pos, 0.38, this.y);
-    if (this.y <= ground && this.vy <= 0) { this.y = ground; this.vy = 0; this.grounded = true; }
-    else this.grounded = this.y <= ground + 0.02;
+    const followsGround = wasGrounded && this.vy <= 0 &&
+      ground <= this.y + TUNING.move.maxStepUp &&
+      this.y - ground <= TUNING.move.groundStickDown;
+    if (followsGround) {
+      this.y = ground; this.vy = 0; this.grounded = true;
+    } else {
+      this.vy -= 15 * dt;
+      this.y += this.vy * dt;
+      if (this.y <= ground && this.vy <= 0) {
+        this.y = ground; this.vy = 0; this.grounded = true;
+      } else this.grounded = this.y <= ground + 0.02;
+    }
 
     // vuelta acrobática: progresa en el aire, se limpia al aterrizar
     if (this.flip) {
@@ -1252,7 +1290,9 @@ export class BotMatch {
     const pellets = def.pellets || 1;
     const dmgAcc = new Map();
     for (let i = 0; i < pellets; i++) {
-      const dir = pellets > 1 ? applySpread(baseDir, def.spreadHip) : baseDir;
+      const dir = pellets > 1
+        ? applyPelletPattern(baseDir, def.spreadHip, i, pellets)
+        : baseDir;
       const hit = resolveShot(this.world, targets, _v1, dir, def.range, bot.id);
       if (i === 0) this.cb.effects.tracer(_v1, hit.point);
       if (hit.kind === 'player') {

@@ -42,6 +42,7 @@ export class Controller {
     this.state = 'idle';
     this.stateT = 0;
     this.cover = null;      // face actual
+    this.coverEntry = null; // absorción corta de posición/momentum al engancharse
     this.slide = null;      // {target, face, dir}
     this.dive = null;       // {dir}
     this.chain = 0;         // rebotes encadenados
@@ -58,6 +59,7 @@ export class Controller {
     this.blindMode = null;  // 'over' | 'left' | 'right' según cover/cámara
     this._blindModePrev = null;
     this.blindPoseExposure = 0;
+    this.groundPitch = 0;  // inclinación del suelo en la dirección del cuerpo
     this.dead = false;
   }
 
@@ -85,7 +87,7 @@ export class Controller {
     if (this.dead) return { mode: 'normal' };
     if (this.aim) {
       // asomándose por la orilla izquierda: la cámara cambia de hombro
-      // (shoulder swap automático, estilo Gears) para no ver solo la pared
+      // shoulder swap automático para no ver solo la pared
       const side = this.state === 'cover' && this.coverLeanAnim ? this.coverLeanAnim : 1;
       return { mode: 'aim', side };
     }
@@ -150,6 +152,7 @@ export class Controller {
       blindMode: this.blindMode,
       coverKind: this.cover?.kind,
       latMove: this._latMove(),
+      groundPitch: this.groundPitch,
     };
   }
 
@@ -175,6 +178,7 @@ export class Controller {
     this.runDist = 0;
     this.evadeMom = 0;
     this.mantle = null;
+    this.coverEntry = null;
     this.edgePushT = 0;
     this.bounceWindow = 0;
     this.chain = 0;
@@ -185,19 +189,22 @@ export class Controller {
     this.pos = { x: spawn.x, z: spawn.z };
     this.vel = { x: 0, z: 0 };
     this.y = 0; this.vy = 0; this.grounded = true; this.flip = null;
+    // La pendiente pertenece al suelo de la vida anterior. Conservarla hacía
+    // que el rig reapareciera inclinado durante los primeros frames.
+    this.groundPitch = 0;
     this._clearTransient();
     this.yaw = spawn.yaw;
     this.cam.yaw = spawn.yaw;
     this.cam.pitch = -0.12;
     this.state = 'idle'; this.stateT = 0;
-    this.cover = null; this.slide = null; this.dive = null;
+    this.cover = null; this.coverEntry = null; this.slide = null; this.dive = null;
     this.chain = 0; this.dead = false;
   }
 
   kill() {
     this.dead = true;
     this._setState('idle'); // resetea stateT (directo dejaba el valor pre-muerte)
-    this.cover = null; this.slide = null; this.dive = null; this.flip = null;
+    this.cover = null; this.coverEntry = null; this.slide = null; this.dive = null; this.flip = null;
     this.mantle = null;
     this.aim = false;
     this.vel = { x: 0, z: 0 };
@@ -319,7 +326,7 @@ export class Controller {
         } else if (hasInput) {
           this.yaw = lerpAngle(this.yaw, yawFromDir(dx, dz), 1 - Math.exp(-M.turnLerp * dt));
         } else {
-          // Gears: en reposo el cuerpo (y la mira) siguen a la cámara
+          // En reposo el cuerpo y la mira siguen a la cámara.
           this.yaw = approachAngle(this.yaw, this.cam.yaw,
             TUNING.combat.bodyTurnFollowDeg * Math.PI / 180 * dt);
         }
@@ -365,7 +372,7 @@ export class Controller {
           const range = earnedRoadie ? E.roadieSlideDist : E.slideMaxDist;
           // primero intento snap directo si el cover está pegado
           const snap = this.world.findCover(this.pos, dir, C.snapRange, PLAYER_R, 0.3);
-          if (snap) this._enterCover(snap.face, snap.target);
+          if (snap && snap.dist <= C.directAttachRange) this._enterCover(snap.face, snap.target);
           else this._tryEvade(dir, range);
         }
         break;
@@ -480,11 +487,6 @@ export class Controller {
         const ux = tx / len, uz = tz / len;
         const low = f.h <= TUNING.cover.lowHeight;
 
-        // pegarse a la cara
-        const rel = (this.pos.x - f.a.x) * n.x + (this.pos.z - f.a.z) * n.z;
-        this.pos.x += n.x * (PLAYER_R - rel);
-        this.pos.z += n.z * (PLAYER_R - rel);
-
         // posición a lo largo de la cara + orillas
         let u = ((this.pos.x - f.a.x) * ux + (this.pos.z - f.a.z) * uz);
         const edgeDist = C.cornerLean + PLAYER_R;
@@ -520,12 +522,37 @@ export class Controller {
         // o acumular una salida automática.
         const lat = hasInput ? (mw.x * ux + mw.z * uz) : 0;
         const previousU = u;
-        u += lat * M.coverStrafe * dt + aimLeanSide * 1.3 * dt;
+        const entryCarry = this.coverEntry
+          ? this.coverEntry.tangentSpeed * Math.exp(-C.enterMomentumDamp * this.coverEntry.t)
+          : 0;
+        u += (lat * M.coverStrafe + entryCarry) * dt + aimLeanSide * 1.3 * dt;
         const leanOut = aimLeanSide !== 0 ? 0.45 : 0;
         u = Math.max(PLAYER_R * 0.7 - (aimLeanSide < 0 ? leanOut : 0),
           Math.min(len - PLAYER_R * 0.7 + (aimLeanSide > 0 ? leanOut : 0), u));
-        this.pos.x = f.a.x + ux * u + n.x * PLAYER_R;
-        this.pos.z = f.a.z + uz * u + n.z * PLAYER_R;
+        const desiredX = f.a.x + ux * u + n.x * PLAYER_R;
+        const desiredZ = f.a.z + uz * u + n.z * PLAYER_R;
+        if (this.coverEntry) {
+          const entry = this.coverEntry;
+          entry.t += dt;
+          const ex = desiredX - this.pos.x, ez = desiredZ - this.pos.z;
+          const ed = Math.hypot(ex, ez);
+          const smooth = 1 - Math.exp(-C.enterLerp * dt);
+          const maxStep = C.enterPullSpeed * dt;
+          const k = ed > 1e-6 ? Math.min(1, smooth, maxStep / ed) : 1;
+          this.pos.x += ex * k;
+          this.pos.z += ez * k;
+          if (ed < 0.012 || (entry.t >= entry.dur && ed < 0.05) ||
+              entry.t >= C.enterMaxTime + 0.05) {
+            this.pos.x = desiredX;
+            this.pos.z = desiredZ;
+            this.coverEntry = null;
+            this.bounceWindow = TUNING.evade.bounceWindow;
+            this.ev.onCoverEnter?.(this.chain);
+          }
+        } else {
+          this.pos.x = desiredX;
+          this.pos.z = desiredZ;
+        }
         const coverSpeed = dt > 0 ? (u - previousU) / dt : 0;
         this.vel.x = coverSpeed * ux; this.vel.z = coverSpeed * uz;
 
@@ -657,7 +684,10 @@ export class Controller {
       }
     }
 
-    if (this.state !== 'cover') this.blindMode = null;
+    if (this.state !== 'cover') {
+      this.blindMode = null;
+      this.coverEntry = null;
+    }
     if (this.blindMode !== this._blindModePrev) {
       this.blindPoseExposure = 0;
       this._blindModePrev = this.blindMode;
@@ -665,25 +695,66 @@ export class Controller {
     const blindTarget = this.state === 'cover' && !this.aim && this.blindMode &&
       this.firingBlind > 0 ? 1 : 0;
     this.blindPoseExposure += ((blindTarget ? 1 : 0) - this.blindPoseExposure) *
-      (1 - Math.exp(-(blindTarget ? 22 : 28) * dt));
+      (1 - Math.exp(-(blindTarget ? C.blindEnterRate : C.blindExitRate) * dt));
 
     // integrar + colisión (cover se pega manualmente, pero el resolve no estorba;
     // en mantle el movimiento es guiado y CRUZA el borde: el resolve pelearía)
+    const moveStartX = this.pos.x, moveStartZ = this.pos.z;
+    const wasGrounded = this.grounded;
     if (this.state !== 'cover' && this.state !== 'mantle') {
       this.pos.x += this.vel.x * dt;
       this.pos.z += this.vel.z * dt;
     }
     if (this.state !== 'mantle') this.world.resolveCircle(this.pos, PLAYER_R, this.y);
 
+    // Nunca subir un desnivel grande solo porque groundHeight cambió bajo el
+    // círculo (caso típico: entrar de lado en una rampa). Si el movimiento
+    // completo es inválido, probar cada eje permite deslizarse por el borde.
+    if (wasGrounded && this.state !== 'cover' && this.state !== 'mantle') {
+      const fullGround = this.world.groundHeight(this.pos, PLAYER_R, this.y);
+      if (fullGround > this.y + M.maxStepUp) {
+        const candidate = (x, z) => {
+          const p = { x, z };
+          this.world.resolveCircle(p, PLAYER_R, this.y);
+          const h = this.world.groundHeight(p, PLAYER_R, this.y);
+          return h <= this.y + M.maxStepUp
+            ? { p, d2: (p.x - moveStartX) ** 2 + (p.z - moveStartZ) ** 2 }
+            : null;
+        };
+        const onlyX = candidate(this.pos.x, moveStartZ);
+        const onlyZ = candidate(moveStartX, this.pos.z);
+        const best = !onlyX ? onlyZ : !onlyZ ? onlyX : (onlyX.d2 >= onlyZ.d2 ? onlyX : onlyZ);
+        if (best) {
+          const keptX = Math.abs(best.p.x - moveStartX) > 1e-5;
+          const keptZ = Math.abs(best.p.z - moveStartZ) > 1e-5;
+          this.pos.x = best.p.x; this.pos.z = best.p.z;
+          if (!keptX) this.vel.x = 0;
+          if (!keptZ) this.vel.z = 0;
+        } else {
+          this.pos.x = moveStartX; this.pos.z = moveStartZ;
+          this.vel.x = 0; this.vel.z = 0;
+        }
+      }
+    }
+
     // vertical: gravedad + suelo (permite pararse sobre coberturas)
     const airStates = this.state === 'idle' || this.state === 'run' ||
       this.state === 'roadie' || this.state === 'flip';
     if (airStates) {
       const J = TUNING.jump;
-      this.vy -= J.gravity * dt;
-      this.y += this.vy * dt;
       const ground = this.world.groundHeight(this.pos, PLAYER_R, this.y);
-      if (this.y <= ground + 1e-3 && this.vy <= 0) {
+      // Si estaba apoyado, adherirse a pendientes suaves tanto al subir como
+      // al bajar. Una caída mayor conserva gravedad y animación aérea.
+      const followsGround = wasGrounded && this.vy <= 0 &&
+        ground <= this.y + M.maxStepUp && this.y - ground <= M.groundStickDown;
+      if (followsGround) {
+        this.y = ground; this.vy = 0; this.grounded = true;
+        this.usedDouble = false;
+      } else {
+        this.vy -= J.gravity * dt;
+        this.y += this.vy * dt;
+      }
+      if (!followsGround && this.y <= ground + 1e-3 && this.vy <= 0) {
         const wasAir = !this.grounded;
         const fallSpeed = -this.vy;
         this.y = ground; this.vy = 0; this.grounded = true;
@@ -704,6 +775,21 @@ export class Controller {
       this.vy = 0;
       this.grounded = true;
     }
+
+    // Pendiente longitudinal para el rig. Dos muestras pequeñas producen un
+    // pitch estable en la rampa, pero ignoran paredes/desniveles laterales.
+    let pitchTarget = 0;
+    if (this.grounded && airStates) {
+      const fd = this.facing();
+      const d = 0.42;
+      const front = this.world.groundHeight({ x: this.pos.x + fd.x * d, z: this.pos.z + fd.z * d }, PLAYER_R * 0.4, this.y + M.maxStepUp);
+      const back = this.world.groundHeight({ x: this.pos.x - fd.x * d, z: this.pos.z - fd.z * d }, PLAYER_R * 0.4, this.y + M.maxStepUp);
+      if (Math.abs(front - back) <= 0.5) {
+        pitchTarget = Math.max(-0.3, Math.min(0.3, Math.atan2(front - back, d * 2)));
+      }
+    }
+    this.groundPitch += (pitchTarget - this.groundPitch) *
+      (1 - Math.exp(-M.groundPitchLerp * dt));
   }
 
   // Mantle/vault corto sobre cover BAJO (cubierto + stick hacia el bloque).
@@ -798,17 +884,25 @@ export class Controller {
   }
 
   _enterCover(face, target) {
-    this.pos.x = target.x; this.pos.z = target.z;
-    this.vel = { x: 0, z: 0 };
+    const C = TUNING.cover;
+    const tx = face.b.x - face.a.x, tz = face.b.z - face.a.z;
+    const len = Math.max(0.001, Math.hypot(tx, tz));
+    const ux = tx / len, uz = tz / len;
+    const incomingSpeed = this.speed;
+    const tangentSpeed = Math.max(-TUNING.move.coverStrafe * 1.2,
+      Math.min(TUNING.move.coverStrafe * 1.2, this.vel.x * ux + this.vel.z * uz));
+    const distance = Math.hypot(target.x - this.pos.x, target.z - this.pos.z);
+    const duration = Math.max(C.enterMinTime, Math.min(C.enterMaxTime,
+      distance / Math.max(C.enterPullSpeed, incomingSpeed) + 0.08));
+    this.coverEntry = { target: { ...target }, t: 0, dur: duration, tangentSpeed };
+    this.vel = { x: ux * tangentSpeed, z: uz * tangentSpeed };
     this.evadeMom = 0; // el impulso ganado se gasta al llegar
     this.cover = face;
     this.slide = null;
     this._setState('cover');
-    this.bounceWindow = TUNING.evade.bounceWindow;
     // Llegar al cover termina el slide: una NUEVA pulsación ya es válida.
     // evadeCooldown solo protege la acción mientras está activa.
     this.evadeCooldown = 0;
     this.detachT = 0;
-    this.ev.onCoverEnter?.(this.chain);
   }
 }

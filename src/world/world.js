@@ -1330,7 +1330,7 @@ export class World {
       { x: -4, z: -9.5, ry: 0 }, { x: 4, z: 9.5, ry: Math.PI },
     ];
 
-    // --- ruta rápida este: corredor de roadie run con dos cortes de visión
+    // --- ruta rápida este: corredor de sprint con dos cortes de visión
     this._box(18, -14, 1.1, 5.2, HIGH, hutOpts);           // cuarto técnico / duelo CQC
     this._box(25.2, -17.2, 1.1, 3, LOW, ventOpts);         // opción exterior de riesgo
     this._box(27.2, -7.2, 3, 1.1, LOW, ventOpts);          // pausa antes de media cancha
@@ -2277,7 +2277,7 @@ export class World {
 
   // Altura del "suelo" bajo el círculo: la caja más alta que quede a la
   // altura de los pies o debajo (permite pararse sobre coberturas).
-  groundHeight(p, r, y) {
+  groundHeight(p, r = 0, y = 0) {
     let g = 0;
     for (const zone of this.surfaceZones) {
       if (zone.kind !== 'helipad') continue;
@@ -2285,7 +2285,10 @@ export class World {
       const insideDeck = ax <= zone.edge && az <= zone.edge && ax + az <= zone.diagonal;
       let h = insideDeck ? zone.height : 0;
       // Rampas norte/sur: transición progresiva para jugadores y bots.
-      if (ax <= zone.rampHalfWidth && az > zone.edge && az <= zone.edge + zone.rampLength) {
+      // El círculo recibe soporte al tocar la rampa, no cuando su centro ya
+      // atravesó el costado. El controller puede así rechazar un step-up
+      // lateral antes de que medio cuerpo quede dentro de la geometría.
+      if (ax - r <= zone.rampHalfWidth && az > zone.edge && az <= zone.edge + zone.rampLength) {
         h = Math.max(h, zone.height * (1 - (az - zone.edge) / zone.rampLength));
       }
       if (h > g) g = h;

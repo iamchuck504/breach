@@ -372,7 +372,7 @@ try {
   console.log('BACKFIRE:', JSON.stringify({ antes: bk0, despues: bk1 }));
   if (bk1 >= bk0) errors.push('BACKFIRE: no disparó moviéndose hacia atrás');
 
-  // disparar en el aire saltando DESDE roadie run (cancela el sprint y tira)
+  // disparar en el aire saltando desde sprint (cancela el sprint y tira)
   await page.evaluate(() => { const P = window.BREACH.player; P.pos.x = 0; P.pos.z = -8; });
   await page.keyboard.down('Shift');
   await page.keyboard.down('w');

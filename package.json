@@ -17,9 +17,11 @@
     "check:reticle": "node scripts/check-reticle.mjs",
     "check:impacts": "node scripts/check-impacts.mjs",
     "check:spatial-audio": "node scripts/check-spatial-audio.mjs",
+    "check:i18n": "node scripts/check-i18n.mjs",
+    "check:shotgun-pattern": "node scripts/check-shotgun-pattern.mjs",
     "check:warmup": "node scripts/check-warmup.mjs",
     "check:movement": "node scripts/check-movement.mjs",
-    "test": "npm run check:controller && npm run check:combat-orientation && npm run check:cover-fire && npm run check:impacts && npm run check:spatial-audio && npm run check:warmup"
+    "test": "npm run check:controller && npm run check:combat-orientation && npm run check:cover-fire && npm run check:impacts && npm run check:spatial-audio && npm run check:i18n && npm run check:shotgun-pattern && npm run check:warmup"
   },
   "dependencies": {
     "lil-gui": "^0.20.0",

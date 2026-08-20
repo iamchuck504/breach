@@ -36,7 +36,8 @@ await page.evaluate(() => {
   const orig = P.update.bind(P);
   window.__mon = {
     issues: [], maxSpeed: 0, evades: 0, diveRestarts: 0,
-    lastX: P.pos.x, lastZ: P.pos.z, ignoreTeleport: 0,
+    lastX: P.pos.x, lastZ: P.pos.z, lastY: P.y, lastGrounded: P.grounded,
+    ignoreTeleport: 0,
     lastState: P.state, stuckT: 0,
   };
   const oldDive = P.ev.onDive;
@@ -57,13 +58,18 @@ await page.evaluate(() => {
     if (P.state === 'mantle' && !P.mantle) m.issues.push('mantle sin datos');
     if (P.state === 'slide' && !P.slide) m.issues.push('slide sin datos');
     if (P.y < -0.05) m.issues.push('bajo el suelo: y=' + P.y.toFixed(2));
-    // teleports (fuera de los del propio test y del SNAP de entrada a cover,
-    // que por diseño jala hasta snapRange)
-    const enteredCover = P.state === 'cover' && wasState !== 'cover';
+    // Teleports: entrar a cover ya no es una excepción; también debe respetar
+    // una corrección acotada y visible en varios frames.
     const moved = Math.hypot(P.pos.x - m.lastX, P.pos.z - m.lastZ);
-    if (m.ignoreTeleport > 0) m.ignoreTeleport--;
-    else if (!enteredCover && moved > 16 * dt + 0.6) m.issues.push('teleport: ' + moved.toFixed(2) + 'm en un paso');
+    const ignoringTeleport = m.ignoreTeleport > 0;
+    if (ignoringTeleport) m.ignoreTeleport--;
+    else if (moved > 15 * dt + 0.08) m.issues.push('teleport: ' + moved.toFixed(2) + 'm en un paso');
+    const rose = P.y - m.lastY;
+    if (!ignoringTeleport && m.lastGrounded && P.grounded && rose > 0.2) {
+      m.issues.push('step-up sin transición: +' + rose.toFixed(2) + 'm');
+    }
     m.lastX = P.pos.x; m.lastZ = P.pos.z;
+    m.lastY = P.y; m.lastGrounded = P.grounded;
     // velocidad desbocada (tope teórico slide con cadena+momentum ≈ 13.8)
     if (P.speed > m.maxSpeed) m.maxSpeed = P.speed;
     if (P.speed > 15) m.issues.push('velocidad desbocada: ' + P.speed.toFixed(1));

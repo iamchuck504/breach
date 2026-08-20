@@ -4,12 +4,15 @@
 export const TUNING = {
   move: {
     runSpeed: 4.8,        // jog normal
-    roadieSpeed: 7.6,     // roadie run
+    roadieSpeed: 7.6,     // velocidad de sprint (identificador interno legado)
     accel: 46,            // aceleración al empezar a moverse
     decel: 34,            // frenado al soltar
     turnLerp: 15,         // giro del personaje hacia la dirección de movimiento
-    roadieTurnLerp: 6.5,  // roadie gira más pesado (feel Gears)
+    roadieTurnLerp: 6.5,  // el sprint gira con más peso
     coverStrafe: 3.5,     // velocidad lateral pegado a cobertura
+    maxStepUp: 0.16,      // desnivel máximo automático; más alto exige mantle/salto
+    groundStickDown: 0.24,// sigue pendientes descendentes sin microcaídas
+    groundPitchLerp: 12,  // adaptación visual del cuerpo a la pendiente
   },
   evade: {
     diveSpeed: 8.2,       // dash/roll sin cobertura
@@ -17,7 +20,7 @@ export const TUNING = {
     diveCancelPct: 0.5,   // % del dive tras el cual se puede cancelar en otro evade
     slideSpeed: 9.4,      // slide hacia cobertura
     slideMaxDist: 4.4,    // alcance de búsqueda de cobertura desde jog
-    roadieSlideDist: 5.8, // alcance desde roadie run
+    roadieSlideDist: 5.8, // alcance desde sprint
     bounceWindow: 0.30,   // seg tras tocar cover en los que evadir sale instantáneo
     bounceRange: 5.6,     // alcance de búsqueda de la siguiente cobertura al wallbouncear
     bounceCooldown: 0.06,
@@ -45,11 +48,20 @@ export const TUNING = {
   },
   cover: {
     snapRange: 1.7,       // distancia para engancharse a una cara de cobertura
+    directAttachRange: 0.78, // más lejos entra mediante slide, no con corrección seca
+    enterPullSpeed: 8.5,  // absorción rápida de la distancia restante al cover
+    enterLerp: 18,
+    enterMinTime: 0.07,
+    enterMaxTime: 0.18,
+    enterMomentumDamp: 12,// conserva brevemente momentum paralelo a la pared
     detachPush: 0.55,     // cuánto hay que empujar lejos del cover para soltarse
     detachTime: 0.11,
     cornerLean: 0.55,     // margen del borde para lean en esquinas
     lowHeight: 1.4,       // altura máxima que cuenta como cobertura baja (popover)
     edgeExitBoost: 0.85,  // % de runSpeed del impulso al salir por el extremo
+    blindEnterRate: 34,   // brazos/arma salen rápido desde una orilla válida
+    blindExitRate: 32,
+    blindFireReady: 0.62, // clearance físico sigue siendo obligatorio
   },
   cam: {
     sens: 0.045,          // sensibilidad ratón (deg por pixel; ~360° en 20cm a 1000dpi)
@@ -59,7 +71,7 @@ export const TUNING = {
     fovLerp: 9,
     posLerp: 11,          // seguimiento de posición
     rotLag: 0,            // reservado
-    shoulder: 0.82,       // desplazamiento lateral (hombro derecho, estilo Gears)
+    shoulder: 0.82,       // desplazamiento lateral sobre el hombro derecho
     height: 1.62, dist: 2.7,
     roadieHeight: 1.62, roadieDist: 2.7, // = cámara normal: correr NO mueve la cámara
     aimShoulder: 0.88, aimHeight: 1.58, aimDist: 1.8,
@@ -70,13 +82,13 @@ export const TUNING = {
   },
   weapons: {
     smg: {
-      name: 'METRALLETA', rpm: 620, dmg: 10, headMult: 1.6,
+      nameKey: 'weapon.smg', rpm: 620, dmg: 10, headMult: 1.6,
       mag: 50, reserve: 150, reloadTime: 1.9,
       spreadAim: 0.9, spreadHip: 3.4, spreadBlind: 5.2,   // grados
       recoil: 0.35, range: 80, pellets: 1, auto: true,
     },
     shotgun: {
-      name: 'ESCOPETA', rpm: 95, dmg: 13, headMult: 1.0,
+      nameKey: 'weapon.shotgun', rpm: 95, dmg: 13, headMult: 1.0,
       mag: 8, reserve: 24, reloadTime: 2.1,
       spreadAim: 4.6, spreadHip: 6.4, spreadBlind: 8.0,
       recoil: 1.6, range: 24, pellets: 8, auto: false,

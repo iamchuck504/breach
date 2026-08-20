@@ -1,4 +1,4 @@
-// Cámara over-shoulder estilo Gears: hombro derecho, FOV kick en roadie,
+// Cámara sobre el hombro: hombro derecho, FOV estable al correr,
 // zoom al apuntar, colisión contra el mapa, shake.
 import * as THREE from 'three';
 import { TUNING } from '../config/tuning.js';
@@ -23,7 +23,7 @@ export class ShoulderCamera {
 
   applyMouse(dx, dy, invertY) {
     // escala por FOV: al apuntar (FOV cerrado) la sensibilidad baja proporcionalmente,
-    // igual que gears-clone (sens * 0.55 al apuntar) pero derivado del zoom real
+    // Sensibilidad de apuntado derivada del zoom real.
     const s = TUNING.cam.sens * DEG * (this.fov / TUNING.cam.fovNormal);
     this.yaw -= dx * s;
     this.pitch += (invertY ? dy : -dy) * s;

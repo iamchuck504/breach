@@ -54,6 +54,19 @@ for (let i = 0; i < 9; i++) controller.update(1 / 60, ctrlInput, false);
 check(controller.coverAimExposure < 0.04,
   `soltar ADS no regresó rápido a protección (${controller.coverAimExposure})`);
 
+// La locomoción descendente inclina el root de forma progresiva; así el torso
+// y los pies acompañan la pendiente en lugar de permanecer verticales.
+{
+  const slopeRig = new Rig(new THREE.Scene(), 'red');
+  for (let i = 0; i < 12; i++) slopeRig.update(1 / 60, {
+    state: 'run', speed: 0.75, aim: false, aimPitch: 0, twist: 0,
+    groundPitch: -0.2,
+  });
+  check(slopeRig.root.rotation.x < -0.09,
+    `rig no acompañó pendiente descendente (${slopeRig.root.rotation.x})`);
+  slopeRig.dispose(slopeRig.root.parent);
+}
+
 function contextualBlind(h, x, yaw) {
   const cam = {
     yaw, pitch: 0,

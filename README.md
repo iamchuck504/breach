@@ -1,7 +1,7 @@
 # BREACH
 
 Shooter web 4v4 (Rojo vs Azul) en tercera persona, inspirado en el game feel
-de Gears of War 5: wallbounce, roadie run, coberturas, mantle y escopetazos.
+de combate táctico en tercera persona: rebotes entre coberturas, correr, mantle y escopetazos.
 100% Three.js con assets procedurales.
 
 **Jugar:** https://breach-murex.vercel.app
