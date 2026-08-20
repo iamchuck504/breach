@@ -8,7 +8,9 @@ import { fileURLToPath } from 'node:url';
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const port = 8794;
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
-  env: { ...process.env, PORT: String(port) }, stdio: 'ignore',
+  // Esta prueba aísla autoridad balística; el flujo de presentación tiene su
+  // propio contrato y aquí se desactiva para no añadir 13 s a cada ejecución.
+  env: { ...process.env, PORT: String(port), INTRO_TIME: '0', COUNTDOWN_TIME: '0' }, stdio: 'ignore',
 });
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -86,7 +88,20 @@ try {
   snap = await waitFor(a, (m) => m.t === 'snap');
   if (hpOf(snap, b.welcome.id) !== 84) throw new Error('claim duplicado aplicó daño');
 
-  console.log('ONLINE FIRE OK · hit huérfano rechazado · daño SMG limitado a 16');
+  // Un remate cercano de escopeta publica el contexto visual autoritativo.
+  // Los clientes no deben decidir por su cuenta si una muerte desmiembra.
+  const bx = b.welcome.spawn.x, bz = b.welcome.spawn.z;
+  send(a, { t: 's', x: bx, z: bz - 1.5, y: 0, yaw: 0, st: 'idle', w: 'shotgun', am: 8, ar: 24 });
+  await delay(700);
+  send(a, { t: 'fire', w: 'shotgun', o: [bx, 1.1, bz - 1.5], p: [bx, 1.1, bz], d: [] });
+  send(a, { t: 'hit', target: b.welcome.id, dmg: 104, part: 'body', gib: 1 });
+  const death = await waitFor(a, (m) => m.t === 'death' && m.target === b.welcome.id);
+  if (!death.gib || death.w !== 'shotgun' || death.part !== 'body' ||
+      death.dist > 4.2 || death.dmg !== 104) {
+    throw new Error('contexto de muerte fuerte incompleto: ' + JSON.stringify(death));
+  }
+
+  console.log('ONLINE FIRE OK · autoridad de hit y contexto de muerte fuerte validados');
 } finally {
   a?.ws.close();
   b?.ws.close();

@@ -10,6 +10,9 @@ import { WebSocketServer } from 'ws';
 const PORT = process.env.PORT || 8787;
 const MAX_PLAYERS = 8;
 const HP = 100, REGEN_DELAY = 3.6, REGEN_RATE = 48, RESPAWN_TIME = 5, KILL_LIMIT = 25;
+const INTRO_TIME = Number(process.env.INTRO_TIME ?? 10);
+const COUNTDOWN_TIME = Number(process.env.COUNTDOWN_TIME ?? 3);
+const FINAL_PRESENTATION_TIME = Number(process.env.FINAL_PRESENTATION_TIME ?? 11);
 const SPAWN_PROT = 5;    // seg de invulnerabilidad al nacer (se rompe al disparar)
 const CRATE_RESPAWN = 30;
 const CRATES = [{ x: 7, z: 0, up: true, t: 0 }, { x: -7, z: 0, up: true, t: 0 }];
@@ -54,10 +57,12 @@ let nextDropId = 1;
 let nextId = 1;
 let scores = { red: 0, blue: 0 };
 let resetting = false;
+let roomOpeningAt = 0;
 const DROP_LIFE = 8;
 
 const send = (ws, obj) => { if (ws.readyState === 1) ws.send(JSON.stringify(obj)); };
 const broadcast = (obj) => { const s = JSON.stringify(obj); for (const p of players.values()) if (p.ws.readyState === 1) p.ws.send(s); };
+const nowSec = () => Date.now() / 1000;
 
 function pickTeam() {
   let r = 0, b = 0;
@@ -80,6 +85,9 @@ wss.on('connection', (ws) => {
       const id = 'p' + nextId++;
       const team = pickTeam();
       const spawn = pickSpawn(team);
+      const now = Date.now() / 1000;
+      if (players.size === 0 && !resetting) roomOpeningAt = now + INTRO_TIME + COUNTDOWN_TIME;
+      const startAt = roomOpeningAt > now ? roomOpeningAt : now + INTRO_TIME + COUNTDOWN_TIME;
       me = {
         ws, id, team,
         name: String(msg.name || 'ANON').slice(0, 14).toUpperCase(),
@@ -89,23 +97,28 @@ wss.on('connection', (ws) => {
         st: 'idle', aim: 0, p: 0, w: 'smg', sp: 0,
         hp: HP, alive: true, lastDamage: 0, respawnAt: 0,
         lastFireAt: -Infinity, pendingShot: null,
-        prot: Date.now() / 1000 + SPAWN_PROT,
+        readyAt: startAt,
+        prot: startAt + SPAWN_PROT,
         kills: 0, deaths: 0,
       };
       players.set(id, me);
       send(ws, {
-        t: 'welcome', id, team, spawn, scores,
+        t: 'welcome', id, team, spawn, scores, startAt,
         players: [...players.values()].map(pub),
         crates: CRATES.map((c) => (c.up ? 1 : 0)),
         drops: [...drops.entries()].map(([id, d]) => ({ id, wep: d.wep, x: d.x, z: d.z, y: d.y, team: d.team, t: d.t })),
       });
-      broadcast({ t: 'joined', id, name: me.name, team, v: me.v });
+      broadcast({ t: 'joined', ...pub(me) });
       console.log(`+ ${me.name} (${team}) — ${players.size}/${MAX_PLAYERS}`);
       return;
     }
     if (!me) return;
 
     if (msg.t === 's') {
+      if (resetting || Date.now() / 1000 < me.readyAt) {
+        me.st = 'idle'; me.aim = 0; me.sp = 0;
+        return;
+      }
       me.x = clamp(msg.x, -40, 40); me.z = clamp(msg.z, -40, 40);
       // yaw SIN clamp era fatal: un valor como 1e300 rebotado en el snap
       // metía el lerpAngle de todos los demás clientes en un bucle infinito
@@ -122,7 +135,7 @@ wss.on('connection', (ws) => {
       return;
     }
     if (msg.t === 'fire') {
-      if (!me.alive) return; // los muertos no disparan
+      if (!me.alive || resetting || Date.now() / 1000 < me.readyAt) return; // muertos/preparación no disparan
       const o = vec3(msg.o), pt = vec3(msg.p);
       if (!o || !pt) return; // malformado: descartar, no propagar el crash
       const shotWep = msg.w === 'shotgun' ? 'shotgun' : 'smg';
@@ -149,7 +162,7 @@ wss.on('connection', (ws) => {
     }
     if (msg.t === 'takeDrop') {
       const d = drops.get(msg.id);
-      if (!d || !me.alive) return;
+      if (!d || !me.alive || resetting || Date.now() / 1000 < me.readyAt) return;
       if (Math.hypot(me.x - d.x, me.z - d.z) > 3) return;
       drops.delete(msg.id);
       broadcast({ t: 'dropR', id: msg.id });
@@ -158,7 +171,7 @@ wss.on('connection', (ws) => {
     }
     if (msg.t === 'crate') {
       const c = CRATES[msg.i];
-      if (!c || !c.up || !me.alive || resetting) return;
+      if (!c || !c.up || !me.alive || resetting || Date.now() / 1000 < me.readyAt) return;
       if (Math.hypot(me.x - c.x, me.z - c.z) > 3) return; // validación laxa
       c.up = false;
       c.t = CRATE_RESPAWN;
@@ -169,7 +182,8 @@ wss.on('connection', (ws) => {
     }
     if (msg.t === 'hit') {
       const target = players.get(msg.target);
-      if (!target || !target.alive || !me.alive || target.team === me.team || resetting) return;
+      if (!target || !target.alive || !me.alive || target.team === me.team || resetting ||
+          nowSec() < me.readyAt || nowSec() < target.readyAt) return;
       if (target.prot > Date.now() / 1000) return; // protección de spawn
       const now = Date.now() / 1000;
       const shot = me.pendingShot;
@@ -196,6 +210,10 @@ wss.on('connection', (ws) => {
         const gib = shot.wep === 'shotgun' && targetDist <= FIRE_RULES.shotgun.gibRange && !!msg.gib;
         broadcast({
           t: 'death', target: target.id, from: me.id, gib: gib ? 1 : 0,
+          w: shot.wep,
+          dist: +targetDist.toFixed(2),
+          dmg: Math.round(dmg),
+          part: msg.part === 'head' ? 'head' : 'body',
           kn: me.name, kt: me.team, vn: target.name, vt: target.team,
         });
         // el arma del muerto cae con sus balas restantes (8s para recogerla)
@@ -227,17 +245,21 @@ wss.on('connection', (ws) => {
       drops.clear();
       for (const c of CRATES) { c.up = true; c.t = 0; }
       resetting = false;
+      roomOpeningAt = 0;
       // el timer del reinicio de ronda no debe disparar sobre la sala nueva
       // (teleportaba y reseteaba el arma del primer jugador en entrar)
       if (endTimer) { clearTimeout(endTimer); endTimer = null; }
+      if (startTimer) { clearTimeout(startTimer); startTimer = null; }
     }
   });
 });
 
 let endTimer = null;
+let startTimer = null;
 function endRound(team) {
   resetting = true;
-  broadcast({ t: 'win', team });
+  const finalRows = statRows();
+  broadcast({ t: 'win', team, rows: finalRows, scores: { ...scores } });
   endTimer = setTimeout(() => {
     endTimer = null;
     scores = { red: 0, blue: 0 };
@@ -246,22 +268,44 @@ function endRound(team) {
     for (let i = 0; i < CRATES.length; i++) {
       if (!CRATES[i].up) { CRATES[i].up = true; CRATES[i].t = 0; broadcast({ t: 'crate', i, up: 1 }); }
     }
+    const startAt = nowSec() + INTRO_TIME + COUNTDOWN_TIME;
+    roomOpeningAt = startAt;
     for (const p of players.values()) {
       p.kills = 0; p.deaths = 0;
       p.hp = HP; p.alive = true; p.respawnAt = 0;
-      p.prot = Date.now() / 1000 + SPAWN_PROT;
+      p.readyAt = startAt;
+      p.prot = startAt + SPAWN_PROT;
       const spawn = pickSpawn(p.team);
       p.x = spawn.x; p.z = spawn.z;
       broadcast({ t: 'respawn', id: p.id, spawn });
     }
     broadcast({ t: 'score', ...scores });
-    resetting = false;
-  }, 4000);
+    broadcast({
+      t: 'prepare', startAt, scores: { ...scores },
+      players: [...players.values()].map(pub),
+    });
+    startTimer = setTimeout(() => {
+      startTimer = null;
+      roomOpeningAt = 0;
+      resetting = false;
+      broadcast({ t: 'start' });
+    }, (INTRO_TIME + COUNTDOWN_TIME) * 1000);
+  }, FINAL_PRESENTATION_TIME * 1000);
 }
 
 function pub(p) {
   // x/z: sin ellos los remotos nacían apilados en (0,0) hasta el primer snap
-  return { id: p.id, name: p.name, team: p.team, alive: p.alive, hp: p.hp, x: p.x, z: p.z, v: p.v };
+  return {
+    id: p.id, name: p.name, team: p.team, alive: p.alive, hp: p.hp,
+    x: p.x, z: p.z, v: p.v, kills: p.kills, deaths: p.deaths,
+  };
+}
+
+function statRows() {
+  return [...players.values()].map((p) => ({
+    id: p.id, name: p.name, team: p.team, variant: p.v,
+    kills: p.kills, deaths: p.deaths, score: p.kills * 100,
+  })).sort((a, b) => b.score - a.score || a.deaths - b.deaths || a.name.localeCompare(b.name));
 }
 function num(v) { return typeof v === 'number' && isFinite(v) ? v : 0; }
 function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, num(v))); }

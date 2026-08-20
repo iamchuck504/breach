@@ -9,13 +9,18 @@ export class HUD {
       barrel: document.getElementById('barrel-dot'),
       vignette: document.getElementById('vignette'),
       hitmarker: document.getElementById('hitmarker'),
+      score: document.getElementById('score'),
       scoreRed: document.getElementById('score-red'),
       scoreBlue: document.getElementById('score-blue'),
       scoreSep: document.getElementById('score-sep'),
+      scoreUnits: document.querySelectorAll('#score .score-unit'),
       roundPips: document.getElementById('round-pips'),
       scoreboard: document.getElementById('scoreboard'),
+      matchFlow: document.getElementById('match-flow'),
+      spectator: document.getElementById('spectator'),
       sbRed: document.getElementById('sb-red'),
       sbBlue: document.getElementById('sb-blue'),
+      weapon: document.getElementById('weapon'),
       wepName: document.getElementById('wep-name'),
       wepMag: document.getElementById('wep-mag'),
       wepRes: document.getElementById('wep-res'),
@@ -30,15 +35,32 @@ export class HUD {
     this._hintT = null;
   }
 
+  _pulse(el, cls) {
+    el.classList.remove(cls);
+    void el.offsetWidth;
+    el.classList.add(cls);
+  }
+
   show(on) { this.el.hud.classList.toggle('on', on); }
   showMenu(on) { this.el.menu.classList.toggle('off', !on); }
 
   ammo(w) {
+    const weaponChanged = this._lastWep !== undefined && this._lastWep !== w.cur;
+    const ammoChanged = !weaponChanged && this._lastMag !== undefined && this._lastMag !== w.st.mag;
+    if (weaponChanged) this._pulse(this.el.weapon, 'weapon-change');
+    if (ammoChanged) this._pulse(this.el.weapon, 'ammo-change');
+    this.el.weapon.dataset.weapon = w.cur;
     this.el.wepName.textContent = w.def.name;
     this.el.wepMag.textContent = w.st.mag;
     this.el.wepRes.textContent = w.st.reserve;
-    this.el.wepMsg.textContent = w.reloading ? 'RECARGANDO'
+    this.el.wepMsg.textContent = w.swapping ? 'CAMBIANDO ARMA'
+      : w.reloading ? 'RECARGANDO'
       : (w.st.mag === 0 && w.st.reserve === 0 ? 'SIN MUNICIÓN' : '');
+    this.el.weapon.classList.toggle('reloading', w.reloading);
+    this.el.weapon.classList.toggle('low-ammo', !w.reloading &&
+      w.st.mag <= Math.max(2, Math.ceil(w.def.mag * 0.2)));
+    this._lastWep = w.cur;
+    this._lastMag = w.st.mag;
 
     // barra de segmentos (ref. Gears): cargadores chicos = bloques discretos,
     // grandes = barra continua; en recarga barre en naranja
@@ -69,9 +91,14 @@ export class HUD {
     }
   }
 
-  score(r, b) {
+  score(r, b, unit = 'BAJAS') {
+    if (this._scoreR !== undefined && r !== this._scoreR) this._pulse(this.el.scoreRed, 'score-bump');
+    if (this._scoreB !== undefined && b !== this._scoreB) this._pulse(this.el.scoreBlue, 'score-bump');
     this.el.scoreRed.textContent = r;
     this.el.scoreBlue.textContent = b;
+    for (const el of this.el.scoreUnits) el.textContent = unit;
+    this._scoreR = r;
+    this._scoreB = b;
   }
 
   // temporizador de ronda en el separador central (m:ss); null → "VS"
@@ -84,6 +111,9 @@ export class HUD {
   // pips de rondas ganadas (mejor de 3)
   roundPips(winsR, winsB) {
     if (winsR === null) { this.el.roundPips.innerHTML = ''; return; }
+    const key = winsR + ':' + winsB;
+    if (this._roundKey === key) return;
+    this._roundKey = key;
     let html = '';
     for (let i = 0; i < 2; i++) html += `<div class="pip${i < winsR ? ' red' : ''}"></div>`;
     for (let i = 0; i < 2; i++) html += `<div class="pip${i < winsB ? ' blue' : ''}"></div>`;
@@ -91,9 +121,12 @@ export class HUD {
   }
 
   // scoreboard (Tab / VIEW): rows ordenadas por puntaje, null → ocultar
-  scoreboard(rows) {
+  scoreboard(rows, localId = 'player') {
     this.el.scoreboard.classList.toggle('on', !!rows);
-    if (!rows) return;
+    if (!rows) { this._scoreboardKey = null; return; }
+    const key = localId + '|' + rows.map((r) => `${r.id}:${r.kills}:${r.deaths}:${r.score}`).join('|');
+    if (this._scoreboardKey === key) return;
+    this._scoreboardKey = key;
     const head = '<div class="sb-row sb-cols-head"><span>NOMBRE</span><span>K</span><span>D</span><span>PTS</span></div>';
     for (const team of ['red', 'blue']) {
       const el = team === 'red' ? this.el.sbRed : this.el.sbBlue;
@@ -101,10 +134,102 @@ export class HUD {
       el.innerHTML = title + head + rows
         .filter((r) => r.team === team)
         .map((r) =>
-          `<div class="sb-row${r.id === 'player' ? ' me' : ''}">` +
+          `<div class="sb-row${r.id === localId ? ' me' : ''}">` +
           `<span>${esc(r.name)}</span><span>${r.kills}</span><span>${r.deaths}</span><span>${r.score}</span></div>`)
         .join('');
     }
+  }
+
+  // Secuencia de presentación de partida. Recibe únicamente información que
+  // ya existe en el modo activo; no inventa métricas para llenar el panel.
+  presentation(view) {
+    const root = this.el.matchFlow;
+    if (!view) {
+      root.className = '';
+      root.innerHTML = '';
+      this._presentationKey = null;
+      return;
+    }
+    const rows = view.rows || [];
+    const count = view.count ?? '';
+    const key = [view.phase, view.title, view.sub, count, view.red, view.blue,
+      rows.map((r) => `${r.id}:${r.kills ?? ''}:${r.deaths ?? ''}:${r.score ?? ''}`).join('|')].join('~');
+    root.className = `on ${view.phase}`;
+    if (this._presentationKey === key) {
+      const bar = root.querySelector('.mf-progress span');
+      if (bar && view.progress !== undefined) bar.style.width = `${Math.max(0, Math.min(100, view.progress * 100))}%`;
+      return;
+    }
+    this._presentationKey = key;
+
+    if (view.phase === 'intro') {
+      root.innerHTML = `
+        <section class="mf-card">
+          <div class="mf-kicker">${esc(view.kicker || 'DESPLIEGUE')}</div>
+          <div class="mf-title">${esc(view.title)}</div>
+          <div class="mf-sub">${esc(view.sub || '')}</div>
+          <div class="mf-meta">${(view.meta || []).map((m) => `<span class="mf-chip">${esc(m)}</span>`).join('')}</div>
+          ${flowTeams(rows, view.localId, false)}
+          <div class="mf-progress"><span style="width:${Math.max(0, Math.min(100, (view.progress ?? 0) * 100))}%"></span></div>
+          <div class="mf-wait">${esc(view.wait || 'PREPARANDO COMBATE')}</div>
+        </section>`;
+      return;
+    }
+
+    if (view.phase === 'countdown') {
+      root.innerHTML = `<div><div class="mf-count">${esc(count)}</div><div class="mf-count-label">${esc(view.sub || 'PREPÁRATE')}</div></div>`;
+      return;
+    }
+
+    if (view.phase === 'mvp') {
+      const m = view.mvp || {};
+      root.innerHTML = `
+        <section class="mf-result-card mf-mvp">
+          <div class="mf-portrait"><img alt="${esc(m.name || 'MVP')}"></div>
+          <div>
+            <div class="mf-result-label">MVP DE LA PARTIDA</div>
+            <div class="mf-result-title">${esc(m.name || '—')}</div>
+            <div class="mf-sub ${esc(m.team || '')}">EQUIPO ${m.team === 'blue' ? 'AZUL' : 'ROJO'}</div>
+            <div class="mf-mvp-stats">
+              ${flowStat(m.kills ?? 0, 'KILLS')}${flowStat(m.deaths ?? 0, 'DEATHS')}${flowStat(m.score ?? 0, 'PTS')}
+            </div>
+          </div>
+        </section>`;
+      const img = root.querySelector('.mf-portrait img');
+      if (img && view.portrait) img.src = view.portrait;
+      return;
+    }
+
+    root.innerHTML = `
+      <section class="mf-result-card">
+        <div class="mf-result-top">
+          <div><div class="mf-result-label">${esc(view.kicker || 'RESULTADO')}</div><div class="mf-result-title">${esc(view.title)}</div><div class="mf-sub">${esc(view.sub || '')}</div></div>
+          <div class="mf-result-score"><span class="red">${view.red ?? 0}</span><span> — </span><span class="blue">${view.blue ?? 0}</span></div>
+        </div>
+        ${view.phase === 'final-score' ? flowTeams(rows, view.localId, true) : ''}
+      </section>`;
+  }
+
+  spectator(view) {
+    const root = this.el.spectator;
+    this.el.hud.classList.toggle('spectating', !!view);
+    root.classList.toggle('on', !!view);
+    if (!view) {
+      root.innerHTML = '';
+      this._spectatorKey = null;
+      return;
+    }
+    const key = [view.name, view.controls, view.respawn, view.waiting].join('|');
+    if (key === this._spectatorKey) return;
+    this._spectatorKey = key;
+    root.innerHTML = `<div class="spec-card">
+      <div class="spec-kicker">SPECTATING</div>
+      <div class="spec-name">${esc(view.name || 'ESPERANDO COMPAÑERO')}</div>
+      <div class="spec-meta">
+        <span>${esc(view.controls || '')}</span>
+        ${view.respawn ? `<span class="spec-respawn${view.ready ? ' ready' : ''}">${esc(view.respawn)}</span>` : ''}
+      </div>
+    </div>`;
   }
 
   health(pct) {
@@ -189,4 +314,22 @@ export class HUD {
 
 function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function flowTeams(rows, localId, stats) {
+  return `<div class="mf-teams">${['red', 'blue'].map((team) => {
+    const teamRows = rows.filter((r) => r.team === team);
+    const head = stats
+      ? '<span class="mf-stat-head">K&nbsp;&nbsp;D&nbsp;&nbsp;&nbsp;PTS</span>'
+      : `<span>${teamRows.length}/4</span>`;
+    const body = teamRows.length ? teamRows.map((r) => stats
+      ? `<div class="mf-player${r.id === localId ? ' me' : ''}"><span>${esc(r.name)}</span><span>${r.kills ?? 0}</span><span>${r.deaths ?? 0}</span><span>${r.score ?? 0}</span></div>`
+      : `<div class="mf-player roster${r.id === localId ? ' me' : ''}"><span>${esc(r.name)}</span><span>${r.id === localId ? 'TÚ' : ''}</span></div>`).join('')
+      : '<div class="mf-player roster"><span>ESPERANDO JUGADORES</span><span>—</span></div>';
+    return `<div class="mf-team ${team}"><div class="mf-team-head"><span>EQUIPO ${team === 'red' ? 'ROJO' : 'AZUL'}</span>${head}</div>${body}</div>`;
+  }).join('')}</div>`;
+}
+
+function flowStat(value, label) {
+  return `<div class="mf-mvp-stat"><b>${value}</b><span>${label}</span></div>`;
 }

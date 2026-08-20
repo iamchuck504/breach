@@ -458,6 +458,8 @@ export class Rig {
     this.groundFn = null;  // (x,z,y)->alturaSuelo — lo inyecta quien tiene el world
     this.collideFn = null; // (p,y)->muta p fuera de los AABBs (colisión del cadáver)
     this._deathCtx = null; // contexto físico de la muerte (setDeathContext)
+    this._corpseVisual = null; // clones de material SOLO mientras este rig está muerto
+    this._deathHidden = [];   // piezas ocultas por daño fuerte; se restauran al respawn
   }
 
   // Mismo volumen craneal para las cinco variantes. Todo lo que cambia es
@@ -611,6 +613,117 @@ export class Rig {
   // variación entre muertes viene del contexto, no de aleatoriedad pura.
   setDeathContext(ctx) { this._deathCtx = ctx; }
 
+  _prepareCorpseVisual() {
+    if (this._corpseVisual) return;
+    const excluded = new Set(this._outlines || []);
+    const entries = [];
+    const visit = (node) => {
+      // Las armas caen por separado y el nametag desaparece: ninguno debe
+      // contaminar la lectura/material del cuerpo asentado.
+      if (node === this.gunMount || node === this.backMount ||
+          node === this.nameTag || excluded.has(node)) return;
+      if (node.isMesh && node.material) {
+        const originals = Array.isArray(node.material) ? node.material : [node.material];
+        const clones = originals.map((original) => {
+          const material = original.clone();
+          material.userData = { ...material.userData, shared: false, corpseClone: true };
+          const base = material.color?.clone() ?? null;
+          let muted = null;
+          if (base) {
+            const hsl = {};
+            base.getHSL(hsl);
+            muted = new THREE.Color().setHSL(
+              hsl.h,
+              hsl.s * 0.24,
+              Math.max(0.025, hsl.l * 0.62),
+            );
+          }
+          return {
+            material, base, muted,
+            roughness: material.roughness,
+            metalness: material.metalness,
+          };
+        });
+        node.material = Array.isArray(node.material)
+          ? clones.map((c) => c.material)
+          : clones[0].material;
+        entries.push({ node, originals, clones });
+      }
+      for (const child of node.children) visit(child);
+    };
+    visit(this.root);
+    this._corpseVisual = { entries, amount: -1 };
+  }
+
+  _updateCorpseVisual(t) {
+    this._prepareCorpseVisual();
+    // El impacto conserva color un instante; al asentarse, el cuerpo pierde
+    // saturación, contraste y el brillo de equipo sin volverse gris artificial.
+    const x = Math.min(1, Math.max(0, (t - 0.18) / 0.82));
+    const amount = x * x * (3 - 2 * x);
+    if (Math.abs(amount - this._corpseVisual.amount) < 0.015) return;
+    this._corpseVisual.amount = amount;
+    for (const entry of this._corpseVisual.entries) {
+      for (const c of entry.clones) {
+        if (c.base) c.material.color.copy(c.base).lerp(c.muted, amount);
+        if (typeof c.roughness === 'number') {
+          c.material.roughness = c.roughness + (0.9 - c.roughness) * amount;
+        }
+        if (typeof c.metalness === 'number') {
+          c.material.metalness = c.metalness * (1 - amount * 0.42);
+        }
+      }
+    }
+  }
+
+  _hideDeathPart(node) {
+    if (!node || this._deathHidden.includes(node)) return;
+    node.visible = false;
+    this._deathHidden.push(node);
+  }
+
+  _applyContextualDamage(ctx, impactSide) {
+    const strongShotgun = !!ctx.gib && (!ctx.weapon || ctx.weapon === 'shotgun');
+    if (!strongShotgun) return;
+    const part = ctx.part === 'head' ? 'head' : 'body';
+    const distance = Number.isFinite(ctx.distance) ? ctx.distance : 3;
+    const damage = Number.isFinite(ctx.damage) ? ctx.damage : 75;
+    if (part === 'head') {
+      this._hideDeathPart(this.head);
+      return;
+    }
+    // La balística actual distingue cabeza/cuerpo. Dentro del cuerpo usamos
+    // el lado real de entrada del tiro para elegir qué extremidad pierde,
+    // manteniendo el resultado estable y relacionado con el impacto.
+    const enteringFromLeft = impactSide >= 0;
+    this._hideDeathPart(enteringFromLeft ? this.armL.shoulder : this.armR.shoulder);
+    // Solo un remate verdaderamente extremo añade una segunda lesión. Una
+    // escopeta en el borde de su rango de gib nunca desarma medio cuerpo.
+    if (distance <= 1.8 && damage >= 85) {
+      this._hideDeathPart(enteringFromLeft ? this.legR.knee : this.legL.knee);
+    }
+  }
+
+  _restoreDeathVisuals() {
+    if (this._corpseVisual) {
+      const disposed = new Set();
+      for (const entry of this._corpseVisual.entries) {
+        entry.node.material = Array.isArray(entry.node.material)
+          ? entry.originals
+          : entry.originals[0];
+        for (const c of entry.clones) {
+          if (!disposed.has(c.material)) { disposed.add(c.material); c.material.dispose(); }
+        }
+      }
+      this._corpseVisual = null;
+    }
+    for (const node of this._deathHidden) node.visible = true;
+    this._deathHidden.length = 0;
+    if (this.nameTag) this.nameTag.visible = true;
+    this.gunSMG.visible = true;
+    this.gunShotgun.visible = true;
+  }
+
   _startRagdoll() {
     const yaw = this.root.rotation.y;
     const back = { x: Math.sin(yaw), z: Math.cos(yaw) };
@@ -628,21 +741,32 @@ export class Rig {
     const st = ctx.state || 'idle';
     const inCover = st === 'cover_low' || st === 'cover_high' || st.startsWith('blind_');
     const evading = st === 'dive' || st === 'slide';
+    const side = imp ? imp.x * right.x + imp.z * right.z : rnd(-0.5, 0.5);
+    const front = imp ? imp.x * back.x + imp.z * back.z : 1;
+
+    if (this.nameTag) this.nameTag.visible = false;
+    this.setProtected(false);
+    this._prepareCorpseVisual();
+    this._applyContextualDamage(ctx, side);
 
     // impulso inicial: el momentum que TRAÍA + el empuje del arma (potencia y
     // dirección del tiro). Con tope — nadie "sale disparado"; cubierto casi
     // no se desplaza: se desploma en el sitio, contra su cover.
     let vx = vel.x * (evading ? 0.75 : 0.5) + (imp ? imp.x : back.x) * (0.55 + power * 2.1);
     let vz = vel.z * (evading ? 0.75 : 0.5) + (imp ? imp.z : back.z) * (0.55 + power * 2.1);
-    if (inCover) { vx *= 0.3; vz *= 0.3; }
+    if (inCover) {
+      // No queda sentado contra la pared como un jugador aún cubierto: pierde
+      // el apoyo y resbala tangencialmente antes de terminar tendido.
+      const slip = (side >= 0 ? 1 : -1) * (0.48 + power * 0.34);
+      vx = vx * 0.18 + right.x * slip;
+      vz = vz * 0.18 + right.z * slip;
+    }
     const vm = Math.hypot(vx, vz);
     if (vm > 4.2) { vx *= 4.2 / vm; vz *= 4.2 / vm; }
 
     // dirección del desplome según el contexto: tiro de costado → rueda hacia
     // ese lado; iba lanzado (roadie/evasión) → cae de bruces con su momentum;
     // tiro frontal → se va de espaldas
-    const side = imp ? imp.x * right.x + imp.z * right.z : rnd(-0.5, 0.5);
-    const front = imp ? imp.x * back.x + imp.z * back.z : 1;
     const fwdMom = vel.x * -back.x + vel.z * -back.z;
     let axis, angTarget;
     if (Math.abs(side) > Math.abs(front) + 0.25) {
@@ -655,7 +779,7 @@ export class Rig {
       axis = 'x';
       angTarget = (front >= 0 ? 1 : -1) * (Math.PI / 2) * rnd(0.9, 1.05);
     }
-    if (inCover) angTarget *= rnd(0.62, 0.78); // se escurre contra su cobertura
+    if (inCover) angTarget *= rnd(0.92, 1.02); // termina tendido, no sentado/crouched
 
     this.rag = {
       t: 0,
@@ -681,12 +805,13 @@ export class Rig {
       axis, angTarget,
       tilt: (imp ? side * 0.3 : rnd(-0.3, 0.3)) + rnd(-0.08, 0.08),
       spin: evading ? rnd(-0.9, 0.9) : imp ? -side * rnd(0.25, 0.5) : rnd(-0.4, 0.4),
+      severe: !!ctx.gib,
       pose: [
-        rnd(-0.2, 0.2), rnd(-0.3, 0.3), rnd(-0.4, 0.2), rnd(-0.4, 0.4),
-        rnd(0.2, 0.8), rnd(0.35, 0.9), rnd(0.1, 0.55),
-        rnd(0.2, 0.8), rnd(0.35, 0.9), rnd(0.1, 0.55),
-        rnd(-0.2, 0.5), rnd(0.1, 0.4), rnd(-0.6, -0.1),
-        rnd(-0.3, 0.4), rnd(-0.7, -0.2),
+        rnd(-0.08, 0.16), rnd(-0.22, 0.22), rnd(0.34, 0.66), rnd(-0.58, 0.58),
+        rnd(0.08, 0.42), rnd(0.82, 1.18), rnd(0.12, 0.4),
+        rnd(0.08, 0.42), rnd(0.82, 1.18), rnd(0.12, 0.4),
+        rnd(-0.08, 0.22), rnd(0.25, 0.48), rnd(-0.38, -0.12),
+        rnd(-0.04, 0.28), rnd(-0.42, -0.14),
       ],
     };
     if (this.rag.by < this.rag.floorY) this.rag.by = this.rag.floorY;
@@ -1133,6 +1258,7 @@ export class Rig {
     if (p.state === 'dead' && this.rag) {
       const r = this.rag;
       r.t += dt;
+      this._updateCorpseVisual(r.t);
       const fr = Math.exp(-6 * dt);
       r.vx *= fr; r.vz *= fr;
       r.ox += r.vx * dt; r.oz += r.vz * dt;
@@ -1207,13 +1333,14 @@ export class Rig {
       }
       this.root.position.set(r.bx + r.ox, r.by, r.bz + r.oz);
       this.root.rotation.y = r.byaw + r.spin * fall;
-      // el arma se le CAE de las manos durante el desplome, no al instante
-      this.activeGun.visible = r.t < 0.22;
+      // Ambas armas abandonan la silueta corporal; el pickup separado queda
+      // junto al cadáver y comunica de inmediato que ya no puede combatir.
+      this.gunSMG.visible = r.t < 0.22;
+      this.gunShotgun.visible = r.t < 0.22;
     } else if (p.state !== 'dead') {
       if (this.rag) {
         this.rag = null;
-        this.gunSMG.visible = true;
-        this.gunShotgun.visible = true;
+        this._restoreDeathVisuals();
         this.hips.position.y = 0.66; // sin "brotar" del suelo al revivir
       }
     }
@@ -1279,6 +1406,7 @@ export class Rig {
   }
 
   dispose(scene) {
+    this._restoreDeathVisuals();
     scene.remove(this.root);
     const geos = new Set(), mats = new Set(), maps = new Set();
     this.root.traverse((o) => {

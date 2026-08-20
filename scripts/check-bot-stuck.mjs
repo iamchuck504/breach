@@ -29,6 +29,9 @@ try {
   await page.waitForTimeout(700);
   await page.evaluate(() => {
     const bm = window.BREACH.botMatch;
+    // Esta prueba aísla navegación; salta la presentación inicial sin alterar
+    // el comportamiento productivo del match.
+    bm.phase = 'playing'; bm.phaseT = 0;
     const bot = bm.bots.find((b) => b.team === 'red');
     window.__stuckBot = bot;
     // El shield del spawn ocupa z=-21.4..-20.4, x=-4..4.

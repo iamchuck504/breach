@@ -223,6 +223,10 @@ const dieIn = async (tag, prep, expectState = null, keepPosition = false) => {
       by: +r.by.toFixed(2), floorY: +r.floorY.toFixed(2),
       inWall: Math.hypot(probe.x - px, probe.z - pz) > 0.12,
       nan: !isFinite(px) || !isFinite(pz) || !isFinite(r.by),
+      corpseMaterials: R._corpseVisual?.entries.length || 0,
+      corpseAmount: +(R._corpseVisual?.amount ?? 0).toFixed(2),
+      gunsHidden: !R.gunSMG.visible && !R.gunShotgun.visible,
+      hiddenParts: R._deathHidden.length,
     };
   });
   if (post.err) problems.push(`MUERTE ${tag}: ${post.err}`);
@@ -231,6 +235,9 @@ const dieIn = async (tag, prep, expectState = null, keepPosition = false) => {
     if (post.by < post.floorY - 0.02) problems.push(`MUERTE ${tag}: cuerpo bajo el suelo (${post.by} < ${post.floorY})`);
     if (post.inWall) problems.push(`MUERTE ${tag}: cadáver dentro de una pared`);
     if (post.nan) problems.push(`MUERTE ${tag}: NaN en el cadáver`);
+    if (!post.corpseMaterials || post.corpseAmount < 0.95) problems.push(`MUERTE ${tag}: tratamiento apagado incompleto`);
+    if (!post.gunsHidden) problems.push(`MUERTE ${tag}: arma todavía integrada a la silueta`);
+    if (post.hiddenParts) problems.push(`MUERTE ${tag}: muerte normal ocultó ${post.hiddenParts} piezas`);
   }
   // revivir limpio
   await page.evaluate(() => {
@@ -243,9 +250,15 @@ const dieIn = async (tag, prep, expectState = null, keepPosition = false) => {
   const revived = await page.evaluate(() => ({
     st: window.BREACH.player.state, rag: !!window.BREACH.rig.rag,
     mant: !!window.BREACH.player.mantle,
+    corpseVisual: !!window.BREACH.rig._corpseVisual,
+    hiddenParts: window.BREACH.rig._deathHidden.length,
+    gunsVisible: window.BREACH.rig.gunSMG.visible && window.BREACH.rig.gunShotgun.visible,
   }));
   if (revived.rag) problems.push(`MUERTE ${tag}: el ragdoll no se limpió al revivir`);
   if (revived.mant) problems.push(`MUERTE ${tag}: mantle pegado tras revivir`);
+  if (revived.corpseVisual || revived.hiddenParts || !revived.gunsVisible) {
+    problems.push(`MUERTE ${tag}: apariencia de cadáver no se restauró al revivir`);
+  }
   await flush('muerte-' + tag);
   console.log(`muerte ${tag}: st=${res.stAtDeath} disp=${post.disp ?? '?'}m`);
 };
@@ -297,6 +310,40 @@ await page.keyboard.down('w');
 await page.waitForTimeout(400);
 await page.keyboard.up('w');
 await dieIn('pared', async () => { await page.evaluate(() => { window.__mon.ignoreTeleport = 4; }); }, null, true);
+
+// Remate extremo de escopeta: daño corporal contextual y reversible.
+await page.evaluate(() => {
+  const G = window.BREACH, P = G.player;
+  window.__tp(0, -12);
+  G.rig.setDeathContext({
+    impact: { x: 1, z: 0 }, power: 1, vel: { x: 0, z: 0 }, state: 'idle',
+    weapon: 'shotgun', distance: 1.2, damage: 104, part: 'body', gib: true,
+  });
+  P.kill();
+  window.__mon.ignoreTeleport = 6;
+});
+await page.waitForTimeout(1300);
+const severe = await page.evaluate(() => ({
+  hidden: window.BREACH.rig._deathHidden.length,
+  armGone: !window.BREACH.rig.armL.shoulder.visible || !window.BREACH.rig.armR.shoulder.visible,
+  lowerLegGone: !window.BREACH.rig.legL.knee.visible || !window.BREACH.rig.legR.knee.visible,
+}));
+if (severe.hidden !== 2 || !severe.armGone || !severe.lowerLegGone) {
+  problems.push('MUERTE escopeta: daño contextual no ocultó brazo + pierna inferior');
+}
+await page.evaluate(() => {
+  const G = window.BREACH;
+  G.player.respawn({ x: 0, z: -12, yaw: Math.PI });
+  G.selfAlive = true; G.selfHp = 100;
+  window.__mon.ignoreTeleport = 6;
+});
+await page.waitForTimeout(300);
+const severeReset = await page.evaluate(() => ({
+  hidden: window.BREACH.rig._deathHidden.length,
+  allVisible: window.BREACH.rig.armL.shoulder.visible && window.BREACH.rig.armR.shoulder.visible &&
+    window.BREACH.rig.legL.knee.visible && window.BREACH.rig.legR.knee.visible,
+}));
+if (severeReset.hidden || !severeReset.allVisible) problems.push('MUERTE escopeta: piezas no restauradas al respawn');
 
 const fin = await page.evaluate(() => ({ maxSpeed: +window.__mon.maxSpeed.toFixed(1) }));
 console.log('MOV-CHECK:', JSON.stringify({ maxSpeed: fin.maxSpeed, problemas: problems.length }));

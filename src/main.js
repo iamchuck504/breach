@@ -97,6 +97,11 @@ const G = {
   respawnT: 0,         // countdown visible de reaparición
   playerLastHit: 99,
   remotes: new Map(),  // id -> RemotePlayer
+  onlineRows: [],      // kills/deaths autoritativos expuestos por el servidor
+  onlineStartAt: 0,    // epoch (s): el server bloquea combate hasta este instante
+  onlineFinal: null,   // { team, rows, at } durante resultado/scoreboard/MVP
+  flowLockedPrev: false,
+  spectator: { active: false, targetId: null, deathHold: 0, first: true },
   net: null,
   selfHp: TUNING.combat.hp,
   selfAlive: true,
@@ -109,6 +114,229 @@ const G = {
   })(),
   footAcc: 0,
 };
+
+const MAP_LABEL = { fortaleza: 'FORTALEZA', azoteas: 'AZOTEA' };
+const INTRO_TIME = 10;
+const COUNTDOWN_TIME = 3;
+const FINAL_PRESENTATION_TIME = 11;
+const matchCamTarget = new THREE.Vector3();
+const spectatorCamPos = new THREE.Vector3();
+const spectatorDesired = new THREE.Vector3();
+const spectatorPivot = new THREE.Vector3();
+const spectatorRay = new THREE.Vector3();
+
+function matchControlsLocked() {
+  if (G.mode === 'bots' && G.botMatch) return G.botMatch.controlsLocked();
+  if (G.mode === 'online') {
+    return !!G.onlineFinal || (G.onlineStartAt > Date.now() / 1000);
+  }
+  return false;
+}
+
+function mvpOf(rows) {
+  return [...(rows || [])].sort((a, b) =>
+    (b.score ?? b.kills * 100) - (a.score ?? a.kills * 100) ||
+    (a.deaths ?? 0) - (b.deaths ?? 0) || String(a.name).localeCompare(String(b.name)))[0] || null;
+}
+
+function botPresentation() {
+  const bm = G.botMatch;
+  if (!bm) return null;
+  const common = { rows: bm.statRows(), localId: 'player' };
+  if (bm.phase === 'intro') return {
+    phase: 'intro', kicker: 'DESPLIEGUE // VS BOTS', title: MAP_LABEL[G.mapChoice] || 'FORTALEZA',
+    sub: 'TEAM DEATHMATCH', meta: ['MEJOR DE 3', '15 VIDAS POR EQUIPO', `ROUND ${bm.round}`],
+    progress: 1 - bm.phaseT / INTRO_TIME, wait: 'RECONOCIENDO EL CAMPO DE BATALLA', ...common,
+  };
+  if (bm.phase === 'countdown') return {
+    phase: 'countdown', count: Math.max(1, Math.ceil(bm.phaseT)), sub: `ROUND ${bm.round}`,
+  };
+  if (bm.phase === 'intermission') return {
+    phase: 'final-score', kicker: 'FIN DE ROUND',
+    title: bm.roundWinner ? `ROUND PARA ${bm.roundWinner === 'red' ? 'ROJO' : 'AZUL'}` : 'ROUND EMPATADO',
+    sub: 'SIGUIENTE DESPLIEGUE EN BREVE', red: bm.wins.red, blue: bm.wins.blue, ...common,
+  };
+  if (bm.phase === 'final') {
+    const elapsed = FINAL_PRESENTATION_TIME - bm.phaseT;
+    const won = bm.matchWinner === 'red';
+    if (elapsed < 2.8) return {
+      phase: 'result', kicker: 'PARTIDA TERMINADA', title: won ? 'VICTORIA' : 'DERROTA',
+      sub: bm.matchWinner === 'red' ? 'EQUIPO ROJO' : 'EQUIPO AZUL', red: bm.wins.red, blue: bm.wins.blue,
+    };
+    if (elapsed < 7.2) return {
+      phase: 'final-score', kicker: 'RESULTADO FINAL', title: won ? 'VICTORIA' : 'DERROTA',
+      sub: 'MARCADOR DE LA PARTIDA', red: bm.wins.red, blue: bm.wins.blue, ...common,
+    };
+    const mvp = mvpOf(common.rows);
+    return { phase: 'mvp', mvp, portrait: mvp ? renderCharacterPortrait(mvp.variant, mvp.team) : null };
+  }
+  return null;
+}
+
+function onlinePresentation(now = Date.now() / 1000) {
+  if (G.mode !== 'online') return null;
+  if (G.onlineFinal) {
+    const f = G.onlineFinal;
+    const elapsed = now - f.at;
+    const won = f.team === G.team;
+    if (elapsed < 2.8) return {
+      phase: 'result', kicker: 'PARTIDA TERMINADA', title: won ? 'VICTORIA' : 'DERROTA',
+      sub: `GANA EQUIPO ${f.team === 'red' ? 'ROJO' : 'AZUL'}`, red: f.scores?.red ?? G.scores.red, blue: f.scores?.blue ?? G.scores.blue,
+    };
+    if (elapsed < 7.2) return {
+      phase: 'final-score', kicker: 'RESULTADO FINAL', title: won ? 'VICTORIA' : 'DERROTA',
+      sub: 'MARCADOR DE LA PARTIDA', red: f.scores?.red ?? G.scores.red, blue: f.scores?.blue ?? G.scores.blue,
+      rows: f.rows || G.onlineRows, localId: G.net?.id,
+    };
+    const mvp = mvpOf(f.rows || G.onlineRows);
+    return { phase: 'mvp', mvp, portrait: mvp ? renderCharacterPortrait(mvp.variant, mvp.team) : null };
+  }
+  const remain = G.onlineStartAt - now;
+  if (remain <= 0) return null;
+  if (remain > COUNTDOWN_TIME) return {
+    phase: 'intro', kicker: 'DESPLIEGUE // ONLINE', title: 'FORTALEZA', sub: 'TEAM DEATHMATCH',
+    meta: [`PRIMERO A ${TUNING.combat.killLimit}`, `${G.onlineRows.length}/8 JUGADORES`],
+    progress: 1 - (remain - COUNTDOWN_TIME) / INTRO_TIME, wait: 'SINCRONIZANDO ESCUADRAS',
+    rows: G.onlineRows, localId: G.net?.id,
+  };
+  return { phase: 'countdown', count: Math.max(1, Math.ceil(remain)), sub: 'PREPÁRATE' };
+}
+
+function activePresentation(now = Date.now() / 1000) {
+  return G.mode === 'bots' ? botPresentation() : onlinePresentation(now);
+}
+
+function updateMatchCamera(now, view) {
+  const t = now * 0.00011;
+  const layout = G.mode === 'online' ? 'fortaleza' : G.mapChoice;
+  const wide = layout === 'azoteas';
+  const radiusX = wide ? 25 : 22;
+  const radiusZ = wide ? 31 : 28;
+  const baseY = wide ? 10.5 : 8.8;
+  const side = view?.phase === 'mvp' ? -1 : 1;
+  camera.position.set(Math.sin(t) * radiusX * side, baseY + Math.sin(t * .7) * .5, Math.cos(t) * radiusZ);
+  matchCamTarget.set(0, wide ? 1.3 : 1.7, 0);
+  camera.lookAt(matchCamTarget);
+  if (Math.abs(camera.fov - 52) > .01) { camera.fov = 52; camera.updateProjectionMatrix(); }
+}
+
+function spectatorTargets() {
+  const targets = [];
+  if (G.botMatch) {
+    for (const b of G.botMatch.bots) if (b.team === G.team && b.alive) targets.push({
+      id: b.id, name: b.name, x: b.pos.x, z: b.pos.z, y: b.y || 0, yaw: b.yaw || 0,
+    });
+  }
+  for (const r of G.remotes.values()) if (r.team === G.team && r.alive) targets.push({
+    id: r.id, name: r.name, x: r.x, z: r.z, y: r.y || 0, yaw: r.yaw || 0,
+  });
+  return targets;
+}
+
+function spectatorTarget() {
+  const list = spectatorTargets();
+  if (!list.length) { G.spectator.targetId = null; return null; }
+  let target = list.find((t) => t.id === G.spectator.targetId);
+  if (!target) {
+    target = list[0];
+    G.spectator.targetId = target.id;
+    G.spectator.first = true;
+  }
+  return target;
+}
+
+function cycleSpectator(dir) {
+  const list = spectatorTargets();
+  if (list.length < 2) return;
+  const current = Math.max(0, list.findIndex((t) => t.id === G.spectator.targetId));
+  const next = (current + dir + list.length) % list.length;
+  G.spectator.targetId = list[next].id;
+  G.spectator.first = true;
+}
+
+function enterSpectator() {
+  G.spectator.active = true;
+  G.spectator.targetId = null;
+  G.spectator.deathHold = 1.15;
+  G.spectator.first = true;
+  spectatorCamPos.copy(camera.position);
+  hud.spectator(null); // primero deja respirar a la reacción de muerte
+}
+
+function exitSpectator() {
+  if (!G.spectator.active) return;
+  G.spectator.active = false;
+  G.spectator.targetId = null;
+  G.spectator.deathHold = 0;
+  G.spectator.first = true;
+  // La shoulder camera parte de la última posición observada y converge al
+  // spawn; así el respawn no corta de golpe a otra punta del mapa.
+  shoulderCam.pos.copy(camera.position);
+  shoulderCam._first = false;
+  hud.spectator(null);
+}
+
+function resetSpectator() {
+  G.spectator.active = false;
+  G.spectator.targetId = null;
+  G.spectator.deathHold = 0;
+  G.spectator.first = true;
+  hud.spectator(null);
+}
+
+function spectatorView() {
+  if (!G.spectator.active || G.spectator.deathHold > 0) return null;
+  const target = spectatorTarget();
+  let respawn = '';
+  if (G.respawnT > 0) respawn = `REAPARECES EN ${Math.ceil(G.respawnT)}`;
+  else if (G.mode === 'bots' && G.botMatch?.pool.red <= 0) respawn = 'SIN RESPAWNS · HASTA FIN DE ROUND';
+  else if (!G.selfAlive) respawn = 'ESPERANDO RESPAWN';
+  return {
+    name: target?.name || 'ESPERANDO COMPAÑERO',
+    controls: target
+      ? `${keyLabel(BINDS.kb.swap)}/${keyLabel(BINDS.kb.reload)} · ${padBtnName(BINDS.pad.swap)}/${padBtnName(BINDS.pad.reload)} CAMBIAR`
+      : 'SIN COMPAÑEROS ACTIVOS',
+    respawn,
+    ready: G.respawnT > 0 && G.respawnT <= 1,
+  };
+}
+
+function updateSpectatorCamera(dt, now) {
+  if (G.spectator.deathHold > 0) {
+    shoulderCam.update(dt, G.player);
+    return;
+  }
+  const target = spectatorTarget();
+  if (!target) {
+    updateMatchCamera(now, { phase: 'result' });
+    return;
+  }
+  spectatorPivot.set(target.x, target.y + 1.28, target.z);
+  const sy = Math.sin(target.yaw), cy = Math.cos(target.yaw);
+  spectatorDesired.set(
+    spectatorPivot.x + sy * 4.6 + cy * .72,
+    spectatorPivot.y + 1.45,
+    spectatorPivot.z + cy * 4.6 - sy * .72,
+  );
+  spectatorRay.copy(spectatorDesired).sub(spectatorPivot);
+  const len = spectatorRay.length();
+  if (len > .01) {
+    spectatorRay.multiplyScalar(1 / len);
+    const hit = world.raycast(spectatorPivot, spectatorRay, len + .2, .24);
+    if (hit !== null && hit < len) {
+      spectatorDesired.copy(spectatorPivot).addScaledVector(spectatorRay, Math.max(.75, hit - .16));
+    }
+  }
+  if (G.spectator.first) {
+    spectatorCamPos.copy(camera.position);
+    G.spectator.first = false;
+  }
+  spectatorCamPos.lerp(spectatorDesired, 1 - Math.exp(-7.5 * dt));
+  camera.position.copy(spectatorCamPos);
+  camera.lookAt(spectatorPivot);
+  camera.fov += (58 - camera.fov) * (1 - Math.exp(-8 * dt));
+  camera.updateProjectionMatrix();
+}
 
 // El listener sigue al pecho del jugador, mientras la lateralidad sigue la
 // cámara (lo que el jugador percibe como izquierda/derecha). Un ray corto
@@ -571,6 +799,32 @@ function renderCharPreviews() {
   }
   pr.dispose();
 }
+
+const portraitCache = new Map();
+function renderCharacterPortrait(variant = 0, team = 'red') {
+  const key = `${team}:${variant | 0}`;
+  if (portraitCache.has(key)) return portraitCache.get(key);
+  const pr = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  pr.setPixelRatio(1);
+  pr.setSize(240, 320);
+  const ps = new THREE.Scene();
+  ps.add(new THREE.HemisphereLight(0xe2eaf0, 0x5b6169, 2.25));
+  const keyLight = new THREE.DirectionalLight(team === 'red' ? 0xffd8bd : 0xc8dcff, 1.8);
+  keyLight.position.set(2.4, 3.6, -2.8); ps.add(keyLight);
+  const rim = new THREE.DirectionalLight(team === 'red' ? 0xd94f3f : 0x4f8de0, 1.15);
+  rim.position.set(-2.2, 2, 1.8); ps.add(rim);
+  const pc = new THREE.PerspectiveCamera(28, 240 / 320, .1, 10);
+  pc.position.set(.58, 1.42, -2.72); pc.lookAt(0, .9, 0);
+  const rig = new Rig(ps, team, null, variant | 0);
+  for (let i = 0; i < 35; i++) rig.update(1 / 30, { state: 'idle', speed: 0, aim: false, aimPitch: 0 });
+  rig.root.rotation.y = -.2;
+  rig.root.updateWorldMatrix(true, true);
+  pr.render(ps, pc);
+  const data = pr.domElement.toDataURL('image/png');
+  rig.dispose(ps); pr.dispose();
+  portraitCache.set(key, data);
+  return data;
+}
 document.getElementById('btn-reset-binds').addEventListener('click', () => { resetBinds(); renderBinds(); });
 
 function updateSliderLabels() {
@@ -711,6 +965,7 @@ function deepCopy(src, dst) {
 let startSeq = 0; // n° de arranque de partida: invalida continuaciones tardías
 
 function teardown() {
+  resetSpectator();
   if (G.rig) { G.rig.dispose(scene); G.rig = null; }
   if (G.dummies) { G.dummies.dispose(); G.dummies = null; }
   if (G.botMatch) { G.botMatch.dispose(); G.botMatch = null; }
@@ -727,6 +982,7 @@ function teardown() {
   hud.timer(null);
   hud.roundPips(null);
   hud.scoreboard(null);
+  hud.presentation(null);
   for (const r of G.remotes.values()) r.dispose(scene);
   G.remotes.clear();
   if (G.net) { G.net.close(); G.net = null; }
@@ -736,6 +992,10 @@ function teardown() {
   G.dropSeq = 0;
   G.playerLastHit = 99;
   G.footAcc = 0;
+  G.onlineRows = [];
+  G.onlineStartAt = 0;
+  G.onlineFinal = null;
+  G.flowLockedPrev = false;
 }
 
 function spawnLocal(team, spawn) {
@@ -754,7 +1014,7 @@ function grantSpawnProtection() {
   hud.hint('PROTECCIÓN DE SPAWN — SE ROMPE AL DISPARAR', 2200);
 }
 
-function damagePlayerLocal(dmg, fromName, shooter) {
+function damagePlayerLocal(dmg, fromName, shooter, hitCtx = null) {
   if (!G.selfAlive) return false;
   if (G.spawnProt > 0) return false; // protegido: sin daño
   G.selfHp -= dmg;
@@ -775,8 +1035,14 @@ function damagePlayerLocal(dmg, fromName, shooter) {
       power: Math.min(1, dmg / 55),
       vel: { x: G.player.vel.x, z: G.player.vel.z },
       state: G.player.animState(),
+      weapon: hitCtx?.weapon,
+      distance: hitCtx?.distance,
+      damage: hitCtx?.damage ?? dmg,
+      part: hitCtx?.part,
+      gib: !!hitCtx?.gib,
     });
     G.player.kill();
+    enterSpectator();
     audio.death();
     input.pad.rumble(350, 0.8, 1.0);
     // countdown solo si de verdad queda respawn en el pool del equipo
@@ -824,6 +1090,7 @@ function startBots() {
   G.botMatch = new BotMatch(scene, world, {
     effects, audio, hud,
     playerName: G.name,
+    playerVariant: G.charVariant,
     stepSound,
     dropWeapon: (wep, x, z, team, y = 0, deathRig = null) => {
       // los bots no llevan contador de balas: sueltan un remanente plausible.
@@ -849,15 +1116,17 @@ function startBots() {
       // sobre el bloque invisible para los bots)
       crouch: isCrouchState(G.player.animState()),
     }),
-    damagePlayer: (dmg, fromName, shooter) => damagePlayerLocal(dmg, fromName, shooter),
-    respawnPlayer: (spawn) => {
+    damagePlayer: (dmg, fromName, shooter, hitCtx) => damagePlayerLocal(dmg, fromName, shooter, hitCtx),
+    respawnPlayer: (spawn, protect = true) => {
       G.selfAlive = true;
       G.selfHp = TUNING.combat.hp;
       G.respawnT = 0;
       G.player.respawn(spawn);
       G.weapons.reset();
-      grantSpawnProtection();
+      exitSpectator();
+      if (protect) grantSpawnProtection();
     },
+    onRoundStart: () => grantSpawnProtection(),
     onMatchEnd: () => {
       const bm = G.botMatch; // identidad, no modo: el string 'bots' también
       setTimeout(() => {     // es cierto para una partida NUEVA (la mataba)
@@ -868,7 +1137,7 @@ function startBots() {
         hud.show(false);
         input.releaseLock(); // en el menú principal el cursor queda libre
         openMenu();
-      }, 6500);
+      }, 180);
     },
   });
   hud.showMenu(false);
@@ -927,8 +1196,12 @@ async function startOnline() {
     if (welcome.crates) welcome.crates.forEach((up, i) => G.crates.setState(i, !!up));
     G.drops = new WeaponDrops(scene);
     if (welcome.drops) for (const d of welcome.drops) G.drops.spawn(d.id, d.wep, d.x, d.z, d.team, 0, 0, d.t, d.y || 0);
-    grantSpawnProtection();
     G.scores = welcome.scores;
+    G.onlineStartAt = welcome.startAt || (Date.now() / 1000 + INTRO_TIME + COUNTDOWN_TIME);
+    G.onlineRows = (welcome.players || []).map((p) => ({
+      id: p.id, name: p.name, team: p.team, variant: p.v | 0,
+      kills: p.kills || 0, deaths: p.deaths || 0, score: (p.kills || 0) * 100,
+    }));
     for (const p of welcome.players) {
       if (p.id !== net.id) addRemote(p);
     }
@@ -936,7 +1209,6 @@ async function startOnline() {
     showControls(false);
     hud.show(true);
     hud.score(G.scores.red, G.scores.blue);
-    hud.center('EQUIPO ' + (welcome.team === 'red' ? 'ROJO' : 'AZUL'), 'primero a ' + TUNING.combat.killLimit, 2600);
     netStatus.textContent = '';
     input.requestLock();
     setTimeout(() => hud.hint('EJE Y: ' + (input.invertY ? 'INVERTIDO' : 'NORMAL') + ' — F9 CAMBIA', 3000), 3000);
@@ -971,11 +1243,19 @@ function bindNet(net) {
   // (sin esto, un reconectar fallido o mensajes bufereados del socket viejo
   // ejecutaban acciones — kill/respawn/teleport — sobre la partida NUEVA)
   const alive = () => G.net === net;
-  net.on('joined', (m) => { if (alive() && m.id !== net.id) { addRemote(m); hud.hint(m.name + ' ENTRÓ', 1400); } });
+  net.on('joined', (m) => {
+    if (!alive() || m.id === net.id) return;
+    addRemote(m);
+    if (!G.onlineRows.some((r) => r.id === m.id)) G.onlineRows.push({
+      id: m.id, name: m.name, team: m.team, variant: m.v | 0, kills: 0, deaths: 0, score: 0,
+    });
+    hud.hint(m.name + ' ENTRÓ', 1400);
+  });
   net.on('left', (m) => {
     if (!alive()) return;
     const r = G.remotes.get(m.id);
     if (r) { r.dispose(scene); G.remotes.delete(m.id); }
+    G.onlineRows = G.onlineRows.filter((row) => row.id !== m.id);
   });
   net.on('snap', (m) => {
     if (!alive()) return;
@@ -1035,11 +1315,16 @@ function bindNet(net) {
       else effects.blood(new THREE.Vector3(pos.x, 1, pos.z), TEAM_HEX[vteam]);
     }
     hud.kill(m.kn, m.kt, m.vn, m.vt);
+    const killerRow = G.onlineRows.find((r) => r.id === m.from);
+    const victimRow = G.onlineRows.find((r) => r.id === m.target);
+    if (killerRow) { killerRow.kills++; killerRow.score = killerRow.kills * 100; }
+    if (victimRow) victimRow.deaths++;
     // contexto físico para el ragdoll (dirección del tiro + momentum previo)
     const killer = m.from === net.id
       ? { x: G.player.pos.x, z: G.player.pos.z }
       : (() => { const k = G.remotes.get(m.from); return k ? { x: k.x, z: k.z } : null; })();
     if (victim) {
+      victim.alive = false; // cycling spectator no espera al siguiente snapshot
       // velocidad aproximada del remoto desde sus últimos snapshots
       const b = victim.buf;
       let rv = { x: 0, z: 0 };
@@ -1053,6 +1338,11 @@ function bindNet(net) {
         power: m.gib ? 1 : 0.6,
         vel: rv,
         state: victim.st,
+        weapon: m.w,
+        distance: m.dist,
+        damage: m.dmg,
+        part: m.part,
+        gib: !!m.gib,
       });
     }
     if (m.target === net.id) {
@@ -1063,8 +1353,14 @@ function bindNet(net) {
         power: m.gib ? 1 : 0.6,
         vel: { x: G.player.vel.x, z: G.player.vel.z },
         state: G.player.animState(),
+        weapon: m.w,
+        distance: m.dist,
+        damage: m.dmg,
+        part: m.part,
+        gib: !!m.gib,
       });
       G.player.kill();
+      enterSpectator();
       audio.death();
       input.pad.rumble(350, 0.8, 1.0);
       G.respawnT = TUNING.combat.respawnTime;
@@ -1110,7 +1406,10 @@ function bindNet(net) {
       G.player.respawn(m.spawn);
       G.weapons.reset();
       G.rig.setWeapon('smg');
-      grantSpawnProtection();
+      exitSpectator();
+      // El reset de fin de partida coloca al jugador antes de la presentación;
+      // la protección empieza al terminar el 3…2…1, no 13 s antes.
+      if (!G.onlineFinal && G.onlineStartAt <= Date.now() / 1000) grantSpawnProtection();
       hud.centerOff();
     } else {
       const r = G.remotes.get(m.id);
@@ -1127,7 +1426,27 @@ function bindNet(net) {
   net.on('win', (m) => {
     if (!alive()) return;
     audio.win();
-    hud.center('GANA ' + (m.team === 'red' ? 'ROJO' : 'AZUL'), 'reiniciando…', 4000);
+    G.onlineStartAt = 0;
+    G.onlineFinal = {
+      team: m.team, at: Date.now() / 1000,
+      rows: (m.rows || G.onlineRows).map((r) => ({ ...r, score: r.score ?? (r.kills || 0) * 100 })),
+      scores: m.scores || { ...G.scores },
+    };
+  });
+  net.on('prepare', (m) => {
+    if (!alive()) return;
+    G.onlineFinal = null;
+    G.onlineStartAt = m.startAt || (Date.now() / 1000 + INTRO_TIME + COUNTDOWN_TIME);
+    if (m.scores) G.scores = m.scores;
+    if (m.players) G.onlineRows = m.players.map((p) => ({
+      id: p.id, name: p.name, team: p.team, variant: p.v | 0,
+      kills: p.kills || 0, deaths: p.deaths || 0, score: (p.kills || 0) * 100,
+    }));
+    hud.centerOff();
+  });
+  net.on('start', () => {
+    if (!alive()) return;
+    G.onlineStartAt = 0;
   });
   net.on('full', () => { netStatus.textContent = 'Servidor lleno (8/8)'; });
   net.on('close', () => {
@@ -1309,6 +1628,11 @@ function fireShot() {
           power: Math.min(1, e.dmg / 55),
           vel: { x: 0, z: 0 },
           state: 'run',
+          weapon: w.cur,
+          distance: e.dist,
+          damage: e.dmg,
+          part: e.part,
+          gib,
         });
         G.scores.red++;
         hud.score(G.scores.red, G.scores.blue);
@@ -1318,7 +1642,9 @@ function fireShot() {
       });
       if (!killed) audio.hit();
     } else if (G.mode === 'bots' && G.botMatch) {
-      const killed = G.botMatch.damageBot(id, e.dmg, 'player', gib);
+      const killed = G.botMatch.damageBot(id, e.dmg, 'player', gib, false, {
+        weapon: w.cur, distance: e.dist, damage: e.dmg, part: e.part, gib,
+      });
       if (killed === null) continue; // protegido o inválido: sin feedback falso
       hitSomeone = true;
       if (!killed) audio.hit();
@@ -1395,6 +1721,36 @@ window.THREE = THREE;
 function simStep(dt) {
   const p = G.player;
   if (!p) return;
+
+  // Una sola puerta de control gobierna intro, countdown, intermedio y cierre.
+  // La simulación visual sigue viva, pero jugador, armas, pickups y bots no
+  // pueden adelantarse al 3…2…1.
+  if (matchControlsLocked()) {
+    G.fireBuffer = 0;
+    G.pendingShots = 0;
+    p.update(dt, input, false);
+    if (G.botMatch) G.botMatch.update(dt);
+    if (G.net) G.net.tickState(dt, p, G.weapons);
+    input.consumeEdges();
+    return;
+  }
+
+  if (G.spectator.active) {
+    G.spectator.deathHold = Math.max(0, G.spectator.deathHold - dt);
+    if (G.spectator.deathHold <= 0) {
+      if (input.swapPressed) cycleSpectator(-1);
+      if (input.reloadPressed || input.firePressed) cycleSpectator(1);
+    }
+    G.respawnT = Math.max(0, G.respawnT - dt);
+    // El mundo continúa vivo mientras observamos, pero el cadáver local no
+    // puede recargar, disparar, recoger objetos ni controlar al compañero.
+    G.drops?.update(dt, p.pos.x, p.pos.z, p.y, false, () => {});
+    G.crates?.update(dt, p.pos.x, p.pos.z, p.y, false, () => {});
+    if (G.botMatch) G.botMatch.update(dt);
+    if (G.net) G.net.tickState(dt, p, G.weapons);
+    input.consumeEdges();
+    return;
+  }
 
   // (el flip Matrix SÍ permite disparar en el aire)
   const stateOk = !p.dead && p.state !== 'dive' && p.state !== 'slide' &&
@@ -1529,8 +1885,11 @@ function frame(now) {
 
   const menuOpen = menuIsOpen();
   if (!G.mode) updateMenuBackdrop(now);
-  input.suppress = menuOpen; // con menú abierto los inputs de juego se ignoran
-  input.pollPad(dt, !!G.mode && !menuOpen);
+  const flowLocked = matchControlsLocked();
+  if (G.flowLockedPrev && !flowLocked && G.mode === 'online') grantSpawnProtection();
+  G.flowLockedPrev = flowLocked;
+  input.suppress = menuOpen || flowLocked; // presentación y menú bloquean el gameplay
+  input.pollPad(dt, !!G.mode && !menuOpen && !flowLocked);
 
   // cursor virtual: menú abierto con pointer lock activo
   const vcOn = menuOpen && input.locked;
@@ -1574,8 +1933,9 @@ function frame(now) {
 
   if (G.mode && G.player) {
     if (!menuOpen) {
-      if (input.locked || input.lockDisabled) shoulderCam.applyMouse(input.mouseDX, input.mouseDY, input.invertY);
-      if (input.pad.connected) shoulderCam.applyStick(input.pad.camX, input.pad.camY, dt, input.invertYPad);
+      const spectatorLocked = G.spectator.active;
+      if (!spectatorLocked && (input.locked || input.lockDisabled)) shoulderCam.applyMouse(input.mouseDX, input.mouseDY, input.invertY);
+      if (!spectatorLocked && input.pad.connected) shoulderCam.applyStick(input.pad.camX, input.pad.camY, dt, input.invertYPad);
       // keeper: jugando sin lock (cooldown de Esc, despausa con gamepad,
       // lock post-await) → reintentar captura periódicamente
       // lockSuspended (F10): sin él, el keeper robaba el mouse al panel de
@@ -1602,7 +1962,11 @@ function frame(now) {
       }
     }
 
-    shoulderCam.update(dt, G.player);
+    const flowView = activePresentation(Date.now() / 1000);
+    hud.presentation(flowView);
+    if (flowView && flowView.phase !== 'countdown') updateMatchCamera(now, flowView);
+    else if (G.spectator.active) updateSpectatorCamera(dt, now);
+    else shoulderCam.update(dt, G.player);
     G.rig.setWeapon(G.weapons.cur); // el intercambio real ocurre a mitad del gesto
     // protección de spawn: highlight sutil en el color del equipo
     G.rig.root.visible = true;
@@ -1639,22 +2003,27 @@ function frame(now) {
     }
 
     hud.ammo(G.weapons);
-    hud.health(G.mode === 'online' || G.mode === 'bots' ? G.selfHp / TUNING.combat.hp : 1);
+    hud.health(G.spectator.active ? 1
+      : (G.mode === 'online' || G.mode === 'bots' ? G.selfHp / TUNING.combat.hp : 1));
     // countdown grande de reaparición (no en fin de ronda/partida: ahí la
     // cola de respawns se vació y el contador mentía, pisando "ROUND PARA…")
     const bmPhase = G.botMatch?.phase;
-    if (!G.selfAlive && G.respawnT > 0 && bmPhase !== 'over' && bmPhase !== 'intermission') {
+    if (!G.spectator.active && !G.selfAlive && G.respawnT > 0 && bmPhase !== 'over' && bmPhase !== 'intermission') {
       hud.respawnTick(Math.ceil(G.respawnT));
     } else {
       hud.respawnTick(null);
     }
+    hud.spectator(!flowView ? spectatorView() : null);
     if (G.mode === 'bots' && G.botMatch) {
-      hud.score(G.botMatch.livesOf('red'), G.botMatch.livesOf('blue'));
+      hud.score(G.botMatch.livesOf('red'), G.botMatch.livesOf('blue'), 'VIDAS');
       hud.timer(G.botMatch.timer);
       hud.roundPips(G.botMatch.wins.red, G.botMatch.wins.blue);
-      hud.scoreboard(input.scoreHeld && !menuOpen ? G.botMatch.statRows() : null);
+      hud.scoreboard(!flowView && input.scoreHeld && !menuOpen ? G.botMatch.statRows() : null);
+    } else if (G.mode === 'online') {
+      hud.scoreboard(!flowView && input.scoreHeld && !menuOpen ? G.onlineRows : null, G.net?.id);
     }
-    updateReticle();
+    if (flowView) hud.reticle(false, null);
+    else updateReticle();
   }
 
   effects.update(dt);

@@ -21,6 +21,10 @@ const RESPAWN_POOL = 11;     // respawns por equipo (además de las 4 vidas
                              // iniciales = 15 vidas totales, pedido de Chuck)
 const BOT_RESPAWN = 3;
 const PLAYER_RESPAWN = () => TUNING.combat.respawnTime;
+const INTRO_TIME = 10;
+const COUNTDOWN_TIME = 3;
+const ROUND_RESULT_TIME = 5;
+const FINAL_TIME = 11;
 const BOT_NAMES = { red: ['REX', 'VOLT', 'JAZZ'], blue: ['NOVA', 'DUKE', 'BLITZ', 'PIXEL'] };
 const TEAM_HEX = { red: 0xd94f3f, blue: 0x4f8de0 };
 const BOT_DMG = 0.7;         // los bots pegan más suave que un jugador
@@ -55,13 +59,14 @@ class Bot {
   constructor(scene, world, id, name, team, spawn) {
     this.id = id; this.name = name; this.team = team;
     this.world = world;
+    this.variant = (Math.random() * 5) | 0;
     this.profile = {
       aggression: hash01(id + ':aggression'),
       patience: hash01(id + ':patience'),
       flank: hash01(id + ':flank'),
       cohesion: hash01(id + ':cohesion'),
     };
-    this.rig = new Rig(scene, team, name, (Math.random() * 5) | 0); // soldado random
+    this.rig = new Rig(scene, team, name, this.variant); // soldado random
     this.rig.groundFn = (x, z, y) => world.groundHeight({ x, z }, 0.38, y);
     this.rig.collideFn = (p, y, r = RAGDOLL_R) => world.resolveCircle(p, r, y);
     this.respawn(spawn);
@@ -759,7 +764,10 @@ export class BotMatch {
     this.enemyHeat = { red: [0, 0, 0], blue: [0, 0, 0] };
     this.tacticalClaims = new Map(); // destinos/ángulos reservados por bot
 
-    this.stats.set('player', { name: cb.playerName, team: 'red', kills: 0, deaths: 0 });
+    this.stats.set('player', {
+      name: cb.playerName, team: 'red', kills: 0, deaths: 0,
+      variant: cb.playerVariant ?? 0,
+    });
     let n = 0;
     for (const team of ['red', 'blue']) {
       for (const name of BOT_NAMES[team]) {
@@ -767,28 +775,42 @@ export class BotMatch {
         // +1: el spawn [0] del lado rojo es del JUGADOR (evitar solaparse)
         const spawn = world.spawns[team][(this.bots.length + 1) % 4];
         this.bots.push(new Bot(scene, world, id, name, team, spawn));
-        this.stats.set(id, { name, team, kills: 0, deaths: 0 });
+        this.stats.set(id, { name, team, kills: 0, deaths: 0, variant: this.bots.at(-1).variant });
       }
     }
-    this._startRound();
+    this.roundWinner = null;
+    this.matchWinner = null;
+    this._startRound(true);
   }
 
-  _startRound() {
+  _startRound(first = false) {
     this.round++;
     this.timer = ROUND_TIME;
     this.pool = { red: RESPAWN_POOL, blue: RESPAWN_POOL };
     this.respawnQueue = [];
     this.coverClaims.clear();
     this.tacticalClaims.clear();
-    this.phase = 'playing';
+    this.phase = first ? 'intro' : 'countdown';
+    this.phaseT = first ? INTRO_TIME : COUNTDOWN_TIME;
+    this.roundWinner = null;
     let i = { red: 0, blue: 0 };
     for (const b of this.bots) {
       b.respawn(this.world.spawns[b.team][++i[b.team] % 4]);
     }
     this._assignOpeningPlans();
-    this.cb.respawnPlayer(this.world.spawns.red[0]);
-    this.cb.hud.center('ROUND ' + this.round,
-      'primero en agotar las ' + (RESPAWN_POOL + 4) + ' vidas rivales', 3000);
+    this.cb.respawnPlayer(this.world.spawns.red[0], false);
+  }
+
+  controlsLocked() { return this.phase !== 'playing'; }
+
+  _idleBots(dt) {
+    for (const b of this.bots) {
+      if (!b.alive) b.update(dt, this);
+      else {
+        b.rig.setTransform(b.pos.x, b.pos.z, b.yaw, b.y);
+        b.rig.update(dt, { state: 'idle', speed: 0, aim: false, aimPitch: 0 });
+      }
+    }
   }
 
   livesOf(team) {
@@ -1239,7 +1261,11 @@ export class BotMatch {
           dmg *= Math.max(0, 1 - (hit.t - def.falloffStart) / (def.falloffEnd - def.falloffStart));
         }
         if (hit.part === 'head') dmg *= def.headMult;
-        dmgAcc.set(hit.id, (dmgAcc.get(hit.id) || 0) + dmg);
+        const acc = dmgAcc.get(hit.id) || { dmg: 0, part: hit.part, dist: hit.t };
+        acc.dmg += dmg;
+        acc.dist = Math.min(acc.dist, hit.t);
+        if (hit.part === 'head') acc.part = 'head';
+        dmgAcc.set(hit.id, acc);
       } else if (hit.kind === 'world') {
         // Cada pellet deja su marca; Effects limita/presupuesta las partículas.
         this.cb.effects.impact(hit.point, hit.normal, hit.surface);
@@ -1249,19 +1275,28 @@ export class BotMatch {
     const shotAudio = { position: { x: bot.pos.x, y: bot.y + 1.35, z: bot.pos.z } };
     if (bot.wep === 'shotgun') this.cb.audio.shotgun(shotAudio);
     else this.cb.audio.smg(shotAudio);
-    for (const [id, dmg] of dmgAcc) {
+    for (const [id, hitCtx] of dmgAcc) {
+      const dmg = hitCtx.dmg;
+      const gib = bot.wep === 'shotgun' && hitCtx.dist <= TUNING.weapons.shotgun.gibRange;
+      const deathCtx = {
+        weapon: bot.wep, distance: hitCtx.dist, damage: dmg,
+        part: hitCtx.part, gib,
+      };
       if (id === 'player') {
         this.cb.effects.blood(_v3.set(this.cb.player().x, 1, this.cb.player().z), TEAM_HEX.red);
-        const died = this.cb.damagePlayer(dmg, bot.name, { x: bot.pos.x, z: bot.pos.z });
-        if (died) this._onDeath('player', bot.id, false);
+        const died = this.cb.damagePlayer(dmg, bot.name, { x: bot.pos.x, z: bot.pos.z }, deathCtx);
+        if (died) {
+          if (gib) this.cb.effects.gib(_v3.set(this.cb.player().x, this.cb.player().y || 0, this.cb.player().z), TEAM_HEX.red);
+          this._onDeath('player', bot.id, gib);
+        }
       } else {
-        this.damageBot(id, dmg, bot.id, false, true);
+        this.damageBot(id, dmg, bot.id, gib, true, deathCtx);
       }
     }
   }
 
   // daño a un bot; from: 'player' | botId
-  damageBot(id, dmg, from, gib, silent = false) {
+  damageBot(id, dmg, from, gib, silent = false, hitCtx = null) {
     const b = this.bots.find((x) => x.id === id);
     if (!b || !b.alive || this.phase !== 'playing') return null;
     if (b.protT > 0) return null; // protegido: rechazo distinguible de "no murió"
@@ -1284,6 +1319,11 @@ export class BotMatch {
         power: Math.min(1, dmg / 55) + (gib ? 0.35 : 0),
         vel: { x: b.velX ?? 0, z: b.velZ ?? 0 },
         state: b.state === 'cover' ? (b.cover?.low ? 'cover_low' : 'cover_high') : b.state,
+        weapon: hitCtx?.weapon,
+        distance: hitCtx?.distance,
+        damage: hitCtx?.damage ?? dmg,
+        part: hitCtx?.part,
+        gib: !!gib,
       });
       if (gib) this.cb.effects.gib(_v3.set(b.pos.x, b.y, b.pos.z), TEAM_HEX[b.team]);
       this._onDeath(id, from, gib);
@@ -1329,31 +1369,27 @@ export class BotMatch {
   _endRound(winner) {
     if (this.phase !== 'playing') return;
     this.phase = 'intermission';
-    this.phaseT = 4;
+    this.phaseT = ROUND_RESULT_TIME;
+    this.roundWinner = winner;
     this.respawnQueue = [];
     this.coverClaims.clear();
     this.tacticalClaims.clear();
     if (winner) this.wins[winner]++;
     const w = this.wins;
     if (winner && w[winner] >= 2) {
-      this.phase = 'over';
-      const playerWon = winner === 'red';
-      this.cb.hud.center(
-        playerWon ? 'VICTORIA' : 'DERROTA',
-        `match ${w.red} - ${w.blue}`, 6000);
+      this.phase = 'final';
+      this.phaseT = FINAL_TIME;
+      this.matchWinner = winner;
       this.cb.audio.win();
-      this.cb.onMatchEnd(winner);
     } else {
-      this.cb.hud.center(
-        winner ? 'ROUND PARA ' + (winner === 'red' ? 'ROJO' : 'AZUL') : 'ROUND EMPATADO',
-        `rounds ${w.red} - ${w.blue}`, 3500);
       if (winner) this.cb.audio.win();
     }
   }
 
   statRows() {
     const rows = [...this.stats.entries()].map(([id, s]) => ({
-      id, name: s.name, team: s.team, kills: s.kills, deaths: s.deaths, score: s.kills * 100,
+      id, name: s.name, team: s.team, kills: s.kills, deaths: s.deaths,
+      score: s.kills * 100, variant: s.variant ?? 0,
     }));
     rows.sort((a, b) => b.score - a.score || a.deaths - b.deaths);
     return rows;
@@ -1361,6 +1397,30 @@ export class BotMatch {
 
   update(dt) {
     if (this.phase === 'over') return;
+    if (this.phase === 'intro' || this.phase === 'countdown') {
+      this.phaseT -= dt;
+      this._idleBots(dt);
+      if (this.phaseT <= 0) {
+        if (this.phase === 'intro') {
+          this.phase = 'countdown';
+          this.phaseT = COUNTDOWN_TIME;
+        } else {
+          this.phase = 'playing';
+          this.phaseT = 0;
+          this.cb.onRoundStart?.();
+        }
+      }
+      return;
+    }
+    if (this.phase === 'final') {
+      this.phaseT -= dt;
+      this._idleBots(dt);
+      if (this.phaseT <= 0) {
+        this.phase = 'over';
+        this.cb.onMatchEnd(this.matchWinner);
+      }
+      return;
+    }
     // el calor de zonas se enfría solo: información vieja pesa menos
     for (const team of ['red', 'blue']) {
       const h = this.enemyHeat[team];
@@ -1371,11 +1431,8 @@ export class BotMatch {
       this.phaseT -= dt;
       if (this.phaseT <= 0) { this._startRound(); return; }
       // los ragdolls siguen desplomándose y los vivos respiran en idle
-      // (el return seco congelaba estatuas a mitad de la caída 4 s)
-      for (const b of this.bots) {
-        if (!b.alive) b.update(dt, this);
-        else b.rig.update(dt, { state: 'idle', speed: 0, aim: false, aimPitch: 0 });
-      }
+      // (el return seco congelaba estatuas a mitad de la caída)
+      this._idleBots(dt);
       return;
     }
     this.timer -= dt;
