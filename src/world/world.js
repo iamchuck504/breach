@@ -4,6 +4,7 @@
 // También es el dueño de la física estática: AABBs, raycast, resolución de círculo
 // y las caras de cobertura que consume el sistema de cover.
 import * as THREE from 'three';
+import { MAP_RUNTIME } from '../game/lobby-rules.js';
 
 const FIELD_X = 15, FIELD_Z = 18; // semiancho / semilargo
 
@@ -86,26 +87,15 @@ export class World {
     }[layout] ?? ['stone', 'stoneTop'];
     // cajas de munición por mapa: en azoteas van sobre el eje del helipuerto,
     // libres de cover (las ±7,0 por defecto chocaban con el anillo)
-    this.cratePos = {
-      azoteas: [{ x: 0, z: -12.1 }, { x: 0, z: 12.1 }],
-      calle: [{ x: -14, z: 0 }, { x: 14, z: 0 }],
-      metro: [{ x: -8, z: 0 }, { x: 8, z: 0 }],
-      prision: [{ x: -17.5, z: -2 }, { x: 17.5, z: 2 }],
-      pueblo: [{ x: 12, z: -20 }, { x: -12, z: 20 }],
-    }[layout] ?? null;
+    const runtime = MAP_RUNTIME[layout];
+    this.cratePos = runtime?.crates ?? null;
     // pedestal del arma ESPECIAL (sniper/bazooka alternando por ronda):
     // zona central de riesgo, equidistante de ambos spawns
     // Descentrado sobre el eje X (equidistante de ambos spawns, que están en
     // ±z): en el centro exacto todo el tráfico converge al mismo carril y la
     // escuadra se amontona. Azoteas es la excepción: su centro es el
     // helipuerto despejado, que ya es una zona de riesgo con rutas propias.
-    this.specialSpot = layout === 'fortaleza' ? { x: 2.8, z: 0 }
-      : layout === 'prision' ? { x: 9, z: 0 }
-      : layout === 'pueblo' ? { x: 7.5, z: 0 }
-      : layout === 'calle' ? { x: 0, z: 0 }
-      : layout === 'metro' ? { x: 0, z: 0 }
-      : layout === 'azoteas' ? { x: 0, z: 0 }
-      : null;
+    this.specialSpot = runtime?.special ?? null;
 
     this._buildFloor();
     if (layout === 'arena') this._buildArena();
@@ -2615,10 +2605,7 @@ export class World {
     // spawns FIJOS por mapa con bolsillo respecto al muro trasero (la cámara
     // no debe chocar la muralla al nacer). El server duplica esta tabla en
     // spawnSet() — mantener ambos sincronizados.
-    const z = {
-      fortaleza: 23.4, azoteas: 35.1,
-      calle: 26.4, metro: 22.4, prision: 26.4, pueblo: 30.4,
-    }[this.layout] ?? this.fz - 1.6;
+    const z = MAP_RUNTIME[this.layout]?.spawnZ ?? this.fz - 1.6;
     for (let i = 0; i < 4; i++) {
       const x = -3.6 + i * 2.4;
       // convención: facing = (-sin yaw, -cos yaw) → yaw π mira a +z, yaw 0 a -z

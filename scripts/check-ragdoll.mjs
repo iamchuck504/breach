@@ -29,8 +29,6 @@ await page.waitForFunction(
   () => window.BREACH.botMatch && !window.BREACH.botMatch.controlsLocked(),
   null, { timeout: 30000 },
 );
-await page.screenshot({ path: path.join(root, 'scripts', 'shot-outline.png') });
-
 // esperar la primera muerte de un bot y seguir su cadáver
 let tracked = null;
 for (let i = 0; i < 240 && !tracked; i++) {

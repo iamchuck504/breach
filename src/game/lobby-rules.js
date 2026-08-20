@@ -1,6 +1,41 @@
 export const MAX_PLAYERS = 8;
 export const TEAM_CAPACITY = 4;
 export const MAPS = ['fortaleza', 'azoteas', 'calle', 'metro', 'prision', 'pueblo'];
+// Datos de gameplay que deben coincidir entre cliente y servidor. Mantenerlos
+// aquí evita que el mapa dibuje pickups en un sitio mientras la autoridad
+// online los valida en otro.
+export const MAP_RUNTIME = Object.freeze({
+  fortaleza: Object.freeze({
+    spawnZ: 23.4,
+    crates: Object.freeze([{ x: 7, z: 0 }, { x: -7, z: 0 }]),
+    special: Object.freeze({ x: 2.8, z: 0, y: 0 }),
+  }),
+  azoteas: Object.freeze({
+    spawnZ: 35.1,
+    crates: Object.freeze([{ x: 0, z: -12.1 }, { x: 0, z: 12.1 }]),
+    special: Object.freeze({ x: 0, z: 0, y: 1.1 }),
+  }),
+  calle: Object.freeze({
+    spawnZ: 26.4,
+    crates: Object.freeze([{ x: -14, z: 0 }, { x: 14, z: 0 }]),
+    special: Object.freeze({ x: 0, z: 0, y: 0 }),
+  }),
+  metro: Object.freeze({
+    spawnZ: 22.4,
+    crates: Object.freeze([{ x: -8, z: 0 }, { x: 8, z: 0 }]),
+    special: Object.freeze({ x: 0, z: 0, y: 0 }),
+  }),
+  prision: Object.freeze({
+    spawnZ: 26.4,
+    crates: Object.freeze([{ x: -17.5, z: -2 }, { x: 17.5, z: 2 }]),
+    special: Object.freeze({ x: 9, z: 0, y: 0 }),
+  }),
+  pueblo: Object.freeze({
+    spawnZ: 30.4,
+    crates: Object.freeze([{ x: 12, z: -20 }, { x: -12, z: 20 }]),
+    special: Object.freeze({ x: 7.5, z: 0, y: 0 }),
+  }),
+});
 export const ROUND_OPTIONS = [1, 3, 5];
 export const LIFE_OPTIONS = [8, 12, 15, 20];
 export const POST_MATCH_OPTIONS = ['lobby', 'next-map'];

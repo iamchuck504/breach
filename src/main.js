@@ -1604,6 +1604,7 @@ function setupOnlineBots(roster) {
     stepSound,
     botFire: (bot, origin, point, wep, impacts) => G.net?.botFire(bot.id, origin, point, wep, impacts),
     botHit: (bot, targetId, dmg, part, gib) => G.net?.botHit(bot.id, targetId, dmg, part, gib),
+    claimBotSpecial: (bot) => G.net?.send({ t: 'takeSpecial', bot: bot.id }),
   }, {
     external: true, playerTeam: G.team, rounds: G.onlineSettings.rounds, lives: G.onlineSettings.lives,
     bots: slots.map((b) => ({ id: b.id, name: b.name, team: b.team, variant: b.v,
@@ -1768,16 +1769,22 @@ function bindNet(net) {
     const okVec = (v) => Array.isArray(v) && v.length === 3 && v.every((n) => typeof n === 'number' && isFinite(n));
     if (!okVec(m.o) || !okVec(m.d)) return;
     // mine=false: se ve y se oye, pero el daño lo reclama su dueño
+    const source = G.remotes.get(m.id) || G.onlineBots?.botById?.(m.id);
     rockets.fire(
       { x: m.o[0], y: m.o[1], z: m.o[2] },
       new THREE.Vector3(m.d[0], m.d[1], m.d[2]).normalize(),
       false,
+      source ? { id: m.id, team: source.team } : null,
     );
   });
   // arma especial online: el SERVIDOR decide quién se la lleva
   net.on('specialTaken', (m) => {
     specials.clear();
-    if (m.id !== net.id || !TUNING.weapons[m.wep]) return;
+    if (!TUNING.weapons[m.wep]) return;
+    if (m.id !== net.id) {
+      G.onlineBots?.grantBotSpecial?.(m.id, m.wep);
+      return;
+    }
     const removed = G.weapons.giveSpecial(m.wep);
     audio.reloadDone();
     hud.hint(t('msg.specialTaken', {
@@ -1898,7 +1905,19 @@ function bindNet(net) {
   net.on('dropGive', (m) => {
     if (!alive()) return;
     const def = TUNING.weapons[m.wep];
-    const s = G.weapons.state[m.wep];
+    if (!def) return;
+    let s = G.weapons.state[m.wep];
+    if (!s && def.special) {
+      G.weapons.giveSpecial(m.wep);
+      s = G.weapons.state[m.wep];
+      s.mag = Math.min(def.mag, Math.max(0, m.mag || 0));
+      s.reserve = Math.min(def.reserve, Math.max(0, m.res || 0));
+      G.rig?.setWeapon?.(m.wep);
+      audio.reloadDone();
+      hud.hint(t('msg.weaponRecovered', { weapon: t(def.nameKey) }), 1500);
+      return;
+    }
+    if (!s) return;
     const total = (m.mag || 0) + (m.res || 0);
     const gained = Math.min(def.reserve, s.reserve + total) - s.reserve;
     s.reserve += gained;
@@ -2059,6 +2078,19 @@ function allCharacterTargets() {
     }
     return out;
   }
+  if (G.mode === 'online') {
+    if (G.selfAlive && G.player && !G.player.dead) {
+      out.push({ id: G.net?.id, x: G.player.pos.x, z: G.player.pos.z, y: G.player.y,
+        alive: true, team: G.team });
+    }
+    for (const r of G.remotes.values()) if (r.alive) {
+      out.push({ id: r.id, x: r.x, z: r.z, y: r.y ?? 0, alive: true, team: r.team });
+    }
+    for (const b of G.onlineBots?.bots ?? []) if (b.alive) {
+      out.push({ id: b.id, x: b.pos.x, z: b.pos.z, y: b.y, alive: true, team: b.team });
+    }
+    return out;
+  }
   return currentTargets();
 }
 
@@ -2163,6 +2195,37 @@ function explodeRocket(pos, mine = true, owner = null) {
   const splash = (dist) => d.dmg * Math.max(0.25, 1 - (dist / R) * 0.75);
   const onlineSplash = [];
 
+  // En online, los bots pertenecen al host pero el disparo sigue siendo del
+  // bot. Registrar fire/hit con su id evita atribuir el splash al host.
+  if (owner && G.mode === 'online' && G.net && G.onlineBots) {
+    const losOK = (x, y, z) => {
+      _v2.set(x - pos.x, y - pos.y, z - pos.z);
+      const len = _v2.length();
+      return len <= 0.4 || world.raycast(_v1, _v2.normalize(), len - 0.2) === null;
+    };
+    for (const tg of allCharacterTargets()) {
+      if (tg.alive === false || tg.id === owner.id || tg.team === owner.team) continue;
+      const ty = (tg.y ?? 0) + 0.9;
+      const dist = Math.hypot(tg.x - pos.x, ty - pos.y, tg.z - pos.z);
+      if (dist > R || !losOK(tg.x, ty, tg.z)) continue;
+      onlineSplash.push({ id: tg.id, dmg: splash(dist), point: { x: tg.x, y: ty, z: tg.z } });
+    }
+    const self = G.onlineBots.botById(owner.id);
+    let selfHit = null;
+    if (self?.alive) {
+      const sy = self.y + 0.9;
+      const sd = Math.hypot(self.pos.x - pos.x, sy - pos.y, self.pos.z - pos.z);
+      if (sd < R && losOK(self.pos.x, sy, self.pos.z)) {
+        selfHit = { id: self.id, dmg: splash(sd) * 0.7, point: { x: self.pos.x, y: sy, z: self.pos.z } };
+      }
+    }
+    _v2.copy(_v1);
+    G.net.botFire(owner.id, _v1, _v2, 'bazooka', []);
+    for (const c of onlineSplash) G.net.botHit(owner.id, c.id, c.dmg, 'body', false, c.point);
+    if (selfHit) G.net.botHit(owner.id, selfHit.id, selfHit.dmg, 'body', false, selfHit.point);
+    return;
+  }
+
   // Cohete lanzado por un BOT: daña al bando contrario (jugador incluido) y
   // a su propio dueño si se pasó de cerca. No toca a sus compañeros.
   if (owner && G.mode === 'bots' && G.botMatch) {
@@ -2244,13 +2307,21 @@ function explodeRocket(pos, mine = true, owner = null) {
     }
   }
   // el server valida el disparo (explosión) y luego cada reclamo de daño
-  if (G.net && onlineSplash.length) {
+  const p = G.player;
+  if (G.net) {
     _v2.set(pos.x, pos.y, pos.z);
     G.net.fire(_v1, _v2, 'bazooka', []);
     for (const c of onlineSplash) G.net.hit(c.id, c.dmg, 'body', false, c.point);
+    if (p && G.selfAlive && !p.dead) {
+      const sy = p.y + 0.9;
+      const sd = Math.hypot(p.pos.x - pos.x, sy - pos.y, p.pos.z - pos.z);
+      if (sd < R && losClear(p.pos.x, sy, p.pos.z)) {
+        G.net.hit(G.net.id, splash(sd) * 0.7, 'body', false,
+          { x: p.pos.x, y: sy, z: p.pos.z });
+      }
+    }
   }
   // autodaño (70% del splash) — solo donde hay muerte real del jugador
-  const p = G.player;
   if (G.mode === 'bots' && p && G.selfAlive && !p.dead) {
     const sy = p.y + 0.9;
     const sd = Math.hypot(p.pos.x - pos.x, sy - pos.y, p.pos.z - pos.z);
@@ -2813,9 +2884,26 @@ function simStep(dt) {
       const def = TUNING.weapons[d.wep];
       const s = G.weapons.state[d.wep];
       if (!s) {
+        if (def.special) {
+          if (G.mode === 'online') {
+            d.claimed = true;
+            d.claimT = 2;
+            G.net?.send({ t: 'takeDrop', id });
+          } else {
+            G.weapons.giveSpecial(d.wep);
+            const specialState = G.weapons.state[d.wep];
+            specialState.mag = Math.min(def.mag, Math.max(0, d.mag || 0));
+            specialState.reserve = Math.min(def.reserve, Math.max(0, d.res || 0));
+            G.rig?.setWeapon?.(d.wep);
+            G.drops.remove(id);
+            audio.reloadDone();
+            hud.hint(t('msg.weaponRecovered', { weapon: t(def.nameKey) }), 1500);
+          }
+          return;
+        }
         // no llevas esa arma: si es una primaria normal del suelo y tu slot
         // primario carga una ESPECIAL ya vacía, la recuperas en su lugar
-        if (def.special || def.thrown) return;
+        if (def.thrown) return;
         for (const idx of [0, 1]) {
           const curW = G.weapons.slots[idx];
           const curDef = TUNING.weapons[curW];

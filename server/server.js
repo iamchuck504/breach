@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import {
-  DEFAULT_LOBBY_SETTINGS, MAX_PLAYERS, TEAM_CAPACITY, makeBotName,
+  DEFAULT_LOBBY_SETTINGS, MAP_RUNTIME, MAX_PLAYERS, TEAM_CAPACITY, makeBotName,
   nextLobbyMap, normalizeLobbySettings, teamCounts, validateLobby,
 } from '../src/game/lobby-rules.js';
 import { ROUND_FINISH_HOLD as DEFAULT_ROUND_FINISH_HOLD } from '../src/game/match-flow.js';
@@ -20,7 +20,7 @@ const ROUND_FINISH_HOLD = Number(process.env.ROUND_FINISH_HOLD ?? DEFAULT_ROUND_
 const INTERMISSION_TIME = Number(process.env.INTERMISSION_TIME ?? 5);
 const FINAL_TIME = Number(process.env.FINAL_PRESENTATION_TIME ?? 11);
 const SPAWN_PROT = 5, CRATE_RESPAWN = 30, DROP_LIFE = 8, TICK_HZ = 20;
-const CRATES = [{ x: 7, z: 0, up: true, t: 0 }, { x: -7, z: 0, up: true, t: 0 }];
+const CRATES = [{ up: true, t: 0 }, { up: true, t: 0 }];
 const FIRE_RULES = {
   smg: { interval: 60 / 620, range: 80, maxDamage: 16 },
   shotgun: { interval: 60 / 95, range: 24, maxDamage: 8 * 13, gibRange: 4.2 },
@@ -34,6 +34,7 @@ const FIRE_RULES = {
 };
 // ids replicables en 'w' (la granada solo aparece EN MANO, nunca dispara aquí)
 const VALID_WEAPONS = new Set(['smg', 'shotgun', 'pistol', 'grenade', 'sniper', 'bazooka']);
+const SPECIAL_WEAPONS = new Set(['sniper', 'bazooka']);
 const FIREABLE = new Set(Object.keys(FIRE_RULES));
 const clampWep = (w) => (VALID_WEAPONS.has(w) ? w : 'smg');
 // la granada no es un arma soltable: el drop degrada a smg
@@ -73,11 +74,7 @@ const inMatch = () => ['intro', 'countdown', 'playing', 'round-finish', 'intermi
 const isHost = (p) => !!p && p.id === hostId;
 
 function spawnSet(map, team) {
-  // duplica la tabla de world._buildSpawns — mantener ambas sincronizadas
-  const z = {
-    fortaleza: 23.4, azoteas: 35.1,
-    calle: 26.4, metro: 22.4, prision: 26.4, pueblo: 30.4,
-  }[map] ?? 23.4;
+  const z = MAP_RUNTIME[map]?.spawnZ ?? MAP_RUNTIME.fortaleza.spawnZ;
   return Array.from({ length: 4 }, (_, i) => {
     const x = -3.6 + i * 2.4;
     return { x: team === 'red' ? x : -x, z: team === 'red' ? -z : z, yaw: team === 'red' ? Math.PI : 0 };
@@ -131,6 +128,7 @@ function canJoinTeam(entity, team) {
 function freshCombatState(p, spawn) {
   Object.assign(p, { x: spawn.x, z: spawn.z, y: 0, yaw: spawn.yaw, st: 'idle', aim: 0,
     p: 0, w: 'smg', sp: 0, hp: HP, alive: true,
+    specialWep: null,
     lastDamage: 0, respawnAt: 0, prot: startAt + SPAWN_PROT,
     lastFireAt: -Infinity, pendingShot: null });
 }
@@ -218,20 +216,24 @@ function registerFire(shooter, msg, isBotFire = false) {
 }
 function registerHit(shooter, msg) {
   const target = players.get(msg.target) || bots.get(msg.target);
-  if (!target || !target.alive || !shooter?.alive || target.team === shooter.team || phase !== 'playing' || target.prot > nowSec()) return;
-  const shot = shooter.pendingShot, rule = shot ? FIRE_RULES[shot.wep] : null, now = nowSec();
+  const shot = shooter?.pendingShot, rule = shot ? FIRE_RULES[shot.wep] : null, now = nowSec();
+  if (!target || !target.alive || !shooter?.alive || phase !== 'playing' || target.prot > now) return;
+  const selfRocket = target.id === shooter.id && shot?.wep === 'bazooka';
+  if (target.team === shooter.team && !selfRocket) return;
   if (!shot || !rule || now - shot.at > HIT_WINDOW || shot.hitIds.has(target.id)) return;
   const dist = Math.hypot(target.x - shot.origin[0], (target.y || 0) + 1 - shot.origin[1], target.z - shot.origin[2]);
   if (dist > (rule.hitRange ?? rule.range) + 2) return;
   const dmg = Math.min(Math.max(0, num(msg.dmg)), shot.remainingDamage); if (dmg <= 0) return;
   shot.hitIds.add(target.id); shot.remainingDamage -= dmg; target.hp -= dmg; target.lastDamage = now;
   if (target.hp > 0) return;
-  target.hp = 0; target.alive = false; target.deaths++; shooter.kills++;
+  target.hp = 0; target.alive = false; target.deaths++;
+  if (target.id !== shooter.id) shooter.kills++;
   const gib = shot.wep === 'shotgun' && dist <= FIRE_RULES.shotgun.gibRange && !!msg.gib;
   broadcastRaw({ t: 'death', target: target.id, from: shooter.id, gib: gib ? 1 : 0, w: shot.wep,
     dist: +dist.toFixed(2), dmg: Math.round(dmg), part: msg.part === 'head' ? 'head' : 'body',
     kn: shooter.name, kt: shooter.team, vn: target.name, vt: target.team });
   dropWeapon(target);
+  target.specialWep = null;
   if (pools[target.team] > 0) { pools[target.team]--; target.respawnAt = now + RESPAWN_TIME; }
   else target.respawnAt = 0;
   broadcastRaw({ t: 'score', ...livesState(), wins: { ...wins } }); checkRoundEnd();
@@ -251,7 +253,8 @@ wss.on('connection', (ws) => {
       me = { ws, id, bot: false, team: assignTeam(), joinedAt: Date.now(),
         name: String(msg.name || 'ANON').slice(0, 14).toUpperCase(),
         v: Math.min(4, Math.max(0, Math.round(num(msg.v)))), hp: HP, alive: true,
-        kills: 0, deaths: 0, w: 'smg', lastFireAt: -Infinity, pendingShot: null };
+        kills: 0, deaths: 0, w: 'smg', specialWep: null,
+        lastFireAt: -Infinity, pendingShot: null };
       players.set(id, me); if (!hostId) { hostId = id; phase = 'lobby'; }
       send(ws, { t: 'welcome', id, team: me.team, lobby: lobbyPayload() }); broadcastLobby();
       console.log(`+ ${me.name} (${me.team}) — ${players.size} humanos, ${bots.size} bots`); return;
@@ -283,7 +286,8 @@ wss.on('connection', (ws) => {
       if (!canJoinTeam(probe, team)) { lobbyError(ws, 'team-full'); return; }
       const id = 'b' + nextBotId++, occupied = allSlots().map((p) => p.name);
       bots.set(id, { id, bot: true, team, name: makeBotName(team, occupied), v: (nextBotId - 2) % 5,
-        hp: HP, alive: true, kills: 0, deaths: 0, w: 'smg', lastFireAt: -Infinity, pendingShot: null });
+        hp: HP, alive: true, kills: 0, deaths: 0, w: 'smg', specialWep: null,
+        lastFireAt: -Infinity, pendingShot: null });
       broadcastLobby(); return;
     }
     if (msg.t === 'lobbyBotRemove' || msg.t === 'lobbyBotTeam') {
@@ -303,7 +307,9 @@ wss.on('connection', (ws) => {
       if (phase !== 'playing' || !me.alive) { me.st = 'idle'; me.aim = 0; me.sp = 0; return; }
       me.x = clamp(msg.x, -60, 60); me.z = clamp(msg.z, -60, 60); me.y = clamp(msg.y, 0, 20); me.yaw = clamp(msg.yaw, -10, 10);
       me.st = VALID_STATES.has(String(msg.st)) && msg.st !== 'dead' ? msg.st : 'idle';
-      me.aim = msg.aim ? 1 : 0; me.p = clamp(msg.p, -1.6, 1.6); me.w = clampWep(msg.w);
+      me.aim = msg.aim ? 1 : 0; me.p = clamp(msg.p, -1.6, 1.6);
+      const requestedWep = clampWep(msg.w);
+      me.w = SPECIAL_WEAPONS.has(requestedWep) && me.specialWep !== requestedWep ? 'smg' : requestedWep;
       me.am = clamp(msg.am, 0, 500); me.ar = clamp(msg.ar, 0, 500); me.sp = clamp(msg.sp, 0, 1); return;
     }
     if (msg.t === 'botState') {
@@ -312,11 +318,18 @@ wss.on('connection', (ws) => {
         const b = bots.get(s.id); if (!b || !b.alive) continue;
         b.x = clamp(s.x, -60, 60); b.z = clamp(s.z, -60, 60); b.y = clamp(s.y, 0, 20); b.yaw = clamp(s.yaw, -10, 10);
         b.st = VALID_STATES.has(String(s.st)) && s.st !== 'dead' ? s.st : 'idle';
-        b.aim = s.aim ? 1 : 0; b.p = clamp(s.p, -1.6, 1.6); b.w = clampWep(s.w); b.sp = clamp(s.sp, 0, 1);
+        b.aim = s.aim ? 1 : 0; b.p = clamp(s.p, -1.6, 1.6);
+        const requestedWep = clampWep(s.w);
+        b.w = SPECIAL_WEAPONS.has(requestedWep) && b.specialWep !== requestedWep ? 'smg' : requestedWep;
+        b.sp = clamp(s.sp, 0, 1);
       } return;
     }
     if (msg.t === 'fire') { registerFire(me, msg); return; }
-    if (msg.t === 'botFire') { if (isHost(me)) { const b = bots.get(msg.id); if (b) { b.w = FIREABLE.has(msg.w) ? msg.w : 'smg'; registerFire(b, msg, true); } } return; }
+    if (msg.t === 'botFire') { if (isHost(me)) { const b = bots.get(msg.id); if (b) {
+      const requestedWep = FIREABLE.has(msg.w) ? msg.w : 'smg';
+      if (SPECIAL_WEAPONS.has(requestedWep) && b.specialWep !== requestedWep) return;
+      b.w = requestedWep; registerFire(b, msg, true);
+    } } return; }
     // granada de humo: solo visual/oclusión — el server la reenvía y cada
     // cliente simula el mismo proyectil determinista
     if (msg.t === 'nade') {
@@ -329,18 +342,25 @@ wss.on('connection', (ws) => {
     if (msg.t === 'takeDrop') {
       const d = drops.get(msg.id);
       if (!d || !me.alive || phase !== 'playing' || Math.hypot(me.x - d.x, me.z - d.z) > 3) return;
+      if (SPECIAL_WEAPONS.has(d.wep)) me.specialWep = d.wep;
       drops.delete(msg.id); broadcastRaw({ t: 'dropR', id: msg.id }); send(ws, { t: 'dropGive', wep: d.wep, mag: d.mag, res: d.res }); return;
     }
     // pickup del arma especial: gana el PRIMER reclamo válido y solo uno
     if (msg.t === 'takeSpecial') {
-      if (!me?.alive || phase !== 'playing' || special.taken || !special.wep) return;
-      special.taken = true; special.by = me.id;
-      broadcastRaw({ t: 'specialTaken', id: me.id, wep: special.wep });
+      const claimant = msg.bot && isHost(me) ? bots.get(msg.bot) : me;
+      if (!claimant?.alive || phase !== 'playing' || special.taken || !special.wep) return;
+      const spot = MAP_RUNTIME[settings.map]?.special;
+      if (!spot || Math.hypot(claimant.x - spot.x, claimant.z - spot.z) > 2.2 ||
+          Math.abs((claimant.y || 0) - (spot.y || 0)) > 1.5) return;
+      special.taken = true; special.by = claimant.id; claimant.specialWep = special.wep;
+      broadcastRaw({ t: 'specialTaken', id: claimant.id, wep: special.wep });
       return;
     }
     if (msg.t === 'crate') {
       const c = CRATES[msg.i];
-      if (!c || !c.up || !me.alive || phase !== 'playing' || Math.hypot(me.x - c.x, me.z - c.z) > 3) return;
+      const spot = MAP_RUNTIME[settings.map]?.crates?.[msg.i];
+      if (!c || !spot || !c.up || !me.alive || phase !== 'playing' ||
+          Math.hypot(me.x - spot.x, me.z - spot.z) > 3) return;
       c.up = false; c.t = CRATE_RESPAWN; broadcastRaw({ t: 'crate', i: msg.i, up: 0, by: me.id });
     }
   });

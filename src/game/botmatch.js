@@ -1656,6 +1656,9 @@ export class BotMatch {
   // El bot toma el arma especial del pedestal (mismo pedestal y misma regla
   // de exclusividad que el jugador: quien completa el hold se la lleva).
   botTakeSpecial(bot) {
+    // En online el host propone el reclamo, pero el servidor decide y después
+    // concede mediante el broadcast. No consumir el pedestal solo localmente.
+    if (this.cb.claimBotSpecial) { this.cb.claimBotSpecial(bot); return; }
     const specials = this.cb.specials;
     const wep = specials?.take?.();
     if (!wep) return;
@@ -1666,6 +1669,20 @@ export class BotMatch {
     bot.rig.setWeapon(wep);
     this.specialSeeker[bot.team] = null; // reclamo cumplido: liberar
     this.cb.hud?.hint?.(t('msg.specialTakenBy', { name: bot.name, weapon: t(TUNING.weapons[wep].nameKey) }), 2000);
+  }
+
+  grantBotSpecial(id, wep) {
+    const bot = this.botById(id);
+    if (!bot || !bot.alive || !TUNING.weapons[wep]?.special) return false;
+    this.cb.specials?.clear?.();
+    bot.wep = wep;
+    bot.specialAmmo = TUNING.weapons[wep].mag + TUNING.weapons[wep].reserve;
+    bot.swapCd = 2.5;
+    bot.swapAnim = 0.5;
+    bot.rig.setWeapon(wep);
+    this.specialSeeker[bot.team] = null;
+    this.cb.hud?.hint?.(t('msg.specialTakenBy', { name: bot.name, weapon: t(TUNING.weapons[wep].nameKey) }), 2000);
+    return true;
   }
 
   botShoot(bot, enemy) {

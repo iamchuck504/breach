@@ -25,7 +25,9 @@
     "check:warmup": "node scripts/check-warmup.mjs",
     "check:movement": "node scripts/check-movement.mjs",
     "check:lobby": "node scripts/check-lobby.mjs",
-    "test": "npm run check:controller && npm run check:menu-controller && npm run check:reload-cancel && npm run check:round-flow && npm run check:combat-orientation && npm run check:cover-fire && npm run check:impacts && npm run check:spatial-audio && npm run check:i18n && npm run check:shotgun-pattern && npm run check:warmup && npm run check:lobby && npm run check:online-fire"
+    "check:online-map-items": "node scripts/check-online-map-items.mjs",
+    "check:mp-bot-special": "node scripts/check-mp-bot-special.mjs",
+    "test": "npm run check:controller && npm run check:menu-controller && npm run check:reload-cancel && npm run check:round-flow && npm run check:combat-orientation && npm run check:cover-fire && npm run check:impacts && npm run check:spatial-audio && npm run check:i18n && npm run check:shotgun-pattern && npm run check:warmup && npm run check:lobby && npm run check:online-map-items && npm run check:mp-bot-special && npm run check:online-fire"
   },
   "dependencies": {
     "lil-gui": "^0.20.0",

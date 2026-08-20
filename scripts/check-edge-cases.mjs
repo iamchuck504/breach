@@ -496,6 +496,23 @@ check('respawn restaura el loadout de fábrica',
   deathSpecial.slots === 'smg,shotgun,pistol,grenade' && deathSpecial.mag === 50,
   JSON.stringify(deathSpecial));
 
+const recoveredSpecial = await page.evaluate(async () => {
+  const G = window.BREACH;
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const drop = [...G.drops.drops.values()].find((d) => d.wep === 'bazooka');
+  if (!drop) return { why: 'drop expirado antes de recogerlo' };
+  window.__tp(drop.x, drop.z);
+  await wait(450);
+  return {
+    slots: G.weapons.slots.join(','), cur: G.weapons.cur,
+    mag: G.weapons.state.bazooka?.mag, res: G.weapons.state.bazooka?.reserve,
+    left: [...G.drops.drops.values()].filter((d) => d.wep === 'bazooka').length,
+  };
+});
+check('otro jugador/respawn puede recuperar la especial caída',
+  recoveredSpecial.slots?.includes('bazooka') && recoveredSpecial.cur === 'bazooka' &&
+  recoveredSpecial.left === 0, JSON.stringify(recoveredSpecial));
+
 // --- multitud en espacio chico: separación sin atascos ni fugas
 const crowd = await page.evaluate(async () => {
   const G = window.BREACH, M = G.botMatch;
