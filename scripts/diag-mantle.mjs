@@ -17,12 +17,12 @@ const browser = await chromium.launch({ executablePath: CHROME, headless: true }
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 page.on('pageerror', (e) => console.log('PAGEERROR:', e.message));
 await page.goto('http://localhost:8785/?nolock=1', { waitUntil: 'networkidle' });
-const started = await page.evaluate(() => {
+await page.evaluate(() => {
   const enter = document.getElementById('btn-enter');
   if (enter) enter.click();
-  document.getElementById('btn-practice').click();
-  return true;
 });
+await page.waitForSelector('#splash.off', { state: 'attached' });
+await page.evaluate(() => document.getElementById('btn-practice').click());
 await page.waitForTimeout(1500);
 const setup = await page.evaluate(() => {
   const G = window.BREACH, W = window.BREACH_WORLD;

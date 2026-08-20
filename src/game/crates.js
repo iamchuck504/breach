@@ -40,8 +40,14 @@ function buildCrate() {
     b.position.set(-0.12 + i * 0.12, 0.36, 0);
     g.add(b);
   }
-  const glow = new THREE.PointLight(ACCENT, 3, 4);
-  glow.position.y = 0.6;
+  // Glow visual sin PointLight. Ocultar una caja antes cambiaba el número de
+  // luces de la escena y forzaba recompilaciones de shaders justo al recogerla.
+  const glow = new THREE.Mesh(
+    new THREE.SphereGeometry(0.16, 8, 6),
+    new THREE.MeshBasicMaterial({ color: ACCENT, transparent: true, opacity: 0.34 })
+  );
+  glow.position.y = 0.58;
+  glow.scale.set(1.8, 0.55, 1.8);
   g.add(glow);
   return g;
 }

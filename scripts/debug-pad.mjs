@@ -19,6 +19,7 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 page.on('pageerror', (e) => console.log('PAGEERROR:', e.message));
 await page.goto('http://localhost:8794/?nolock=1', { waitUntil: 'networkidle' });
 await page.click('#btn-enter');
+await page.waitForSelector('#splash.off', { state: 'attached' });
 await page.click('#btn-practice');
 await page.waitForTimeout(600);
 

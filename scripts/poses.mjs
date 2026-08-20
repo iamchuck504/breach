@@ -42,6 +42,7 @@ try {
 
   await page.goto('http://localhost:8792/?nolock=1', { waitUntil: 'networkidle' });
   await page.click('#btn-enter');
+  await page.waitForSelector('#splash.off', { state: 'attached' });
   await page.click('#btn-practice');
   await page.waitForTimeout(800);
 

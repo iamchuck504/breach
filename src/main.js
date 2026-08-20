@@ -172,8 +172,26 @@ const controlsCard = document.getElementById('controls-card');
 const btnResume = document.getElementById('btn-resume');
 
 function dismissSplash() { splash.classList.add('off'); }
-btnEnter.addEventListener('click', () => {
+let preparePromise = null;
+function prepareGame() {
+  if (preparePromise) return preparePromise;
+  // AudioContext debe crearse sincrónicamente dentro del gesto del usuario.
+  const audioReady = audio.prepare();
+  preparePromise = (async () => {
+    await new Promise(requestAnimationFrame); // pintar PREPARANDO antes del trabajo GPU
+    await Promise.all([audioReady, effects.prepare(renderer, camera)]);
+    await new Promise(requestAnimationFrame);
+  })();
+  return preparePromise;
+}
+btnEnter.addEventListener('click', async () => {
+  if (btnEnter.disabled) return;
+  btnEnter.disabled = true;
+  btnEnter.textContent = 'Preparando…';
+  try { await prepareGame(); }
+  catch (e) { console.warn('Warm-up parcial:', e); }
   dismissSplash();
+  btnEnter.textContent = 'Entrar';
   inName.focus();
   inName.select();
 });

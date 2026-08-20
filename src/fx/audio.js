@@ -11,6 +11,8 @@ export class Audio {
     this.volume = v >= 0 && v <= 1 ? v : 0.5; // volumen general (slider)
     this._noise = null;
     this.samples = {};
+    this._samplesReady = null;
+    this._prepared = false;
   }
 
   setVolume(v) {
@@ -20,30 +22,60 @@ export class Audio {
   }
 
   ensure() {
-    if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
-    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-    this.master = this.ctx.createGain();
-    this.master.gain.value = this.muted ? 0 : this.volume;
-    this.master.connect(this.ctx.destination);
-    const len = this.ctx.sampleRate * 1;
-    const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
-    this._noise = buf;
-    this._loadSamples();
+    if (!this.ctx) {
+      this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      this.master = this.ctx.createGain();
+      this.master.gain.value = this.muted ? 0 : this.volume;
+      this.master.connect(this.ctx.destination);
+      const len = this.ctx.sampleRate * 1;
+      const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      this._noise = buf;
+      this._samplesReady = this._loadSamples();
+    }
+    const resumed = this.ctx.state === 'suspended' ? this.ctx.resume() : Promise.resolve();
+    return Promise.all([resumed, this._samplesReady || Promise.resolve()]);
   }
 
   // Samples de armas (mejor esfuerzo): si no cargan, queda el sintético.
   _loadSamples() {
-    if (this._samplesReq) return;
+    if (this._samplesReq) return this._samplesReady || Promise.resolve();
     this._samplesReq = true;
+    const jobs = [];
     for (const [k, url] of [['smg', 'audio/smg.mp3'], ['shotgun', 'audio/shotgun.mp3']]) {
-      fetch(url)
+      jobs.push(fetch(url)
         .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.arrayBuffer(); })
         .then((ab) => this.ctx.decodeAudioData(ab))
         .then((buf) => { this.samples[k] = buf; })
-        .catch(() => { /* sin sample: fallback sintético */ });
+        .catch(() => { /* sin sample: fallback sintético */ }));
     }
+    return Promise.all(jobs);
+  }
+
+  // Se llama desde el gesto de ENTRAR: desbloquea WebAudio, espera los dos
+  // samples y ejercita silenciosamente los nodos usados durante gameplay.
+  // Así el primer disparo/pickup no paga inicialización del motor de audio.
+  async prepare() {
+    await this.ensure();
+    if (this._prepared || !this.ctx) return;
+    this._prepared = true;
+    const silent = this.ctx.createGain();
+    silent.gain.value = 0;
+    silent.connect(this.master);
+    const t = this.ctx.currentTime;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this._noise;
+    const filter = this.ctx.createBiquadFilter();
+    const osc = this.ctx.createOscillator();
+    const pan = this.ctx.createStereoPanner?.();
+    src.connect(filter).connect(silent);
+    osc.connect(pan || silent);
+    if (pan) pan.connect(silent);
+    src.start(t, 0, 0.002);
+    osc.start(t); osc.stop(t + 0.002);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    silent.disconnect();
   }
 
   // true si el sample sonó; rate con leve variación evita el efecto metralla

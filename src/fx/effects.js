@@ -12,6 +12,25 @@ const IMPACT_COLORS = {
   metal: new THREE.Color(0x8c7155),
 };
 
+function makePool(scene, count, factory) {
+  const free = [];
+  for (let i = 0; i < count; i++) {
+    const obj = factory();
+    obj.visible = false;
+    obj.frustumCulled = false;
+    scene.add(obj);
+    free.push(obj);
+  }
+  return {
+    free,
+    acquire() { return this.free.pop() || null; },
+    release(obj) {
+      obj.visible = false;
+      this.free.push(obj);
+    },
+  };
+}
+
 // Un solo InstancedMesh y un ring buffer: 96 impactos cuestan un draw call,
 // nunca crean/destruyen meshes y la marca más antigua se reutiliza primero.
 class ImpactDecalPool {
@@ -165,44 +184,55 @@ export class Effects {
     this._gibMats = new Map();
     this.decals = new ImpactDecalPool(scene);
     this._impactBurstBudget = 4;
+    // Una sola luz siempre presente: intensidad 0 cuando está inactiva.
+    // Añadir/quitar PointLights por disparo invalidaba los programas WebGL.
+    this._muzzleLight = new THREE.PointLight(0xffb35c, 0, 7);
+    this._muzzleLightT = 0;
+    this._muzzleLightPeak = 0;
+    scene.add(this._muzzleLight);
+    this._tracerPool = makePool(scene, 32,
+      () => new THREE.Mesh(this._tracerGeo, this._tracerMat));
+    this._flashPools = this._flashGeo.map((geo) => makePool(scene, 16,
+      () => new THREE.Mesh(geo, this._flashMat)));
     for (const r of [this._tracerMat, this._tracerGeo, this._flashMat, ...this._flashGeo, this._gibGeo]) {
       r.userData.shared = true;
     }
   }
 
-  _add(obj, ttl, tick) {
-    this.scene.add(obj);
-    this.items.push({ obj, life: 0, ttl, tick });
+  _add(obj, ttl, tick, release = null) {
+    if (!obj.parent) this.scene.add(obj);
+    obj.visible = true;
+    this.items.push({ obj, life: 0, ttl, tick, release });
   }
 
   tracer(from, to) {
     const dir = to.clone().sub(from);
     const len = dir.length();
     if (len < 0.3) return;
-    const m = new THREE.Mesh(this._tracerGeo, this._tracerMat);
+    const m = this._tracerPool.acquire();
+    if (!m) return; // priorizar frame time sobre un tracer extra
     m.scale.set(0.025, 0.025, len);
     m.position.copy(from).addScaledVector(dir, 0.5);
     m.lookAt(to);
     this._add(m, 0.07, (it) => {
       const fade = Math.max(0.15, 1 - it.life / it.ttl);
       it.obj.scale.x = it.obj.scale.y = 0.025 * fade;
-    });
+    }, (obj) => this._tracerPool.release(obj));
   }
 
   muzzleFlash(pos, big = false) {
-    const light = new THREE.PointLight(0xffb35c, big ? 26 : 14, 7);
-    light.position.copy(pos);
-    this._add(light, 0.055, (it) => {
-      it.obj.intensity *= 0.75;
-    });
-    const s = new THREE.Mesh(
-      this._flashGeo[big ? 1 : 0],
-      this._flashMat
-    );
+    this._muzzleLight.position.copy(pos);
+    this._muzzleLightPeak = big ? 26 : 14;
+    this._muzzleLight.intensity = this._muzzleLightPeak;
+    this._muzzleLightT = 0.055;
+    const pool = this._flashPools[big ? 1 : 0];
+    const s = pool.acquire();
+    if (!s) return;
     s.position.copy(pos);
+    s.scale.setScalar(1);
     this._add(s, 0.05, (it) => {
       it.obj.scale.multiplyScalar(1.18);
-    });
+    }, (obj) => pool.release(obj));
   }
 
   _burst(pos, count, color, speed, size, ttl, gravity = 9, normal = null) {
@@ -286,18 +316,48 @@ export class Effects {
   }
 
   update(dt) {
+    if (this._muzzleLightT > 0) {
+      this._muzzleLightT = Math.max(0, this._muzzleLightT - dt);
+      this._muzzleLight.intensity = this._muzzleLightPeak * (this._muzzleLightT / 0.055);
+    } else this._muzzleLight.intensity = 0;
     this._impactBurstBudget = Math.min(4, this._impactBurstBudget + dt * 10);
     this.decals.update(dt);
     for (let i = this.items.length - 1; i >= 0; i--) {
       const it = this.items[i];
       it.life += dt;
       if (it.life >= it.ttl) {
-        this.scene.remove(it.obj);
-        if (it.obj.geometry && !it.obj.geometry.userData.shared) it.obj.geometry.dispose();
-        if (it.obj.material && !it.obj.material.userData.shared) it.obj.material.dispose?.();
+        if (it.release) it.release(it.obj);
+        else {
+          this.scene.remove(it.obj);
+          if (it.obj.geometry && !it.obj.geometry.userData.shared) it.obj.geometry.dispose();
+          if (it.obj.material && !it.obj.material.userData.shared) it.obj.material.dispose?.();
+        }
         this.items.splice(i, 1);
       } else it.tick(it, dt);
     }
+  }
+
+  // Prepara los programas/materiales que solo aparecen al disparar o impactar.
+  // Se ejecuta una vez, detrás del splash, y limpia todos los objetos de prueba.
+  async prepare(renderer, camera) {
+    if (this._prepared) return;
+    this._prepared = true;
+    const p = new THREE.Vector3(0, -1000, 0);
+    const q = new THREE.Vector3(0, -1000, -3);
+    const n = new THREE.Vector3(0, 1, 0);
+    this.tracer(p, q);
+    this.muzzleFlash(p, false);
+    this.muzzleFlash(q, true);
+    this._impactBurstBudget = 4;
+    this.impact(p, n, 'concrete');
+    this.impact(q, n, 'metal');
+    this.blood(p, 0xd94f3f);
+    this.dust(q);
+    if (renderer.compileAsync) await renderer.compileAsync(this.scene, camera);
+    else renderer.compile(this.scene, camera);
+    this.update(999);
+    this.clearImpacts();
+    this._impactBurstBudget = 4;
   }
 
   clearImpacts() { this.decals.clear(); }

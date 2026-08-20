@@ -25,10 +25,9 @@ const page = await browser.newPage({ viewport: { width: 960, height: 540 } });
 const problems = [];
 page.on('pageerror', (e) => problems.push('PAGEERROR: ' + e.message));
 await page.goto('http://localhost:8784/?nolock=1', { waitUntil: 'networkidle' });
-await page.evaluate(() => {
-  document.getElementById('btn-enter')?.click();
-  document.getElementById('btn-practice').click();
-});
+await page.evaluate(() => document.getElementById('btn-enter')?.click());
+await page.waitForSelector('#splash.off', { state: 'attached' });
+await page.evaluate(() => document.getElementById('btn-practice').click());
 await page.waitForTimeout(1800);
 
 // instrumentación: registrar CADA paso de sim y detectar anomalías

@@ -18,10 +18,9 @@ try {
   const pageErrors = [];
   page.on('pageerror', (e) => pageErrors.push(e.message));
   await page.goto('http://localhost:8793/?nolock=1', { waitUntil: 'networkidle' });
-  await page.evaluate(() => {
-    document.getElementById('btn-enter')?.click();
-    document.getElementById('btn-practice').click();
-  });
+  await page.evaluate(() => document.getElementById('btn-enter')?.click());
+  await page.waitForSelector('#splash.off', { state: 'attached' });
+  await page.evaluate(() => document.getElementById('btn-practice').click());
   await page.waitForTimeout(1300);
 
   async function scenario(type, side = 0, pitch = 0) {

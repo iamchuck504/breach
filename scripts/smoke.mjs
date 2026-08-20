@@ -34,6 +34,7 @@ try {
 
   // atravesar el splash antes de usar el menú principal
   await page.click('#btn-enter');
+  await page.waitForSelector('#splash.off', { state: 'attached' });
 
   // entrar a práctica
   await page.click('#btn-practice');
