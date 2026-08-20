@@ -38,6 +38,9 @@ export class LobbyUI {
     document.getElementById('main-card').style.display = 'none';
     document.getElementById('char-card').style.display = 'none';
     document.getElementById('controls-card').style.display = 'none';
+    for (const id of ['options-card', 'audio-card', 'video-card', 'language-card']) {
+      document.getElementById(id).style.display = 'none';
+    }
     this.root.classList.remove('off');
     document.getElementById('menu').scrollTop = 0;
     this.render();

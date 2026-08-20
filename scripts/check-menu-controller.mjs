@@ -142,7 +142,11 @@ try {
   await tap(1); // B leaves lobby
   await page.waitForSelector('#lobby-card.off', { state: 'attached' });
 
-  await focus('#btn-controls');
+  // Controles vive bajo Opciones: hub primero, subcard después
+  await focus('#btn-options');
+  await tap(0);
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('#options-card')).display === 'block');
+  await focus('#btn-opt-controls');
   await tap(0);
   await page.waitForFunction(() => getComputedStyle(document.querySelector('#controls-card')).display === 'block');
   await expectFocus({ column: 'keyboard' }, 'Controles no inició en la primera asignación de teclado');
@@ -156,9 +160,11 @@ try {
   await tap(15);
   const after = Number(await page.$eval('#sl-pad', (el) => el.value));
   if (!(after > before)) throw new Error('D-pad no modificó el slider');
-  await tap(1);
+  await tap(1); // B: controles → hub de Opciones
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('#options-card')).display === 'block');
+  await tap(1); // B: Opciones → menú principal
   await page.waitForFunction(() => getComputedStyle(document.querySelector('#main-card')).display !== 'none');
-  await expectFocus({ id: 'btn-controls' }, 'volver de Controles no restauró el botón de origen');
+  await expectFocus({ id: 'btn-options' }, 'volver de Opciones no restauró el botón de origen');
 
   await focus('#btn-character');
   await tap(0);

@@ -462,6 +462,9 @@
 
   /* ---------- panel de controles ---------- */
   #controls-card { width: min(900px, calc(100vw - 48px)); display: none; }
+  #options-card, #audio-card, #video-card, #language-card { width: min(560px, calc(100vw - 48px)); display: none; }
+  .options-list { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
+  .options-list .btn { display: flex; justify-content: space-between; align-items: center; }
   #controls-card .menu-title, #char-card .menu-title { margin-bottom: 8px; }
   #controls-card .tag, #char-card .tag { margin-bottom: 18px; }
   .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
@@ -550,7 +553,7 @@
     #btn-pause, #btn-fs { top: 10px; transform: scale(.88); transform-origin: top left; }
     #btn-pause { left: 10px; } #btn-fs { left: 53px; }
     #menu { padding: 12px; align-items: flex-start; }
-    .menu-card, #controls-card, #char-card { width: calc(100vw - 24px); padding: 20px; }
+    .menu-card, #controls-card, #char-card, #options-card, #audio-card, #video-card, #language-card { width: calc(100vw - 24px); padding: 20px; }
     .menu-grid, .cols { grid-template-columns: 1fr; }
     .utility-row, .settings-grid { grid-template-columns: 1fr; }
     #char-slots { overflow-x: auto; grid-template-columns: repeat(5,112px); padding-bottom: 4px; }
@@ -693,7 +696,7 @@
             <span class="btn-copy" data-i18n="menu.multiplayer">MULTIPLAYER</span><span class="btn-num">03</span>
           </button>
           <div class="pause-actions" id="pause-actions">
-            <button class="btn" id="btn-pause-controls" data-i18n="common.controls">CONTROLS</button>
+            <button class="btn" id="btn-pause-controls" data-i18n="menu.options">OPTIONS</button>
             <button class="btn" id="btn-pause-fullscreen" data-i18n="common.fullscreen">FULLSCREEN</button>
             <button class="btn" id="btn-leave-match" data-i18n="common.leaveMatch">LEAVE MATCH</button>
           </div>
@@ -722,7 +725,7 @@
         </div>
         <div class="utility-row">
           <button class="btn" id="btn-character" data-i18n="common.character">CHARACTER</button>
-          <button class="btn" id="btn-controls" data-i18n="common.controls">CONTROLS</button>
+          <button class="btn" id="btn-options" data-i18n="menu.options">OPTIONS</button>
           <button class="btn" id="btn-fullscreen"><span id="fullscreen-label" data-i18n="common.fullscreen">FULLSCREEN</span></button>
         </div>
         <div id="net-status"></div>
@@ -759,6 +762,63 @@
     <button class="btn primary" id="btn-char-back" data-i18n="common.back">BACK</button>
   </div>
 
+  <div class="menu-card" id="options-card">
+    <div class="menu-top"><div class="logo">BRE<em>A</em>CH</div><div class="tag" data-i18n="common.localSave">LOCAL SAVE</div></div>
+    <div class="menu-kicker" data-i18n="menu.optionsKicker">GAME CONFIGURATION</div>
+    <h1 class="menu-title" data-i18n="menu.options">OPTIONS</h1>
+    <div class="options-list">
+      <button class="btn" id="btn-opt-audio" data-nav-default><span data-i18n="menu.audio">AUDIO</span><span class="btn-num">01</span></button>
+      <button class="btn" id="btn-opt-video"><span data-i18n="menu.video">VIDEO</span><span class="btn-num">02</span></button>
+      <button class="btn" id="btn-opt-language"><span data-i18n="menu.language">LANGUAGE</span><span class="btn-num">03</span></button>
+      <button class="btn" id="btn-opt-controls"><span data-i18n="menu.controlsTitle">CONTROLS</span><span class="btn-num">04</span></button>
+    </div>
+    <div class="control-actions">
+      <button class="btn primary" id="btn-options-back" data-i18n="common.back">BACK</button>
+    </div>
+  </div>
+
+  <div class="menu-card" id="audio-card">
+    <div class="menu-top"><div class="logo">BRE<em>A</em>CH</div><div class="tag" data-i18n="common.localSave">LOCAL SAVE</div></div>
+    <div class="menu-kicker" data-i18n="menu.options">OPTIONS</div>
+    <h1 class="menu-title" data-i18n="menu.audio">AUDIO</h1>
+    <div class="settings-grid">
+      <div class="slider-row"><label for="sl-vol" data-i18n="menu.volumeMute">VOLUME (M TO MUTE)</label><span class="val" id="sl-vol-v"></span><input type="range" id="sl-vol" min="0" max="1" step="0.05" data-nav-default /></div>
+    </div>
+    <div class="control-actions">
+      <button class="btn primary" id="btn-audio-back" data-i18n="common.back">BACK</button>
+    </div>
+  </div>
+
+  <div class="menu-card" id="video-card">
+    <div class="menu-top"><div class="logo">BRE<em>A</em>CH</div><div class="tag" data-i18n="common.localSave">LOCAL SAVE</div></div>
+    <div class="menu-kicker" data-i18n="menu.options">OPTIONS</div>
+    <h1 class="menu-title" data-i18n="menu.video">VIDEO</h1>
+    <div class="options-list">
+      <button class="btn" id="btn-video-fullscreen" data-nav-default><span id="video-fullscreen-label" data-i18n="common.fullscreen">FULLSCREEN</span></button>
+    </div>
+    <div class="check-grid">
+      <div class="chk-row"><label><input type="checkbox" id="chk-shadows" checked /> <span data-i18n="menu.videoShadows">SHADOWS</span></label></div>
+    </div>
+    <div class="select-row"><label for="sel-scale" data-i18n="menu.videoScale">RENDER RESOLUTION</label><select id="sel-scale">
+      <option value="1">100%</option>
+      <option value="0.75">75%</option>
+      <option value="0.5">50%</option>
+    </select></div>
+    <div class="control-actions">
+      <button class="btn primary" id="btn-video-back" data-i18n="common.back">BACK</button>
+    </div>
+  </div>
+
+  <div class="menu-card" id="language-card">
+    <div class="menu-top"><div class="logo">BRE<em>A</em>CH</div><div class="tag" data-i18n="common.localSave">LOCAL SAVE</div></div>
+    <div class="menu-kicker" data-i18n="menu.options">OPTIONS</div>
+    <h1 class="menu-title" data-i18n="menu.language">LANGUAGE</h1>
+    <div class="select-row"><label for="sel-language" data-i18n="menu.language">LANGUAGE</label><select id="sel-language" data-nav-default></select></div>
+    <div class="control-actions">
+      <button class="btn primary" id="btn-language-back" data-i18n="common.back">BACK</button>
+    </div>
+  </div>
+
   <div class="menu-card" id="controls-card">
     <div class="menu-top"><div class="logo">BRE<em>A</em>CH</div><div class="tag" data-i18n="common.localSave">LOCAL SAVE</div></div>
     <div class="menu-kicker" data-i18n="menu.inputDevices">KEYBOARD AND CONTROLLER</div>
@@ -768,12 +828,11 @@
       <div class="col"><div class="col-title" data-i18n="menu.keyboard">KEYBOARD</div><div id="kb-rows"></div></div>
       <div class="col"><div class="col-title" data-i18n="menu.controller">CONTROLLER</div><div id="pad-rows"></div><div id="pad-status" data-i18n="menu.noController">NO CONTROLLER DETECTED</div></div>
     </div>
+    <div class="tag" data-i18n="menu.dpadWeapons">D-PAD: ↑ GRENADE · ↓ PISTOL · ← SMG · → SHOTGUN</div>
     <div class="settings-grid">
       <div class="slider-row"><label for="sl-mouse" data-i18n="menu.mouseSensitivity">MOUSE SENS.</label><span class="val" id="sl-mouse-v"></span><input type="range" id="sl-mouse" min="0.01" max="0.12" step="0.005" /></div>
       <div class="slider-row"><label for="sl-pad" data-i18n="menu.stickSensitivity">STICK SENS.</label><span class="val" id="sl-pad-v"></span><input type="range" id="sl-pad" min="60" max="320" step="10" /></div>
-      <div class="slider-row"><label for="sl-vol" data-i18n="menu.volumeMute">VOLUME (M TO MUTE)</label><span class="val" id="sl-vol-v"></span><input type="range" id="sl-vol" min="0" max="1" step="0.05" /></div>
     </div>
-    <div class="select-row"><label for="sel-language" data-i18n="menu.language">LANGUAGE</label><select id="sel-language"></select></div>
     <div class="check-grid">
       <div class="chk-row"><label><input type="checkbox" id="chk-invert" /> <span data-i18n="menu.invertMouse">INVERT Y — MOUSE (F9)</span></label></div>
       <div class="chk-row"><label><input type="checkbox" id="chk-invert-pad" /> <span data-i18n="menu.invertController">INVERT Y — CONTROLLER</span></label></div>

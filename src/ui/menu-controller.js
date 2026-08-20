@@ -98,13 +98,13 @@ function mainGraph(scope) {
   const name = query(scope, '#in-name'), map = query(scope, '#btn-map');
   const server = query(scope, '#in-server'), create = query(scope, '#btn-lobby-create');
   const join = query(scope, '#btn-lobby-join'), character = query(scope, '#btn-character');
-  const controls = query(scope, '#btn-controls'), fullscreen = query(scope, '#btn-fullscreen');
+  const options = query(scope, '#btn-options'), fullscreen = query(scope, '#btn-fullscreen');
   linkLine(graph, modes, 'down');
   linkLine(graph, [name, map, server, create, character], 'down');
   link(graph, create, 'right', join);
-  link(graph, character, 'right', controls);
-  link(graph, controls, 'right', fullscreen);
-  setRoute(graph, join, 'up', server); setRoute(graph, join, 'down', controls);
+  link(graph, character, 'right', options);
+  link(graph, options, 'right', fullscreen);
+  setRoute(graph, join, 'up', server); setRoute(graph, join, 'down', options);
   setRoute(graph, fullscreen, 'up', join);
   [[modes[0], name], [modes[1], map], [modes[2], server]].forEach(([a, b]) => link(graph, a, 'right', b));
   setRoute(graph, create, 'left', modes[2]);
@@ -134,18 +134,19 @@ function controlsGraph(scope) {
     if (a && b) link(graph, a, 'right', b);
   }
 
+  // volumen e idioma viven ahora en sus propios cards de Opciones (Audio /
+  // Idioma); aquí solo quedan sensibilidades e inversión de eje
   const mouse = query(scope, '#sl-mouse'), stick = query(scope, '#sl-pad');
-  const volume = query(scope, '#sl-vol'), language = query(scope, '#sel-language');
   const invertMouse = query(scope, '#chk-invert'), invertPad = query(scope, '#chk-invert-pad');
   const reset = query(scope, '#btn-reset-binds'), back = query(scope, '#btn-back');
   if (kb.length) link(graph, kb.at(-1), 'down', mouse);
   if (pad.length) setRoute(graph, pad.at(-1), 'down', stick);
   // Izquierda/derecha en sliders y selectores modifica el valor, por eso el
   // cambio de columna sucede verticalmente y nunca roba un ajuste.
-  linkLine(graph, [mouse, stick, volume, language], 'down');
-  setRoute(graph, language, 'down', invertMouse);
+  linkLine(graph, [mouse, stick], 'down');
+  setRoute(graph, stick, 'down', invertMouse);
   link(graph, invertMouse, 'right', invertPad);
-  setRoute(graph, invertMouse, 'up', language); setRoute(graph, invertPad, 'up', language);
+  setRoute(graph, invertMouse, 'up', stick); setRoute(graph, invertPad, 'up', stick);
   setRoute(graph, invertMouse, 'down', reset); setRoute(graph, invertPad, 'down', back);
   link(graph, reset, 'right', back);
   setRoute(graph, reset, 'up', invertMouse); setRoute(graph, back, 'up', invertPad);

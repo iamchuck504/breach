@@ -402,7 +402,18 @@ try {
   }));
   console.log('PAUSE:', JSON.stringify(paused));
   if (!paused.menuOpen || !paused.resumeVisible) errors.push('PAUSE: menú/reanudar no visible');
-  await page.evaluate(() => document.getElementById('btn-controls').click());
+  // Controles vive ahora bajo Opciones: hub → subcard de controles
+  await page.evaluate(() => document.getElementById('btn-options').click());
+  await page.waitForTimeout(150);
+  const hub = await page.evaluate(() => ({
+    options: document.getElementById('options-card').style.display === 'block',
+    subs: ['btn-opt-audio', 'btn-opt-video', 'btn-opt-language', 'btn-opt-controls']
+      .every((id) => !!document.getElementById(id)),
+  }));
+  console.log('OPTIONS:', JSON.stringify(hub));
+  if (!hub.options || !hub.subs) errors.push('OPTIONS: hub de opciones incompleto');
+  await page.screenshot({ path: path.join(root, 'scripts', 'shot-options.png') });
+  await page.evaluate(() => document.getElementById('btn-opt-controls').click());
   await page.waitForTimeout(200);
   const ctrls = await page.evaluate(() => ({
     kbRows: document.getElementById('kb-rows').children.length,
@@ -412,7 +423,18 @@ try {
   // v3: teclado suma melee + armas 1-4 (15); el pad cambia swap por melee (9)
   if (ctrls.kbRows !== 15 || ctrls.padRows !== 9) errors.push('CONTROLS: filas esperadas 15/9, got ' + ctrls.kbRows + '/' + ctrls.padRows);
   await page.screenshot({ path: path.join(root, 'scripts', 'shot-controls.png') });
+  // volver: controles → opciones (audio/idioma accesibles) → menú principal
   await page.evaluate(() => document.getElementById('btn-back').click());
+  await page.waitForTimeout(120);
+  await page.evaluate(() => document.getElementById('btn-opt-audio').click());
+  await page.waitForTimeout(120);
+  const audioCardOk = await page.evaluate(() =>
+    document.getElementById('audio-card').style.display === 'block' &&
+    !!document.getElementById('sl-vol'));
+  if (!audioCardOk) errors.push('OPTIONS: subcard de audio no abre o perdió el slider');
+  await page.evaluate(() => document.getElementById('btn-audio-back').click());
+  await page.waitForTimeout(120);
+  await page.evaluate(() => document.getElementById('btn-options-back').click());
   await page.evaluate(() => document.getElementById('btn-resume').click());
   await page.waitForTimeout(300);
 

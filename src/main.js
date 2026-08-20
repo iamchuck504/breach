@@ -42,7 +42,10 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 // legibilidad al shooter. Escritorio conserva el máximo; móvil usa un techo
 // más sensato y estable.
 const coarseDisplay = matchMedia('(pointer: coarse)').matches;
-renderer.setPixelRatio(Math.min(devicePixelRatio, coarseDisplay ? 1.35 : 2));
+const BASE_PIXEL_RATIO = Math.min(devicePixelRatio, coarseDisplay ? 1.35 : 2);
+// escala de render de Opciones → Video (persistida); 1 = resolución completa
+let renderScale = parseFloat(localStorage.getItem('breach.video.scale') || '1') || 1;
+renderer.setPixelRatio(BASE_PIXEL_RATIO * renderScale);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap; // bordes de sombra nítidos, sin suavizado
@@ -723,7 +726,7 @@ btnMap.addEventListener('click', () => {
 updateMapBtn();
 btnResume.addEventListener('click', () => closeMenu());
 document.getElementById('btn-pause').addEventListener('click', () => openMenu());
-document.getElementById('btn-pause-controls').addEventListener('click', () => showControls(true));
+document.getElementById('btn-pause-controls').addEventListener('click', () => showOptions(true));
 
 function leaveCurrentMatch() {
   if (!G.mode) return;
@@ -760,8 +763,9 @@ document.getElementById('btn-pause-fullscreen').addEventListener('click', () => 
 document.getElementById('btn-fs').addEventListener('click', () => toggleFullscreen());
 document.addEventListener('fullscreenchange', () => {
   const on = !!document.fullscreenElement;
-  document.getElementById('fullscreen-label').textContent = on
-    ? t('common.exitFullscreen') : t('common.fullscreen');
+  const fsLabel = on ? t('common.exitFullscreen') : t('common.fullscreen');
+  document.getElementById('fullscreen-label').textContent = fsLabel;
+  document.getElementById('video-fullscreen-label').textContent = fsLabel;
   // en fullscreen, capturar Esc (Keyboard Lock API): ni Esc suelta el pointer
   // lock → el bug de ClipCursor no tiene forma de dispararse jugando.
   // Registramos si fue CONCEDIDO: si falla, Esc mantiene el exit programático.
@@ -918,8 +922,45 @@ for (const language of LANGUAGES) {
 selLanguage.value = getLanguage();
 selLanguage.addEventListener('change', () => setLanguage(selLanguage.value));
 
-function showControls(on) {
+// ---------- Opciones: hub + subcards (Audio / Video / Idioma / Controles) ----------
+const optionsCard = document.getElementById('options-card');
+const audioCard = document.getElementById('audio-card');
+const videoCard = document.getElementById('video-card');
+const languageCard = document.getElementById('language-card');
+const optionSubCards = [audioCard, videoCard, languageCard];
+
+function hideOptionCards() {
+  optionsCard.style.display = 'none';
+  for (const c of optionSubCards) c.style.display = 'none';
+}
+
+function showOptions(on) {
   mainCard.style.display = on ? 'none' : 'block';
+  hideOptionCards();
+  controlsCard.style.display = 'none';
+  charCard.style.display = 'none';
+  optionsCard.style.display = on ? 'block' : 'none';
+  hud.el.menu.scrollTop = 0;
+  if (!on) cancelRebind();
+}
+
+function showSubCard(card) {
+  mainCard.style.display = 'none';
+  hideOptionCards();
+  controlsCard.style.display = 'none';
+  charCard.style.display = 'none';
+  card.style.display = 'block';
+  hud.el.menu.scrollTop = 0;
+  if (card === audioCard) {
+    slVol.value = audio.volume;
+    updateSliderLabels();
+  }
+}
+
+function showControls(on) {
+  // on=false es el "reset a menú principal" que usan openMenu/lobby
+  mainCard.style.display = on ? 'none' : 'block';
+  hideOptionCards();
   controlsCard.style.display = on ? 'block' : 'none';
   charCard.style.display = 'none';
   hud.el.menu.scrollTop = 0;
@@ -927,14 +968,43 @@ function showControls(on) {
     renderBinds();
     slMouse.value = TUNING.cam.sens;
     slPad.value = TUNING.cam.padSens;
-    slVol.value = audio.volume;
     chkInvert.checked = input.invertY;
     chkInvertPad.checked = input.invertYPad;
     updateSliderLabels();
   } else cancelRebind();
 }
-document.getElementById('btn-controls').addEventListener('click', () => showControls(true));
-document.getElementById('btn-back').addEventListener('click', () => showControls(false));
+document.getElementById('btn-options').addEventListener('click', () => showOptions(true));
+document.getElementById('btn-options-back').addEventListener('click', () => showOptions(false));
+document.getElementById('btn-opt-audio').addEventListener('click', () => showSubCard(audioCard));
+document.getElementById('btn-opt-video').addEventListener('click', () => showSubCard(videoCard));
+document.getElementById('btn-opt-language').addEventListener('click', () => showSubCard(languageCard));
+document.getElementById('btn-opt-controls').addEventListener('click', () => showControls(true));
+document.getElementById('btn-audio-back').addEventListener('click', () => showOptions(true));
+document.getElementById('btn-video-back').addEventListener('click', () => showOptions(true));
+document.getElementById('btn-language-back').addEventListener('click', () => showOptions(true));
+document.getElementById('btn-back').addEventListener('click', () => showOptions(true));
+
+// ---------- video: pantalla completa, sombras y escala de render ----------
+const chkShadows = document.getElementById('chk-shadows');
+const selScale = document.getElementById('sel-scale');
+document.getElementById('btn-video-fullscreen').addEventListener('click', () => toggleFullscreen());
+function applyShadows(on) {
+  if (world.sun) world.sun.castShadow = on;
+}
+chkShadows.checked = localStorage.getItem('breach.video.shadows') !== '0';
+applyShadows(chkShadows.checked);
+chkShadows.addEventListener('change', () => {
+  localStorage.setItem('breach.video.shadows', chkShadows.checked ? '1' : '0');
+  applyShadows(chkShadows.checked);
+});
+selScale.value = String(renderScale);
+if (selScale.selectedIndex < 0) selScale.value = '1';
+selScale.addEventListener('change', () => {
+  renderScale = parseFloat(selScale.value) || 1;
+  localStorage.setItem('breach.video.scale', String(renderScale));
+  renderer.setPixelRatio(BASE_PIXEL_RATIO * renderScale);
+  renderer.setSize(innerWidth, innerHeight);
+});
 
 // ---------- selección de personaje ----------
 const charCard = document.getElementById('char-card');
@@ -943,6 +1013,7 @@ const charSlots = document.getElementById('char-slots');
 function showChar(on) {
   mainCard.style.display = on ? 'none' : 'block';
   controlsCard.style.display = 'none';
+  hideOptionCards();
   charCard.style.display = on ? 'block' : 'none';
   hud.el.menu.scrollTop = 0;
   if (on) buildCharUI();
@@ -952,7 +1023,10 @@ document.getElementById('btn-char-back').addEventListener('click', () => showCha
 
 function navigateMenuBack() {
   if (!splash.classList.contains('off')) return false;
-  if (controlsCard.style.display === 'block') { showControls(false); return true; }
+  // jerarquía: subcard → Opciones → menú principal
+  if (optionSubCards.some((c) => c.style.display === 'block')) { showOptions(true); return true; }
+  if (controlsCard.style.display === 'block') { showOptions(true); return true; }
+  if (optionsCard.style.display === 'block') { showOptions(false); return true; }
   if (charCard.style.display === 'block') { showChar(false); return true; }
   if (!lobbyUI.root.classList.contains('off')) { leaveLobby(); return true; }
   if (G.mode && menuIsOpen()) { closeMenu(); return true; }
@@ -1154,6 +1228,8 @@ onLanguageChange((language) => {
   document.getElementById('menu-title').textContent = t(G.mode ? 'common.pause' : 'common.play');
   document.getElementById('menu-kicker').textContent = t(G.mode ? 'menu.currentMatch' : 'menu.selectMode');
   document.getElementById('fullscreen-label').textContent = t(document.fullscreenElement
+    ? 'common.exitFullscreen' : 'common.fullscreen');
+  document.getElementById('video-fullscreen-label').textContent = t(document.fullscreenElement
     ? 'common.exitFullscreen' : 'common.fullscreen');
   if (!input.pad.connected) padStatus.textContent = t('menu.noController');
   if (G.lobby) lobbyUI.render(G.lobby);
