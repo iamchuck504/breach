@@ -16,9 +16,9 @@ const STREET_SCALE = Object.freeze({
   door: 2.05,
   floor: 2.7,
   lamp: 6.2,
-  car: Object.freeze({ width: 1.9, length: 4.35, height: 1.4, wheel: 0.36 }),
-  truck: Object.freeze({ width: 2.4, length: 6.8, height: 2.9, wheel: 0.34 }),
-  bus: Object.freeze({ width: 2.5, length: 9.0, height: 3.08, wheel: 0.37 }),
+  car: Object.freeze({ width: 1.9, length: 4.35, height: 1.4, wheel: 0.38 }),
+  truck: Object.freeze({ width: 2.4, length: 6.8, height: 2.9, wheel: 0.46 }),
+  bus: Object.freeze({ width: 2.5, length: 9.0, height: 3.08, wheel: 0.50 }),
 });
 
 // REGLA DE DISEÑO (Chuck): solo existen TRES alturas de bloque/pared.
@@ -398,7 +398,8 @@ export class World {
     return cv;
   }
 
-  // Asfalto: agregado fino, grietas y un parche de recapeo — piso de Calle.
+  // Asfalto: agregado fino y grietas — piso de Calle. Los antiguos parches
+  // rectangulares se repetían con la textura y parecían cuadros negros sueltos.
   _asphaltCanvas() {
     const s = 256;
     const cv = document.createElement('canvas');
@@ -420,8 +421,6 @@ export class World {
       }
       g.stroke();
     }
-    g.fillStyle = 'rgba(30,29,27,0.5)'; // parche de recapeo
-    g.fillRect(s * 0.55, s * 0.6, 74, 52);
     return cv;
   }
 
@@ -1417,7 +1416,7 @@ export class World {
       for (const dz of [-2.42, 2.22]) {
         const wheel = new THREE.Mesh(new THREE.CylinderGeometry(S.wheel, S.wheel, 0.18, 14), tireMat);
         wheel.rotation.z = Math.PI / 2; wheel.position.set(side * (S.width / 2 + 0.035), S.wheel, dz); group.add(wheel);
-        const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 0.19, 12), trimMat);
+        const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.21, 0.21, 0.19, 12), trimMat);
         hub.rotation.z = Math.PI / 2; hub.position.set(side * (S.width / 2 + 0.045), S.wheel, dz); group.add(hub);
       }
     }
@@ -1522,6 +1521,9 @@ export class World {
       for (const p of [-2.88, 2.82]) {
         const wheel = new THREE.Mesh(new THREE.CylinderGeometry(S.wheel, S.wheel, 0.19, 16), tire);
         wheel.rotation.z = Math.PI / 2; wheel.position.set(side * (S.width / 2 + 0.04), S.wheel, p); group.add(wheel);
+        const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.23, 0.23, 0.20, 14), trim);
+        hub.rotation.z = Math.PI / 2;
+        hub.position.set(side * (S.width / 2 + 0.055), S.wheel, p); group.add(hub);
         const arch = new THREE.Mesh(new THREE.TorusGeometry(S.wheel + 0.04, 0.06, 7, 16, Math.PI), lower);
         arch.position.set(side * (S.width / 2 + 0.11), S.wheel, p); arch.rotation.y = side * Math.PI / 2;
         arch.rotation.z = Math.PI; group.add(arch);
@@ -1647,10 +1649,11 @@ export class World {
     this._box(-6.1, -21.4, 2.4, 0.9, LOW, { ...lowOpts, visual: false });
     this._box(6.1, -21.4, 2.4, 0.9, LOW, { ...lowOpts, visual: false });
 
-    // Puestos pequeños centrados en la acera. Quedan corredores amplios tanto
-    // por el lado de la calle como por el lado de los edificios.
-    this._box(-14.35, -17, 1.75, 1.75, MID, { ...midOpts, visual: false });
-    this._box(14.35, -14, 1.65, 1.65, MID, { ...midOpts, visual: false });
+    // Kioscos compactos, pero de altura humana. La huella no cambia y sigue
+    // dejando circulación por ambos lados de la acera; HIGH acompaña el techo
+    // visual para que no exista geometría atravesable por encima del puesto.
+    this._box(-14.35, -17, 1.75, 1.75, HIGH, { ...highOpts, visual: false });
+    this._box(14.35, -14, 1.65, 1.65, HIGH, { ...highOpts, visual: false });
 
     // vehículos sobre la avenida (cobertura baja)
     this._box(-2.5, -16, 1.9, 4.2, LOW, { ...lowOpts, visual: false });
@@ -1664,10 +1667,10 @@ export class World {
     // (el espejo crea el segundo). El tráfico abandonado guía los flancos.
     this._box(-6.5, -1.5, 2.4, 7, HIGH, { ...highOpts, visual: false });
 
-    // plataforma saltable + caseta compacta + cobertura del callejón
-    this._box(8.5, -5, 2.6, 2.6, LOW, { ...lowOpts, visual: false });
-    this._box(14.35, -8.5, 1.15, 0.5, MID, { ...midOpts, visual: false });
-    this._box(-16.5, -8, 0.9, 2.2, LOW, { ...lowOpts, visual: false });
+    // Los dumpsters grandes pertenecen a patios de servicio laterales. El
+    // carrito de café conserva solo una base LOW: toldo y postes son decorado.
+    this._box(-15.15, -8, 2.5, 2.2, LOW, { ...lowOpts, visual: false });
+    this._box(14.35, -8.5, 1.30, 0.75, LOW, { ...lowOpts, visual: false });
 
     // cobertura de aproximación al centro
     this._box(3.6, -2.2, 2.4, 0.9, LOW, { ...lowOpts, visual: false });
@@ -2010,108 +2013,115 @@ export class World {
       [3.6, -2.2], [-3.6, 2.2],
     ]) addJersey(x, z, 2.4, 0.9);
 
-    // Los cuadrados LOW laterales son contenedores comerciales de basura.
-    // Conservan exactamente la huella de 2.6 × 2.6 y la altura de cover;
-    // solo cambia su lectura ambiental, no la geometría jugable.
+    // Contenedores comerciales junto a las puertas de servicio. Ya no ocupan
+    // el carril ni parecen cobertura colocada arbitrariamente en la avenida.
     const largeWasteMat = new THREE.MeshStandardMaterial({ color: 0x304a46, metalness: 0.34, roughness: 0.68 });
     const wasteDarkMat = new THREE.MeshStandardMaterial({ color: 0x1d2627, metalness: 0.48, roughness: 0.58 });
     const wasteRimMat = new THREE.MeshStandardMaterial({ color: 0x68706d, metalness: 0.48, roughness: 0.54 });
     const reflectorMat = new THREE.MeshBasicMaterial({ color: 0xcf7b3f });
-    for (const [x, z, ry] of [[8.5, -5, 0], [-8.5, 5, Math.PI]]) {
+    for (const [x, z, ry] of [[-15.15, -8, Math.PI / 2], [15.15, 8, -Math.PI / 2]]) {
       const bin = new THREE.Group(); bin.position.set(x, 0, z); bin.rotation.y = ry;
-      const skid = new THREE.Mesh(new THREE.BoxGeometry(2.42, 0.12, 2.34), wasteDarkMat);
+      const skid = new THREE.Mesh(new THREE.BoxGeometry(2.34, 0.12, 2.02), wasteDarkMat);
       skid.position.y = 0.06; bin.add(skid);
-      const body = new THREE.Mesh(new THREE.BoxGeometry(2.48, 0.78, 2.28), largeWasteMat);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(2.38, 0.78, 1.94), largeWasteMat);
       body.position.y = 0.51; body.castShadow = true; body.receiveShadow = true; bin.add(body);
-      const rim = new THREE.Mesh(new THREE.BoxGeometry(2.56, 0.14, 2.42), wasteRimMat);
+      const rim = new THREE.Mesh(new THREE.BoxGeometry(2.48, 0.14, 2.06), wasteRimMat);
       rim.position.y = 0.96; rim.castShadow = true; bin.add(rim);
       for (const side of [-1, 1]) {
-        for (const pz of [-0.78, -0.26, 0.26, 0.78]) {
+        for (const pz of [-0.66, -0.22, 0.22, 0.66]) {
           const rib = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.64, 0.08), wasteRimMat);
-          rib.position.set(side * 1.255, 0.54, pz); bin.add(rib);
+          rib.position.set(side * 1.205, 0.54, pz); bin.add(rib);
         }
       }
-      for (const px of [-0.61, 0.61]) {
-        const lid = new THREE.Mesh(new THREE.BoxGeometry(1.14, 0.10, 2.30), wasteDarkMat);
+      for (const px of [-0.59, 0.59]) {
+        const lid = new THREE.Mesh(new THREE.BoxGeometry(1.10, 0.10, 1.96), wasteDarkMat);
         lid.position.set(px, 1.07, 0); lid.rotation.z = px < 0 ? -0.035 : 0.035; bin.add(lid);
         const handle = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.07, 0.08), wasteRimMat);
-        handle.position.set(px, 1.14, -0.88); bin.add(handle);
+        handle.position.set(px, 1.14, -0.73); bin.add(handle);
       }
-      for (const px of [-0.82, 0.82]) {
+      for (const px of [-0.78, 0.78]) {
         const reflector = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.12, 0.035), reflectorMat);
-        reflector.position.set(px, 0.55, -1.158); bin.add(reflector);
+        reflector.position.set(px, 0.55, -0.988); bin.add(reflector);
       }
       this.mapGroup.add(bin);
     }
 
-    // Puestos de acera de escala humana: revistas y comida rápida. Su volumen
-    // visual coincide con el MID compacto y deja circulación a ambos lados.
-    const cornerBrick = new THREE.MeshStandardMaterial({
-      color: 0xa78b7d, map: this._tex('urbanBrick', 3, 1.8), roughness: 0.84,
-    });
+    // Kioscos urbanos compactos pero de escala humana: base, mostrador,
+    // abertura de servicio, postes, puerta posterior y techo independiente.
+    // La silueta abierta evita que se lean como edificios en miniatura.
+    const kioskPanel = new THREE.MeshStandardMaterial({ color: 0x5d6667, metalness: 0.32, roughness: 0.62 });
     const cornerDark = new THREE.MeshStandardMaterial({
       color: 0x4c5558, map: this._tex('shopShutter', 2, 1), metalness: 0.45, roughness: 0.55,
     });
     const cornerGlass = new THREE.MeshStandardMaterial({ color: 0x10202a, metalness: 0.58, roughness: 0.2 });
     const cornerTrim = new THREE.MeshStandardMaterial({ color: 0x77716a, roughness: 0.78 });
+    const paperColors = [0xc65745, 0xd9b44a, 0x4f7891, 0xd6d0bd];
     const addSidewalkKiosk = (x, z, w, d, toward, name, awningColor) => {
-      // Techo liso para evitar aliasing del ladrillo visto en ángulo cenital.
-      const shell = new THREE.Mesh(new THREE.BoxGeometry(w + 0.04, 1.94, d + 0.04),
-        [cornerBrick, cornerBrick, cornerTrim, cornerTrim, cornerBrick, cornerBrick]);
-      shell.position.set(x, 0.97, z); shell.castShadow = true; shell.receiveShadow = true; this.mapGroup.add(shell);
+      const addKioskPart = (geometry, material, px, py, pz) => {
+        const part = new THREE.Mesh(geometry, material);
+        part.position.set(px, py, pz); part.castShadow = true; part.receiveShadow = true;
+        this.mapGroup.add(part); return part;
+      };
       const frontZ = z + toward * (d / 2 + 0.026);
-      // PlaneGeometry mira a +Z: el frente debe apuntar en la misma dirección
-      // que `toward`, no mostrar su reverso espejado.
+      const backZ = z - toward * (d / 2 - 0.055);
       const frontRot = toward > 0 ? 0 : Math.PI;
-      const shutter = new THREE.Mesh(new THREE.PlaneGeometry(w * 0.50, 1.12), cornerDark);
-      shutter.position.set(x - w * 0.10, 0.76, frontZ + toward * 0.010); shutter.rotation.y = frontRot; this.mapGroup.add(shutter);
-      const doorW = w * 0.28;
-      const door = new THREE.Mesh(new THREE.PlaneGeometry(doorW, 1.30), cornerGlass);
-      door.position.set(x + w * 0.31, 0.72, frontZ + toward * 0.012); door.rotation.y = frontRot; this.mapGroup.add(door);
-      for (const px of [x - w * 0.47, x + w * 0.17, x + w * 0.47]) {
-        const pier = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.76, 0.12), cornerTrim);
-        pier.position.set(px, 0.88, frontZ + toward * 0.055); this.mapGroup.add(pier);
+      const backRot = frontRot + Math.PI;
+      addKioskPart(new THREE.BoxGeometry(w, 0.12, d), cornerTrim, x, 0.06, z);
+      addKioskPart(new THREE.BoxGeometry(w - 0.10, 2.30, 0.11), kioskPanel, x, 1.20, backZ);
+      for (const side of [-1, 1]) {
+        addKioskPart(new THREE.BoxGeometry(0.10, 2.28, d * 0.58), kioskPanel,
+          x + side * (w / 2 - 0.05), 1.20, z - toward * d * 0.20);
+        addKioskPart(new THREE.BoxGeometry(0.11, 2.46, 0.11), cornerTrim,
+          x + side * (w / 2 - 0.055), 1.35, frontZ - toward * 0.055);
       }
-      const canopy = new THREE.Mesh(
-        new THREE.BoxGeometry(w * 0.82, 0.11, 0.44),
+      addKioskPart(new THREE.BoxGeometry(w - 0.16, 0.78, 0.18), kioskPanel,
+        x, 0.43, frontZ - toward * 0.06);
+      addKioskPart(new THREE.BoxGeometry(w + 0.04, 0.10, 0.38), cornerTrim,
+        x, 0.87, frontZ + toward * 0.11);
+      const awning = addKioskPart(new THREE.BoxGeometry(w + 0.12, 0.12, 0.48),
         new THREE.MeshStandardMaterial({ color: awningColor, roughness: 0.74 }),
-      );
-      canopy.position.set(x - w * 0.04, 1.55, frontZ + toward * 0.22); this.mapGroup.add(canopy);
-      const cornice = new THREE.Mesh(new THREE.BoxGeometry(w + 0.10, 0.12, d + 0.10), cornerTrim);
-      cornice.position.set(x, 1.88, z); this.mapGroup.add(cornice);
-      this._addMapSign(name, x - w * 0.04, 1.72, frontZ + toward * 0.026, frontRot,
-        { w: w - 0.25, h: 0.28, bg: '#2a3438', fg: '#ead6ae', border: '#8d6b4f' });
+        x, 2.18, frontZ + toward * 0.20);
+      awning.rotation.x = toward * -0.08;
+      addKioskPart(new THREE.BoxGeometry(w + 0.18, 0.18, d + 0.18), cornerTrim, x, 2.62, z);
+      addKioskPart(new THREE.BoxGeometry(w - 0.12, 0.34, 0.10), cornerDark,
+        x, 2.40, frontZ - toward * 0.015);
+
+      // Entrada de servicio a tamaño humano en la cara posterior.
+      const door = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 1.92), cornerGlass);
+      door.position.set(x, 1.08, backZ - toward * 0.061); door.rotation.y = backRot;
+      this.mapGroup.add(door);
+      const handle = addKioskPart(new THREE.BoxGeometry(0.025, 0.13, 0.05), cornerTrim,
+        x + 0.22, 1.05, backZ - toward * 0.075);
+      handle.rotation.y = frontRot;
+
+      this._addMapSign(name, x, 2.40, frontZ + toward * 0.045, frontRot,
+        { w: w - 0.22, h: 0.27, bg: '#2a3438', fg: '#ead6ae', border: '#8d6b4f' });
+
+      // Producto visible sobre el mostrador: revistas o condimentos. Estos
+      // detalles pequeños explican el uso sin ampliar la huella del puesto.
+      if (name === 'NEWS') {
+        for (let i = 0; i < 4; i++) {
+          const magazine = new THREE.Mesh(
+            new THREE.PlaneGeometry(0.25, 0.32),
+            new THREE.MeshBasicMaterial({ color: paperColors[i], side: THREE.DoubleSide }),
+          );
+          magazine.position.set(x + (i - 1.5) * 0.29, 0.49, frontZ + toward * 0.101);
+          magazine.rotation.y = frontRot; this.mapGroup.add(magazine);
+        }
+      } else {
+        for (const [dx, color] of [[-0.20, 0xc64535], [0, 0xe4bc4f], [0.20, 0x5b8a50]]) {
+          const bottle = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.035, 0.045, 0.22, 8),
+            new THREE.MeshStandardMaterial({ color, roughness: 0.62 }),
+          );
+          bottle.position.set(x + dx, 1.03, frontZ - toward * 0.01); this.mapGroup.add(bottle);
+        }
+      }
     };
     addSidewalkKiosk(-14.35, -17, 1.75, 1.75, 1, 'NEWS', 0x623b34);
     addSidewalkKiosk(14.35, 17, 1.75, 1.75, -1, 'NEWS', 0x623b34);
     addSidewalkKiosk(14.35, -14, 1.65, 1.65, 1, 'HOT DOGS', 0xb05f35);
     addSidewalkKiosk(-14.35, 14, 1.65, 1.65, -1, 'HOT DOGS', 0xb05f35);
-
-    // Un par de puntos de basura/obra en los bordes comunican evacuación sin
-    // cerrar callejones. Su base coincide con cubiertas ya existentes.
-    const dumpsterMat = new THREE.MeshStandardMaterial({ color: 0x344f4c, metalness: 0.35, roughness: 0.68 });
-    for (const [x, z, ry] of [[-16.5, -8, 0], [16.5, 8, Math.PI]]) {
-      const bin = new THREE.Group(); bin.position.set(x, 0, z); bin.rotation.y = ry;
-      const base = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.90, 1.94), dumpsterMat);
-      base.position.y = 0.49; base.castShadow = true; bin.add(base);
-      const rim = new THREE.Mesh(new THREE.BoxGeometry(0.88, 0.16, 2.16), dumpsterMat);
-      rim.position.y = 0.98; rim.castShadow = true; bin.add(rim);
-      for (const pz of [-0.70, 0, 0.70]) {
-        for (const side of [-1, 1]) {
-          const rib = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.72, 0.09), curbMat);
-          rib.position.set(side * 0.39, 0.55, pz); bin.add(rib);
-        }
-      }
-      for (const pz of [-0.54, 0.54]) {
-        const lid = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.08, 0.98), curbMat);
-        lid.position.set(0, 1.10, pz); lid.rotation.x = pz < 0 ? -0.08 : 0.08; bin.add(lid);
-      }
-      for (const pz of [-0.72, 0.72]) for (const side of [-1, 1]) {
-        const caster = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.07, 8), curbMat);
-        caster.rotation.z = Math.PI / 2; caster.position.set(side * 0.34, 0.08, pz); bin.add(caster);
-      }
-      this.mapGroup.add(bin);
-    }
 
     // Los dumpsters pertenecen ahora a pequeños patios de servicio. Puerta,
     // luz y pintura de carga los conectan con el edificio en vez de dejarlos
@@ -2175,23 +2185,44 @@ export class World {
       this.mapGroup.add(group);
     };
     addRoadwork(-1.2, -8.7, 0); addRoadwork(1.2, 8.7, Math.PI);
+    // Carritos de café, no tablas rotuladas: ruedas, mostrador, cafetera,
+    // postes y toldo explican de inmediato la función del prop. Solo la base
+    // LOW participa en cover; la estructura superior es ligera y decorativa.
+    const coffeeBodyMat = new THREE.MeshStandardMaterial({ color: 0x754a34, metalness: 0.18, roughness: 0.72 });
+    const coffeeTopMat = new THREE.MeshStandardMaterial({ color: 0x30383a, metalness: 0.52, roughness: 0.42 });
+    const coffeeAwningMat = new THREE.MeshStandardMaterial({ color: 0xa8653d, roughness: 0.72 });
+    const coffeeMetalMat = new THREE.MeshStandardMaterial({ color: 0x8d9695, metalness: 0.72, roughness: 0.28 });
+    const coffeeWheelMat = new THREE.MeshStandardMaterial({ color: 0x111416, roughness: 0.92 });
     for (const [x, z, rot] of [[14.35, -8.5, 0], [-14.35, 8.5, Math.PI]]) {
-      const booth = new THREE.Group(); booth.position.set(x, 0, z); booth.rotation.y = rot;
-      const body = new THREE.Mesh(new THREE.BoxGeometry(1.10, 1.54, 0.48), dumpsterMat);
-      body.position.set(0, 0.77, 0); body.castShadow = true; booth.add(body);
-      const roof = new THREE.Mesh(new THREE.BoxGeometry(1.18, 0.13, 0.64), blackMat);
-      roof.position.set(0, 1.61, 0); booth.add(roof);
-      const shutter = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.82, 0.96),
-        new THREE.MeshStandardMaterial({ map: this._tex('shopShutter'), color: 0x6e7474, metalness: 0.5, roughness: 0.5 }),
-      );
-      shutter.position.set(0, 0.72, -0.246); booth.add(shutter);
-      this.mapGroup.add(booth);
+      const cart = new THREE.Group(); cart.position.set(x, 0, z); cart.rotation.y = rot;
+      const addCartPart = (geometry, material, px, py, pz) => {
+        const part = new THREE.Mesh(geometry, material);
+        part.position.set(px, py, pz); part.castShadow = true; part.receiveShadow = true;
+        cart.add(part); return part;
+      };
+      addCartPart(new THREE.BoxGeometry(1.24, 0.68, 0.64), coffeeBodyMat, 0, 0.48, 0);
+      addCartPart(new THREE.BoxGeometry(1.34, 0.10, 0.76), coffeeTopMat, 0, 0.87, 0);
+      for (const px of [-0.47, 0.47]) for (const pz of [-0.36, 0.36]) {
+        const wheel = addCartPart(new THREE.CylinderGeometry(0.14, 0.14, 0.08, 12),
+          coffeeWheelMat, px, 0.18, pz);
+        wheel.rotation.x = Math.PI / 2;
+      }
+      for (const px of [-0.55, 0.55]) for (const pz of [-0.27, 0.27]) {
+        addCartPart(new THREE.BoxGeometry(0.055, 1.18, 0.055), coffeeMetalMat, px, 1.48, pz);
+      }
+      addCartPart(new THREE.BoxGeometry(1.52, 0.13, 0.90), coffeeAwningMat, 0, 2.09, 0);
+      addCartPart(new THREE.BoxGeometry(0.34, 0.34, 0.28), coffeeMetalMat, 0.27, 1.09, 0.02);
+      addCartPart(new THREE.BoxGeometry(0.24, 0.08, 0.16), coffeeTopMat, 0.27, 0.97, -0.20);
+      for (const px of [-0.22, -0.08]) {
+        addCartPart(new THREE.CylinderGeometry(0.045, 0.04, 0.13, 10),
+          new THREE.MeshStandardMaterial({ color: 0xe7ddd0, roughness: 0.72 }), px, 1.00, -0.08);
+      }
+      this.mapGroup.add(cart);
     }
-    this._addMapSign('COFFEE', 14.35, 1.40, -8.76, Math.PI,
-      { w: 0.92, h: 0.25, bg: '#3d2920', fg: '#f0d4a1', border: '#a96f45' });
-    this._addMapSign('COFFEE', -14.35, 1.40, 8.76, 0,
-      { w: 0.92, h: 0.25, bg: '#3d2920', fg: '#f0d4a1', border: '#a96f45' });
+    this._addMapSign('COFFEE', 14.35, 1.91, -8.96, Math.PI,
+      { w: 1.16, h: 0.28, bg: '#3d2920', fg: '#f0d4a1', border: '#a96f45' });
+    this._addMapSign('COFFEE', -14.35, 1.91, 8.96, 0,
+      { w: 1.16, h: 0.28, bg: '#3d2920', fg: '#f0d4a1', border: '#a96f45' });
 
     // Postes continuos de extremo a extremo. La calle está cerrada al tráfico,
     // pero su infraestructura permanece completa y legible como una avenida.
