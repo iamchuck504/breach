@@ -1015,18 +1015,68 @@ export class World {
   _dataProp(o, piece, tone) {
     const h = o.h ?? piece.h, w = o.w ?? piece.w, d = o.d ?? piece.d;
     const texId = this._batchTexIds[0];
+    const propColor = {
+      hvac: 0x687887, tank: 0x68735f, vehicle: 0x3f4b56,
+      barricade: 0x8b6746, column: 0x6f7478, crateProp: 0x75604b,
+    }[piece.id] ?? tone[2];
     const mat = new THREE.MeshLambertMaterial({
-      color: tone[2], map: this._tex(texId, Math.max(1, w / 2), Math.max(1, h / 2)),
+      color: propColor, map: this._tex(texId, Math.max(1, w / 2), Math.max(1, h / 2)),
     });
+    const dark = new THREE.MeshLambertMaterial({ color: 0x222b32 });
+    const accent = new THREE.MeshLambertMaterial({ color: 0xc47a3c });
+    const group = new THREE.Group();
     const geo = piece.kind === 'cyl'
       ? new THREE.CylinderGeometry(w / 2, w / 2, h, 10)
       : new THREE.BoxGeometry(w, h, d);
     const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.set(o.x, h / 2, o.z);
-    mesh.rotation.y = (o.rot ?? 0) * Math.PI / 180;
+    mesh.position.y = h / 2;
     mesh.castShadow = true;
     mesh.receiveShadow = true;
-    this.mapGroup.add(mesh);
+    group.add(mesh);
+    const outline = new THREE.LineSegments(
+      new THREE.EdgesGeometry(geo, 28),
+      new THREE.LineBasicMaterial({ color: 0x20272d, transparent: true, opacity: 0.72 }),
+    );
+    outline.position.y = h / 2; group.add(outline);
+
+    const box = (bw, bh, bd, x, y, z, material = dark, rz = 0) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, bd), material);
+      m.position.set(x, y, z); m.rotation.z = rz; m.castShadow = true; group.add(m); return m;
+    };
+    const cyl = (r, ch, x, y, z, material = dark, sides = 10) => {
+      const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, ch, sides), material);
+      m.position.set(x, y, z); m.castShadow = true; group.add(m); return m;
+    };
+    if (piece.id === 'hvac') {
+      cyl(Math.min(w, d) * 0.28, 0.09, 0, h + 0.045, 0, dark, 14);
+      for (const x of [-w * 0.28, 0, w * 0.28]) box(0.045, h * 0.55, d + 0.018, x, h * 0.48, 0, dark);
+      box(w * 0.42, 0.08, d + 0.035, 0, h * 0.23, 0, accent);
+    } else if (piece.id === 'tank') {
+      for (const y of [h * 0.28, h * 0.7]) cyl(w * 0.52, 0.07, 0, y, 0, dark, 12);
+      cyl(w * 0.16, 0.16, 0, h + 0.08, 0, accent, 10);
+    } else if (piece.id === 'vehicle') {
+      mesh.scale.y = 0.58; mesh.position.y = h * 0.29;
+      outline.scale.y = 0.58; outline.position.y = h * 0.29;
+      box(w * 0.78, h * 0.48, d * 0.44, 0, h * 0.68, -d * 0.06, mat);
+      for (const x of [-w * 0.51, w * 0.51]) for (const z of [-d * 0.3, d * 0.3]) {
+        const wheel = cyl(h * 0.22, 0.14, x, h * 0.22, z, dark, 10);
+        wheel.rotation.z = Math.PI / 2;
+      }
+      box(w * 0.54, 0.07, d + 0.04, 0, h * 0.43, 0, accent);
+    } else if (piece.id === 'barricade') {
+      box(w * 0.9, 0.1, d + 0.04, 0, h * 0.68, 0, accent, 0.32);
+      box(w * 0.9, 0.1, d + 0.04, 0, h * 0.68, 0, dark, -0.32);
+      box(w * 0.9, 0.1, d + 0.05, 0, h * 0.22, 0, dark);
+    } else if (piece.id === 'column') {
+      cyl(w * 0.62, 0.12, 0, 0.06, 0, dark, 12);
+      cyl(w * 0.62, 0.12, 0, h - 0.06, 0, accent, 12);
+    } else if (piece.id === 'crateProp') {
+      box(w + 0.03, 0.08, d + 0.04, 0, h * 0.5, 0, accent);
+      box(0.08, h + 0.03, d + 0.04, 0, h * 0.5, 0, dark);
+    }
+    group.position.set(o.x, 0, o.z);
+    group.rotation.y = (o.rot ?? 0) * Math.PI / 180;
+    this.mapGroup.add(group);
   }
 
   // Mapa "Calle Cerrada" (34×60): avenida urbana al atardecer. Ruta central

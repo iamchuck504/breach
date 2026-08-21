@@ -11,8 +11,9 @@ import * as THREE from 'three';
 import {
   PALETTE, paletteById, newMap, makeObject, footprint, THEMES,
   listMaps, getMap, saveMap, deleteMap, duplicateMap, mapLayoutId,
-  spawnsOf, validateMap, validationOk,
+  spawnsOf, validateMap, validationOk, stageMap, unstageMap,
 } from '../world/map-data.js';
+import { t } from '../core/i18n.js';
 
 const DEG = Math.PI / 180;
 const SNAP_POS = [0, 0.25, 0.5, 1, 2];
@@ -69,9 +70,13 @@ export class MapEditor {
     this.scene.remove(this.overlay);
   }
 
+  discardDraft() {
+    if (this.map?.id) unstageMap(this.map.id);
+  }
+
   // Reconstruye el mundo REAL desde los datos (una sola fuente de verdad)
   rebuild() {
-    saveMap(this.map);                       // el world lee del almacén
+    stageMap(this.map);                      // borrador en memoria, no persistencia
     this.world.setLayout(mapLayoutId(this.map), true); // force: mismo id, datos nuevos
     this.refreshOverlay();
   }
@@ -92,28 +97,32 @@ export class MapEditor {
   }
 
   // ------------------------------------------------------------- historial
+  snapshot() { return JSON.stringify(this.map); }
+  restore(data) { this.map = JSON.parse(data); }
   pushUndo(label = '') {
-    this.undoStack.push({ label, data: JSON.stringify(this.map.objects) });
+    this.undoStack.push({ label, data: this.snapshot() });
     if (this.undoStack.length > 80) this.undoStack.shift();
     this.redoStack.length = 0;
     this.dirty = true;
   }
   undo() {
-    if (!this.undoStack.length) return this.setStatus('Nada que deshacer');
-    this.redoStack.push({ data: JSON.stringify(this.map.objects) });
+    if (!this.undoStack.length) return this.setStatus(t('editor.status.nothingUndo'));
+    this.redoStack.push({ data: this.snapshot() });
     const s = this.undoStack.pop();
-    this.map.objects = JSON.parse(s.data);
+    this.restore(s.data);
     this.selection.clear();
+    this.dirty = true;
     this.rebuild();
-    this.setStatus('Deshecho' + (s.label ? `: ${s.label}` : ''));
+    this.setStatus(t('editor.status.undone'));
   }
   redo() {
-    if (!this.redoStack.length) return this.setStatus('Nada que rehacer');
-    this.undoStack.push({ data: JSON.stringify(this.map.objects) });
-    this.map.objects = JSON.parse(this.redoStack.pop().data);
+    if (!this.redoStack.length) return this.setStatus(t('editor.status.nothingRedo'));
+    this.undoStack.push({ data: this.snapshot() });
+    this.restore(this.redoStack.pop().data);
     this.selection.clear();
+    this.dirty = true;
     this.rebuild();
-    this.setStatus('Rehecho');
+    this.setStatus(t('editor.status.redone'));
   }
 
   setStatus(msg) { this.status = msg; this.onChange?.(); }
@@ -160,7 +169,7 @@ export class MapEditor {
     }
     this.selection = new Set(ids);
     this.rebuild();
-    this.setStatus(`Duplicado ×${sel.length}`);
+    this.setStatus(t('editor.status.duplicated', { count: sel.length }));
   }
 
   moveSelection(dx, dz, dy = 0) {
@@ -242,7 +251,7 @@ export class MapEditor {
     }
     this.selection = new Set(ids);
     this.rebuild();
-    this.setStatus(`Espejo ${axis.toUpperCase()} ×${src.length}`);
+    this.setStatus(t('editor.status.mirrored', { axis: axis.toUpperCase(), count: src.length }));
   }
 
   // ------------------------------------------------------------- picking
@@ -299,6 +308,9 @@ export class MapEditor {
     this.ghost = null;
     this.overlay.add(this.selBox, this.markerGroup, this.coverGroup, this.navGroup, this.pathGroup);
     this._matSel = new THREE.LineBasicMaterial({ color: 0xffb057 });
+    this._matSelFill = new THREE.MeshBasicMaterial({
+      color: 0xff8b42, transparent: true, opacity: 0.11, depthWrite: false,
+    });
     this._matTeam = {
       red: new THREE.MeshBasicMaterial({ color: 0xd94f3f, transparent: true, opacity: 0.75 }),
       blue: new THREE.MeshBasicMaterial({ color: 0x4f8de0, transparent: true, opacity: 0.75 }),
@@ -322,19 +334,36 @@ export class MapEditor {
   }
 
   _refreshGrid() {
-    if (this.gridHelper) { this.overlay.remove(this.gridHelper); this.gridHelper.dispose?.(); }
+    if (this.gridHelper) {
+      this.overlay.remove(this.gridHelper);
+      this.gridHelper.traverse((o) => {
+        o.geometry?.dispose?.();
+        if (Array.isArray(o.material)) o.material.forEach((m) => m.dispose?.());
+        else o.material?.dispose?.();
+      });
+    }
     if (!this.showGrid) { this.gridHelper = null; return; }
     const size = Math.max(this.map.fx, this.map.fz) * 2;
-    const div = Math.max(4, Math.round(size / Math.max(1, this.snapPos || 1)));
-    this.gridHelper = new THREE.GridHelper(size, Math.min(div, 240), 0x4a5568, 0x2b323c);
+    const group = new THREE.Group();
+    const minorStep = Math.max(2, this.snapPos || 1);
+    const minor = new THREE.GridHelper(size, Math.min(Math.round(size / minorStep), 160), 0x3b4854, 0x26313b);
+    const major = new THREE.GridHelper(size, Math.min(Math.round(size / 8), 48), 0x71808d, 0x46535f);
+    minor.material.transparent = true; minor.material.opacity = 0.22;
+    major.material.transparent = true; major.material.opacity = 0.42;
+    group.add(minor, major);
+    this.gridHelper = group;
     this.gridHelper.position.y = 0.02;
     this.overlay.add(this.gridHelper);
   }
 
-  _clear(group) {
+  _clear(group, disposeMaterial = false) {
     for (const c of [...group.children]) {
       group.remove(c);
       c.geometry?.dispose?.();
+      if (disposeMaterial) {
+        if (Array.isArray(c.material)) c.material.forEach((m) => m.dispose?.());
+        else c.material?.dispose?.();
+      }
     }
   }
 
@@ -345,17 +374,20 @@ export class MapEditor {
       if (!piece || (piece.t !== 'spawn' && piece.t !== 'crate' && piece.t !== 'special')) continue;
       const mat = piece.t === 'spawn' ? this._matTeam[piece.team]
         : piece.t === 'crate' ? this._matTeam.ammo : this._matTeam.special;
-      const m = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.12, 12), mat);
-      m.position.set(o.x, 0.07, o.z);
+      const m = new THREE.Mesh(new THREE.CylinderGeometry(0.72, 0.72, 0.14, 16), mat);
+      m.position.set(o.x, 0.08, o.z);
       this.markerGroup.add(m);
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.5, 0.12), mat);
-      post.position.set(o.x, 0.75, o.z);
+      const ring = new THREE.Mesh(new THREE.RingGeometry(0.82, 1.02, 20), mat);
+      ring.rotation.x = -Math.PI / 2; ring.position.set(o.x, 0.035, o.z);
+      this.markerGroup.add(ring);
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.8, 0.16), mat);
+      post.position.set(o.x, 0.9, o.z);
       this.markerGroup.add(post);
       if (piece.t === 'spawn') {
         // flecha de orientación: hacia dónde mira quien nace aquí
-        const arrow = new THREE.Mesh(new THREE.ConeGeometry(0.28, 0.7, 8), mat);
+        const arrow = new THREE.Mesh(new THREE.ConeGeometry(0.36, 0.9, 8), mat);
         const yaw = o.yaw ?? 0;
-        arrow.position.set(o.x - Math.sin(yaw) * 1.1, 0.35, o.z - Math.cos(yaw) * 1.1);
+        arrow.position.set(o.x - Math.sin(yaw) * 1.35, 0.42, o.z - Math.cos(yaw) * 1.35);
         arrow.rotation.set(Math.PI / 2, 0, yaw);
         this.markerGroup.add(arrow);
       }
@@ -369,8 +401,9 @@ export class MapEditor {
       const geo = new THREE.BoxGeometry(b.maxx - b.minx, b.maxy - b.miny, b.maxz - b.minz);
       const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo), this._matSel);
       edges.position.set((b.minx + b.maxx) / 2, (b.miny + b.maxy) / 2, (b.minz + b.maxz) / 2);
-      geo.dispose();
-      this.selBox.add(edges);
+      const fill = new THREE.Mesh(geo, this._matSelFill);
+      fill.position.copy(edges.position);
+      this.selBox.add(fill, edges);
     }
   }
 
@@ -395,22 +428,35 @@ export class MapEditor {
 
   // Navegación: celdas transitables según la MISMA física del juego
   _refreshNav() {
-    this._clear(this.navGroup);
+    this._clear(this.navGroup, true);
     this.navGroup.visible = this.showNav;
     if (!this.showNav) return;
     const grid = this.navGrid();
     const geo = new THREE.PlaneGeometry(grid.cell * 0.86, grid.cell * 0.86);
     const walk = new THREE.MeshBasicMaterial({ color: 0x4f8de0, transparent: true, opacity: 0.22 });
     const block = new THREE.MeshBasicMaterial({ color: 0xe0566c, transparent: true, opacity: 0.16 });
+    const walkCells = [], blockCells = [];
     for (let i = 0; i < grid.w; i++) {
       for (let j = 0; j < grid.h; j++) {
         const walkable = grid.cells[j * grid.w + i];
-        const m = new THREE.Mesh(geo, walkable ? walk : block);
-        m.rotation.x = -Math.PI / 2;
-        m.position.set(grid.x0 + i * grid.cell, 0.05, grid.z0 + j * grid.cell);
-        this.navGroup.add(m);
+        (walkable ? walkCells : blockCells).push([grid.x0 + i * grid.cell, grid.z0 + j * grid.cell]);
       }
     }
+    const matrix = new THREE.Matrix4();
+    const quat = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
+    const scale = new THREE.Vector3(1, 1, 1);
+    const addCells = (cells, mat) => {
+      if (!cells.length) { mat.dispose(); return; }
+      const mesh = new THREE.InstancedMesh(geo.clone(), mat, cells.length);
+      cells.forEach(([x, z], i) => {
+        matrix.compose(new THREE.Vector3(x, 0.05, z), quat, scale);
+        mesh.setMatrixAt(i, matrix);
+      });
+      mesh.instanceMatrix.needsUpdate = true;
+      this.navGroup.add(mesh);
+    };
+    addCells(walkCells, walk); addCells(blockCells, block);
+    geo.dispose();
   }
 
   // Grid de navegación derivada de la física real (resolveCircle con el radio
@@ -497,7 +543,7 @@ export class MapEditor {
   clearPathTest() { this.pathTest = null; this._refreshPath(); }
 
   _refreshPath() {
-    this._clear(this.pathGroup);
+    this._clear(this.pathGroup, true);
     const p = this.pathTest;
     if (!p) return;
     const mark = (pt, color) => {
@@ -521,14 +567,15 @@ export class MapEditor {
   spawnsConnected() {
     const s = spawnsOf(this.map);
     if (!s.red.length || !s.blue.length) return null;
-    return !!this.findPath(s.red[0], s.blue[0]);
+    const anchor = s.red[0];
+    return [...s.red.slice(1), ...s.blue].every((spawn) => !!this.findPath(anchor, spawn));
   }
 
   validate() {
     const report = validateMap(this.map, this.world);
     const conn = this.spawnsConnected();
-    if (conn === true) report.push({ level: 'ok', key: 'nav', msg: 'Rojo y azul conectados' });
-    else if (conn === false) report.push({ level: 'error', key: 'nav', msg: 'Los spawns NO están conectados' });
+    if (conn === true) report.push({ level: 'ok', key: 'nav', msg: 'Rojo y azul conectados', i18nKey: 'editor.validation.nav.ok' });
+    else if (conn === false) report.push({ level: 'error', key: 'nav', msg: 'Los spawns NO están conectados', i18nKey: 'editor.validation.nav.error' });
     return report;
   }
 
@@ -536,9 +583,11 @@ export class MapEditor {
 
   // -------------------------------------------------------------- archivo
   newMap() {
-    this.pushUndo('nuevo');
+    if (this.map?.id) unstageMap(this.map.id);
     this.map = newMap();
     this.selection.clear();
+    this.undoStack.length = 0; this.redoStack.length = 0;
+    this.dirty = false;
     this.rebuild();
     this.frameCamera();
   }
@@ -548,14 +597,15 @@ export class MapEditor {
     this.map = JSON.parse(JSON.stringify(m));
     this.selection.clear();
     this.undoStack.length = 0; this.redoStack.length = 0;
+    this.dirty = false;
     this.rebuild();
     this.frameCamera();
-    this.setStatus(`Cargado: ${m.name}`);
+    this.setStatus(t('editor.status.loaded', { name: m.name }));
   }
   save() {
     saveMap(this.map);
     this.dirty = false;
-    this.setStatus(`Guardado: ${this.map.name}`);
+    this.setStatus(t('editor.status.saved', { name: this.map.name }));
   }
   saveAs(name) {
     this.map = JSON.parse(JSON.stringify(this.map));
@@ -563,10 +613,11 @@ export class MapEditor {
     this.map.name = name || (this.map.name + ' COPIA');
     saveMap(this.map);
     this.rebuild();
-    this.setStatus(`Guardado como: ${this.map.name}`);
+    this.dirty = false;
+    this.setStatus(t('editor.status.savedAs', { name: this.map.name }));
   }
-  duplicate() { const d = duplicateMap(this.map.id); if (d) this.setStatus(`Duplicado: ${d.name}`); }
-  remove(id) { deleteMap(id); this.setStatus('Mapa borrado'); }
+  duplicate() { const d = duplicateMap(this.map.id); if (d) this.setStatus(t('editor.status.duplicateMap', { name: d.name })); }
+  remove(id) { deleteMap(id); this.setStatus(t('editor.status.deleted')); }
   maps() { return listMaps(); }
 
   // ---------------------------------------------------------------- input

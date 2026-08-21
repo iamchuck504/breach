@@ -56,14 +56,16 @@ const built = await page.evaluate(async () => {
   ed.brush = 'wall'; ed.place(9, -4);
   ed.brush = 'pillar'; ed.place(0, 0);
   // markers
-  ed.brush = 'spawnRed'; ed.place(0, -19);
-  ed.brush = 'spawnBlue'; ed.place(0, 19);
+  ed.brush = 'spawnRed';
+  for (const x of [-4.5, -1.5, 1.5, 4.5]) ed.place(x, -19);
+  ed.brush = 'spawnBlue';
+  for (const x of [-4.5, -1.5, 1.5, 4.5]) ed.place(x, 19);
   ed.brush = 'ammo'; ed.place(-11, 0); ed.place(11, 0);
   ed.brush = 'special'; ed.place(5, 0);
   ed.rebuild();
   return { objects: ed.map.objects.length, theme: ed.world.theme, fx: ed.world.fx };
 });
-check('mapa construido por la API', built.objects === 11, JSON.stringify(built));
+check('mapa construido por la API', built.objects === 17, JSON.stringify(built));
 check('el mundo adopta tema y dimensiones', built.theme === 'metro' && built.fx === 16,
   JSON.stringify(built));
 
@@ -201,7 +203,8 @@ const overlays = await page.evaluate(() => {
   return { cover, navCells, afterCover: ed.coverGroup.visible };
 });
 check('overlay de cover dibuja las caras reales', overlays.cover > 20, JSON.stringify(overlays));
-check('overlay de navegación dibuja celdas', overlays.navCells > 50, JSON.stringify(overlays));
+check('overlay de navegación usa instancing (máximo dos draw calls)',
+  overlays.navCells > 0 && overlays.navCells <= 2, JSON.stringify(overlays));
 
 // 10) guardar / cargar / duplicar
 const files = await page.evaluate(() => {

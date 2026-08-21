@@ -388,6 +388,126 @@ Object.assign(zh, {
   'weapon.grenadeShort':'烟雾','weapon.sniperShort':'狙击','weapon.bazookaShort':'火箭',
 });
 
+// Editor de mapas: vocabulario compacto compartido por toda la herramienta.
+// Mantener el mismo orden permite añadir idiomas sin dispersar textos por la UI.
+const EDITOR_KEYS = [
+  'select','move','rotate','scale','grid','undo','redo','duplicate','delete','mirrorX','mirrorZ',
+  'cover','nav','route','topView','save','playtest','exit','map','name','new','saveAs','open',
+  'library','gameplay','environment','markers','properties','validation','noSelection','activePiece',
+  'placeHint','playable','notPlayable','meta.lowCover','meta.midCover','meta.highCover',
+  'meta.decorative','meta.marker','unsaved','piece.coverLow','piece.coverMid','piece.wall','piece.pillar',
+  'piece.platform','piece.corner','piece.railing','piece.hvac','piece.tank','piece.vehicle',
+  'piece.barricade','piece.column','piece.crate','piece.spawnRed','piece.spawnBlue','piece.ammo',
+  'piece.special','collisionNote','halfWidth','halfLength','theme','tools','view','file','snap','rotation',
+];
+const EDITOR_PACKS = {
+  en: ['SELECT','MOVE','ROTATE','SCALE','GRID','UNDO','REDO','DUPLICATE','DELETE','MIRROR X','MIRROR Z','COVER','NAV','ROUTE A→B','TOP VIEW','SAVE','PLAYTEST','EXIT','MAP','NAME','NEW','SAVE AS','OPEN','LIBRARY','GAMEPLAY','ENVIRONMENT','MARKERS','PROPERTIES','VALIDATION','No selection.','Active piece','ALT+CLICK to place it.','PLAYABLE','NOT PLAYABLE','LOW COVER','MID COVER','HIGH COVER','DECORATIVE · NO COLLISION','GAMEPLAY MARKER','unsaved','LOW COVER','MID COVER','WALL','PILLAR','PLATFORM','CORNER','RAILING','HVAC','TANK','VEHICLE','BARRICADE','COLUMN','CRATE','RED SPAWN','BLUE SPAWN','AMMO','SPECIAL WEAPON','Gameplay collision is AABB: solid geometry rotates in 90° steps.','HALF WIDTH','HALF LENGTH','THEME','TOOLS','VIEW','FILE','SNAP','ROTATION'],
+  es: ['SELECCIONAR','MOVER','ROTAR','ESCALAR','GRID','DESHACER','REHACER','DUPLICAR','BORRAR','ESPEJO X','ESPEJO Z','COVER','NAV','RUTA A→B','VISTA SUP.','GUARDAR','PLAYTEST','SALIR','MAPA','NOMBRE','NUEVO','GUARDAR COMO','ABRIR','BIBLIOTECA','GAMEPLAY','ENTORNO','MARCADORES','PROPIEDADES','VALIDACIÓN','Sin selección.','Pieza activa','ALT+CLIC para colocarla.','JUGABLE','NO JUGABLE','COVER BAJO','COVER MEDIO','COVER ALTO','DECORATIVO · SIN COLISIÓN','MARCADOR DE JUEGO','sin guardar','COVER BAJO','COVER MEDIO','PARED','PILAR','PLATAFORMA','ESQUINA','BARANDAL','HVAC','TANQUE','VEHÍCULO','BARRICADA','COLUMNA','CAJA','SPAWN ROJO','SPAWN AZUL','MUNICIÓN','ARMA ESPECIAL','La colisión jugable es AABB: la geometría sólida rota en pasos de 90°.','SEMIANCHO','SEMILARGO','TEMA','HERRAMIENTAS','VISTA','ARCHIVO','SNAP','ROTACIÓN'],
+  pt: ['SELECIONAR','MOVER','GIRAR','ESCALAR','GRADE','DESFAZER','REFAZER','DUPLICAR','EXCLUIR','ESPELHAR X','ESPELHAR Z','COBERTURA','NAV','ROTA A→B','VISTA SUPERIOR','SALVAR','TESTAR','SAIR','MAPA','NOME','NOVO','SALVAR COMO','ABRIR','BIBLIOTECA','JOGABILIDADE','AMBIENTE','MARCADORES','PROPRIEDADES','VALIDAÇÃO','Sem seleção.','Peça ativa','ALT+CLIQUE para colocar.','JOGÁVEL','NÃO JOGÁVEL','COBERTURA BAIXA','COBERTURA MÉDIA','COBERTURA ALTA','DECORATIVO · SEM COLISÃO','MARCADOR DE JOGO','não salvo','COBERTURA BAIXA','COBERTURA MÉDIA','PAREDE','PILAR','PLATAFORMA','CANTO','CORRIMÃO','HVAC','TANQUE','VEÍCULO','BARRICADA','COLUNA','CAIXA','SPAWN VERMELHO','SPAWN AZUL','MUNIÇÃO','ARMA ESPECIAL','A colisão jogável é AABB: geometria sólida gira em passos de 90°.','MEIA LARGURA','MEIO COMPRIMENTO','TEMA','FERRAMENTAS','VISTA','ARQUIVO','SNAP','ROTAÇÃO'],
+  fr: ['SÉLECTIONNER','DÉPLACER','PIVOTER','ÉCHELLE','GRILLE','ANNULER','RÉTABLIR','DUPLIQUER','SUPPRIMER','MIROIR X','MIROIR Z','COUVERTURE','NAV','TRAJET A→B','VUE DU DESSUS','ENREGISTRER','TESTER','QUITTER','CARTE','NOM','NOUVEAU','ENREGISTRER SOUS','OUVRIR','BIBLIOTHÈQUE','GAMEPLAY','ENVIRONNEMENT','MARQUEURS','PROPRIÉTÉS','VALIDATION','Aucune sélection.','Pièce active','ALT+CLIC pour placer.','JOUABLE','NON JOUABLE','COUVERTURE BASSE','COUVERTURE MOYENNE','COUVERTURE HAUTE','DÉCORATIF · SANS COLLISION','MARQUEUR DE JEU','non enregistré','COUVERTURE BASSE','COUVERTURE MOYENNE','MUR','PILIER','PLATEFORME','ANGLE','GARDE-CORPS','HVAC','RÉSERVOIR','VÉHICULE','BARRICADE','COLONNE','CAISSE','SPAWN ROUGE','SPAWN BLEU','MUNITIONS','ARME SPÉCIALE','La collision est AABB : la géométrie solide tourne par pas de 90°.','DEMI-LARGEUR','DEMI-LONGUEUR','THÈME','OUTILS','VUE','FICHIER','SNAP','ROTATION'],
+  ja: ['選択','移動','回転','拡大縮小','グリッド','元に戻す','やり直す','複製','削除','X反転','Z反転','カバー','ナビ','経路 A→B','上面図','保存','プレイテスト','終了','マップ','名前','新規','名前を付けて保存','開く','ライブラリ','ゲームプレイ','環境','マーカー','プロパティ','検証','未選択','選択中のパーツ','ALT+クリックで配置','プレイ可能','プレイ不可','低いカバー','中カバー','高いカバー','装飾 · 当たり判定なし','ゲームマーカー','未保存','低いカバー','中カバー','壁','柱','足場','角','手すり','空調設備','タンク','車両','バリケード','円柱','箱','赤スポーン','青スポーン','弾薬','特殊武器','当たり判定はAABBです。固体は90°単位で回転します。','半幅','半長','テーマ','ツール','表示','ファイル','スナップ','回転'],
+  it: ['SELEZIONA','SPOSTA','RUOTA','SCALA','GRIGLIA','ANNULLA','RIPETI','DUPLICA','ELIMINA','SPECCHIA X','SPECCHIA Z','COPERTURA','NAV','PERCORSO A→B','VISTA ALTO','SALVA','PROVA','ESCI','MAPPA','NOME','NUOVO','SALVA COME','APRI','LIBRERIA','GAMEPLAY','AMBIENTE','INDICATORI','PROPRIETÀ','VALIDAZIONE','Nessuna selezione.','Elemento attivo','ALT+CLIC per posizionare.','GIOCABILE','NON GIOCABILE','COPERTURA BASSA','COPERTURA MEDIA','COPERTURA ALTA','DECORATIVO · SENZA COLLISIONE','INDICATORE DI GIOCO','non salvato','COPERTURA BASSA','COPERTURA MEDIA','MURO','PILASTRO','PIATTAFORMA','ANGOLO','RINGHIERA','HVAC','SERBATOIO','VEICOLO','BARRICATA','COLONNA','CASSA','SPAWN ROSSO','SPAWN BLU','MUNIZIONI','ARMA SPECIALE','La collisione è AABB: la geometria solida ruota a passi di 90°.','SEMILARGHEZZA','SEMILUNGHEZZA','TEMA','STRUMENTI','VISTA','FILE','SNAP','ROTAZIONE'],
+  zh: ['选择','移动','旋转','缩放','网格','撤销','重做','复制','删除','X 镜像','Z 镜像','掩体','导航','路径 A→B','顶视图','保存','试玩','退出','地图','名称','新建','另存为','打开','组件库','玩法','环境','标记','属性','验证','未选择','当前组件','ALT+点击放置','可游玩','不可游玩','低掩体','中掩体','高掩体','装饰 · 无碰撞','游戏标记','未保存','低掩体','中掩体','墙','柱','平台','拐角','栏杆','空调设备','储罐','车辆','路障','立柱','箱子','红队出生点','蓝队出生点','弹药','特殊武器','碰撞采用AABB：实体几何以90°步进旋转。','半宽','半长','主题','工具','视图','文件','吸附','旋转'],
+};
+for (const [code, values] of Object.entries(EDITOR_PACKS)) {
+  const dict = { en, es, pt, fr, ja, it, zh }[code];
+  Object.assign(dict, Object.fromEntries(EDITOR_KEYS.map((key, i) => [`editor.${key}`, values[i]])));
+}
+
+// Mensajes de ejecución del editor. Los idiomas sin una traducción específica
+// reciben inglés en lugar de heredar los antiguos textos españoles hardcodeados.
+const EDITOR_RUNTIME_EN = {
+  'editor.hint1': 'WASD move · E/C up-down · RIGHT CLICK look · WHEEL zoom',
+  'editor.hint2': 'ALT+CLICK place · CLICK select · SHIFT+CLICK multi · CTRL+D duplicate',
+  'editor.hint3': 'R rotate · DELETE remove · CTRL+Z undo · T top view',
+  'editor.unsavedNew': 'There are unsaved changes. Create a new map?',
+  'editor.unsavedOpen': 'There are unsaved changes. Open another map?',
+  'editor.newMapName': 'New map name:', 'editor.copy': 'COPY',
+  'editor.deleteConfirm': 'This permanently DELETES "{name}".\nType its name to confirm:',
+  'editor.deleteCancelled': 'Delete cancelled',
+  'editor.selectRoute': 'Select 2 objects or place both team spawns',
+  'editor.routeFound': 'Route found ({count} steps)', 'editor.noRoute': 'NO ROUTE: unreachable area',
+  'editor.off': 'OFF', 'editor.free': 'FREE',
+  'editor.heightLow': 'LOW', 'editor.heightMid': 'MID', 'editor.heightHigh': 'HIGH',
+  'editor.status.nothingUndo': 'Nothing to undo', 'editor.status.nothingRedo': 'Nothing to redo',
+  'editor.status.undone': 'Undone', 'editor.status.redone': 'Redone',
+  'editor.status.duplicated': 'Duplicated ×{count}',
+  'editor.status.mirrored': 'Mirror {axis} ×{count}',
+  'editor.status.loaded': 'Loaded: {name}', 'editor.status.saved': 'Saved: {name}',
+  'editor.status.savedAs': 'Saved as: {name}', 'editor.status.duplicateMap': 'Duplicated: {name}',
+  'editor.status.deleted': 'Map deleted',
+  'editor.validation.redSpawn.ok': 'Red spawns ({count}/4)',
+  'editor.validation.redSpawn.error': 'Missing red spawns ({count}/4)',
+  'editor.validation.blueSpawn.ok': 'Blue spawns ({count}/4)',
+  'editor.validation.blueSpawn.error': 'Missing blue spawns ({count}/4)',
+  'editor.validation.spawnDist.warn': 'Team spawns are too close ({distance}m)',
+  'editor.validation.spawnDist.ok': 'Team separation {distance}m',
+  'editor.validation.bounds.error': '{count} object(s) outside map bounds',
+  'editor.validation.bounds.ok': 'Everything is inside map bounds',
+  'editor.validation.unknownPiece.error': '{count} unknown piece(s)',
+  'editor.validation.ammo.warn': 'No ammo crates',
+  'editor.validation.ammo.ok': 'Ammo crates ({count})',
+  'editor.validation.special.warn': 'No special weapon point',
+  'editor.validation.special.ok': 'Special weapon point placed',
+  'editor.validation.spawnClear.error': '{count} spawn(s) inside geometry',
+  'editor.validation.spawnClear.ok': 'Spawns are clear',
+  'editor.validation.pickupClear.error': '{count} pickup(s) inside geometry',
+  'editor.validation.pickupClear.ok': 'Pickups are accessible',
+  'editor.validation.cover.warn': 'Low usable cover ({count} faces)',
+  'editor.validation.cover.ok': 'Usable cover ({count} faces)',
+  'editor.validation.nav.ok': 'Red and blue spawns are connected',
+  'editor.validation.nav.error': 'Spawns are NOT connected',
+  'editor.playtestProblems': 'The map has {count} problem(s):',
+  'editor.playtestAnyway': 'Playtest anyway?',
+  'editor.playtestHint': 'PLAYTEST · ESC TO RETURN TO EDITOR',
+};
+for (const dict of [en, es, pt, fr, ja, it, zh]) Object.assign(dict, EDITOR_RUNTIME_EN);
+Object.assign(es, {
+  'editor.hint1': 'WASD mover · E/C subir-bajar · CLIC DER. mirar · RUEDA zoom',
+  'editor.hint2': 'ALT+CLIC colocar · CLIC seleccionar · SHIFT+CLIC multi · CTRL+D duplicar',
+  'editor.hint3': 'R rotar · SUPR borrar · CTRL+Z deshacer · T vista superior',
+  'editor.unsavedNew': 'Hay cambios sin guardar. ¿Crear un mapa nuevo?',
+  'editor.unsavedOpen': 'Hay cambios sin guardar. ¿Abrir otro mapa?',
+  'editor.newMapName': 'Nombre del mapa nuevo:', 'editor.copy': 'COPIA',
+  'editor.deleteConfirm': 'Esto BORRA "{name}" definitivamente.\nEscribe el nombre para confirmar:',
+  'editor.deleteCancelled': 'Borrado cancelado',
+  'editor.selectRoute': 'Selecciona 2 objetos o coloca los spawns de ambos equipos',
+  'editor.routeFound': 'Ruta encontrada ({count} pasos)', 'editor.noRoute': 'SIN RUTA: zona inaccesible',
+  'editor.off': 'OFF', 'editor.free': 'LIBRE',
+  'editor.heightLow': 'BAJO', 'editor.heightMid': 'MEDIO', 'editor.heightHigh': 'ALTO',
+  'editor.status.nothingUndo': 'Nada que deshacer', 'editor.status.nothingRedo': 'Nada que rehacer',
+  'editor.status.undone': 'Deshecho', 'editor.status.redone': 'Rehecho',
+  'editor.status.duplicated': 'Duplicado ×{count}',
+  'editor.status.mirrored': 'Espejo {axis} ×{count}',
+  'editor.status.loaded': 'Cargado: {name}', 'editor.status.saved': 'Guardado: {name}',
+  'editor.status.savedAs': 'Guardado como: {name}', 'editor.status.duplicateMap': 'Duplicado: {name}',
+  'editor.status.deleted': 'Mapa borrado',
+  'editor.validation.redSpawn.ok': 'Spawns rojos ({count}/4)',
+  'editor.validation.redSpawn.error': 'Faltan spawns rojos ({count}/4)',
+  'editor.validation.blueSpawn.ok': 'Spawns azules ({count}/4)',
+  'editor.validation.blueSpawn.error': 'Faltan spawns azules ({count}/4)',
+  'editor.validation.spawnDist.warn': 'Spawns demasiado cerca ({distance}m)',
+  'editor.validation.spawnDist.ok': 'Separación entre bandos {distance}m',
+  'editor.validation.bounds.error': '{count} objeto(s) fuera de los límites',
+  'editor.validation.bounds.ok': 'Todo dentro de los límites',
+  'editor.validation.unknownPiece.error': '{count} pieza(s) desconocida(s)',
+  'editor.validation.ammo.warn': 'Sin cajas de munición',
+  'editor.validation.ammo.ok': 'Cajas de munición ({count})',
+  'editor.validation.special.warn': 'Sin punto de arma especial',
+  'editor.validation.special.ok': 'Punto de arma especial colocado',
+  'editor.validation.spawnClear.error': '{count} spawn(s) dentro de geometría',
+  'editor.validation.spawnClear.ok': 'Spawns despejados',
+  'editor.validation.pickupClear.error': '{count} pickup(s) dentro de geometría',
+  'editor.validation.pickupClear.ok': 'Pickups accesibles',
+  'editor.validation.cover.warn': 'Poca cobertura utilizable ({count} caras)',
+  'editor.validation.cover.ok': 'Cobertura utilizable ({count} caras)',
+  'editor.validation.nav.ok': 'Spawns rojos y azules conectados',
+  'editor.validation.nav.error': 'Los spawns NO están conectados',
+  'editor.playtestProblems': 'El mapa tiene {count} problema(s):',
+  'editor.playtestAnyway': '¿Probarlo de todas formas?',
+  'editor.playtestHint': 'PLAYTEST · ESC PARA VOLVER AL EDITOR',
+});
+
 const DICTIONARIES = Object.freeze({ en, es, pt, fr, ja, it, zh });
 const valid = new Set(LANGUAGES.map((l) => l.code));
 const storage = typeof globalThis.localStorage !== 'undefined' ? globalThis.localStorage : null;

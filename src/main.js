@@ -24,7 +24,7 @@ import { BotMatch } from './game/botmatch.js';
 import { SmokeSystem } from './game/smoke.js';
 import { MapEditor } from './editor/editor.js';
 import { EditorUI } from './editor/editor-ui.js';
-import { mapLayoutId, isCustomLayout, getMap, listMaps, footprint } from './world/map-data.js';
+import { mapLayoutId, isCustomLayout, getMap, listMaps, listPlayableMaps, footprint } from './world/map-data.js';
 import { SpecialPickup, Rockets, SPECIAL_HOLD_TIME } from './game/special.js';
 import {
   DEFAULT_LOBBY_SETTINGS, MAPS, MAX_PLAYERS, TEAM_CAPACITY, makeBotName,
@@ -745,7 +745,7 @@ function updateMapBtn() {
 }
 btnMap.addEventListener('click', () => {
   // cicla los mapas del juego + los JUGABLES creados en el editor
-  const all = [...MAPS, ...listMaps().map((m) => mapLayoutId(m))];
+  const all = [...MAPS, ...listPlayableMaps().map((m) => mapLayoutId(m))];
   G.mapChoice = all[(all.indexOf(G.mapChoice) + 1) % all.length];
   localStorage.setItem('breach.map', G.mapChoice);
   updateMapBtn();
@@ -1616,6 +1616,7 @@ function openEditor(map = null) {
 function closeEditor() {
   if (!editor) return;
   editor.close();
+  editor.discardDraft();
   editorUI.show(false);
   G.mode = null;
   input.suppress = false;
@@ -1625,31 +1626,31 @@ function closeEditor() {
   hud.showMenu(true);
 }
 
-// Playtest: guarda, valida y entra a jugar el mapa en edición.
+// Playtest: valida el borrador y entra a jugarlo sin guardarlo implícitamente.
 function editorPlaytest() {
   if (!editor) return;
-  editor.save();
   const report = editor.validate();
   const blocking = report.filter((r) => r.level === 'error');
   if (blocking.length &&
-      !confirm(`El mapa tiene ${blocking.length} problema(s):\n\n` +
-        blocking.map((b) => '• ' + b.msg).join('\n') +
-        '\n\n¿Probarlo igual?')) return;
+      !confirm(`${t('editor.playtestProblems', { count: blocking.length })}\n\n` +
+        blocking.map((b) => '• ' + (b.i18nKey ? t(b.i18nKey, b.vars) : b.msg)).join('\n') +
+        `\n\n${t('editor.playtestAnyway')}`)) return;
   const layout = mapLayoutId(editor.map);
   editor.close();
   editorUI.show(false);
   input.suppress = false;
-  G.editorReturn = editor.map.id;   // volver aquí al terminar
+  G.editorReturn = JSON.parse(JSON.stringify(editor.map)); // volver al mismo borrador
   G.mapChoice = layout;
   startPractice();
-  hud.hint('PLAYTEST · ESC PARA VOLVER AL EDITOR', 3200);
+  editor.discardDraft(); // el mundo ya fue construido; no contaminar el selector normal
+  hud.hint(t('editor.playtestHint'), 3200);
 }
 
 // Vuelta desde el playtest al editor, con el mapa intacto
 function returnToEditor() {
-  const id = G.editorReturn;
+  const draft = G.editorReturn;
   G.editorReturn = null;
-  openEditor(getMap(id) ?? editor?.map ?? null);
+  openEditor(draft ?? editor?.map ?? null);
 }
 
 document.getElementById('btn-editor')?.addEventListener('click', () => openEditor());

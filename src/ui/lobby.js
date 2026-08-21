@@ -1,6 +1,6 @@
 import { t } from '../core/i18n.js';
 import { LIFE_OPTIONS, MAPS, ROUND_OPTIONS } from '../game/lobby-rules.js';
-import { listMaps, mapLayoutId, isCustomLayout, getMap } from '../world/map-data.js';
+import { listPlayableMaps, mapLayoutId, isCustomLayout, getMap } from '../world/map-data.js';
 
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -88,7 +88,7 @@ export class LobbyUI {
   // se queda con los mapas que el servidor conoce.
   mapOptions() {
     if (this.kind === 'online') return MAPS;
-    return [...MAPS, ...listMaps().map((m) => mapLayoutId(m))];
+    return [...MAPS, ...listPlayableMaps().map((m) => mapLayoutId(m))];
   }
   mapName(id) {
     return isCustomLayout(id) ? (getMap(id)?.name ?? 'MAPA') : t(`map.${id}`);

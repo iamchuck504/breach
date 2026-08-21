@@ -158,6 +158,20 @@ const oob = await page.evaluate(() => {
 check('detecta objetos fuera de los límites', oob.level === 'error', JSON.stringify(oob));
 check('undo limpia el error de límites', oob.afterUndo === 'ok', JSON.stringify(oob));
 
+const footprintBounds = await page.evaluate(() => {
+  const ed = window.BREACH_EDITOR;
+  ed.brush = 'wall';
+  ed.place(ed.map.fx - 1, 0);
+  const wall = ed.selected()[0];
+  wall.w = 10;
+  ed.rebuild();
+  const bounds = ed.validate().find((r) => r.key === 'bounds');
+  ed.undo();
+  return { level: bounds?.level, x: wall.x, w: wall.w, fx: ed.map.fx };
+});
+check('los límites consideran el volumen completo, no solo el centro',
+  footprintBounds.level === 'error', JSON.stringify(footprintBounds));
+
 // ------------------------------------------- 4. sin fugas al reconstruir
 const leak = await page.evaluate(() => {
   const ed = window.BREACH_EDITOR, S = window.BREACH_WORLD.scene ?? null;
@@ -189,6 +203,30 @@ check('undo/redo profundo (30 pasos) es reversible',
   history.placed === 30 && history.undone === 0 && history.redone === 30,
   JSON.stringify(history));
 
+const fullHistory = await page.evaluate(() => {
+  const ed = window.BREACH_EDITOR;
+  ed.newMap();
+  const original = ed.map.theme;
+  ed.pushUndo('theme');
+  ed.map.theme = 'metro';
+  ed.rebuild();
+  ed.undo();
+  return { original, afterUndo: ed.map.theme };
+});
+check('undo restaura propiedades completas del mapa, incluido el tema',
+  fullHistory.afterUndo === fullHistory.original, JSON.stringify(fullHistory));
+
+const draftOnly = await page.evaluate(() => {
+  const ed = window.BREACH_EDITOR;
+  ed.newMap();
+  const id = ed.map.id;
+  ed.map.name = 'BORRADOR NO GUARDADO';
+  ed.brush = 'coverLow'; ed.place(0, 0);
+  return { id, listed: ed.maps().some((m) => m.id === id), dirty: ed.dirty };
+});
+check('un borrador no aparece como mapa guardado',
+  draftOnly.dirty && !draftOnly.listed, JSON.stringify(draftOnly));
+
 // -------------------------------------- 6. persistencia entre RECARGAS
 const saved = await page.evaluate(() => {
   const ed = window.BREACH_EDITOR;
@@ -196,8 +234,10 @@ const saved = await page.evaluate(() => {
   ed.map.name = 'PERSISTENTE';
   ed.map.theme = 'prision';
   ed.brush = 'coverMid'; ed.place(3, 3);
-  ed.brush = 'spawnRed'; ed.place(0, -18);
-  ed.brush = 'spawnBlue'; ed.place(0, 18);
+  ed.brush = 'spawnRed';
+  for (const x of [-4.5, -1.5, 1.5, 4.5]) ed.place(x, -18);
+  ed.brush = 'spawnBlue';
+  for (const x of [-4.5, -1.5, 1.5, 4.5]) ed.place(x, 18);
   ed.save();
   return { id: ed.map.id, objects: ed.map.objects.length };
 });
@@ -261,8 +301,10 @@ const botGame = await page.evaluate(async () => {
   ed.map.name = 'BOT ARENA'; ed.map.fx = 18; ed.map.fz = 24;
   ed.brush = 'coverLow';
   for (const [x, z] of [[-6, -8], [6, -8], [0, -3], [-6, 8], [6, 8], [0, 3]]) ed.place(x, z);
-  ed.brush = 'spawnRed'; ed.place(0, -20);
-  ed.brush = 'spawnBlue'; ed.place(0, 20);
+  ed.brush = 'spawnRed';
+  for (const x of [-4.5, -1.5, 1.5, 4.5]) ed.place(x, -20);
+  ed.brush = 'spawnBlue';
+  for (const x of [-4.5, -1.5, 1.5, 4.5]) ed.place(x, 20);
   ed.brush = 'ammo'; ed.place(-10, 0); ed.place(10, 0);
   ed.brush = 'special'; ed.place(6, 0);
   ed.save();
