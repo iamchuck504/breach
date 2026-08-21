@@ -22,8 +22,6 @@ import { HUD } from './ui/hud.js';
 import { NetClient } from './net/client.js';
 import { BotMatch } from './game/botmatch.js';
 import { SmokeSystem } from './game/smoke.js';
-import { MapEditor } from './editor/editor.js';
-import { EditorUI } from './editor/editor-ui.js';
 import { mapLayoutId, isCustomLayout, getMap, listMaps, listPlayableMaps, footprint } from './world/map-data.js';
 import { SpecialPickup, Rockets, SPECIAL_HOLD_TIME } from './game/special.js';
 import {
@@ -510,6 +508,19 @@ const controlsCard = document.getElementById('controls-card');
 const btnResume = document.getElementById('btn-resume');
 const menuPrompts = document.getElementById('menu-prompts');
 let menuNavigator = null;
+
+// El editor es una herramienta de autoría, no parte del juego distribuido.
+// Usar únicamente DEV permite a Vite eliminar también sus imports/chunks del
+// build de producción; no basta con esconder el botón en runtime.
+const editorLocalOnly = import.meta.env.DEV;
+let btnEditor = null;
+if (editorLocalOnly) {
+  btnEditor = document.createElement('button');
+  btnEditor.className = 'btn';
+  btnEditor.id = 'btn-editor';
+  btnEditor.textContent = 'MAP EDITOR';
+  document.getElementById('btn-fullscreen')?.before(btnEditor);
+}
 
 function dismissSplash() { splash.classList.add('off'); }
 let preparePromise = null;
@@ -1569,46 +1580,66 @@ function startBots(lobby = G.lobby || defaultLocalLobby()) {
 // Playtest arranca una partida REAL sobre el mapa en edición (mismo pipeline
 // de datos) y devuelve el control al editor sin perder nada.
 // ---------------------------------------------------------------------------
-let editor = null, editorUI = null;
+let editor = null, editorUI = null, editorLoadPromise = null;
 
-function ensureEditor() {
+async function ensureEditor() {
   if (editor) return editor;
-  editor = new MapEditor({
-    scene, camera, renderer, world, canvas: renderer.domElement,
-  });
-  editorUI = new EditorUI(editor, {
-    onPlaytest: () => editorPlaytest(),
-    onExit: () => closeEditor(),
-  });
-  // ratón del editor sobre el canvas (el juego no tiene pointer lock aquí)
-  const el = renderer.domElement;
-  const nx = (e) => (e.clientX / innerWidth) * 2 - 1;
-  const ny = (e) => -(e.clientY / innerHeight) * 2 + 1;
-  el.addEventListener('mousedown', (e) => {
-    if (G.mode !== 'editor') return;
-    editor.onPointerDown(nx(e), ny(e), { shift: e.shiftKey, alt: e.altKey, button: e.button });
-  });
-  window.addEventListener('mousemove', (e) => {
-    if (G.mode !== 'editor') return;
-    editor.onPointerMove(nx(e), ny(e), e.movementX, e.movementY);
-  });
-  window.addEventListener('mouseup', () => { if (G.mode === 'editor') editor.onPointerUp(); });
-  el.addEventListener('contextmenu', (e) => { if (G.mode === 'editor') e.preventDefault(); });
-  return editor;
+  if (!editorLoadPromise) editorLoadPromise = (async () => {
+    const [{ MapEditor }, { EditorUI }] = await Promise.all([
+      import('./editor/editor.js'),
+      import('./editor/editor-ui.js'),
+    ]);
+    editor = new MapEditor({
+      scene, camera, renderer, world, canvas: renderer.domElement,
+    });
+    editorUI = new EditorUI(editor, {
+      onPlaytest: () => editorPlaytest(),
+      onExit: () => closeEditor(),
+    });
+    // ratón del editor sobre el canvas (el juego no tiene pointer lock aquí)
+    const el = renderer.domElement;
+    const nx = (e) => (e.clientX / innerWidth) * 2 - 1;
+    const ny = (e) => -(e.clientY / innerHeight) * 2 + 1;
+    el.addEventListener('mousedown', (e) => {
+      if (G.mode !== 'editor') return;
+      editor.onPointerDown(nx(e), ny(e), { shift: e.shiftKey, alt: e.altKey, button: e.button });
+    });
+    window.addEventListener('mousemove', (e) => {
+      if (G.mode !== 'editor') return;
+      editor.onPointerMove(nx(e), ny(e), e.movementX, e.movementY);
+    });
+    window.addEventListener('mouseup', () => { if (G.mode === 'editor') editor.onPointerUp(); });
+    el.addEventListener('contextmenu', (e) => { if (G.mode === 'editor') e.preventDefault(); });
+    return editor;
+  })();
+  return editorLoadPromise;
 }
 
-function openEditor(map = null) {
+async function openEditor(map = null) {
+  if (!editorLocalOnly) return;
   dismissSplash();
   startSeq++;
+  // El editor usa cursor real. Cancelar primero cualquier intento automático
+  // de recaptura y abandonar fullscreen evita el ClipCursor perdido al volver
+  // de un playtest o abrir la herramienta desde una partida.
+  input.suppress = true;
+  cancelSanitize();
+  input.releaseLock();
+  if (document.pointerLockElement) {
+    input.cleanExitAt = performance.now();
+    try { document.exitPointerLock(); } catch { /* ya liberado */ }
+  }
+  if (document.fullscreenElement) {
+    try { await document.exitFullscreen(); } catch { /* el editor sigue windowed lógico */ }
+  }
+  cancelSanitize();
   teardown();
-  ensureEditor();
+  await ensureEditor();
   G.mode = 'editor';
   G.editorReturn = null;
   hud.showMenu(false);
   hud.show(false);
   showControls(false);
-  input.suppress = true;
-  input.releaseLock();
   editor.open(map ?? editor.map);
   editorUI.show(true);
 }
@@ -1641,7 +1672,7 @@ function editorPlaytest() {
   input.suppress = false;
   G.editorReturn = JSON.parse(JSON.stringify(editor.map)); // volver al mismo borrador
   G.mapChoice = layout;
-  startPractice();
+  startPractice({ fullscreen: false });
   editor.discardDraft(); // el mundo ya fue construido; no contaminar el selector normal
   hud.hint(t('editor.playtestHint'), 3200);
 }
@@ -1653,12 +1684,12 @@ function returnToEditor() {
   openEditor(draft ?? editor?.map ?? null);
 }
 
-document.getElementById('btn-editor')?.addEventListener('click', () => openEditor());
+btnEditor?.addEventListener('click', () => openEditor());
 
-function startPractice() {
+function startPractice({ fullscreen = true } = {}) {
   dismissSplash();
   audio.ensure();
-  enterFullscreen();
+  if (fullscreen) enterFullscreen();
   startSeq++;
   teardown();
   G.name = saveName();
@@ -2821,10 +2852,12 @@ window.BREACH_AUDIO = audio;
 window.BREACH_WORLD = world;
 window.BREACH_EFFECTS = effects;
 window.BREACH_SMOKE = smoke;
-// editor: handles para suites headless y depuración de nivel
-Object.defineProperty(window, 'BREACH_EDITOR', { get: () => editor });
-window.BREACH_EDITOR_PLAYTEST = () => editorPlaytest();
-window.BREACH_MAPDATA = { mapLayoutId, isCustomLayout, getMap, listMaps, footprint };
+// Editor: API de diagnóstico disponible únicamente en el entorno de autoría.
+if (editorLocalOnly) {
+  Object.defineProperty(window, 'BREACH_EDITOR', { get: () => editor });
+  window.BREACH_EDITOR_PLAYTEST = () => editorPlaytest();
+  window.BREACH_MAPDATA = { mapLayoutId, isCustomLayout, getMap, listMaps, footprint };
+}
 window.BREACH_SPECIALS = specials;
 window.BREACH_ROCKETS = rockets;
 window.BREACH_RIG = Rig; // para tests visuales de poses/animaciones

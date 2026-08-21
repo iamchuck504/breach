@@ -121,7 +121,6 @@ const en = {
   'msg.specialTaken': '{weapon} EQUIPPED — REPLACES {removed}',
   'msg.weaponRecovered': '{weapon} RECOVERED',
   'menu.options': 'OPTIONS', 'menu.optionsKicker': 'GAME CONFIGURATION',
-  'menu.editor': 'MAP EDITOR',
   'menu.audio': 'AUDIO', 'menu.video': 'VIDEO',
   'menu.videoShadows': 'SHADOWS', 'menu.videoScale': 'RENDER RESOLUTION',
   'menu.dpadWeapons': 'D-PAD: ↑ GRENADE · ↓ PISTOL · ← SHOTGUN · → SMG',
@@ -240,7 +239,6 @@ const es = {
   'msg.specialTaken': '{weapon} EQUIPADA — REEMPLAZA {removed}',
   'msg.weaponRecovered': 'RECUPERASTE {weapon}',
   'menu.options': 'OPCIONES', 'menu.optionsKicker': 'CONFIGURACIÓN DEL JUEGO',
-  'menu.editor': 'EDITOR DE MAPAS',
   'menu.audio': 'AUDIO', 'menu.video': 'VIDEO',
   'menu.videoShadows': 'SOMBRAS', 'menu.videoScale': 'RESOLUCIÓN DE RENDER',
   'menu.dpadWeapons': 'D-PAD: ↑ GRANADA · ↓ PISTOLA · ← ESCOPETA · → SMG',
@@ -388,6 +386,9 @@ Object.assign(zh, {
   'weapon.grenadeShort':'烟雾','weapon.sniperShort':'狙击','weapon.bazookaShort':'火箭',
 });
 
+// Vite elimina este bloque completo del build de producción. En Node se
+// conserva para las auditorías directas de traducción.
+if (import.meta.env?.DEV ?? true) {
 // Editor de mapas: vocabulario compacto compartido por toda la herramienta.
 // Mantener el mismo orden permite añadir idiomas sin dispersar textos por la UI.
 const EDITOR_KEYS = [
@@ -507,6 +508,7 @@ Object.assign(es, {
   'editor.playtestAnyway': '¿Probarlo de todas formas?',
   'editor.playtestHint': 'PLAYTEST · ESC PARA VOLVER AL EDITOR',
 });
+}
 
 const DICTIONARIES = Object.freeze({ en, es, pt, fr, ja, it, zh });
 const valid = new Set(LANGUAGES.map((l) => l.code));

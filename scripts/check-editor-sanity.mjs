@@ -13,9 +13,8 @@ const root = path.join(__dirname, '..');
 const CHROME = process.env.CHROME_PATH ||
   'C:\\Users\\iamch\\AppData\\Local\\ms-playwright\\chromium-1228\\chrome-win64\\chrome.exe';
 
-const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
-  env: { ...process.env, PORT: '8782' }, stdio: 'ignore',
-});
+const server = spawn(process.execPath, [path.join(root, 'node_modules', 'vite', 'bin', 'vite.js'),
+  '--host', '127.0.0.1', '--port', '8782', '--strictPort'], { stdio: 'ignore' });
 await new Promise((r) => setTimeout(r, 900));
 
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });

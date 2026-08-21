@@ -12,9 +12,8 @@ const root = path.join(__dirname, '..');
 const CHROME = process.env.CHROME_PATH ||
   'C:\\Users\\iamch\\AppData\\Local\\ms-playwright\\chromium-1228\\chrome-win64\\chrome.exe';
 
-const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
-  env: { ...process.env, PORT: '8786' }, stdio: 'ignore',
-});
+const server = spawn(process.execPath, [path.join(root, 'node_modules', 'vite', 'bin', 'vite.js'),
+  '--host', '127.0.0.1', '--port', '8786', '--strictPort'], { stdio: 'ignore' });
 await new Promise((r) => setTimeout(r, 900));
 
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
@@ -39,9 +38,12 @@ let s = await page.evaluate(() => ({
   mode: window.BREACH.mode,
   ui: document.getElementById('editor-ui')?.classList.contains('on'),
   lib: document.querySelectorAll('#ed-lib [data-piece]').length,
+  fullscreen: !!document.fullscreenElement,
+  pointerLocked: !!document.pointerLockElement,
 }));
 check('el editor abre desde el menú', s.mode === 'editor' && s.ui === true, JSON.stringify(s));
 check('biblioteca con piezas', s.lib >= 10, `piezas=${s.lib}`);
+check('el editor abre windowed y con cursor libre', !s.fullscreen && !s.pointerLocked, JSON.stringify(s));
 
 // 2) construir un mapa completo por la API del editor
 const built = await page.evaluate(async () => {
@@ -231,10 +233,13 @@ const play = await page.evaluate(() => ({
   custom: !!window.BREACH_WORLD.customMap,
   playerOnMap: !!window.BREACH.player,
   editorUI: document.getElementById('editor-ui').classList.contains('on'),
+  fullscreen: !!document.fullscreenElement,
 }));
 check('playtest arranca en el mapa editado',
   play.mode === 'practice' && play.custom === true && play.playerOnMap, JSON.stringify(play));
 check('la UI del editor se oculta durante el playtest', play.editorUI === false,
+  JSON.stringify(play));
+check('el playtest del editor no fuerza fullscreen', play.fullscreen === false,
   JSON.stringify(play));
 
 await page.keyboard.press('Escape');
@@ -244,10 +249,14 @@ const back = await page.evaluate(() => ({
   ui: document.getElementById('editor-ui').classList.contains('on'),
   objects: window.BREACH_EDITOR.map.objects.length,
   name: window.BREACH_EDITOR.map.name,
+  fullscreen: !!document.fullscreenElement,
+  pointerLocked: !!document.pointerLockElement,
 }));
 check('Esc vuelve al editor', back.mode === 'editor' && back.ui === true, JSON.stringify(back));
 check('el mapa sigue intacto al volver',
   back.objects === files.n && back.name === 'TEST ARENA', JSON.stringify(back));
+check('volver del playtest restaura cursor libre y modo windowed',
+  !back.fullscreen && !back.pointerLocked, JSON.stringify(back));
 
 // 12) el mapa aparece como jugable para el juego (mismo formato)
 const playable = await page.evaluate(() => {
