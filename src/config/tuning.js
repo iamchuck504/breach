@@ -86,6 +86,9 @@ export const TUNING = {
       mag: 50, reserve: 150, reloadTime: 1.9,
       spreadAim: 0.9, spreadHip: 3.4, spreadBlind: 5.2,   // grados
       recoil: 0.35, range: 80, pellets: 1, auto: true,
+      // Conserva daño pleno en las distancias normales de combate y cae de
+      // forma leve hasta 8 dmg en la sightline extrema del mapa más grande.
+      falloffStart: 35, falloffEnd: 80, falloffMin: 0.8,
     },
     shotgun: {
       nameKey: 'weapon.shotgun', rpm: 95, dmg: 13, headMult: 1.0,
@@ -169,6 +172,7 @@ export const TUNING = {
     bodyTurnBlindDeg: 420,// blindfire en cover: giro más pesado, nunca snap 180°
     bodyTurnFollowDeg: 360,
     hp: 100,
+    botDamageScale: 0.7,
     regenDelay: 3.6, regenRate: 48,
     respawnTime: 5,
     killLimit: 25,

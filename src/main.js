@@ -13,6 +13,7 @@ import { RemotePlayer } from './player/remote.js';
 import { Dummies } from './player/practice.js';
 import { Weapons } from './combat/weapons.js';
 import { resolveShot, resolveGuidedShot, applySpread, applyPelletPattern } from './combat/ballistics.js';
+import { damageFalloff, rocketSplashDamage } from './combat/damage.js';
 import { muzzleHasClearance, segmentsHaveClearance } from './combat/cover-fire.js';
 import { requiredFireBuffer } from './combat/fire-control.js';
 import { Effects } from './fx/effects.js';
@@ -1729,7 +1730,8 @@ function setupOnlineBots(roster) {
     playing: () => G.onlinePhase === 'playing',
     stepSound,
     botFire: (bot, origin, point, wep, impacts) => G.net?.botFire(bot.id, origin, point, wep, impacts),
-    botHit: (bot, targetId, dmg, part, gib) => G.net?.botHit(bot.id, targetId, dmg, part, gib),
+    botHit: (bot, targetId, dmg, part, gib, point, meta) =>
+      G.net?.botHit(bot.id, targetId, dmg, part, gib, point, meta),
     claimBotSpecial: (bot) => G.net?.send({ t: 'takeSpecial', bot: bot.id }),
   }, {
     external: true, playerTeam: G.team, rounds: G.onlineSettings.rounds, lives: G.onlineSettings.lives,
@@ -2250,13 +2252,6 @@ function allCharacterTargets() {
   return currentTargets();
 }
 
-function falloff(def, dist) {
-  if (!def.falloffStart) return 1;
-  if (dist <= def.falloffStart) return 1;
-  if (dist >= def.falloffEnd) return 0;
-  return 1 - (dist - def.falloffStart) / (def.falloffEnd - def.falloffStart);
-}
-
 // Dirección de hipfire/blindfire: paralela a la cámara, con ORIGEN en el cañón
 // La mira sigue a la cámara; el personaje rota para acompañarla.
 function hipDir() {
@@ -2348,7 +2343,7 @@ function explodeRocket(pos, mine = true, owner = null) {
   // el cohete de OTRO jugador solo se ve y se oye: su daño lo reclama su
   // dueño contra el servidor (si no, cada cliente aplicaría el splash)
   if (!G.mode || !mine) return;
-  const splash = (dist) => d.dmg * Math.max(0.25, 1 - (dist / R) * 0.75);
+  const splash = (dist) => rocketSplashDamage(d, dist);
   const onlineSplash = [];
 
   // En online, los bots pertenecen al host pero el disparo sigue siendo del
@@ -2674,10 +2669,13 @@ function fireShot() {
       worldImpacts.push(hit.point);
     }
     if (hit.kind === 'player') {
-      let dmg = def.dmg * falloff(def, hit.t);
+      let dmg = def.dmg * damageFalloff(def, hit.t);
       if (hit.part === 'head') dmg *= def.headMult;
-      const e = dmgByTarget.get(hit.id) || { dmg: 0, part: hit.part, dist: hit.t, point: hit.point };
+      const e = dmgByTarget.get(hit.id) || {
+        dmg: 0, part: hit.part, dist: hit.t, point: hit.point, pellets: 0,
+      };
       e.dmg += dmg;
+      e.pellets++;
       if (hit.part === 'head') e.part = 'head';
       dmgByTarget.set(hit.id, e);
     }
@@ -2738,7 +2736,9 @@ function fireShot() {
       if ((!r && !b) || r?.inv || b?.protT > 0) continue; // snapshot protegido: el server rechazará daño
       hitSomeone = true;
       effects.blood(e.point, TEAM_HEX[r?.team || b.team]);
-      onlineClaims.push({ id, dmg: e.dmg, part: e.part, gib, point: e.point });
+      onlineClaims.push({
+        id, dmg: e.dmg, part: e.part, gib, point: e.point, pellets: e.pellets,
+      });
       audio.hit();
     }
   }
@@ -2749,7 +2749,9 @@ function fireShot() {
     // WebSocket conserva orden: registrar primero el disparo validable y luego
     // sus claims de daño. Antes los hits llegaban al server sin disparo asociado.
     G.net.fire(muzzle, anyPoint, w.cur, worldImpacts);
-    for (const c of onlineClaims) G.net.hit(c.id, c.dmg, c.part, c.gib, c.point);
+    for (const c of onlineClaims) {
+      G.net.hit(c.id, c.dmg, c.part, c.gib, c.point, { pellets: c.pellets });
+    }
   }
 }
 

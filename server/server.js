@@ -11,9 +11,12 @@ import {
   nextLobbyMap, normalizeLobbySettings, teamCounts, validateLobby,
 } from '../src/game/lobby-rules.js';
 import { ROUND_FINISH_HOLD as DEFAULT_ROUND_FINISH_HOLD } from '../src/game/match-flow.js';
+import { TUNING } from '../src/config/tuning.js';
+import { damageFalloff, firearmDamage, rocketSplashDamage } from '../src/combat/damage.js';
 
 const PORT = process.env.PORT || 8787;
-const HP = 100, REGEN_DELAY = 3.6, REGEN_RATE = 48, RESPAWN_TIME = 5;
+const HP = TUNING.combat.hp, REGEN_DELAY = TUNING.combat.regenDelay,
+  REGEN_RATE = TUNING.combat.regenRate, RESPAWN_TIME = TUNING.combat.respawnTime;
 const INTRO_TIME = Number(process.env.INTRO_TIME ?? 10);
 const COUNTDOWN_TIME = Number(process.env.COUNTDOWN_TIME ?? 3);
 const ROUND_FINISH_HOLD = Number(process.env.ROUND_FINISH_HOLD ?? DEFAULT_ROUND_FINISH_HOLD);
@@ -21,16 +24,22 @@ const INTERMISSION_TIME = Number(process.env.INTERMISSION_TIME ?? 5);
 const FINAL_TIME = Number(process.env.FINAL_PRESENTATION_TIME ?? 11);
 const SPAWN_PROT = 5, CRATE_RESPAWN = 30, DROP_LIFE = 8, TICK_HZ = 20;
 const CRATES = [{ up: true, t: 0 }, { up: true, t: 0 }];
+const WD = TUNING.weapons;
 const FIRE_RULES = {
-  smg: { interval: 60 / 620, range: 80, maxDamage: 16 },
-  shotgun: { interval: 60 / 95, range: 24, maxDamage: 8 * 13, gibRange: 4.2 },
-  pistol: { interval: 60 / 260, range: 60, maxDamage: 44 },
-  sniper: { interval: 60 / 34, range: 130, maxDamage: 187 },
+  smg: { interval: 60 / WD.smg.rpm, range: WD.smg.range,
+    maxDamage: WD.smg.dmg * WD.smg.headMult },
+  shotgun: { interval: 60 / WD.shotgun.rpm, range: WD.shotgun.range,
+    maxDamage: WD.shotgun.pellets * WD.shotgun.dmg, gibRange: WD.shotgun.gibRange },
+  pistol: { interval: 60 / WD.pistol.rpm, range: WD.pistol.range,
+    maxDamage: WD.pistol.dmg * WD.pistol.headMult },
+  sniper: { interval: 60 / WD.sniper.rpm, range: WD.sniper.range,
+    maxDamage: WD.sniper.dmg * WD.sniper.headMult },
   // el splash puede alcanzar a varios: el presupuesto cubre 3 impactos y su
   // "rango" al validar hits es el radio de la explosión, no el del vuelo
-  bazooka: { interval: 60 / 28, range: 110, maxDamage: 115 * 3, hitRange: 5 },
+  bazooka: { interval: 60 / WD.bazooka.rpm, range: WD.bazooka.range,
+    maxDamage: WD.bazooka.dmg * 3, hitRange: WD.bazooka.splashRadius + 0.8 },
   // tolerancia de red pequeña sobre los 1.82 m físicos del cliente
-  melee: { interval: 0.4, range: 1.95, hitRange: 1.95, maxDamage: 60 },
+  melee: { interval: 0.4, range: 1.95, hitRange: 1.95, maxDamage: TUNING.melee.dmg },
 };
 // ids replicables en 'w' (la granada solo aparece EN MANO, nunca dispara aquí)
 const VALID_WEAPONS = new Set(['smg', 'shotgun', 'pistol', 'grenade', 'sniper', 'bazooka']);
@@ -221,6 +230,59 @@ function registerFire(shooter, msg, isBotFire = false) {
   shooter.prot = 0;
   broadcastRaw({ t: 'fire', id: shooter.id, o, p: pt, w: weapon, ...(decals ? { d: decals } : {}) }); return true;
 }
+
+const CROUCH_STATES = new Set(['cover_low', 'blind_over', 'blind_low_left', 'blind_low_right']);
+
+// El cliente comunica el punto visual, pero no decide el multiplicador. La Y
+// del impacto permite validar cabeza incluso con interpolación horizontal; el
+// radio amplio en XZ tolera los ~120 ms de snapshots sin regalar headshots por
+// impactos claramente situados en el torso.
+function validatedPart(target, claimedPart, point) {
+  if (claimedPart !== 'head' || !point) return 'body';
+  const crouched = CROUCH_STATES.has(target.st);
+  const relY = point[1] - (target.y || 0);
+  const minY = crouched ? 0.66 : 1.30;
+  const maxY = crouched ? 1.16 : 1.82;
+  const horizontal = Math.hypot(point[0] - target.x, point[2] - target.z);
+  return relY >= minY && relY <= maxY && horizontal <= 1.25 ? 'head' : 'body';
+}
+
+function authoritativeDamage(shooter, target, shot, msg, dist) {
+  const wep = shot.wep;
+  const point = vec3(msg.p);
+  const part = validatedPart(target, msg.part, point);
+  const botScale = shooter.bot && wep !== 'bazooka'
+    ? TUNING.combat.botDamageScale
+    : 1;
+
+  if (wep === 'melee') {
+    return { dmg: TUNING.melee.dmg * botScale, part: 'body' };
+  }
+  if (wep === 'bazooka') {
+    return {
+      dmg: rocketSplashDamage(WD.bazooka, dist, target.id === shooter.id),
+      part: 'body',
+    };
+  }
+
+  const def = WD[wep];
+  if (!def) return { dmg: 0, part: 'body' };
+  let pellets = 1;
+  if (wep === 'shotgun') {
+    const declared = Math.floor(num(msg.pellets));
+    if (declared > 0) pellets = Math.min(def.pellets, declared);
+    else {
+      // Compatibilidad con clientes anteriores: inferir cuántos pellets
+      // produjeron su claim, pero recalcular el daño con la fórmula vigente.
+      const perPellet = def.dmg * damageFalloff(def, dist) * botScale;
+      pellets = perPellet > 0
+        ? Math.max(1, Math.min(def.pellets, Math.round(num(msg.dmg) / perPellet)))
+        : 1;
+    }
+  }
+  return { dmg: firearmDamage(def, dist, part, pellets, botScale), part };
+}
+
 function registerHit(shooter, msg) {
   const target = players.get(msg.target) || bots.get(msg.target);
   const shot = shooter?.pendingShot, rule = shot ? FIRE_RULES[shot.wep] : null, now = nowSec();
@@ -236,7 +298,9 @@ function registerHit(shooter, msg) {
     const fx = -Math.sin(shooter.yaw || 0), fz = -Math.cos(shooter.yaw || 0);
     if (len > 0.001 && (dx * fx + dz * fz) / len < Math.cos(58 * Math.PI / 180)) return;
   }
-  const dmg = Math.min(Math.max(0, num(msg.dmg)), shot.remainingDamage); if (dmg <= 0) return;
+  const authoritative = authoritativeDamage(shooter, target, shot, msg, dist);
+  const dmg = Math.min(authoritative.dmg, shot.remainingDamage); if (dmg <= 0) return;
+  const part = authoritative.part;
   shot.hitIds.add(target.id); shot.remainingDamage -= dmg; target.hp -= dmg; target.lastDamage = now;
   if (shot.wep === 'melee') {
     const p = vec3(msg.p) || [target.x, (target.y || 0) + 1, target.z];
@@ -248,7 +312,7 @@ function registerHit(shooter, msg) {
   if (target.id !== shooter.id) shooter.kills++;
   const gib = shot.wep === 'shotgun' && dist <= FIRE_RULES.shotgun.gibRange && !!msg.gib;
   broadcastRaw({ t: 'death', target: target.id, from: shooter.id, gib: gib ? 1 : 0, w: shot.wep,
-    dist: +dist.toFixed(2), dmg: Math.round(dmg), part: msg.part === 'head' ? 'head' : 'body',
+    dist: +dist.toFixed(2), dmg: Math.round(dmg), part,
     kn: shooter.name, kt: shooter.team, vn: target.name, vt: target.team });
   dropWeapon(target);
   target.specialWep = null;

@@ -72,35 +72,70 @@ try {
   send(b, firePacket(b, a));
   await delay(80);
 
+  const bx = b.self.x, bz = b.self.z;
+  send(a, { t: 's', x: bx, z: bz - 4, y: 0, yaw: 0, st: 'idle', w: 'smg', am: 50, ar: 150 });
+  a.self.x = bx; a.self.z = bz - 4;
+  await delay(100);
+
   // Hit sin fire asociado: rechazado.
   send(a, { t: 'hit', target: b.welcome.id, dmg: 120, part: 'head', gib: 1 });
   a.messages.length = 0;
   let snap = await waitFor(a, (m) => m.t === 'snap');
   if (hpOf(snap, b.welcome.id) !== 100) throw new Error('hit sin disparo fue aceptado');
 
-  // Un SMG válido no puede reclamar 120: presupuesto máximo = headshot 16.
+  // Mentir sobre la zona no convierte un impacto de torso en headshot. El
+  // servidor ignora además el 120 reclamado y reconstruye los 10 dmg reales.
   send(a, firePacket(a, b));
-  send(a, { t: 'hit', target: b.welcome.id, dmg: 120, part: 'head', gib: 1 });
+  send(a, { t: 'hit', target: b.welcome.id, dmg: 120, part: 'head', gib: 1,
+    p: [bx, 1.0, bz] });
   a.messages.length = 0;
   snap = await waitFor(a, (m) => m.t === 'snap' && hpOf(m, b.welcome.id) < 100);
-  if (hpOf(snap, b.welcome.id) !== 84) {
-    throw new Error(`presupuesto SMG incorrecto: hp=${hpOf(snap, b.welcome.id)}`);
+  if (hpOf(snap, b.welcome.id) !== 90) {
+    throw new Error(`zona autoritativa SMG incorrecta: hp=${hpOf(snap, b.welcome.id)}`);
+  }
+
+  // Un punto de cabeza real sí usa 1.6x aunque el cliente reclame solo 1 dmg.
+  await delay(110);
+  send(a, firePacket(a, b));
+  send(a, { t: 'hit', target: b.welcome.id, dmg: 1, part: 'head', gib: 0,
+    p: [bx, 1.52, bz] });
+  a.messages.length = 0;
+  snap = await waitFor(a, (m) => m.t === 'snap' && hpOf(m, b.welcome.id) < 90);
+  if (hpOf(snap, b.welcome.id) !== 74) {
+    throw new Error(`headshot SMG no fue recalculado: hp=${hpOf(snap, b.welcome.id)}`);
   }
 
   // Repetir el claim sin otro disparo no vuelve a aplicar daño.
-  send(a, { t: 'hit', target: b.welcome.id, dmg: 16, part: 'head', gib: 0 });
+  send(a, { t: 'hit', target: b.welcome.id, dmg: 120, part: 'head', gib: 0,
+    p: [bx, 1.52, bz] });
   await delay(90);
   a.messages.length = 0;
   snap = await waitFor(a, (m) => m.t === 'snap');
-  if (hpOf(snap, b.welcome.id) !== 84) throw new Error('claim duplicado aplicó daño');
+  if (hpOf(snap, b.welcome.id) !== 74) throw new Error('claim duplicado aplicó daño');
+
+  // A 80 m la SMG cae a 8 dmg, aunque el cliente intente reclamar 120.
+  send(a, { t: 's', x: -40, z: 0, y: 0, yaw: -Math.PI / 2,
+    st: 'idle', w: 'smg', am: 48, ar: 150 });
+  send(b, { t: 's', x: 40, z: 0, y: 0, yaw: Math.PI / 2,
+    st: 'idle', w: 'smg', am: 49, ar: 150 });
+  await delay(120);
+  send(a, { t: 'fire', w: 'smg', o: [-40, 1.1, 0], p: [40, 1.0, 0], d: [] });
+  send(a, { t: 'hit', target: b.welcome.id, dmg: 120, part: 'body', gib: 0,
+    p: [40, 1.0, 0] });
+  a.messages.length = 0;
+  snap = await waitFor(a, (m) => m.t === 'snap' && hpOf(m, b.welcome.id) < 74);
+  if (hpOf(snap, b.welcome.id) !== 66) {
+    throw new Error(`falloff SMG autoritativo incorrecto: hp=${hpOf(snap, b.welcome.id)}`);
+  }
 
   // Un remate cercano de escopeta publica el contexto visual autoritativo.
   // Los clientes no deben decidir por su cuenta si una muerte desmiembra.
-  const bx = b.self.x, bz = b.self.z;
+  send(b, { t: 's', x: bx, z: bz, y: 0, yaw: 0, st: 'idle', w: 'smg', am: 49, ar: 150 });
   send(a, { t: 's', x: bx, z: bz - 1.5, y: 0, yaw: 0, st: 'idle', w: 'shotgun', am: 8, ar: 24 });
   await delay(700);
   send(a, { t: 'fire', w: 'shotgun', o: [bx, 1.1, bz - 1.5], p: [bx, 1.1, bz], d: [] });
-  send(a, { t: 'hit', target: b.welcome.id, dmg: 104, part: 'body', gib: 1 });
+  send(a, { t: 'hit', target: b.welcome.id, dmg: 1, part: 'body', gib: 1,
+    pellets: 8, p: [bx, 1.0, bz] });
   const death = await waitFor(a, (m) => m.t === 'death' && m.target === b.welcome.id);
   if (!death.gib || death.w !== 'shotgun' || death.part !== 'body' ||
       death.dist > 4.2 || death.dmg !== 104) {

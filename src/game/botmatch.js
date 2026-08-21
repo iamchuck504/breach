@@ -16,6 +16,7 @@ import { TUNING } from '../config/tuning.js';
 import { ROUND_FINISH_HOLD } from './match-flow.js';
 import { Rig, RAGDOLL_R } from '../player/rig.js';
 import { resolveShot, applySpread, applyPelletPattern } from '../combat/ballistics.js';
+import { damageFalloff } from '../combat/damage.js';
 import { t } from '../core/i18n.js';
 
 const ROUND_TIME = 300;      // 5 minutos
@@ -28,7 +29,7 @@ const ROUND_RESULT_TIME = 5;
 const FINAL_TIME = 11;
 const BOT_NAMES = { red: ['REX', 'VOLT', 'JAZZ'], blue: ['NOVA', 'DUKE', 'BLITZ', 'PIXEL'] };
 const TEAM_HEX = { red: 0xd94f3f, blue: 0x4f8de0 };
-const BOT_DMG = 0.7;         // los bots pegan más suave que un jugador
+const BOT_DMG = TUNING.combat.botDamageScale; // los bots pegan más suave que un jugador
 const TACTICAL_ROLES = ['advance', 'flank', 'hold', 'support', 'angle'];
 const STUCK_WINDOW = 0.45;   // reacción perceptiblemente inmediata, sin ruido de un frame
 const STUCK_RATIO = 0.32;    // progreso real mínimo frente al movimiento solicitado
@@ -1768,12 +1769,13 @@ export class BotMatch {
       if (i === 0) this.cb.effects.tracer(_v1, hit.point);
       if (hit.kind === 'player') {
         let dmg = def.dmg * BOT_DMG;
-        if (def.falloffStart && hit.t > def.falloffStart) {
-          dmg *= Math.max(0, 1 - (hit.t - def.falloffStart) / (def.falloffEnd - def.falloffStart));
-        }
+        dmg *= damageFalloff(def, hit.t);
         if (hit.part === 'head') dmg *= def.headMult;
-        const acc = dmgAcc.get(hit.id) || { dmg: 0, part: hit.part, dist: hit.t };
+        const acc = dmgAcc.get(hit.id) || {
+          dmg: 0, part: hit.part, dist: hit.t, point: hit.point.clone(), pellets: 0,
+        };
         acc.dmg += dmg;
+        acc.pellets++;
         acc.dist = Math.min(acc.dist, hit.t);
         if (hit.part === 'head') acc.part = 'head';
         dmgAcc.set(hit.id, acc);
@@ -1798,7 +1800,9 @@ export class BotMatch {
         part: hitCtx.part, gib,
       };
       if (this.external) {
-        this.cb.botHit?.(bot, id, dmg, hitCtx.part, gib, hitCtx.dist);
+        this.cb.botHit?.(bot, id, dmg, hitCtx.part, gib, hitCtx.point, {
+          pellets: hitCtx.pellets,
+        });
         continue;
       }
       if (id === 'player') {

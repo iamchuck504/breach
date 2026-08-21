@@ -91,11 +91,12 @@ export class NetClient {
     this.send({ t: 'fire', o: pack(origin), p: pack(point), w: wep, d: impacts.slice(0, 8).map(pack) });
   }
 
-  hit(targetId, dmg, part, gib, point = null) {
+  hit(targetId, dmg, part, gib, point = null, meta = null) {
     const p = point ? [+point.x.toFixed(2), +point.y.toFixed(2), +point.z.toFixed(2)] : undefined;
     this.send({
       t: 'hit', target: targetId, dmg: Math.round(dmg), part,
       gib: gib ? 1 : 0, ...(p ? { p } : {}),
+      ...(meta?.pellets ? { pellets: Math.round(meta.pellets) } : {}),
     });
   }
 
@@ -128,10 +129,11 @@ export class NetClient {
     this.send({ t: 'botFire', id, o: pack(origin), p: pack(point), w: wep, d: impacts.slice(0, 8).map(pack) });
   }
 
-  botHit(id, targetId, dmg, part, gib, point = null) {
+  botHit(id, targetId, dmg, part, gib, point = null, meta = null) {
     const p = point ? [+point.x.toFixed(2), +point.y.toFixed(2), +point.z.toFixed(2)] : undefined;
     this.send({ t: 'botHit', id, target: targetId, dmg: Math.round(dmg), part,
-      gib: gib ? 1 : 0, ...(p ? { p } : {}) });
+      gib: gib ? 1 : 0, ...(p ? { p } : {}),
+      ...(meta?.pellets ? { pellets: Math.round(meta.pellets) } : {}) });
   }
 
   close() { this.dead = true; this.ws?.close(); }
