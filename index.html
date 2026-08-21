@@ -452,7 +452,9 @@
   .map-row { display: grid; grid-template-columns: 1fr; }
   #btn-map { min-height: 44px; }
   .field-note { margin-top: 7px; color: var(--dim); font-size: 10px; }
-  .utility-row { display: grid; grid-template-columns: repeat(3,1fr); gap: 7px; margin-top: 14px; }
+  /* 4 utilidades (personaje, opciones, editor, pantalla completa): 2×2 para
+     que ninguna quede colgando sola en una segunda fila */
+  .utility-row { display: grid; grid-template-columns: repeat(2,1fr); gap: 7px; margin-top: 14px; }
   .utility-row .btn { min-height: 42px; padding: 0 8px; justify-content: center; font-size: 8.5px; }
   #net-status { font-family: var(--mono); font-size: 10px; color: #ffad73;
     letter-spacing: .08em; margin-top: 10px; min-height: 14px; }
