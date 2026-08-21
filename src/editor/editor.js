@@ -589,15 +589,16 @@ export class MapEditor {
       this.keys.add(e.code);
     };
     this._onKeyUp = (e) => this.keys.delete(e.code);
+    // Zoom = avanzar/retroceder a lo largo de la línea de visión. El paso
+    // escala con la altura para que acercarse desde lejos sea rápido y el
+    // ajuste fino cerca del suelo siga siendo preciso.
     this._onWheel = (e) => {
       if (!this.active) return;
-      const f = e.deltaY > 0 ? 1.12 : 0.89;
-      // zoom = avanzar en la dirección de la cámara
       const dir = this._camDir();
-      const step = (e.deltaY > 0 ? -1 : 1) * this.cam.y * 0.18;
+      const step = -Math.sign(e.deltaY) * Math.max(1.5, this.cam.y * 0.22);
       this.cam.x += dir.x * step;
-      this.cam.y = Math.max(2, this.cam.y - dir.y * -step * 0 + (e.deltaY > 0 ? 2.2 : -2.2));
       this.cam.z += dir.z * step;
+      this.cam.y = Math.max(1.5, Math.min(240, this.cam.y + dir.y * step));
     };
     window.addEventListener('keydown', this._onKey);
     window.addEventListener('keyup', this._onKeyUp);
@@ -612,6 +613,7 @@ export class MapEditor {
   // clic izquierdo: seleccionar o colocar; con Shift, multi-selección
   onPointerDown(nx, ny, { shift, alt, button }) {
     if (!this.active) return;
+    this._lastPtr = { x: nx * 0.5 * window.innerWidth, y: -ny * 0.5 * window.innerHeight };
     if (button === 2) { this.drag = { kind: 'look' }; return; }
     const hit = this.pick(nx, ny);
     if (alt) {
@@ -627,7 +629,12 @@ export class MapEditor {
         this.selection = new Set([hit.id]);
       }
       const g = this.groundPoint(nx, ny);
-      this.drag = { kind: 'move', last: g, moved: false };
+      // Snapshot del estado inicial: rotar/escalar aplican un delta ABSOLUTO
+      // desde aquí (un solo undo por gesto y sin deriva acumulada).
+      this.drag = {
+        kind: 'move', last: g, moved: false, acc: 0,
+        start: this.selected().map((o) => ({ id: o.id, rot: o.rot ?? 0, w: o.w, d: o.d })),
+      };
       this.refreshOverlay();
     } else if (!shift) {
       this.selection.clear();
@@ -635,26 +642,73 @@ export class MapEditor {
     }
   }
 
-  onPointerMove(nx, ny, dx, dy) {
+  onPointerMove(nx, ny, mdxRaw = 0, mdyRaw = 0) {
     if (!this.active) return;
+    // Delta calculado desde las coordenadas normalizadas: movementX/Y no es
+    // fiable (llega en 0 con eventos sintéticos y sin pointer lock), y las
+    // herramientas de rotar/escalar dependen del desplazamiento del cursor.
+    const px = nx * 0.5 * window.innerWidth, py = -ny * 0.5 * window.innerHeight;
+    const last = this._lastPtr ?? { x: px, y: py };
+    let dx = px - last.x, dy = py - last.y;
+    this._lastPtr = { x: px, y: py };
+    if (dx === 0 && dy === 0) { dx = mdxRaw; dy = mdyRaw; }
     if (this.drag?.kind === 'look') {
       this.cam.yaw -= dx * 0.0032;
       this.cam.pitch = Math.max(-1.55, Math.min(-0.05, this.cam.pitch - dy * 0.0032));
       return;
     }
-    if (this.drag?.kind === 'move' && this.tool !== 'select') {
-      const g = this.groundPoint(nx, ny);
-      if (!g || !this.drag.last) return;
-      const mdx = g.x - this.drag.last.x, mdz = g.z - this.drag.last.z;
-      if (!this.drag.moved && Math.hypot(mdx, mdz) > 0.05) {
-        this.pushUndo('mover');
-        this.drag.moved = true;
+    if (!this.drag || this.drag.kind !== 'move' || this.tool === 'select') return;
+
+    // ROTAR arrastrando en horizontal: el desplazamiento del cursor se
+    // convierte en ángulo, con el snap activo (y 90° fijos en geometría AABB).
+    if (this.tool === 'rotate') {
+      if (!this.drag.moved && Math.abs(dx) < 1) return;
+      if (!this.drag.moved) { this.pushUndo('rotar'); this.drag.moved = true; }
+      this.drag.acc += dx * 0.45;
+      const stepped = this.snapRot > 0
+        ? Math.round(this.drag.acc / this.snapRot) * this.snapRot
+        : this.drag.acc;
+      for (const s of this.drag.start) {
+        const o = this.map.objects.find((x) => x.id === s.id);
+        if (!o) continue;
+        const piece = paletteById(o.p);
+        // AABB: la geometría jugable solo admite múltiplos de 90°
+        const delta = piece?.t === 'box' ? Math.round(stepped / 90) * 90 : stepped;
+        o.rot = ((s.rot + delta) % 360 + 360) % 360;
+        if (piece?.t === 'spawn') o.yaw = o.rot * DEG;
       }
-      if (this.drag.moved) {
-        for (const o of this.selected()) { o.x = this.snap(o.x + mdx); o.z = this.snap(o.z + mdz); }
-        this.drag.last = g;
-        this.rebuild();
+      this.rebuild();
+      return;
+    }
+
+    // ESCALAR arrastrando: derecha/arriba agranda, izquierda/abajo encoge.
+    if (this.tool === 'scale') {
+      if (!this.drag.moved && Math.abs(dx) + Math.abs(dy) < 2) return;
+      if (!this.drag.moved) { this.pushUndo('escalar'); this.drag.moved = true; }
+      this.drag.acc += (dx - dy) * 0.006;
+      const f = Math.max(0.15, Math.min(6, 1 + this.drag.acc));
+      for (const s of this.drag.start) {
+        const o = this.map.objects.find((x) => x.id === s.id);
+        if (!o || s.w === undefined) continue;
+        o.w = Math.max(0.3, +(s.w * f).toFixed(2));
+        o.d = Math.max(0.3, +(s.d * f).toFixed(2));
       }
+      this.rebuild();
+      return;
+    }
+
+    // MOVER: el objeto sigue al cursor sobre el plano del suelo
+    const g = this.groundPoint(nx, ny);
+    if (!g || !this.drag.last) return;
+    const mdx = g.x - this.drag.last.x, mdz = g.z - this.drag.last.z;
+    if (!this.drag.moved && Math.hypot(mdx, mdz) > 0.05) {
+      this.pushUndo('mover');
+      this.drag.moved = true;
+    }
+    if (this.drag.moved) {
+      for (const o of this.selected()) { o.x = this.snap(o.x + mdx); o.z = this.snap(o.z + mdz); }
+      this.drag.last = g;
+      this.rebuild();
     }
   }
 
