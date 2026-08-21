@@ -1647,9 +1647,10 @@ export class World {
     this._box(-6.1, -21.4, 2.4, 0.9, LOW, { ...lowOpts, visual: false });
     this._box(6.1, -21.4, 2.4, 0.9, LOW, { ...lowOpts, visual: false });
 
-    // edificios (crean los callejones laterales contra el muro perimetral)
-    this._box(-11.5, -17, 7, 8, HIGH, { ...highOpts, visual: false });
-    this._box(12, -14, 6, 6, HIGH, { ...highOpts, visual: false });
+    // Puestos pequeños centrados en la acera. Quedan corredores amplios tanto
+    // por el lado de la calle como por el lado de los edificios.
+    this._box(-14.35, -17, 1.75, 1.75, MID, { ...midOpts, visual: false });
+    this._box(14.35, -14, 1.65, 1.65, MID, { ...midOpts, visual: false });
 
     // vehículos sobre la avenida (cobertura baja)
     this._box(-2.5, -16, 1.9, 4.2, LOW, { ...lowOpts, visual: false });
@@ -1663,9 +1664,9 @@ export class World {
     // (el espejo crea el segundo). El tráfico abandonado guía los flancos.
     this._box(-6.5, -1.5, 2.4, 7, HIGH, { ...highOpts, visual: false });
 
-    // plataforma saltable + kiosco + cobertura del callejón
+    // plataforma saltable + caseta compacta + cobertura del callejón
     this._box(8.5, -5, 2.6, 2.6, LOW, { ...lowOpts, visual: false });
-    this._box(12.5, -8.5, 2.8, 1, MID, { ...midOpts, visual: false });
+    this._box(14.35, -8.5, 1.15, 0.5, MID, { ...midOpts, visual: false });
     this._box(-16.5, -8, 0.9, 2.2, LOW, { ...lowOpts, visual: false });
 
     // cobertura de aproximación al centro
@@ -1683,29 +1684,24 @@ export class World {
       color: 0x777a79, map: this._tex('concreteTop', 2.2, 16), roughness: 0.8, metalness: 0.02,
     });
     const lineMat = new THREE.MeshBasicMaterial({ color: 0xd3a864, transparent: true, opacity: 0.46 });
-    // Aceras completas: el asfalto ya no llega hasta una pared. Son planos
-    // visuales sobre el mismo suelo navegable y por tanto no crean escalones.
-    for (const x of [-12.92, 12.92]) {
-      const walk = new THREE.Mesh(new THREE.PlaneGeometry(8.0, this.fz * 2 - 0.8), sidewalkMat);
+    // Aceras estrechas de escala urbana. Son planos visuales sobre el mismo
+    // suelo navegable: ensanchan la lectura de la calzada sin crear escalones.
+    for (const x of [-14.25, 14.25]) {
+      const walk = new THREE.Mesh(new THREE.PlaneGeometry(5.0, this.fz * 2 - 0.8), sidewalkMat);
       walk.rotation.x = -Math.PI / 2; walk.position.set(x, 0.014, 0); walk.receiveShadow = true;
       this.mapGroup.add(walk);
     }
-    for (const x of [-8.7, 8.7]) {
-      // La interrupción central del bordillo es puramente visual y permite
-      // que los ramales laterales se lean realmente como una intersección.
-      const gap = 8.4;
-      const segmentLength = (this.fz * 2 - 1 - gap) / 2;
-      const segmentCenter = gap / 2 + segmentLength / 2;
-      for (const z of [-segmentCenter, segmentCenter]) {
-        const curb = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.12, segmentLength), curbMat);
-        curb.position.set(x, 0.06, z); curb.receiveShadow = true; this.mapGroup.add(curb);
-        const gutter = new THREE.Mesh(
-          new THREE.PlaneGeometry(0.62, segmentLength - 0.1),
-          new THREE.MeshBasicMaterial({ color: 0x242a2d, transparent: true, opacity: 0.36 }),
-        );
-        gutter.rotation.x = -Math.PI / 2; gutter.position.set(x - Math.sign(x) * 0.46, 0.019, z);
-        this.mapGroup.add(gutter);
-      }
+    for (const x of [-11.65, 11.65]) {
+      // Bordillo continuo: Calle Cerrada es una sola avenida, no una
+      // intersección. La cuneta marca con claridad el límite de la calzada.
+      const curb = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.12, this.fz * 2 - 1), curbMat);
+      curb.position.set(x, 0.06, 0); curb.receiveShadow = true; this.mapGroup.add(curb);
+      const gutter = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.62, this.fz * 2 - 1.2),
+        new THREE.MeshBasicMaterial({ color: 0x242a2d, transparent: true, opacity: 0.36 }),
+      );
+      gutter.rotation.x = -Math.PI / 2; gutter.position.set(x - Math.sign(x) * 0.46, 0.019, 0);
+      this.mapGroup.add(gutter);
     }
     const marks = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.13, 2.2), lineMat, 20);
     const m4 = new THREE.Matrix4();
@@ -1716,46 +1712,19 @@ export class World {
     }
     this.mapGroup.add(marks);
 
-    // Dos accesos comerciales clausurados cruzan la avenida. La capa oscura
-    // convierte la acera profunda en ramales de una intersección sin crear
-    // geometría, escalones ni nuevas rutas físicas.
-    const crossingAsphalt = new THREE.MeshBasicMaterial({
-      color: 0x2a2f32, transparent: true, opacity: 0.88, depthWrite: false,
-    });
-    for (const x of [-12.85, 12.85]) {
-      const spur = new THREE.Mesh(new THREE.PlaneGeometry(8.05, 8.4), crossingAsphalt);
-      spur.rotation.x = -Math.PI / 2; spur.position.set(x, 0.027, 0); this.mapGroup.add(spur);
-    }
-    const wornWhite = new THREE.MeshBasicMaterial({
-      color: 0xd7d2bd, transparent: true, opacity: 0.48, depthWrite: false,
-    });
-    // Dos pasos peatonales y sus líneas de parada. Las 18 franjas comparten
-    // una sola llamada de dibujo; se deja libre el pickup central.
-    const crosswalk = new THREE.InstancedMesh(new THREE.PlaneGeometry(1.22, 0.58), wornWhite, 18);
-    const crossTransform = new THREE.Object3D();
-    let crossIndex = 0;
-    for (const zSign of [-1, 1]) {
-      const crossZ = zSign * 4.55;
-      for (let i = -4; i <= 4; i++) {
-        crossTransform.position.set(i * 1.72, 0.032, crossZ + ((i + 4) % 3 - 1) * 0.035);
-        crossTransform.rotation.set(-Math.PI / 2, 0, (i % 2) * 0.012);
-        crossTransform.updateMatrix(); crosswalk.setMatrixAt(crossIndex++, crossTransform.matrix);
-      }
-      const stop = new THREE.Mesh(new THREE.PlaneGeometry(15.2, 0.16), wornWhite);
-      stop.rotation.x = -Math.PI / 2; stop.position.set(0, 0.031, zSign * 6.05); this.mapGroup.add(stop);
-    }
-    crosswalk.instanceMatrix.needsUpdate = true; this.mapGroup.add(crosswalk);
-    // Tapas y drenajes hacen que el cruce se lea como infraestructura real.
+    // Alcantarilla y drenajes longitudinales aportan infraestructura urbana
+    // sin convertir el centro en una intersección inexistente.
     const ironMat = new THREE.MeshStandardMaterial({ color: 0x252a2c, metalness: 0.64, roughness: 0.58 });
     const manhole = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.62, 0.025, 20), ironMat);
     manhole.position.set(0.55, 0.035, 0.35); this.mapGroup.add(manhole);
     const grooves = new THREE.InstancedMesh(new THREE.BoxGeometry(0.78, 0.018, 0.035), curbMat, 5);
+    const crossTransform = new THREE.Object3D();
     for (let i = 0; i < 5; i++) {
       crossTransform.position.set(0.55, 0.052, 0.15 + i * 0.10);
       crossTransform.rotation.set(0, 0.28, 0); crossTransform.updateMatrix(); grooves.setMatrixAt(i, crossTransform.matrix);
     }
     grooves.instanceMatrix.needsUpdate = true; this.mapGroup.add(grooves);
-    const drainPositions = [[-8.12, -4.0], [8.12, 4.0], [-8.12, 4.0], [8.12, -4.0]];
+    const drainPositions = [[-11.18, -4.0], [11.18, 4.0], [-11.18, 4.0], [11.18, -4.0]];
     const drains = new THREE.InstancedMesh(new THREE.BoxGeometry(0.34, 0.025, 0.78), ironMat, drainPositions.length);
     const drainSlots = new THREE.InstancedMesh(new THREE.BoxGeometry(0.38, 0.014, 0.035), curbMat, 20);
     let slotIndex = 0;
@@ -1796,13 +1765,13 @@ export class World {
       const side = i % 2 ? 1 : -1;
       const z = -24 + i * 3.65;
       dm.compose(
-        new THREE.Vector3(side * (9.25 + (i % 3) * 0.38), 0.034, z),
+        new THREE.Vector3(side * (12.15 + (i % 3) * 0.30), 0.034, z),
         new THREE.Quaternion().setFromEuler(new THREE.Euler(0, (i * 1.71) % Math.PI, (i % 4 - 1.5) * 0.05)),
         new THREE.Vector3(0.65 + (i % 3) * 0.22, 1, 0.7 + (i % 4) * 0.13),
       );
       debris.setMatrixAt(i, dm);
       dm.compose(
-        new THREE.Vector3(-side * (9.4 + (i % 2) * 0.55), 0.034, -z),
+        new THREE.Vector3(-side * (12.2 + (i % 2) * 0.42), 0.034, -z),
         new THREE.Quaternion().setFromEuler(new THREE.Euler(0, (i * 1.29) % Math.PI, 0)),
         new THREE.Vector3(0.7 + (i % 2) * 0.2, 1, 0.8),
       );
@@ -1815,9 +1784,10 @@ export class World {
     // marquesinas y rótulos quedan detrás/sobre el muro y no generan hitboxes
     // falsas dentro de la avenida.
     const addStreetBuilding = (side, z, span, height, name, color, variant = 0) => {
-      // El muro físico comienza a ±17.0. La piel queda 8 cm delante: no hay
-      // z-fighting y el jugador sigue colisionando detrás de lo que ve.
-      const faceX = side * (this.fx - 0.08);
+      // El muro físico comienza a ±17.0 y la masa exterior termina en ±16.92.
+      // La piel se proyecta 5 cm hacia la calle para que nunca comparta plano
+      // con el ladrillo del volumen (la causa del parpadeo anterior).
+      const faceX = side * (this.fx - 0.13);
       const rot = side > 0 ? -Math.PI / 2 : Math.PI / 2;
       const toward = -side;
       const brickId = variant % 3 === 1 ? 'urbanBrickDark' : 'urbanBrick';
@@ -1825,6 +1795,9 @@ export class World {
       const facadeMat = new THREE.MeshStandardMaterial({
         color: facadeTint, map: this._tex(brickId, Math.max(2, span / 2.2), Math.max(2, height / 1.8)),
         roughness: 0.86, metalness: 0.02, side: THREE.DoubleSide,
+      });
+      const roofMat = new THREE.MeshStandardMaterial({
+        color: facadeTint.clone().multiplyScalar(0.52), roughness: 0.94, metalness: 0.01,
       });
       const glassMat = new THREE.MeshStandardMaterial({ color: 0x101c23, metalness: 0.52, roughness: 0.2 });
       const litGlassMat = new THREE.MeshBasicMaterial({ color: 0xd19a61 });
@@ -1841,7 +1814,10 @@ export class World {
         color: variant % 2 ? 0x384248 : 0x514238, metalness: 0.34, roughness: 0.62,
       });
       // Volumen exterior: visible por encima de la fachada, sin afectar juego.
-      const mass = new THREE.Mesh(new THREE.BoxGeometry(4.6, height, span), facadeMat);
+      // El techo usa material liso: evita el patrón de ladrillo horizontal
+      // de alta frecuencia que producía moiré al observar el mapa desde arriba.
+      const mass = new THREE.Mesh(new THREE.BoxGeometry(4.6, height, span),
+        [facadeMat, facadeMat, roofMat, roofMat, facadeMat, facadeMat]);
       mass.position.set(side * (this.fx + 2.22), height / 2, z); mass.castShadow = true; this.mapGroup.add(mass);
       const face = new THREE.Mesh(new THREE.PlaneGeometry(span - 0.16, height - 0.18), facadeMat);
       face.position.set(faceX, height / 2, z); face.rotation.y = rot; this.mapGroup.add(face);
@@ -1987,6 +1963,7 @@ export class World {
     const blocks = [
       [-24, 11.7, 8.4, 'PHARMACY', 0x9c8173, 0],
       [-12, 11.7, 7.3, 'GARAGE', 0x746967, 1],
+      [0, 10.8, 8.1, 'HARDWARE', 0x846f67, 2],
       [12, 11.7, 7.8, 'LAUNDRY', 0x776c68, 3],
       [24, 11.7, 8.6, 'MARKET', 0x95796c, 4],
     ];
@@ -1994,29 +1971,6 @@ export class World {
       addStreetBuilding(-1, z, span, h, name, color, variant);
       addStreetBuilding(1, -z, span, h, name, color, variant);
     }
-    // Los ramales del cruce terminan en accesos sellados por el operativo.
-    // El muro físico no cambia, pero ahora se percibe una calle lateral
-    // clausurada en vez de una acera que desemboca contra una tienda.
-    const closureMat = new THREE.MeshStandardMaterial({
-      color: 0x263034, map: this._tex('shopShutter', 2.4, 1), metalness: 0.46,
-      roughness: 0.58, side: THREE.DoubleSide,
-    });
-    const closureTrim = new THREE.MeshStandardMaterial({ color: 0x444c4f, metalness: 0.56, roughness: 0.48 });
-    for (const side of [-1, 1]) {
-      const faceX = side * (this.fx - 0.07);
-      const rot = side < 0 ? Math.PI / 2 : -Math.PI / 2;
-      const gate = new THREE.Mesh(new THREE.PlaneGeometry(7.65, 3.0), closureMat);
-      gate.position.set(faceX, 1.50, 0); gate.rotation.y = rot; this.mapGroup.add(gate);
-      for (const z of [-3.88, 3.88]) {
-        const jamb = new THREE.Mesh(new THREE.BoxGeometry(0.24, 3.18, 0.24), closureTrim);
-        jamb.position.set(faceX - side * 0.10, 1.59, z); this.mapGroup.add(jamb);
-      }
-      const header = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.30, 8.0), closureTrim);
-      header.position.set(faceX - side * 0.12, 3.08, 0); this.mapGroup.add(header);
-      this._addMapSign('STREET CLOSED', faceX - side * 0.04, 2.68, 0, rot,
-        { w: 3.55, h: 0.46, bg: '#3b2524', fg: '#f0d7aa', border: '#bc6846' });
-    }
-
     // Autos inutilizados: landmark de vehículo y cover bajo predecible.
     for (const [x, z, rot, color, variant] of [
       [-2.5, -16, 0, 0x5a6470, 0], [2.5, 16, Math.PI, 0x5a6470, 0],
@@ -2056,67 +2010,42 @@ export class World {
       [3.6, -2.2], [-3.6, 2.2],
     ]) addJersey(x, z, 2.4, 0.9);
 
-    // Los cuadrados LOW laterales se interpretan como generadores urbanos:
-    // siguen siendo mantle/cover bajo y ganan una silueta temática.
-    const generatorMat = new THREE.MeshStandardMaterial({ color: 0x4e5658, metalness: 0.52, roughness: 0.46 });
-    const ventMat = new THREE.MeshStandardMaterial({ color: 0x202629, metalness: 0.66, roughness: 0.4 });
-    const indicatorMat = new THREE.MeshBasicMaterial({ color: 0xd78837 });
+    // Los cuadrados LOW laterales son contenedores comerciales de basura.
+    // Conservan exactamente la huella de 2.6 × 2.6 y la altura de cover;
+    // solo cambia su lectura ambiental, no la geometría jugable.
+    const largeWasteMat = new THREE.MeshStandardMaterial({ color: 0x304a46, metalness: 0.34, roughness: 0.68 });
+    const wasteDarkMat = new THREE.MeshStandardMaterial({ color: 0x1d2627, metalness: 0.48, roughness: 0.58 });
+    const wasteRimMat = new THREE.MeshStandardMaterial({ color: 0x68706d, metalness: 0.48, roughness: 0.54 });
+    const reflectorMat = new THREE.MeshBasicMaterial({ color: 0xcf7b3f });
     for (const [x, z, ry] of [[8.5, -5, 0], [-8.5, 5, Math.PI]]) {
-      const gen = new THREE.Group(); gen.position.set(x, 0, z); gen.rotation.y = ry;
-      const base = new THREE.Mesh(new THREE.BoxGeometry(2.42, 0.18, 2.42), ventMat);
-      base.position.y = 0.09; gen.add(base);
-      const body = new THREE.Mesh(new THREE.BoxGeometry(2.54, 0.86, 2.54), generatorMat);
-      body.position.y = 0.61; body.castShadow = true; gen.add(body);
-      const cap = new THREE.Mesh(new THREE.BoxGeometry(2.38, 0.15, 2.38), generatorMat);
-      cap.position.y = 1.115; cap.castShadow = true; gen.add(cap);
-      for (const px of [-0.72, 0, 0.72]) {
-        const vent = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.48, 0.04), ventMat);
-        vent.position.set(px, 0.65, -1.292); gen.add(vent);
+      const bin = new THREE.Group(); bin.position.set(x, 0, z); bin.rotation.y = ry;
+      const skid = new THREE.Mesh(new THREE.BoxGeometry(2.42, 0.12, 2.34), wasteDarkMat);
+      skid.position.y = 0.06; bin.add(skid);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(2.48, 0.78, 2.28), largeWasteMat);
+      body.position.y = 0.51; body.castShadow = true; body.receiveShadow = true; bin.add(body);
+      const rim = new THREE.Mesh(new THREE.BoxGeometry(2.56, 0.14, 2.42), wasteRimMat);
+      rim.position.y = 0.96; rim.castShadow = true; bin.add(rim);
+      for (const side of [-1, 1]) {
+        for (const pz of [-0.78, -0.26, 0.26, 0.78]) {
+          const rib = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.64, 0.08), wasteRimMat);
+          rib.position.set(side * 1.255, 0.54, pz); bin.add(rib);
+        }
       }
-      const control = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.38, 0.05), ventMat);
-      control.position.set(0.72, 0.63, 1.292); gen.add(control);
-      for (const cx of [0.54, 0.72, 0.90]) {
-        const light = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.055), cx === 0.72 ? indicatorMat : ventMat);
-        light.position.set(cx, 0.72, 1.325); gen.add(light);
+      for (const px of [-0.61, 0.61]) {
+        const lid = new THREE.Mesh(new THREE.BoxGeometry(1.14, 0.10, 2.30), wasteDarkMat);
+        lid.position.set(px, 1.07, 0); lid.rotation.z = px < 0 ? -0.035 : 0.035; bin.add(lid);
+        const handle = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.07, 0.08), wasteRimMat);
+        handle.position.set(px, 1.14, -0.88); bin.add(handle);
       }
-      for (const px of [-0.88, 0.88]) {
-        const handle = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.08, 0.08), ventMat);
-        handle.position.set(px, 1.22, 0); gen.add(handle);
+      for (const px of [-0.82, 0.82]) {
+        const reflector = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.12, 0.035), reflectorMat);
+        reflector.position.set(px, 0.55, -1.158); bin.add(reflector);
       }
-      this.mapGroup.add(gen);
-    }
-    // Cada generador alimenta un gabinete provisional en la fachada. Los
-    // cables explican su presencia y permanecen como detalle sin collider.
-    const cableRubber = new THREE.MeshStandardMaterial({ color: 0x121618, roughness: 0.86 });
-    const cabinetMat = new THREE.MeshStandardMaterial({ color: 0x586164, metalness: 0.58, roughness: 0.46 });
-    const workLampMat = new THREE.MeshBasicMaterial({ color: 0xff9a46 });
-    for (const [gx, gz] of [[8.5, -5], [-8.5, 5]]) {
-      const side = Math.sign(gx);
-      const wallX = side * (this.fx - 0.22);
-      const cable = new THREE.Mesh(
-        new THREE.TubeGeometry(new THREE.CatmullRomCurve3([
-          new THREE.Vector3(gx + side * 0.86, 0.045, gz + 0.72),
-          new THREE.Vector3(side * 11.4, 0.045, gz + 0.92),
-          new THREE.Vector3(side * 14.3, 0.045, gz + 0.46),
-          new THREE.Vector3(wallX, 0.62, gz + 0.28),
-        ]), 14, 0.026, 6, false),
-        cableRubber,
-      );
-      this.mapGroup.add(cable);
-      const cabinet = new THREE.Mesh(new THREE.BoxGeometry(0.24, 1.34, 0.92), cabinetMat);
-      cabinet.position.set(wallX, 0.74, gz + 0.28); this.mapGroup.add(cabinet);
-      for (const dz of [-0.27, 0, 0.27]) {
-        const slot = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.38, 0.055), ventMat);
-        slot.position.set(wallX - side * 0.135, 0.82, gz + 0.28 + dz); this.mapGroup.add(slot);
-      }
-      const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.10, 0.34), workLampMat);
-      lamp.position.set(wallX - side * 0.18, 1.64, gz + 0.28); this.mapGroup.add(lamp);
-      const glow = new THREE.PointLight(0xff8640, 1.35, 5.0, 2);
-      glow.position.set(wallX - side * 0.55, 1.55, gz + 0.28); glow.castShadow = false; this.mapGroup.add(glow);
+      this.mapGroup.add(bin);
     }
 
-    // Los bloques HIGH interiores son edificios bajos reales, no cubos con
-    // una calcomanía frontal. La piel coincide con su collider de 3 m.
+    // Puestos de acera de escala humana: revistas y comida rápida. Su volumen
+    // visual coincide con el MID compacto y deja circulación a ambos lados.
     const cornerBrick = new THREE.MeshStandardMaterial({
       color: 0xa78b7d, map: this._tex('urbanBrick', 3, 1.8), roughness: 0.84,
     });
@@ -2125,35 +2054,38 @@ export class World {
     });
     const cornerGlass = new THREE.MeshStandardMaterial({ color: 0x10202a, metalness: 0.58, roughness: 0.2 });
     const cornerTrim = new THREE.MeshStandardMaterial({ color: 0x77716a, roughness: 0.78 });
-    const addCornerStore = (x, z, w, d, toward, name, awningColor) => {
-      const shell = new THREE.Mesh(new THREE.BoxGeometry(w + 0.055, 3.04, d + 0.055), cornerBrick);
-      shell.position.set(x, 1.52, z); shell.castShadow = true; shell.receiveShadow = true; this.mapGroup.add(shell);
-      const frontZ = z + toward * (d / 2 + 0.035);
+    const addSidewalkKiosk = (x, z, w, d, toward, name, awningColor) => {
+      // Techo liso para evitar aliasing del ladrillo visto en ángulo cenital.
+      const shell = new THREE.Mesh(new THREE.BoxGeometry(w + 0.04, 1.94, d + 0.04),
+        [cornerBrick, cornerBrick, cornerTrim, cornerTrim, cornerBrick, cornerBrick]);
+      shell.position.set(x, 0.97, z); shell.castShadow = true; shell.receiveShadow = true; this.mapGroup.add(shell);
+      const frontZ = z + toward * (d / 2 + 0.026);
       // PlaneGeometry mira a +Z: el frente debe apuntar en la misma dirección
       // que `toward`, no mostrar su reverso espejado.
       const frontRot = toward > 0 ? 0 : Math.PI;
-      const shutter = new THREE.Mesh(new THREE.PlaneGeometry(w * 0.58, STREET_SCALE.door), cornerDark);
-      shutter.position.set(x - w * 0.12, 1.08, frontZ + toward * 0.012); shutter.rotation.y = frontRot; this.mapGroup.add(shutter);
-      const door = new THREE.Mesh(new THREE.PlaneGeometry(0.94, STREET_SCALE.door), cornerGlass);
-      door.position.set(x + w * 0.34, 1.08, frontZ + toward * 0.014); door.rotation.y = frontRot; this.mapGroup.add(door);
-      for (const px of [x - w * 0.45, x + w * 0.17, x + w * 0.47]) {
-        const pier = new THREE.Mesh(new THREE.BoxGeometry(0.24, 2.82, 0.18), cornerTrim);
-        pier.position.set(px, 1.41, frontZ + toward * 0.09); this.mapGroup.add(pier);
+      const shutter = new THREE.Mesh(new THREE.PlaneGeometry(w * 0.50, 1.12), cornerDark);
+      shutter.position.set(x - w * 0.10, 0.76, frontZ + toward * 0.010); shutter.rotation.y = frontRot; this.mapGroup.add(shutter);
+      const doorW = w * 0.28;
+      const door = new THREE.Mesh(new THREE.PlaneGeometry(doorW, 1.30), cornerGlass);
+      door.position.set(x + w * 0.31, 0.72, frontZ + toward * 0.012); door.rotation.y = frontRot; this.mapGroup.add(door);
+      for (const px of [x - w * 0.47, x + w * 0.17, x + w * 0.47]) {
+        const pier = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.76, 0.12), cornerTrim);
+        pier.position.set(px, 0.88, frontZ + toward * 0.055); this.mapGroup.add(pier);
       }
       const canopy = new THREE.Mesh(
-        new THREE.BoxGeometry(w * 0.72, 0.14, 0.64),
+        new THREE.BoxGeometry(w * 0.82, 0.11, 0.44),
         new THREE.MeshStandardMaterial({ color: awningColor, roughness: 0.74 }),
       );
-      canopy.position.set(x - w * 0.08, 2.46, frontZ + toward * 0.31); this.mapGroup.add(canopy);
-      const cornice = new THREE.Mesh(new THREE.BoxGeometry(w + 0.18, 0.16, d + 0.18), cornerTrim);
-      cornice.position.set(x, 2.94, z); this.mapGroup.add(cornice);
-      this._addMapSign(name, x - w * 0.08, 2.76, frontZ + toward * 0.04, frontRot,
-        { w: Math.min(3.8, w - 0.55), h: 0.42, bg: '#2a3438', fg: '#ead6ae', border: '#8d6b4f' });
+      canopy.position.set(x - w * 0.04, 1.55, frontZ + toward * 0.22); this.mapGroup.add(canopy);
+      const cornice = new THREE.Mesh(new THREE.BoxGeometry(w + 0.10, 0.12, d + 0.10), cornerTrim);
+      cornice.position.set(x, 1.88, z); this.mapGroup.add(cornice);
+      this._addMapSign(name, x - w * 0.04, 1.72, frontZ + toward * 0.026, frontRot,
+        { w: w - 0.25, h: 0.28, bg: '#2a3438', fg: '#ead6ae', border: '#8d6b4f' });
     };
-    addCornerStore(-11.5, -17, 7, 8, 1, 'SERVICE', 0x623b34);
-    addCornerStore(11.5, 17, 7, 8, -1, 'SERVICE', 0x623b34);
-    addCornerStore(12, -14, 6, 6, 1, 'DEPOT', 0x36565b);
-    addCornerStore(-12, 14, 6, 6, -1, 'DEPOT', 0x36565b);
+    addSidewalkKiosk(-14.35, -17, 1.75, 1.75, 1, 'NEWS', 0x623b34);
+    addSidewalkKiosk(14.35, 17, 1.75, 1.75, -1, 'NEWS', 0x623b34);
+    addSidewalkKiosk(14.35, -14, 1.65, 1.65, 1, 'HOT DOGS', 0xb05f35);
+    addSidewalkKiosk(-14.35, 14, 1.65, 1.65, -1, 'HOT DOGS', 0xb05f35);
 
     // Un par de puntos de basura/obra en los bordes comunican evacuación sin
     // cerrar callejones. Su base coincide con cubiertas ya existentes.
@@ -2243,64 +2175,42 @@ export class World {
       this.mapGroup.add(group);
     };
     addRoadwork(-1.2, -8.7, 0); addRoadwork(1.2, 8.7, Math.PI);
-    for (const [x, z, rot] of [[12.5, -8.5, 0], [-12.5, 8.5, Math.PI]]) {
+    for (const [x, z, rot] of [[14.35, -8.5, 0], [-14.35, 8.5, Math.PI]]) {
       const booth = new THREE.Group(); booth.position.set(x, 0, z); booth.rotation.y = rot;
-      const body = new THREE.Mesh(new THREE.BoxGeometry(2.78, 1.82, 0.96), dumpsterMat);
-      body.position.set(0, 0.91, 0); body.castShadow = true; booth.add(body);
-      const roof = new THREE.Mesh(new THREE.BoxGeometry(2.74, 0.18, 1.22), blackMat);
-      roof.position.set(0, 1.95, 0); booth.add(roof);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(1.10, 1.54, 0.48), dumpsterMat);
+      body.position.set(0, 0.77, 0); body.castShadow = true; booth.add(body);
+      const roof = new THREE.Mesh(new THREE.BoxGeometry(1.18, 0.13, 0.64), blackMat);
+      roof.position.set(0, 1.61, 0); booth.add(roof);
       const shutter = new THREE.Mesh(
-        new THREE.PlaneGeometry(2.28, 1.22),
+        new THREE.PlaneGeometry(0.82, 0.96),
         new THREE.MeshStandardMaterial({ map: this._tex('shopShutter'), color: 0x6e7474, metalness: 0.5, roughness: 0.5 }),
       );
-      shutter.position.set(0, 0.87, -0.491); booth.add(shutter);
+      shutter.position.set(0, 0.72, -0.246); booth.add(shutter);
       this.mapGroup.add(booth);
     }
-    this._addMapSign('TRAFFIC CONTROL', 12.5, 1.64, -9.01, Math.PI,
-      { w: 2.28, h: 0.34, bg: '#28383c', fg: '#e8d6a9', border: '#b06a3c' });
-    this._addMapSign('TRAFFIC CONTROL', -12.5, 1.64, 9.01, 0,
-      { w: 2.28, h: 0.34, bg: '#28383c', fg: '#e8d6a9', border: '#b06a3c' });
+    this._addMapSign('COFFEE', 14.35, 1.40, -8.76, Math.PI,
+      { w: 0.92, h: 0.25, bg: '#3d2920', fg: '#f0d4a1', border: '#a96f45' });
+    this._addMapSign('COFFEE', -14.35, 1.40, 8.76, 0,
+      { w: 0.92, h: 0.25, bg: '#3d2920', fg: '#f0d4a1', border: '#a96f45' });
 
-    // Semáforo fuera de servicio: landmark del cruce y causa visual del
-    // cierre. Su brazo queda por encima del jugador y no altera sightlines.
-    const signalPoleMat = new THREE.MeshStandardMaterial({ color: 0x30373a, metalness: 0.62, roughness: 0.44 });
-    const signalDarkMat = new THREE.MeshStandardMaterial({ color: 0x14191b, metalness: 0.34, roughness: 0.52 });
-    const signalRedMat = new THREE.MeshBasicMaterial({ color: 0xb93b32 });
-    const addBrokenSignal = (x, z, side) => {
-      const g = new THREE.Group(); g.position.set(x, 0, z);
-      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 4.15, 8), signalPoleMat);
-      pole.position.y = 2.075; g.add(pole);
-      const arm = new THREE.Mesh(new THREE.BoxGeometry(3.05, 0.09, 0.09), signalPoleMat);
-      arm.position.set(side * 1.46, 3.87, 0); arm.rotation.z = side * -0.09; g.add(arm);
-      const head = new THREE.Mesh(new THREE.BoxGeometry(0.42, 1.04, 0.34), signalDarkMat);
-      head.position.set(side * 2.76, 3.48, 0); head.rotation.z = side * 0.20; g.add(head);
-      for (let i = 0; i < 3; i++) {
-        const lens = new THREE.Mesh(new THREE.CircleGeometry(0.105, 12), i === 0 ? signalRedMat : signalPoleMat);
-        lens.position.set(side * 2.76, 3.78 - i * 0.30, side > 0 ? -0.176 : 0.176);
-        lens.rotation.y = side > 0 ? Math.PI : 0; g.add(lens);
-      }
-      this.mapGroup.add(g);
-    };
-    addBrokenSignal(-8.45, -4.85, 1);
-    addBrokenSignal(8.45, 4.85, -1);
-
-    // postes de luz de sodio a lo largo de la avenida (glow, sin luz dinámica)
-    for (const z of [-18, -6, 6, 18]) {
-      // Pegados a la acera: no introducen un obstáculo visual en el carril.
-      this._addUtilityPole(-8.72, z, { lamp: 0xffc27a, arm: 0.3 });
-      this._addUtilityPole(8.72, z, { lamp: 0xffc27a, arm: -0.3 });
+    // Postes continuos de extremo a extremo. La calle está cerrada al tráfico,
+    // pero su infraestructura permanece completa y legible como una avenida.
+    for (const z of [-25, -15, -5, 5, 15, 25]) {
+      // Pegados al bordillo y fuera de la huella reducida de los kioscos.
+      this._addUtilityPole(-11.72, z, { lamp: 0xffc27a, arm: 0.3 });
+      this._addUtilityPole(11.72, z, { lamp: 0xffc27a, arm: -0.3 });
     }
     // Cableado con caída suave entre postes: landmark vertical y profundidad
     // de calle real. TubeGeometry pequeño, lejos del volumen jugable.
     const cableMat = new THREE.MeshLambertMaterial({ color: 0x151a1e });
-    for (const x of [-8.83, 8.83]) {
-      for (let zi = -18; zi < 18; zi += 12) {
+    for (const x of [-11.83, 11.83]) {
+      for (let zi = -25; zi < 25; zi += 10) {
         for (const offset of [-0.10, 0.10]) {
           const cable = new THREE.Mesh(
             new THREE.TubeGeometry(new THREE.CatmullRomCurve3([
               new THREE.Vector3(x + offset, STREET_SCALE.lamp - 0.44, zi),
-              new THREE.Vector3(x + offset, STREET_SCALE.lamp - 0.82, zi + 6),
-              new THREE.Vector3(x + offset, STREET_SCALE.lamp - 0.44, zi + 12),
+              new THREE.Vector3(x + offset, STREET_SCALE.lamp - 0.82, zi + 5),
+              new THREE.Vector3(x + offset, STREET_SCALE.lamp - 0.44, zi + 10),
             ]), 8, 0.018, 5, false),
             cableMat,
           );
@@ -2312,7 +2222,7 @@ export class World {
     // No tienen collider: se mantienen pegados detrás del bordillo.
     const streetMetal = new THREE.MeshStandardMaterial({ color: 0x30383d, metalness: 0.64, roughness: 0.4 });
     const hydrantMat = new THREE.MeshStandardMaterial({ color: 0x8e3e31, metalness: 0.45, roughness: 0.48 });
-    for (const [x, z] of [[-9.5, -11], [9.5, 11]]) {
+    for (const [x, z] of [[-12.45, -11], [12.45, 11]]) {
       const h = new THREE.Group(); h.position.set(x, 0, z);
       const body = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.16, 0.48, 9), hydrantMat);
       body.position.y = 0.24; h.add(body);
@@ -2321,7 +2231,7 @@ export class World {
       const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.065, 0.38, 8), hydrantMat);
       arm.rotation.z = Math.PI / 2; arm.position.y = 0.32; h.add(arm); this.mapGroup.add(h);
     }
-    for (const [x, z, side] of [[-9.55, -2, -1], [9.55, 2, 1], [-9.55, 22, -1], [9.55, -22, 1]]) {
+    for (const [x, z, side] of [[-12.55, -2, -1], [12.55, 2, 1], [-12.55, 22, -1], [12.55, -22, 1]]) {
       const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 2.8, 7), streetMetal);
       pole.position.set(x, 1.4, z); this.mapGroup.add(pole);
       const plate = new THREE.Mesh(
@@ -2336,7 +2246,7 @@ export class World {
     // cada escaparate en un coste de iluminación independiente.
     for (let i = 0; i < 4; i++) {
       const z = -18 + i * 12;
-      const x = i % 2 ? 7.9 : -7.9;
+      const x = i % 2 ? 11.1 : -11.1;
       const light = new THREE.PointLight(i % 2 ? 0xffb36b : 0xffc17d, 4.2, 13, 2);
       light.position.set(x, 2.75, z); light.castShadow = false; this.mapGroup.add(light);
       const glow = new THREE.Mesh(
