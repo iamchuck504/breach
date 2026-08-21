@@ -1,6 +1,9 @@
 export const MAX_PLAYERS = 8;
 export const TEAM_CAPACITY = 4;
-export const MAPS = ['fortaleza', 'azoteas', 'calle', 'metro', 'prision', 'pueblo'];
+// Mapas aprobados para la build pública. Los layouts restantes se conservan
+// en el proyecto para seguir trabajándolos, pero no aparecen en lobbies ni en
+// la rotación automática hasta que estén listos.
+export const MAPS = ['fortaleza', 'azoteas', 'calle'];
 // Datos de gameplay que deben coincidir entre cliente y servidor. Mantenerlos
 // aquí evita que el mapa dibuje pickups en un sitio mientras la autoridad
 // online los valida en otro.

@@ -10,6 +10,16 @@ import { getMap, isCustomLayout, cratesOf, specialOf, spawnsOf, footprint, palet
   from './map-data.js';
 
 const FIELD_X = 15, FIELD_Z = 18; // semiancho / semilargo
+const SOLDIER_HEIGHT = 1.63;
+const STREET_SCALE = Object.freeze({
+  soldier: SOLDIER_HEIGHT,
+  door: 2.05,
+  floor: 2.7,
+  lamp: 6.2,
+  car: Object.freeze({ width: 1.9, length: 4.35, height: 1.4, wheel: 0.30 }),
+  truck: Object.freeze({ width: 2.4, length: 6.8, height: 2.9, wheel: 0.34 }),
+  bus: Object.freeze({ width: 2.5, length: 9.0, height: 3.08, wheel: 0.37 }),
+});
 
 // REGLA DE DISEÑO (Chuck): solo existen TRES alturas de bloque/pared.
 //   LOW  (1.1): saltable por encima; agachado, la cabeza NO sobresale (tope 1.02)
@@ -1178,7 +1188,9 @@ export class World {
     tex.colorSpace = THREE.SRGBColorSpace;
     const sign = new THREE.Mesh(
       new THREE.PlaneGeometry(w, h),
-      new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide, fog: false }),
+      // El reverso no se dibuja: evita que CanvasTexture aparezca espejada.
+      // Cada llamada orienta explícitamente el frente hacia el área jugable.
+      new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.FrontSide, fog: false }),
     );
     sign.position.set(x, y, z);
     sign.rotation.y = ry;
@@ -1186,9 +1198,33 @@ export class World {
     return sign;
   }
 
+  // Extruye un perfil lateral (z/y) a lo ancho del vehículo. Permite capós,
+  // parabrisas y techos inclinados sin depender de una pila de cubos.
+  _addVehicleProfile(group, profile, width, material, bevel = 0.035) {
+    const shape = new THREE.Shape();
+    shape.moveTo(profile[0][0], profile[0][1]);
+    for (let i = 1; i < profile.length; i++) shape.lineTo(profile[i][0], profile[i][1]);
+    shape.closePath();
+    const geo = new THREE.ExtrudeGeometry(shape, {
+      depth: width,
+      steps: 1,
+      bevelEnabled: bevel > 0,
+      bevelSegments: 1,
+      bevelSize: bevel,
+      bevelThickness: bevel,
+    });
+    // Shape.x es longitud local Z; extrusion.z pasa a ancho local X.
+    geo.rotateY(-Math.PI / 2);
+    geo.translate(width / 2, 0, 0);
+    geo.computeVertexNormals();
+    const mesh = new THREE.Mesh(geo, material);
+    mesh.castShadow = true; mesh.receiveShadow = true; group.add(mesh);
+    return mesh;
+  }
+
   _addStreetVehicle(x, z, rot = 0, color = 0x53616b) {
     const bodyMat = new THREE.MeshStandardMaterial({ color, metalness: 0.55, roughness: 0.38 });
-    const glassMat = new THREE.MeshStandardMaterial({ color: 0x101a21, metalness: 0.62, roughness: 0.16 });
+    const glassMat = new THREE.MeshStandardMaterial({ color: 0x101a21, metalness: 0.62, roughness: 0.16, side: THREE.DoubleSide });
     const tireMat = new THREE.MeshStandardMaterial({ color: 0x111315, metalness: 0.05, roughness: 0.88 });
     const hubMat = new THREE.MeshStandardMaterial({ color: 0x667078, metalness: 0.78, roughness: 0.3 });
     const trimMat = new THREE.MeshStandardMaterial({ color: 0x202326, metalness: 0.48, roughness: 0.48 });
@@ -1201,41 +1237,46 @@ export class World {
       m.position.set(px, py, pz); m.rotation.x = rx; m.rotation.z = rz;
       m.castShadow = true; m.receiveShadow = true; group.add(m); return m;
     };
-    // Tres volúmenes escalonados forman una silueta sedán reconocible. El
-    // capó/baúl bajos y la cabina estrecha evitan la lectura de "caja".
-    add(1.96, 0.34, 4.24, 0, 0.38, 0, bodyMat);
-    add(1.88, 0.30, 1.34, 0, 0.62, -1.38, bodyMat, -0.045);
-    add(1.86, 0.25, 1.05, 0, 0.59, 1.56, bodyMat, 0.035);
-    add(1.62, 0.48, 1.52, 0, 0.86, 0.06, bodyMat);
-    add(1.48, 0.30, 1.34, 0, 0.91, 0.05, glassMat);
-    // parabrisas y medallón con inclinación real
-    add(1.49, 0.40, 0.035, 0, 0.88, -0.72, glassMat, -0.62);
-    add(1.45, 0.34, 0.035, 0, 0.86, 0.77, glassMat, 0.58);
+    const S = STREET_SCALE.car;
+    this._addVehicleProfile(group, [
+      [-S.length / 2, 0.20], [-S.length / 2, 0.52], [-1.62, 0.72],
+      [-0.78, 0.82], [-0.39, S.height - 0.08], [0.66, S.height],
+      [1.18, 0.88], [2.04, 0.70], [S.length / 2, 0.42], [S.length / 2, 0.20],
+    ], S.width, bodyMat, 0.045);
+    // Cristales laterales trapezoidales que siguen el perfil real de cabina.
+    const sidePanel = (side, pts) => {
+      const x = side * (S.width / 2 + 0.047);
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pts.flatMap(([zv, yv]) => [x, yv, zv]), 3));
+      geo.setIndex([0, 1, 2, 0, 2, 3]); geo.computeVertexNormals();
+      const p = new THREE.Mesh(geo, glassMat); group.add(p); return p;
+    };
     for (const side of [-1, 1]) {
-      const window = new THREE.Mesh(new THREE.PlaneGeometry(1.12, 0.30), glassMat);
-      window.position.set(side * 0.816, 0.91, 0.02);
-      window.rotation.y = side * Math.PI / 2; group.add(window);
-      // marco B, manijas y líneas de puertas
-      add(0.025, 0.34, 0.07, side * 0.826, 0.9, 0.02, trimMat);
-      add(0.025, 0.045, 0.23, side * 0.829, 0.61, -0.13, trimMat);
-      for (const pz of [-0.66, 0.66]) add(0.025, 0.32, 0.025, side * 0.829, 0.48, pz, trimMat);
+      sidePanel(side, [[-0.69, 0.87], [-0.34, 1.26], [0.04, 1.29], [0.04, 0.87]]);
+      sidePanel(side, [[0.11, 0.87], [0.11, 1.29], [0.60, 1.29], [0.98, 0.88]]);
+      add(0.035, 0.46, 0.07, side * (S.width / 2 + 0.055), 1.08, 0.075, trimMat);
+      add(0.035, 0.05, 0.24, side * (S.width / 2 + 0.06), 0.72, -0.20, trimMat);
+      for (const pz of [-0.73, 0.79]) add(0.035, 0.48, 0.03, side * (S.width / 2 + 0.055), 0.63, pz, trimMat);
     }
-    for (const sx of [-0.96, 0.96]) for (const sz of [-1.25, 1.25]) {
-      const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.29, 0.29, 0.16, 14), tireMat);
-      wheel.rotation.z = Math.PI / 2; wheel.position.set(sx, 0.27, sz); group.add(wheel);
+    // Parabrisas y medallón realmente inclinados; no son caras verticales.
+    add(1.55, 0.52, 0.035, 0, 1.08, -0.58, glassMat, -0.68);
+    add(1.52, 0.43, 0.035, 0, 1.05, 0.83, glassMat, 0.62);
+    for (const sx of [-S.width / 2 - 0.015, S.width / 2 + 0.015]) for (const sz of [-1.43, 1.38]) {
+      const wheel = new THREE.Mesh(new THREE.CylinderGeometry(S.wheel, S.wheel, 0.17, 16), tireMat);
+      wheel.rotation.z = Math.PI / 2; wheel.position.set(sx, S.wheel, sz); group.add(wheel);
       const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.165, 12), hubMat);
-      hub.rotation.z = Math.PI / 2; hub.position.set(sx * 1.004, 0.27, sz); group.add(hub);
+      hub.rotation.z = Math.PI / 2; hub.position.set(sx * 1.004, S.wheel, sz); group.add(hub);
     }
-    add(1.94, 0.12, 0.13, 0, 0.30, -2.14, trimMat);
-    add(1.94, 0.12, 0.13, 0, 0.30, 2.14, trimMat);
-    add(0.72, 0.13, 0.04, 0, 0.43, -2.215, trimMat); // parrilla
+    add(S.width + 0.04, 0.12, 0.13, 0, 0.31, -S.length / 2 - 0.02, trimMat);
+    add(S.width + 0.04, 0.12, 0.13, 0, 0.31, S.length / 2 + 0.02, trimMat);
+    add(0.78, 0.15, 0.04, 0, 0.47, -S.length / 2 - 0.09, trimMat); // parrilla
     for (const sx of [-0.62, 0.62]) {
-      add(0.34, 0.13, 0.035, sx, 0.52, -2.215, lampMat);
-      add(0.30, 0.12, 0.035, sx, 0.49, 2.215, rearLampMat);
+      add(0.34, 0.14, 0.035, sx, 0.56, -S.length / 2 - 0.09, lampMat);
+      add(0.30, 0.14, 0.035, sx, 0.54, S.length / 2 + 0.09, rearLampMat);
     }
     // vehículo abandonado: una puerta apenas abierta rompe la perfección sin
     // ampliar el collider ni ocupar la ruta.
-    const door = add(0.035, 0.56, 0.92, 0.995, 0.63, 0.28, bodyMat);
+    const door = add(0.035, 0.68, 1.02, S.width / 2 + 0.07, 0.69, 0.30, bodyMat);
     door.rotation.y = -0.12;
     this.mapGroup.add(group);
   }
@@ -1252,32 +1293,42 @@ export class World {
     group.position.set(x, 0, z); group.rotation.y = rot;
     const add = (w, h, d, px, py, pz, mat) => {
       const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-      m.position.set(px, py, pz); m.castShadow = true; m.receiveShadow = true; group.add(m);
+      m.position.set(px, py, pz); m.castShadow = true; m.receiveShadow = true; group.add(m); return m;
     };
-    // Ocupa la misma huella del HIGH longitudinal de 2.4×7 m.
-    add(2.48, 2.58, 4.34, 0, 1.42, 0.84, cargoMat);
-    add(2.34, 1.38, 1.62, 0, 0.77, -2.45, cabMat);
-    add(2.20, 0.44, 0.72, 0, 0.54, -3.42, cabMat); // cofre
-    add(2.34, 0.14, 1.86, 0, 1.51, -2.30, cabMat); // techo
-    const windshield = new THREE.Mesh(new THREE.PlaneGeometry(1.62, 0.64), glassMat);
-    windshield.position.set(0, 1.18, -3.255); windshield.rotation.x = -0.16; group.add(windshield);
+    const S = STREET_SCALE.truck;
+    // Caja alta con cabina perfilada: parabrisas, cofre y techo forman una
+    // sola silueta continua en vez de cuatro prismas apilados.
+    add(S.width + 0.04, 2.62, 4.65, 0, 1.51, 1.06, cargoMat);
+    this._addVehicleProfile(group, [
+      [-S.length / 2, 0.22], [-S.length / 2, 0.70], [-3.02, 0.92],
+      [-2.70, 1.78], [-1.42, 1.82], [-1.28, 0.22],
+    ], S.width - 0.06, cabMat, 0.045);
+    const windshield = new THREE.Mesh(new THREE.PlaneGeometry(1.76, 0.72), glassMat);
+    windshield.position.set(0, 1.34, -2.84); windshield.rotation.x = -0.34; group.add(windshield);
     for (const side of [-1, 1]) {
-      const window = new THREE.Mesh(new THREE.PlaneGeometry(0.72, 0.48), glassMat);
-      window.position.set(side * 1.19, 1.25, -2.54); window.rotation.y = side * Math.PI / 2; group.add(window);
-      for (const dz of [-2.25, 0.1, 2.05]) {
-        const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.16, 10), tireMat);
-        wheel.rotation.z = Math.PI / 2; wheel.position.set(side * 1.24, 0.31, dz); group.add(wheel);
+      const window = new THREE.Mesh(new THREE.PlaneGeometry(0.82, 0.60), glassMat);
+      window.position.set(side * (S.width / 2 + 0.012), 1.38, -2.24); window.rotation.y = side * Math.PI / 2; group.add(window);
+      for (const dz of [-2.55, 0.20, 2.45]) {
+        const wheel = new THREE.Mesh(new THREE.CylinderGeometry(S.wheel, S.wheel, 0.18, 14), tireMat);
+        wheel.rotation.z = Math.PI / 2; wheel.position.set(side * (S.width / 2 + 0.035), S.wheel, dz); group.add(wheel);
       }
     }
     // puerta, parrilla, faros y nervaduras de la caja de reparto
     for (const side of [-1, 1]) {
-      add(0.035, 1.10, 1.08, side * 1.185, 0.86, -2.45, cabMat);
-      add(0.045, 0.045, 0.30, side * 1.205, 0.92, -2.42, trimMat);
+      add(0.035, 1.42, 1.18, side * (S.width / 2 + 0.035), 0.94, -2.18, cabMat);
+      add(0.045, 0.045, 0.32, side * (S.width / 2 + 0.055), 1.02, -2.17, trimMat);
+      for (let p = -0.82; p <= 2.80; p += 0.62) {
+        add(0.055, 2.28, 0.065, side * (S.width / 2 + 0.045), 1.55, p, stripeMat);
+      }
     }
-    add(1.28, 0.34, 0.05, 0, 0.53, -3.80, trimMat);
-    for (const side of [-0.76, 0.76]) add(0.30, 0.22, 0.055, side, 0.74, -3.80, lampMat);
-    for (let p = -1.02; p <= 2.72; p += 0.62) add(2.50, 0.045, 0.055, 0, 1.55, p, stripeMat);
-    for (const y of [0.48, 2.34]) add(2.52, 0.075, 0.05, 0, y, 3.03, stripeMat);
+    add(1.34, 0.36, 0.05, 0, 0.57, -S.length / 2 - 0.05, trimMat);
+    for (const side of [-0.78, 0.78]) add(0.32, 0.23, 0.055, side, 0.80, -S.length / 2 - 0.06, lampMat);
+    // Puertas traseras, bisagras y reflectores hacen legible el volumen de carga.
+    add(S.width - 0.12, 2.42, 0.055, 0, 1.53, S.length / 2 + 0.01, trimMat);
+    add(0.055, 2.26, 0.06, 0, 1.52, S.length / 2 + 0.05, stripeMat);
+    for (const side of [-0.82, 0.82]) for (const y of [0.62, 2.30]) {
+      add(0.12, 0.12, 0.065, side, y, S.length / 2 + 0.06, stripeMat);
+    }
     this.mapGroup.add(group);
   }
 
@@ -1288,61 +1339,79 @@ export class World {
     const tire = new THREE.MeshStandardMaterial({ color: 0x101214, roughness: 0.9 });
     const trim = new THREE.MeshStandardMaterial({ color: 0xc49a5a, metalness: 0.52, roughness: 0.36 });
     const lamp = new THREE.MeshBasicMaterial({ color: 0xffd3a0 });
+    const rearLampMat = new THREE.MeshBasicMaterial({ color: 0xb72f24 });
     const group = new THREE.Group(); group.position.set(x, 0, z); group.rotation.y = rot;
     const add = (w, h, d, px, py, pz, mat, rx = 0, rz = 0) => {
       const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
       m.position.set(px, py, pz); m.rotation.x = rx; m.rotation.z = rz; m.castShadow = true; m.receiveShadow = true;
       group.add(m); return m;
     };
-    add(2.15, 1.00, 7.14, 0, 0.61, 0, lower);
-    add(2.12, 1.76, 6.92, 0, 1.90, 0, body);
-    add(2.19, 0.14, 6.92, 0, 2.84, 0, lower);
+    const S = STREET_SCALE.bus;
+    this._addVehicleProfile(group, [
+      [-S.length / 2, 0.18], [-S.length / 2, 2.72], [-4.28, S.height],
+      [4.25, S.height], [S.length / 2, 2.76], [S.length / 2, 0.18],
+    ], S.width, body, 0.05);
+    add(S.width + 0.025, 0.82, S.length - 0.10, 0, 0.58, 0, lower);
+    add(S.width + 0.10, 0.14, S.length - 0.30, 0, S.height + 0.02, 0, lower);
     // frontal ancho y tablero de ruta apagado
-    add(1.83, 0.76, 0.045, 0, 2.05, -3.49, glass, -0.05);
-    add(1.02, 0.22, 0.052, 0, 2.64, -3.51, lower);
-    add(1.34, 0.25, 0.052, 0, 0.77, -3.59, lower);
-    for (const sx of [-0.72, 0.72]) add(0.32, 0.20, 0.055, sx, 0.82, -3.60, lamp);
+    add(S.width - 0.40, 0.82, 0.045, 0, 2.18, -S.length / 2 - 0.015, glass, -0.08);
+    add(1.30, 0.24, 0.052, 0, 2.77, -S.length / 2 - 0.04, lower);
+    add(1.54, 0.27, 0.052, 0, 0.78, -S.length / 2 - 0.08, lower);
+    for (const sx of [-0.78, 0.78]) add(0.34, 0.21, 0.055, sx, 0.83, -S.length / 2 - 0.09, lamp);
+    // La cara posterior también necesita lectura propia: desde los spawns es
+    // uno de los primeros volúmenes que ve el jugador. Evita el aspecto de
+    // bloque liso y mantiene una escala creíble incluso a corta distancia.
+    add(S.width - 0.42, 0.68, 0.045, 0, 2.18, S.length / 2 + 0.02, glass, 0.06);
+    add(1.42, 0.22, 0.052, 0, 2.76, S.length / 2 + 0.045, lower);
+    add(1.36, 0.34, 0.052, 0, 0.72, S.length / 2 + 0.055, lower);
+    for (const sx of [-0.82, 0.82]) {
+      add(0.27, 0.38, 0.058, sx, 0.88, S.length / 2 + 0.07, rearLampMat);
+      add(0.22, 0.09, 0.06, sx, 0.52, S.length / 2 + 0.075, lamp);
+    }
+    for (const y of [0.58, 0.72, 0.86]) {
+      add(0.88, 0.035, 0.06, 0, y, S.length / 2 + 0.085, trim);
+    }
     for (const side of [-1, 1]) {
-      for (let p = -2.70; p <= 2.75; p += 1.08) {
-        const win = new THREE.Mesh(new THREE.PlaneGeometry(0.82, 0.72), glass);
-        win.position.set(side * 1.071, 2.06, p); win.rotation.y = side * Math.PI / 2; group.add(win);
-        const frame = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.84, 0.055), lower);
-        frame.position.set(side * 1.083, 2.06, p + 0.48); group.add(frame);
+      for (let p = -3.32; p <= 3.34; p += 1.12) {
+        const win = new THREE.Mesh(new THREE.PlaneGeometry(0.90, 0.80), glass);
+        win.position.set(side * (S.width / 2 + 0.012), 2.16, p); win.rotation.y = side * Math.PI / 2; group.add(win);
+        const frame = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.92, 0.055), lower);
+        frame.position.set(side * (S.width / 2 + 0.025), 2.16, p + 0.52); group.add(frame);
       }
-      const band = new THREE.Mesh(new THREE.PlaneGeometry(6.55, 0.10), trim);
-      band.position.set(side * 1.078, 1.38, 0); band.rotation.y = side * Math.PI / 2; group.add(band);
+      const band = new THREE.Mesh(new THREE.PlaneGeometry(S.length - 0.42, 0.11), trim);
+      band.position.set(side * (S.width / 2 + 0.03), 1.48, 0); band.rotation.y = side * Math.PI / 2; group.add(band);
       // doble puerta delantera
-      for (const p of [-2.68, -2.15]) {
-        const door = new THREE.Mesh(new THREE.PlaneGeometry(0.46, 1.55), glass);
-        door.position.set(side * 1.082, 1.12, p); door.rotation.y = side * Math.PI / 2; group.add(door);
+      for (const p of [-3.66, -2.98]) {
+        const door = new THREE.Mesh(new THREE.PlaneGeometry(0.62, STREET_SCALE.door - 0.08), glass);
+        door.position.set(side * (S.width / 2 + 0.035), 1.14, p); door.rotation.y = side * Math.PI / 2; group.add(door);
       }
-      for (const p of [-2.35, 2.28]) {
-        const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 0.17, 14), tire);
-        wheel.rotation.z = Math.PI / 2; wheel.position.set(side * 1.10, 0.34, p); group.add(wheel);
-        const arch = new THREE.Mesh(new THREE.TorusGeometry(0.37, 0.055, 6, 14, Math.PI), lower);
-        arch.position.set(side * 1.086, 0.34, p); arch.rotation.y = side * Math.PI / 2;
+      for (const p of [-2.88, 2.82]) {
+        const wheel = new THREE.Mesh(new THREE.CylinderGeometry(S.wheel, S.wheel, 0.19, 16), tire);
+        wheel.rotation.z = Math.PI / 2; wheel.position.set(side * (S.width / 2 + 0.04), S.wheel, p); group.add(wheel);
+        const arch = new THREE.Mesh(new THREE.TorusGeometry(S.wheel + 0.04, 0.06, 7, 16, Math.PI), lower);
+        arch.position.set(side * (S.width / 2 + 0.025), S.wheel, p); arch.rotation.y = side * Math.PI / 2;
         arch.rotation.z = Math.PI; group.add(arch);
       }
-      for (const p of [-1.48, -0.42, 0.64, 1.70]) {
-        const seam = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.78, 0.035), lower);
-        seam.position.set(side * 1.082, 0.88, p); group.add(seam);
+      for (let p = -2.18; p <= 2.20; p += 1.10) {
+        const seam = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.86, 0.035), lower);
+        seam.position.set(side * (S.width / 2 + 0.032), 0.94, p); group.add(seam);
       }
     }
     // unidad de techo y parachoques venden escala de vehículo de servicio
-    add(1.25, 0.22, 1.10, 0, 3.02, 0.72, lower);
-    add(2.22, 0.16, 0.16, 0, 0.34, -3.62, lower);
-    add(2.22, 0.16, 0.16, 0, 0.34, 3.62, lower);
+    add(1.38, 0.24, 1.20, 0, S.height + 0.18, 0.82, lower);
+    add(S.width + 0.10, 0.17, 0.17, 0, 0.35, -S.length / 2 - 0.12, lower);
+    add(S.width + 0.10, 0.17, 0.17, 0, 0.35, S.length / 2 + 0.12, lower);
     // espejos, limpiaparabrisas y cristal roto en un extremo
-    for (const sx of [-1.22, 1.22]) {
-      add(0.30, 0.05, 0.05, sx, 1.70, -3.40, lower);
-      add(0.10, 0.24, 0.16, sx * 1.03, 1.72, -3.43, glass);
+    for (const sx of [-S.width / 2 - 0.12, S.width / 2 + 0.12]) {
+      add(0.32, 0.05, 0.05, sx, 1.78, -S.length / 2 + 0.08, lower);
+      add(0.11, 0.26, 0.17, sx * 1.02, 1.80, -S.length / 2 + 0.05, glass);
     }
-    for (const sx of [-0.42, 0.42]) add(0.035, 0.42, 0.035, sx, 1.94, -3.55, lower, 0, sx > 0 ? 0.48 : -0.48);
+    for (const sx of [-0.46, 0.46]) add(0.035, 0.46, 0.035, sx, 2.02, -S.length / 2 - 0.07, lower, 0, sx > 0 ? 0.48 : -0.48);
     const cracked = new THREE.Mesh(
       new THREE.PlaneGeometry(0.56, 0.56),
       new THREE.MeshBasicMaterial({ map: this._tex('crack'), color: 0xb9cad0, transparent: true, alphaTest: 0.08 }),
     );
-    cracked.position.set(0.43, 2.07, -3.526); group.add(cracked);
+    cracked.position.set(0.48, 2.20, -S.length / 2 - 0.052); group.add(cracked);
     this.mapGroup.add(group);
   }
 
@@ -1392,7 +1461,7 @@ export class World {
     this.mapGroup.add(group);
   }
 
-  _addUtilityPole(x, z, { height = 4.8, color = 0x39414a, lamp = 0xffcc82, arm = 0.45 } = {}) {
+  _addUtilityPole(x, z, { height = STREET_SCALE.lamp, color = 0x39414a, lamp = 0xffcc82, arm = 0.55 } = {}) {
     const poleMat = new THREE.MeshLambertMaterial({ color });
     const lampMat = new THREE.MeshBasicMaterial({ color: lamp });
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.1, height, 7), poleMat);
@@ -1422,9 +1491,9 @@ export class World {
 
     // base: un bus atravesado bloquea la avenida. Las salidas laterales se
     // mantienen abiertas, pero el bloqueo ahora tiene una razón urbana clara.
-    this._box(0, -22.5, 7.2, 2.2, HIGH, { ...highOpts, visual: false });
-    this._box(-5.5, -21.4, 2.4, 0.9, LOW, { ...lowOpts, visual: false });
-    this._box(5.5, -21.4, 2.4, 0.9, LOW, { ...lowOpts, visual: false });
+    this._box(0, -22.5, STREET_SCALE.bus.length, STREET_SCALE.bus.width, HIGH, { ...highOpts, visual: false });
+    this._box(-6.1, -21.4, 2.4, 0.9, LOW, { ...lowOpts, visual: false });
+    this._box(6.1, -21.4, 2.4, 0.9, LOW, { ...lowOpts, visual: false });
 
     // edificios (crean los callejones laterales contra el muro perimetral)
     this._box(-11.5, -17, 7, 8, HIGH, { ...highOpts, visual: false });
@@ -1564,58 +1633,58 @@ export class World {
       cap.position.set(faceX - side * 0.2, height - 0.08, z); this.mapGroup.add(cap);
       // Cornisas dividen el local de las plantas residenciales y rompen el
       // gran rectángulo de fachada.
-      for (const y of [2.82, height - 0.52]) {
+      for (const y of [3.02, height - 0.52]) {
         const cornice = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.14, span + 0.14), stoneMat);
         cornice.position.set(faceX + toward * 0.09, y, z); this.mapGroup.add(cornice);
       }
-      const floors = Math.max(2, Math.floor((height - 3.0) / 1.35));
-      const bays = Math.max(2, Math.floor(span / 2.0));
+      const floors = Math.max(1, Math.floor((height - 3.0) / STREET_SCALE.floor));
+      const bays = Math.max(2, Math.floor(span / 2.35));
       for (let row = 0; row < floors; row++) {
-        const y = 3.46 + row * 1.34;
-        if (y > height - 0.75) continue;
+        const y = 4.0 + row * STREET_SCALE.floor;
+        if (y > height - 0.82) continue;
         for (let col = 0; col < bays; col++) {
           const zi = z - span * 0.39 + col * (span * 0.78 / Math.max(1, bays - 1));
-          const win = new THREE.Mesh(new THREE.PlaneGeometry(0.78, 0.76), ((row + col + variant) % 5 === 0) ? litGlassMat : glassMat);
+          const win = new THREE.Mesh(new THREE.PlaneGeometry(1.02, 1.28), ((row + col + variant) % 5 === 0) ? litGlassMat : glassMat);
           win.position.set(faceX + toward * 0.026, y, zi); win.rotation.y = rot; this.mapGroup.add(win);
           // cuatro piezas de marco y un alféizar proyectado
-          for (const yy of [-0.42, 0.42]) {
-            const bar = new THREE.Mesh(new THREE.BoxGeometry(0.10, 0.075, 0.94), frameMat);
+          for (const yy of [-0.68, 0.68]) {
+            const bar = new THREE.Mesh(new THREE.BoxGeometry(0.10, 0.085, 1.18), frameMat);
             bar.position.set(faceX + toward * 0.07, y + yy, zi); this.mapGroup.add(bar);
           }
-          for (const zz of [-0.45, 0.45]) {
-            const bar = new THREE.Mesh(new THREE.BoxGeometry(0.10, 0.88, 0.075), frameMat);
+          for (const zz of [-0.57, 0.57]) {
+            const bar = new THREE.Mesh(new THREE.BoxGeometry(0.10, 1.40, 0.085), frameMat);
             bar.position.set(faceX + toward * 0.07, y, zi + zz); this.mapGroup.add(bar);
           }
-          const mullion = new THREE.Mesh(new THREE.BoxGeometry(0.105, 0.82, 0.045), frameMat);
+          const mullion = new THREE.Mesh(new THREE.BoxGeometry(0.105, 1.34, 0.045), frameMat);
           mullion.position.set(faceX + toward * 0.08, y, zi); this.mapGroup.add(mullion);
         }
       }
       // Planta baja con dos vanos: persiana comercial y puerta de servicio
       // realmente empotradas entre pilastras.
       const shopW = Math.min(3.65, span * 0.58);
-      const shutter = new THREE.Mesh(new THREE.PlaneGeometry(shopW, 1.58), shutterMat);
-      shutter.position.set(faceX + toward * 0.035, 0.98, z - span * 0.10); shutter.rotation.y = rot; this.mapGroup.add(shutter);
-      const door = new THREE.Mesh(new THREE.PlaneGeometry(0.84, 1.74), glassMat);
-      door.position.set(faceX + toward * 0.04, 0.93, z + span * 0.31); door.rotation.y = rot; this.mapGroup.add(door);
+      const shutter = new THREE.Mesh(new THREE.PlaneGeometry(shopW, STREET_SCALE.door), shutterMat);
+      shutter.position.set(faceX + toward * 0.035, 1.10, z - span * 0.10); shutter.rotation.y = rot; this.mapGroup.add(shutter);
+      const door = new THREE.Mesh(new THREE.PlaneGeometry(0.94, STREET_SCALE.door), glassMat);
+      door.position.set(faceX + toward * 0.04, 1.10, z + span * 0.31); door.rotation.y = rot; this.mapGroup.add(door);
       for (const pz of [z - span * 0.40, z + span * 0.18, z + span * 0.42]) {
-        const pier = new THREE.Mesh(new THREE.BoxGeometry(0.26, 2.56, 0.30), stoneMat);
-        pier.position.set(faceX + toward * 0.13, 1.28, pz); this.mapGroup.add(pier);
+        const pier = new THREE.Mesh(new THREE.BoxGeometry(0.26, 2.88, 0.30), stoneMat);
+        pier.position.set(faceX + toward * 0.13, 1.44, pz); this.mapGroup.add(pier);
       }
       const awning = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.13, shopW + 0.34), awningMat);
-      awning.position.set(faceX + toward * 0.36, 2.24, z - span * 0.10); awning.rotation.z = side * 0.10; this.mapGroup.add(awning);
+      awning.position.set(faceX + toward * 0.36, 2.56, z - span * 0.10); awning.rotation.z = side * 0.10; this.mapGroup.add(awning);
       const fixture = new THREE.Mesh(
         new THREE.BoxGeometry(0.10, 0.12, Math.min(1.65, shopW * 0.58)),
         new THREE.MeshBasicMaterial({ color: variant % 3 === 0 ? 0xffc47a : 0xcbd9dc }),
       );
-      fixture.position.set(faceX + toward * 0.43, 2.10, z - span * 0.10); this.mapGroup.add(fixture);
-      this._addMapSign(name, faceX + toward * 0.038, 2.60, z - span * 0.10, rot,
+      fixture.position.set(faceX + toward * 0.43, 2.42, z - span * 0.10); this.mapGroup.add(fixture);
+      this._addMapSign(name, faceX + toward * 0.038, 2.82, z - span * 0.10, rot,
         { w: Math.min(3.3, span - 0.7), h: 0.42, bg: variant % 2 ? '#26383b' : '#4b2928', fg: '#ead8b5', border: '#8e765d' });
       // Escalera de incendio alternada: geometría liviana y siempre dentro
       // del muro perimetral, por lo que no interfiere con cámara ni disparos.
       if (variant % 2 === 0) {
         const metal = frameMat;
         const fireZ = z + span * 0.28;
-        for (const y of [4.15, 5.75]) {
+        for (const y of [4.82, 7.52]) {
           if (y > height - 0.6) continue;
           const deck = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.08, 2.10), metal);
           deck.position.set(faceX + toward * 0.34, y, fireZ); this.mapGroup.add(deck);
@@ -1626,9 +1695,9 @@ export class World {
           const topRail = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.055, 2.04), metal);
           topRail.position.set(faceX + toward * 0.62, y + 0.76, fireZ); this.mapGroup.add(topRail);
         }
-        for (let i = 0; i < 8; i++) {
+        for (let i = 0; i < 13; i++) {
           const rung = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.68), metal);
-          rung.position.set(faceX + toward * 0.63, 4.28 + i * 0.18, fireZ - 0.66 + i * 0.17);
+          rung.position.set(faceX + toward * 0.63, 4.92 + i * 0.20, fireZ - 0.82 + i * 0.13);
           this.mapGroup.add(rung);
         }
       }
@@ -1684,7 +1753,7 @@ export class World {
       this.mapGroup.add(g);
     };
     for (const [x, z] of [
-      [-5.5, -21.4], [5.5, -21.4], [5.5, 21.4], [-5.5, 21.4],
+      [-6.1, -21.4], [6.1, -21.4], [6.1, 21.4], [-6.1, 21.4],
       [3.6, -2.2], [-3.6, 2.2],
     ]) addJersey(x, z, 2.4, 0.9);
 
@@ -1718,23 +1787,25 @@ export class World {
       const shell = new THREE.Mesh(new THREE.BoxGeometry(w + 0.055, 3.04, d + 0.055), cornerBrick);
       shell.position.set(x, 1.52, z); shell.castShadow = true; shell.receiveShadow = true; this.mapGroup.add(shell);
       const frontZ = z + toward * (d / 2 + 0.035);
-      const frontRot = toward > 0 ? Math.PI : 0;
-      const shutter = new THREE.Mesh(new THREE.PlaneGeometry(w * 0.58, 1.46), cornerDark);
-      shutter.position.set(x - w * 0.12, 0.84, frontZ + toward * 0.012); shutter.rotation.y = frontRot; this.mapGroup.add(shutter);
-      const door = new THREE.Mesh(new THREE.PlaneGeometry(0.88, 1.70), cornerGlass);
-      door.position.set(x + w * 0.34, 0.91, frontZ + toward * 0.014); door.rotation.y = frontRot; this.mapGroup.add(door);
+      // PlaneGeometry mira a +Z: el frente debe apuntar en la misma dirección
+      // que `toward`, no mostrar su reverso espejado.
+      const frontRot = toward > 0 ? 0 : Math.PI;
+      const shutter = new THREE.Mesh(new THREE.PlaneGeometry(w * 0.58, STREET_SCALE.door), cornerDark);
+      shutter.position.set(x - w * 0.12, 1.08, frontZ + toward * 0.012); shutter.rotation.y = frontRot; this.mapGroup.add(shutter);
+      const door = new THREE.Mesh(new THREE.PlaneGeometry(0.94, STREET_SCALE.door), cornerGlass);
+      door.position.set(x + w * 0.34, 1.08, frontZ + toward * 0.014); door.rotation.y = frontRot; this.mapGroup.add(door);
       for (const px of [x - w * 0.45, x + w * 0.17, x + w * 0.47]) {
-        const pier = new THREE.Mesh(new THREE.BoxGeometry(0.24, 2.35, 0.18), cornerTrim);
-        pier.position.set(px, 1.18, frontZ + toward * 0.09); this.mapGroup.add(pier);
+        const pier = new THREE.Mesh(new THREE.BoxGeometry(0.24, 2.82, 0.18), cornerTrim);
+        pier.position.set(px, 1.41, frontZ + toward * 0.09); this.mapGroup.add(pier);
       }
       const canopy = new THREE.Mesh(
         new THREE.BoxGeometry(w * 0.72, 0.14, 0.64),
         new THREE.MeshStandardMaterial({ color: awningColor, roughness: 0.74 }),
       );
-      canopy.position.set(x - w * 0.08, 2.20, frontZ + toward * 0.31); this.mapGroup.add(canopy);
+      canopy.position.set(x - w * 0.08, 2.46, frontZ + toward * 0.31); this.mapGroup.add(canopy);
       const cornice = new THREE.Mesh(new THREE.BoxGeometry(w + 0.18, 0.16, d + 0.18), cornerTrim);
       cornice.position.set(x, 2.94, z); this.mapGroup.add(cornice);
-      this._addMapSign(name, x - w * 0.08, 2.58, frontZ + toward * 0.04, frontRot,
+      this._addMapSign(name, x - w * 0.08, 2.76, frontZ + toward * 0.04, frontRot,
         { w: Math.min(3.8, w - 0.55), h: 0.42, bg: '#2a3438', fg: '#ead6ae', border: '#8d6b4f' });
     };
     addCornerStore(-11.5, -17, 7, 8, 1, 'SERVICE', 0x623b34);
@@ -1805,9 +1876,9 @@ export class World {
         for (const offset of [-0.10, 0.10]) {
           const cable = new THREE.Mesh(
             new THREE.TubeGeometry(new THREE.CatmullRomCurve3([
-              new THREE.Vector3(x + offset, 4.36, zi),
-              new THREE.Vector3(x + offset, 4.04, zi + 6),
-              new THREE.Vector3(x + offset, 4.36, zi + 12),
+              new THREE.Vector3(x + offset, STREET_SCALE.lamp - 0.44, zi),
+              new THREE.Vector3(x + offset, STREET_SCALE.lamp - 0.82, zi + 6),
+              new THREE.Vector3(x + offset, STREET_SCALE.lamp - 0.44, zi + 12),
             ]), 8, 0.018, 5, false),
             cableMat,
           );
@@ -1829,13 +1900,13 @@ export class World {
       arm.rotation.z = Math.PI / 2; arm.position.y = 0.32; h.add(arm); this.mapGroup.add(h);
     }
     for (const [x, z, side] of [[-9.55, -2, -1], [9.55, 2, 1], [-9.55, 22, -1], [9.55, -22, 1]]) {
-      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 2.2, 7), streetMetal);
-      pole.position.set(x, 1.1, z); this.mapGroup.add(pole);
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 2.8, 7), streetMetal);
+      pole.position.set(x, 1.4, z); this.mapGroup.add(pole);
       const plate = new THREE.Mesh(
         new THREE.PlaneGeometry(0.48, 0.72),
         new THREE.MeshBasicMaterial({ color: side < 0 ? 0xb7c1bd : 0xd4c6aa, side: THREE.DoubleSide }),
       );
-      plate.position.set(x + side * 0.04, 1.86, z); plate.rotation.y = side < 0 ? Math.PI / 2 : -Math.PI / 2;
+      plate.position.set(x + side * 0.04, 2.34, z); plate.rotation.y = side < 0 ? Math.PI / 2 : -Math.PI / 2;
       this.mapGroup.add(plate);
     }
     // Solo cuatro luces prácticas sin sombras: suficiente para que el asfalto
@@ -2251,8 +2322,8 @@ export class World {
     roadA.rotation.x = -Math.PI / 2; roadA.position.set(0, 0.014, 0); this.mapGroup.add(roadA);
     const roadB = new THREE.Mesh(new THREE.PlaneGeometry(this.fx * 2 - 4, 3.6), roadMat);
     roadB.rotation.x = -Math.PI / 2; roadB.position.set(0, 0.015, 0); this.mapGroup.add(roadB);
-    this._addMapSign('MARKET', -11.95, 3.08, -18.47, Math.PI, { w: 2.2, h: 0.4, bg: '#593b2c', fg: '#ecd49f', border: '#a17754' });
-    this._addMapSign('MARKET', 11.95, 3.08, 18.47, 0, { w: 2.2, h: 0.4, bg: '#593b2c', fg: '#ecd49f', border: '#a17754' });
+    this._addMapSign('MARKET', -11.95, 3.08, -18.47, 0, { w: 2.2, h: 0.4, bg: '#593b2c', fg: '#ecd49f', border: '#a17754' });
+    this._addMapSign('MARKET', 11.95, 3.08, 18.47, Math.PI, { w: 2.2, h: 0.4, bg: '#593b2c', fg: '#ecd49f', border: '#a17754' });
     this._addMapSign('OLD MILL', -14.02, 3.06, -16, Math.PI / 2, { w: 1.9, h: 0.36, bg: '#593b2c', fg: '#ecd49f', border: '#a17754' });
     this._addMapSign('OLD MILL', 14.02, 3.06, 16, -Math.PI / 2, { w: 1.9, h: 0.36, bg: '#593b2c', fg: '#ecd49f', border: '#a17754' });
 
