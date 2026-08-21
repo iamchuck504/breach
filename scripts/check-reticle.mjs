@@ -102,7 +102,63 @@ try {
     console.error('RETICLE DEBUG', JSON.stringify(result));
     throw new Error(`retícula separada ${result.errorPx.toFixed(1)} px del impacto central`);
   }
-  console.log(`RETICLE OK · error central ${result.errorPx.toFixed(2)} px`);
+
+  // ADS obstruido: la cámara alcanza un punto lejano, pero una pared ficticia
+  // queda inmediatamente delante del muzzle. El anillo debe desplazarse al
+  // impacto físico y no quedarse fijo en el centro de la pantalla.
+  const ads = await page.evaluate(async () => {
+    const G = window.BREACH;
+    const W = window.BREACH_WORLD;
+    const I = window.BREACH_INPUT;
+    G.weapons.cur = 'smg';
+    G.player.cam.yaw = 0.35;
+    G.player.yaw = 0.35;
+    I._mouseAim = true;
+    await new Promise((resolve) => setTimeout(resolve, 180));
+
+    G.rig.root.updateWorldMatrix(true, true);
+    const muzzle = G.rig.muzzleWorld(new window.THREE.Vector3()).clone();
+    const cameraOrigin = G.player.cam.aimRay().origin.clone();
+    const oldRaycastHit = W.raycastHit.bind(W);
+    const oldRaycast = W.raycast.bind(W);
+    let expected = null;
+    W.raycastHit = (origin, dir, maxDist) => {
+      if (origin.distanceTo(cameraOrigin) < 0.08) {
+        return { t: Math.min(24, maxDist), normal: { x: 0, y: 0, z: 1 }, surface: 'stone' };
+      }
+      if (origin.distanceTo(muzzle) < 0.12) {
+        const t = Math.min(0.55, maxDist);
+        expected = origin.clone().addScaledVector(dir, t);
+        return { t, normal: { x: 0, y: 0, z: 1 }, surface: 'stone' };
+      }
+      return oldRaycastHit(origin, dir, maxDist);
+    };
+    W.raycast = () => null;
+    await new Promise((resolve) => setTimeout(resolve, 70));
+
+    const ring = document.getElementById('crosshair');
+    const projected = expected?.clone().project(window.BREACH_CAM);
+    const expectedXY = projected ? {
+      x: (projected.x * 0.5 + 0.5) * innerWidth,
+      y: (-projected.y * 0.5 + 0.5) * innerHeight,
+    } : null;
+    const actual = { x: parseFloat(ring.style.left), y: parseFloat(ring.style.top) };
+    W.raycastHit = oldRaycastHit;
+    W.raycast = oldRaycast;
+    I._mouseAim = false;
+    return {
+      visible: ring.classList.contains('aim'),
+      expected: expectedXY,
+      actual,
+      errorPx: expectedXY ? Math.hypot(expectedXY.x - actual.x, expectedXY.y - actual.y) : Infinity,
+      movedFromCenter: Math.hypot(actual.x - innerWidth * 0.5, actual.y - innerHeight * 0.5),
+    };
+  });
+  if (!ads.visible || !ads.expected || ads.errorPx > 4 || ads.movedFromCenter < 8) {
+    console.error('ADS RETICLE DEBUG', JSON.stringify(ads));
+    throw new Error('la retícula ADS no siguió el impacto físico bloqueado desde el muzzle');
+  }
+  console.log(`RETICLE OK · hip ${result.errorPx.toFixed(2)} px · ADS obstruido ${ads.errorPx.toFixed(2)} px`);
 } finally {
   await browser?.close();
   server.kill();

@@ -109,16 +109,6 @@
   #weapon .slots .slot.cur .k { color: var(--accent); }
   #weapon .slots .slot.dry { opacity: .45; }
   #wep-bar { position: relative; }
-  #wep-bar .ar-window { position: absolute; top: -2px; bottom: -2px; display: none;
-    background: rgba(255, 176, 87, .28); border-left: 2px solid var(--accent);
-    border-right: 2px solid var(--accent); pointer-events: none; }
-  #wep-bar.jammed .fill, #wep-bar.jammed .seg.on { background: #b45a3c; }
-  #weapon.dmg-bonus { box-shadow: inset 0 0 0 1px rgba(255, 176, 87, .5); }
-  #weapon.dmg-bonus .mag { color: var(--accent); }
-  @keyframes arPerfect { 0% { background: rgba(255, 176, 87, .5); } 100% { background: none; } }
-  @keyframes arJam { 0% { background: rgba(180, 90, 60, .5); } 100% { background: none; } }
-  #weapon.ar-perfect { animation: arPerfect .45s ease-out; }
-  #weapon.ar-jam { animation: arJam .45s ease-out; }
   #weapon .name { font-size: 12px; font-weight: 600; letter-spacing: .1em; color: #e2e5e7;
     text-transform: uppercase; }
   #weapon .weapon-kicker { margin-top: 3px; color: var(--accent); font-size: 9px; letter-spacing: .14em; }
@@ -737,6 +727,7 @@
         <div class="utility-row">
           <button class="btn" id="btn-character" data-i18n="common.character">CHARACTER</button>
           <button class="btn" id="btn-options" data-i18n="menu.options">OPTIONS</button>
+          <button class="btn" id="btn-editor" data-i18n="menu.editor">MAP EDITOR</button>
           <button class="btn" id="btn-fullscreen"><span id="fullscreen-label" data-i18n="common.fullscreen">FULLSCREEN</span></button>
         </div>
         <div id="net-status"></div>
@@ -839,7 +830,7 @@
       <div class="col"><div class="col-title" data-i18n="menu.keyboard">KEYBOARD</div><div id="kb-rows"></div></div>
       <div class="col"><div class="col-title" data-i18n="menu.controller">CONTROLLER</div><div id="pad-rows"></div><div id="pad-status" data-i18n="menu.noController">NO CONTROLLER DETECTED</div></div>
     </div>
-    <div class="tag" data-i18n="menu.dpadWeapons">D-PAD: ↑ GRENADE · ↓ PISTOL · ← SMG · → SHOTGUN</div>
+    <div class="tag" data-i18n="menu.dpadWeapons">D-PAD: ↑ GRENADE · ↓ PISTOL · ← SHOTGUN · → SMG</div>
     <div class="settings-grid">
       <div class="slider-row"><label for="sl-mouse" data-i18n="menu.mouseSensitivity">MOUSE SENS.</label><span class="val" id="sl-mouse-v"></span><input type="range" id="sl-mouse" min="0.01" max="0.12" step="0.005" /></div>
       <div class="slider-row"><label for="sl-pad" data-i18n="menu.stickSensitivity">STICK SENS.</label><span class="val" id="sl-pad-v"></span><input type="range" id="sl-pad" min="60" max="320" step="10" /></div>

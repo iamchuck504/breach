@@ -16,6 +16,7 @@ const PATROLS = [
 export class Dummies {
   constructor(scene, world = null) {
     this.scene = scene;
+    this.world = world;
     const sx = world ? world.fx / 21 : 1;
     const sz = world ? world.fz / 26.6 : 1;
     const fit = (p) => {
@@ -38,6 +39,7 @@ export class Dummies {
         path, seg: 0, u: Math.random(),
         x: path[0].x, z: path[0].z, yaw: 0,
         hp: TUNING.combat.hp, alive: true, respawnT: 0,
+        hitOX: 0, hitOZ: 0,
       };
     });
   }
@@ -58,6 +60,14 @@ export class Dummies {
     return false;
   }
 
+  recoil(id, dx, dz, distance = 0.14) {
+    const d = this.list.find((x) => x.id === id);
+    if (!d || !d.alive) return;
+    const len = Math.max(0.001, Math.hypot(dx, dz));
+    d.hitOX += (dx / len) * distance;
+    d.hitOZ += (dz / len) * distance;
+  }
+
   update(dt) {
     for (const d of this.list) {
       if (!d.alive) {
@@ -67,6 +77,7 @@ export class Dummies {
           d.alive = true;
           d.hp = TUNING.combat.hp;
           d.u = 0; d.seg = 0;
+          d.hitOX = 0; d.hitOZ = 0;
           d.x = d.path[0].x; d.z = d.path[0].z;
         }
         continue;
@@ -76,8 +87,16 @@ export class Dummies {
       const len = Math.hypot(dx, dz);
       d.u += (1.6 / len) * dt;
       if (d.u >= 1) { d.u = 0; d.seg = 1 - d.seg; continue; }
-      d.x = a.x + dx * d.u;
-      d.z = a.z + dz * d.u;
+      const baseX = a.x + dx * d.u, baseZ = a.z + dz * d.u;
+      const recoilDamp = Math.exp(-4.8 * dt);
+      d.hitOX *= recoilDamp; d.hitOZ *= recoilDamp;
+      d.x = baseX + d.hitOX;
+      d.z = baseZ + d.hitOZ;
+      if (this.world) {
+        const q = { x: d.x, z: d.z };
+        this.world.resolveCircle(q, 0.42, 0);
+        d.x = q.x; d.z = q.z;
+      }
       d.yaw = Math.atan2(-dx, -dz);
       d.rig.setTransform(d.x, d.z, d.yaw);
       d.rig.update(dt, { state: 'run', speed: 0.35, aim: false, aimPitch: 0 });

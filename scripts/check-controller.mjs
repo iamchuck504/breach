@@ -3,7 +3,8 @@
 // el harness visual (dive->dive, acciones simultáneas y momentum lógico).
 import { Controller } from '../src/player/controller.js';
 import { TUNING } from '../src/config/tuning.js';
-import { Weapons } from '../src/combat/weapons.js';
+import { DEFAULT_LOADOUT, Weapons } from '../src/combat/weapons.js';
+import { PAD_DPAD_SLOTS } from '../src/core/bindings.js';
 
 const DT = 1 / 60;
 const failures = [];
@@ -51,6 +52,16 @@ function frame(controller, input, count = 1) {
     input.endFrame();
   }
 }
+
+// Selección directa: teclado 1–4 conserva el orden del loadout y la cruceta
+// utiliza el layout espacial solicitado (escopeta izquierda, SMG derecha).
+check(DEFAULT_LOADOUT.join(',') === 'smg,shotgun,pistol,grenade',
+  `orden numérico inválido (${DEFAULT_LOADOUT.join(',')})`);
+check(DEFAULT_LOADOUT[PAD_DPAD_SLOTS[12]] === 'grenade' &&
+  DEFAULT_LOADOUT[PAD_DPAD_SLOTS[13]] === 'pistol' &&
+  DEFAULT_LOADOUT[PAD_DPAD_SLOTS[14]] === 'shotgun' &&
+  DEFAULT_LOADOUT[PAD_DPAD_SLOTS[15]] === 'smg',
+`mapeo de cruceta inválido (${JSON.stringify(PAD_DPAD_SLOTS)})`);
 
 function putAtCoverEdge(controller, h = 1.1) {
   controller.cover = {

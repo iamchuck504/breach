@@ -44,7 +44,7 @@ await page.evaluate(() => {
   };
 });
 
-// --- melee DURANTE recarga: no debe romper nada y la recarga termina
+// --- melee DURANTE recarga: la interrumpe limpiamente, sin regalar munición
 await page.evaluate(() => {
   window.__tp(0, -10);
   const G = window.BREACH;
@@ -69,8 +69,8 @@ s = await page.evaluate(() => ({
   mag: window.BREACH.weapons.st.mag, cur: window.BREACH.weapons.cur,
   st: window.BREACH.player.state,
 }));
-check('melee durante recarga: recarga completa y estado sano',
-  s.mag === 12 && s.cur === 'pistol' && (s.st === 'idle' || s.st === 'run'), JSON.stringify(s));
+check('melee durante recarga: conserva munición y recupera control',
+  s.mag === 4 && s.cur === 'pistol' && (s.st === 'idle' || s.st === 'run'), JSON.stringify(s));
 
 // --- melee DURANTE cambio de arma: sin estados rotos
 await page.evaluate(() => {
@@ -104,7 +104,8 @@ for (let i = 0; i < 6; i++) {
 }
 check('melee sale justo después de disparar', sawMelee);
 
-// --- spam de melee: el cooldown limita los gestos
+// --- pulsaciones repetidas: nunca reinician un gesto activo. Al recuperar
+// control sí puede volver a atacar inmediatamente (sin cooldown largo).
 const spamRes = await page.evaluate(async () => {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   let entries = 0, was = '';
@@ -118,7 +119,8 @@ const spamRes = await page.evaluate(async () => {
   }
   return entries;
 });
-check('spam de melee limitado por cooldown (≤3 en 1.5s)', spamRes <= 3, `entradas=${spamRes}`);
+check('melee no se reinicia activo y permite ritmo intencional (≤4 en 1.5s)',
+  spamRes >= 2 && spamRes <= 4, `entradas=${spamRes}`);
 
 // --- melee NO atraviesa un muro MID: dummy pegado detrás del muro de base
 const wallMelee = await page.evaluate(async () => {
@@ -194,9 +196,10 @@ const muzzle = await page.evaluate(() => {
 check('muzzle de pistola sano', muzzle.finite && muzzle.dy > 0.5 && muzzle.dy < 2 && muzzle.d < 1.5,
   JSON.stringify(muzzle));
 
-// --- RECARGA ACTIVA: clavar la ventana llena el cargador al instante y da
-// bonus; fallarla atasca y alarga la recarga
-const activeOk = await page.evaluate(async () => {
+// --- RECARGA NORMAL: un segundo toque durante el gesto no completa, atasca
+// ni altera la duración. La única cancelación válida sigue siendo disparar
+// con munición ya disponible o cambiar de arma.
+const plainReload = await page.evaluate(async () => {
   const G = window.BREACH;
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   window.__tp(0, -10);
@@ -204,41 +207,24 @@ const activeOk = await page.evaluate(async () => {
   await wait(700);
   G.weapons.st.mag = 5;
   G.weapons.startReload();
-  const win = G.weapons.activeWindow();
-  // esperar al centro de la ventana
-  const total = G.weapons.def.reloadTime;
-  await wait(total * ((win.start + win.end) / 2) * 1000);
-  const p = +G.weapons.reloadProgress.toFixed(2);
-  const res = G.weapons.tryActiveReload();
-  await wait(120);
-  return {
-    win, p, res, mag: G.weapons.st.mag, reloading: G.weapons.reloading,
-    mul: +G.weapons.damageMul.toFixed(2), bonus: +G.weapons.bonusT.toFixed(1),
-  };
-});
-check('recarga activa: ventana clavada llena el cargador y da bonus',
-  activeOk.res === 'perfect' && activeOk.mag === 50 && !activeOk.reloading && activeOk.mul > 1,
-  JSON.stringify(activeOk));
-
-const activeJam = await page.evaluate(async () => {
-  const G = window.BREACH;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-  G.weapons.bonusT = 0;
-  G.weapons.st.mag = 5;
-  G.weapons.startReload();
-  await wait(60); // muy pronto: fuera de la ventana
+  await wait(90);
   const before = G.weapons.st.reload;
-  const res = G.weapons.tryActiveReload();
+  const magBefore = G.weapons.st.mag;
+  const second = G.weapons.startReload();
   const after = G.weapons.st.reload;
-  const second = G.weapons.tryActiveReload(); // ya atascada: sin efecto
   return {
-    res, second, jam: after > before, jammed: G.weapons.st.jammed,
-    mul: +G.weapons.damageMul.toFixed(2),
+    second, before: +before.toFixed(3), after: +after.toFixed(3),
+    magBefore, magAfter: G.weapons.st.mag,
+    hasActiveApi: typeof G.weapons.tryActiveReload === 'function',
+    hasBonus: 'bonusT' in G.weapons,
+    hasJamState: 'jammed' in G.weapons.st || 'active' in G.weapons.st,
   };
 });
-check('recarga activa: fallar atasca y alarga (una sola vez)',
-  activeJam.res === 'jam' && activeJam.jam && activeJam.second === null && activeJam.mul === 1,
-  JSON.stringify(activeJam));
+check('recarga normal: segundo toque no altera el gesto ni conserva mecánica activa',
+  plainReload.second === false && plainReload.magBefore === plainReload.magAfter &&
+  Math.abs(plainReload.after - plainReload.before) < 0.01 &&
+  !plainReload.hasActiveApi && !plainReload.hasBonus && !plainReload.hasJamState,
+  JSON.stringify(plainReload));
 
 // --- SWAT TURN: en cover, correr alejándose con otra cobertura enfrente
 // cruza el hueco; sin cobertura enfrente sale corriendo normal

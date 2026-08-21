@@ -1,6 +1,20 @@
 import assert from 'node:assert/strict';
 import { Weapons } from '../src/combat/weapons.js';
 
+// La recarga activa no forma parte de Breach: el estado y la API deben seguir
+// ausentes para evitar que un segundo toque otorgue bonus o atasque el arma.
+{
+  const w = new Weapons();
+  w.state.smg.mag = 5;
+  assert.equal(w.startReload(), true);
+  const remaining = w.st.reload;
+  assert.equal(w.startReload(), false);
+  assert.equal(w.st.reload, remaining);
+  assert.equal(typeof w.tryActiveReload, 'undefined');
+  assert.equal('bonusT' in w, false);
+  assert.equal('active' in w.st || 'jammed' in w.st, false);
+}
+
 function tacticalCancel(weapon) {
   const w = new Weapons();
   w.cur = weapon;

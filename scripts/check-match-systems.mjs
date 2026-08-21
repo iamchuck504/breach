@@ -75,7 +75,8 @@ const smokeRes = await page.evaluate(async () => {
 check('bot tenía enemigos visibles', !!smokeRes && smokeRes.before > 0, JSON.stringify(smokeRes));
 check('dentro del humo no ve a NADIE', !!smokeRes && smokeRes.inside === 0, JSON.stringify(smokeRes));
 
-// 3) melee desde cobertura se IGNORA (el arma está contra la pared)
+// 3) melee desde el CENTRO de cobertura se ignora; solo una orilla válida
+// puede activar el golpe contextual.
 const meleeCover = await page.evaluate(async () => {
   const G = window.BREACH, W = window.BREACH_WORLD;
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -96,7 +97,7 @@ const meleeCover = await page.evaluate(async () => {
   return { inCover, after: p.state };
 });
 check('cover alcanzado para la prueba', meleeCover.inCover === 'cover', JSON.stringify(meleeCover));
-check('melee ignorado en cobertura', meleeCover.after === 'cover', JSON.stringify(meleeCover));
+check('melee central permanece locked-in al cover', meleeCover.after === 'cover', JSON.stringify(meleeCover));
 
 // 4) cambio rápido de armas SPAM: sin dobles cambios ni estados rotos
 const spam = await page.evaluate(async () => {

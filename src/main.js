@@ -21,6 +21,9 @@ import { HUD } from './ui/hud.js';
 import { NetClient } from './net/client.js';
 import { BotMatch } from './game/botmatch.js';
 import { SmokeSystem } from './game/smoke.js';
+import { MapEditor } from './editor/editor.js';
+import { EditorUI } from './editor/editor-ui.js';
+import { mapLayoutId, isCustomLayout, getMap, listMaps, footprint } from './world/map-data.js';
 import { SpecialPickup, Rockets, SPECIAL_HOLD_TIME } from './game/special.js';
 import {
   DEFAULT_LOBBY_SETTINGS, MAPS, MAX_PLAYERS, TEAM_CAPACITY, makeBotName,
@@ -106,6 +109,7 @@ const G = {
   pendingThrows: 0,    // granadas aprobadas que esperan la pose de este frame
   throwT: 0,           // gesto de lanzamiento en curso
   throwPending: false, // el bote aún no ha salido de la mano
+  editorReturn: null,  // id del mapa en edición durante un playtest
   specialRound: 0,     // ronda cuyo arma especial ya fue colocada
   specialClaimT: 0,    // anti-spam del reclamo online del pedestal
   mode: null,          // null | 'practice' | 'online'
@@ -147,7 +151,10 @@ const G = {
   presentationAudioKey: '',
 };
 
-const mapLabel = (map) => t(`map.${map || 'fortaleza'}`);
+// los mapas del editor traen su propio nombre; los del juego pasan por i18n
+const mapLabel = (map) => (isCustomLayout(map)
+  ? (getMap(map)?.name ?? 'MAPA')
+  : t(`map.${map || 'fortaleza'}`));
 const teamLabel = (team) => t(team === 'red' ? 'hud.red' : 'hud.blue');
 const INTRO_TIME = 10;
 const COUNTDOWN_TIME = 3;
@@ -468,6 +475,12 @@ const ctrlEvents = {
     audio.footstep('jump', 0.9);
     audio.whoosh();
   },
+  onMeleeStart: () => {
+    // El golpe tiene prioridad sobre una recarga, pero no inventa munición:
+    // conserva cargador/reserva exactamente donde estaban.
+    G.weapons?.interruptReload?.();
+    G.fireBuffer = 0;
+  },
 };
 
 // ---------- menú ----------
@@ -627,7 +640,7 @@ function defaultLocalLobby() {
       bots.push({ id: `local-b${bots.length + 1}`, name: makeBotName(team, occupied), team, bot: 1, v: bots.length % 5, alive: true });
     }
   }
-  const state = { phase: 'lobby', hostId: 'player', settings: normalizeLobbySettings({ ...DEFAULT_LOBBY_SETTINGS, map: G.mapChoice }),
+  const state = { phase: 'lobby', hostId: 'player', settings: normalizeLobbySettings({ ...DEFAULT_LOBBY_SETTINGS, map: G.mapChoice }, { allowCustom: true }),
     players: [player], bots, maxPlayers: MAX_PLAYERS, teamCapacity: TEAM_CAPACITY };
   state.validation = validateLobby([...state.players, ...state.bots], state.settings);
   return state;
@@ -670,7 +683,11 @@ function lobbyAction(action, value) {
       if (bot) { bot.team = player.team; player.team = value.team; }
     }
   }
-  if (action === 'settings') G.lobby.settings = normalizeLobbySettings({ ...G.lobby.settings, ...value });
+  if (action === 'settings') {
+    // el lobby LOCAL acepta mapas del editor; el online no (el server no los conoce)
+    G.lobby.settings = normalizeLobbySettings({ ...G.lobby.settings, ...value },
+      { allowCustom: G.lobbyKind !== 'online' });
+  }
   if (action === 'removeBot') G.lobby.bots = G.lobby.bots.filter((b) => b.id !== value.id);
   if (action === 'moveBot') {
     const b = G.lobby.bots.find((x) => x.id === value.id);
@@ -726,8 +743,9 @@ function updateMapBtn() {
   document.getElementById('map-label').textContent = t('menu.mapValue', { map: mapLabel(G.mapChoice) });
 }
 btnMap.addEventListener('click', () => {
-  // cicla la lista central de mapas (misma fuente que el lobby)
-  G.mapChoice = MAPS[(MAPS.indexOf(G.mapChoice) + 1) % MAPS.length];
+  // cicla los mapas del juego + los JUGABLES creados en el editor
+  const all = [...MAPS, ...listMaps().map((m) => mapLayoutId(m))];
+  G.mapChoice = all[(all.indexOf(G.mapChoice) + 1) % all.length];
   localStorage.setItem('breach.map', G.mapChoice);
   updateMapBtn();
 });
@@ -793,6 +811,9 @@ document.addEventListener('fullscreenchange', () => {
 });
 
 input.onEscape = () => {
+  // el editor y su playtest tienen su propia salida (no abren la pausa)
+  if (G.mode === 'editor') { closeEditor(); return; }
+  if (G.editorReturn) { returnToEditor(); return; }
   if ((menuIsOpen() || !splash.classList.contains('off')) && menuNavigator?.back()) return;
   if (!G.mode) return;
   if (menuIsOpen()) closeMenu(); else openMenu();
@@ -1031,6 +1052,10 @@ document.getElementById('btn-char-back').addEventListener('click', () => showCha
 
 function navigateMenuBack() {
   if (!splash.classList.contains('off')) return false;
+  // en el editor, Esc sale de él (no abre la pausa del juego)
+  if (G.mode === 'editor') { closeEditor(); return true; }
+  // durante un playtest, Esc vuelve al editor con el mapa intacto
+  if (G.editorReturn) { returnToEditor(); return true; }
   // jerarquía: subcard → Opciones → menú principal
   if (optionSubCards.some((c) => c.style.display === 'block')) { showOptions(true); return true; }
   if (controlsCard.style.display === 'block') { showOptions(true); return true; }
@@ -1380,6 +1405,17 @@ function damagePlayerLocal(dmg, fromName, shooter, hitCtx = null) {
   if (G.spawnProt > 0) return false; // protegido: sin daño
   G.selfHp -= dmg;
   G.playerLastHit = 0;
+  if (hitCtx?.weapon === 'melee' && shooter && G.player) {
+    const dx = G.player.pos.x - shooter.x, dz = G.player.pos.z - shooter.z;
+    const len = Math.max(0.001, Math.hypot(dx, dz));
+    const rightX = Math.cos(G.player.yaw), rightZ = -Math.sin(G.player.yaw);
+    const side = (dx * rightX + dz * rightZ) / len;
+    G.rig.hitReact(side, Math.min(1.2, dmg / 50), 'melee');
+    // Empuje corto y físico: resolveCircle impide atravesar pared/cover.
+    G.player.pos.x += (dx / len) * 0.13;
+    G.player.pos.z += (dz / len) * 0.13;
+    world.resolveCircle(G.player.pos, PLAYER_R, G.player.y);
+  }
   audio.hurt();
   shoulderCam.addShake(0.35);
   input.pad.rumble(120, 0.4, 0.6);
@@ -1526,6 +1562,96 @@ function startBots(lobby = G.lobby || defaultLocalLobby()) {
   input.requestLock();
   setTimeout(() => hud.hint(t('msg.scoreboardHint'), 2800), 3400);
 }
+
+// ---------------------------------------------------------------------------
+// EDITOR DE MAPAS. Vive fuera del flujo de partida: abre su propio modo, y el
+// Playtest arranca una partida REAL sobre el mapa en edición (mismo pipeline
+// de datos) y devuelve el control al editor sin perder nada.
+// ---------------------------------------------------------------------------
+let editor = null, editorUI = null;
+
+function ensureEditor() {
+  if (editor) return editor;
+  editor = new MapEditor({
+    scene, camera, renderer, world, canvas: renderer.domElement,
+  });
+  editorUI = new EditorUI(editor, {
+    onPlaytest: () => editorPlaytest(),
+    onExit: () => closeEditor(),
+  });
+  // ratón del editor sobre el canvas (el juego no tiene pointer lock aquí)
+  const el = renderer.domElement;
+  const nx = (e) => (e.clientX / innerWidth) * 2 - 1;
+  const ny = (e) => -(e.clientY / innerHeight) * 2 + 1;
+  el.addEventListener('mousedown', (e) => {
+    if (G.mode !== 'editor') return;
+    editor.onPointerDown(nx(e), ny(e), { shift: e.shiftKey, alt: e.altKey, button: e.button });
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (G.mode !== 'editor') return;
+    editor.onPointerMove(nx(e), ny(e), e.movementX, e.movementY);
+  });
+  window.addEventListener('mouseup', () => { if (G.mode === 'editor') editor.onPointerUp(); });
+  el.addEventListener('contextmenu', (e) => { if (G.mode === 'editor') e.preventDefault(); });
+  return editor;
+}
+
+function openEditor(map = null) {
+  dismissSplash();
+  startSeq++;
+  teardown();
+  ensureEditor();
+  G.mode = 'editor';
+  G.editorReturn = null;
+  hud.showMenu(false);
+  hud.show(false);
+  showControls(false);
+  input.suppress = true;
+  input.releaseLock();
+  editor.open(map ?? editor.map);
+  editorUI.show(true);
+}
+
+function closeEditor() {
+  if (!editor) return;
+  editor.close();
+  editorUI.show(false);
+  G.mode = null;
+  input.suppress = false;
+  teardown();
+  showMenuBackdrop();
+  hud.show(false);
+  hud.showMenu(true);
+}
+
+// Playtest: guarda, valida y entra a jugar el mapa en edición.
+function editorPlaytest() {
+  if (!editor) return;
+  editor.save();
+  const report = editor.validate();
+  const blocking = report.filter((r) => r.level === 'error');
+  if (blocking.length &&
+      !confirm(`El mapa tiene ${blocking.length} problema(s):\n\n` +
+        blocking.map((b) => '• ' + b.msg).join('\n') +
+        '\n\n¿Probarlo igual?')) return;
+  const layout = mapLayoutId(editor.map);
+  editor.close();
+  editorUI.show(false);
+  input.suppress = false;
+  G.editorReturn = editor.map.id;   // volver aquí al terminar
+  G.mapChoice = layout;
+  startPractice();
+  hud.hint('PLAYTEST · ESC PARA VOLVER AL EDITOR', 3200);
+}
+
+// Vuelta desde el playtest al editor, con el mapa intacto
+function returnToEditor() {
+  const id = G.editorReturn;
+  G.editorReturn = null;
+  openEditor(getMap(id) ?? editor?.map ?? null);
+}
+
+document.getElementById('btn-editor')?.addEventListener('click', () => openEditor());
 
 function startPractice() {
   dismissSplash();
@@ -1764,6 +1890,36 @@ function bindNet(net) {
     const r = G.remotes.get(m.id);
     if (r) r.firing = 0.45;
   });
+  net.on('hitConfirm', (m) => {
+    if (!alive() || m.w !== 'melee' || !Array.isArray(m.p) || m.p.length !== 3) return;
+    const point = new THREE.Vector3(+m.p[0] || 0, +m.p[1] || 0, +m.p[2] || 0);
+    const victimSelf = m.target === net.id;
+    const victimRemote = victimSelf ? null : G.remotes.get(m.target);
+    const victimBot = G.onlineBots?.botById(m.target);
+    const attacker = m.from === net.id ? G.player
+      : (G.remotes.get(m.from) || G.onlineBots?.botById(m.from));
+    const victimPos = victimSelf ? G.player?.pos
+      : victimRemote ? victimRemote
+      : victimBot?.pos;
+    const victimYaw = victimSelf ? G.player?.yaw
+      : victimRemote ? victimRemote.yaw
+      : victimBot?.yaw;
+    const victimRig = victimSelf ? G.rig : (victimRemote?.rig || victimBot?.rig);
+    // El atacante ya predijo la reacción local para que el golpe no espere al
+    // ping. Los demás clientes la reproducen desde la confirmación autoritativa.
+    if (m.from !== net.id && victimRig && attacker && victimPos) {
+      const ap = attacker.pos || attacker;
+      const dx = victimPos.x - ap.x, dz = victimPos.z - ap.z;
+      const len = Math.max(0.001, Math.hypot(dx, dz));
+      const side = (dx * Math.cos(victimYaw || 0) + dz * -Math.sin(victimYaw || 0)) / len;
+      victimRig.hitReact(side, Math.min(1.2, (+m.dmg || 60) / 50), 'melee');
+    }
+    if (m.from !== net.id) {
+      const team = victimSelf ? G.team : (victimRemote?.team || victimBot?.team || 'blue');
+      effects.meleeImpact(point, TEAM_HEX[team]);
+      audio.meleeImpact({ position: point }, false);
+    }
+  });
   net.on('rocket', (m) => {
     if (!alive() || m.id === net.id) return;
     const okVec = (v) => Array.isArray(v) && v.length === 3 && v.every((n) => typeof n === 'number' && isFinite(n));
@@ -1850,7 +2006,7 @@ function bindNet(net) {
       }
       victim.rig.setDeathContext({
         impact: killer ? { x: victim.x - killer.x, z: victim.z - killer.z } : null,
-        power: m.gib ? 1 : 0.6,
+        power: m.gib || m.w === 'melee' ? 1 : 0.6,
         vel: rv,
         state: victim.st,
         weapon: m.w,
@@ -1865,7 +2021,7 @@ function bindNet(net) {
       G.weapons.cancelActions();
       G.rig.setDeathContext({
         impact: killer ? { x: G.player.pos.x - killer.x, z: G.player.pos.z - killer.z } : null,
-        power: m.gib ? 1 : 0.6,
+        power: m.gib || m.w === 'melee' ? 1 : 0.6,
         vel: { x: G.player.vel.x, z: G.player.vel.z },
         state: G.player.animState(),
         weapon: m.w,
@@ -2375,31 +2531,45 @@ function resolveMelee() {
     const dx = tg.x - p.pos.x, dz = tg.z - p.pos.z;
     const dist = Math.hypot(dx, dz);
     if (dist > ml.range) continue;
-    if (Math.abs((tg.y ?? 0) - p.y) > 1.4) continue;
+    if (Math.abs((tg.y ?? 0) - p.y) > ml.heightTolerance) continue;
     const dot = dist < 0.001 ? 1 : (dx * f.x + dz * f.z) / dist;
     if (dot < cosHalf) continue;
-    if (!best || dist < best.dist) best = { tg, dist, dx, dz };
+    // Lo más centrado gana sobre una diferencia mínima de distancia. Evita
+    // que un hombro lateral robe el golpe al objetivo claramente frontal.
+    const score = dist + (1 - dot) * 0.42;
+    if (!best || score < best.score) best = { tg, dist, dx, dz, dot, score };
   }
   // el golpe rompe la protección de spawn propia aunque pegue al aire
   if (G.spawnProt > 0) { G.spawnProt = 0; hud.hint(t('msg.protectionBroken'), 900); }
-  if (!best) return;
+  if (!best) return { connected: false, killed: false };
   const { tg, dist } = best;
-  _v1.set(p.pos.x, p.y + 1.1, p.pos.z);
-  _v2.set(best.dx, 0, best.dz).normalize();
-  if (dist > 0.4 && world.raycast(_v1, _v2, dist - 0.2) !== null) return;
+  _v1.set(p.pos.x, p.y + 1.08, p.pos.z);
+  const targetPoint = _v3.set(tg.x, (tg.y ?? 0) + (tg.crouch ? 0.78 : 1.02), tg.z);
+  _v2.copy(targetPoint).sub(_v1);
+  const strikeLen = _v2.length();
+  if (strikeLen > 0.4 && world.raycast(_v1, _v2.normalize(),
+      Math.max(0, strikeLen - ml.wallPadding)) !== null) {
+    return { connected: false, killed: false };
+  }
   const dmg = ml.dmg;
-  const point = _v3.set(tg.x, (tg.y ?? 0) + 1.05, tg.z);
-  const ctx = { weapon: 'melee', distance: dist, damage: dmg, part: 'body', gib: false };
+  const point = targetPoint.clone();
+  const impactDir = new THREE.Vector3(best.dx, 0.12, best.dz).normalize();
+  const attackerState = p.meleeEntryState || 'idle';
+  const ctx = { weapon: 'melee', distance: dist, damage: dmg, part: 'body', gib: false,
+    attackerState };
   let connected = false;
+  let killed = false;
+  let victimTeam = 'blue';
   if (G.mode === 'practice' && G.dummies) {
     connected = true;
-    effects.blood(point, TEAM_HEX.blue);
-    const killed = G.dummies.damage(tg.id, dmg, (d) => {
+    tg.rig?.hitReact?.(best.dot < 0.75 ? Math.sign(best.dx) : 0, 1, 'melee');
+    G.dummies.recoil?.(tg.id, best.dx, best.dz, 0.16);
+    killed = G.dummies.damage(tg.id, dmg, (d) => {
       d.rig.setDeathContext({
         impact: { x: d.x - p.pos.x, z: d.z - p.pos.z },
         power: Math.min(1, dmg / 55),
-        vel: { x: 0, z: 0 },
-        state: 'run',
+        vel: { x: best.dx * 0.18, z: best.dz * 0.18 },
+        state: d.rigState || 'run',
         ...ctx,
       });
       G.scores.red++;
@@ -2409,26 +2579,29 @@ function resolveMelee() {
     });
     if (!killed) audio.hit();
   } else if (G.mode === 'bots' && G.botMatch) {
-    const killed = G.botMatch.damageBot(tg.id, dmg, 'player', false, false, ctx);
-    if (killed !== null) { connected = true; if (!killed) audio.hit(); }
+    const result = G.botMatch.damageBot(tg.id, dmg, 'player', false, false, ctx);
+    if (result !== null) { connected = true; killed = result; if (!killed) audio.hit(); }
+    victimTeam = tg.team || 'blue';
   } else if (G.net) {
     const r = G.remotes.get(tg.id);
     const b = G.onlineBots?.botById(tg.id);
     if ((r || b) && !r?.inv && !(b?.protT > 0)) {
       connected = true;
-      effects.blood(point, TEAM_HEX[r?.team || b.team]);
+      victimTeam = r?.team || b.team;
+      (r?.rig || b?.rig)?.hitReact?.(best.dot < 0.75 ? Math.sign(best.dx) : 0, 1, 'melee');
       // el golpe viaja como disparo validable de corto alcance + su claim
       G.net.fire(_v1, point, 'melee', []);
       G.net.hit(tg.id, dmg, 'body', false, point);
-      audio.hit();
     }
   }
   if (connected) {
+    effects.meleeImpact(point, TEAM_HEX[victimTeam], impactDir);
     hud.hitmarker();
-    audio.thump();
-    input.pad.rumble(70, 0.6, 0.8);
-    shoulderCam.addShake(0.5);
+    audio.meleeImpact(null, killed);
+    input.pad.rumble(killed ? 115 : 85, 0.58, killed ? 0.95 : 0.78);
+    shoulderCam.addShake(killed ? 0.48 : 0.34);
   }
+  return { connected, killed };
 }
 
 // primaria que se ve cargada a la espalda: la que no está en mano (con
@@ -2501,7 +2674,7 @@ function fireShot() {
       worldImpacts.push(hit.point);
     }
     if (hit.kind === 'player') {
-      let dmg = def.dmg * falloff(def, hit.t) * w.damageMul;
+      let dmg = def.dmg * falloff(def, hit.t);
       if (hit.part === 'head') dmg *= def.headMult;
       const e = dmgByTarget.get(hit.id) || { dmg: 0, part: hit.part, dist: hit.t, point: hit.point };
       e.dmg += dmg;
@@ -2594,14 +2767,30 @@ function updateReticle() {
   camera.updateMatrixWorld();
 
   if (p.aim) {
-    // ADS: anillo del tamaño real del cono de dispersión del arma,
-    // atenuado si el punto apuntado queda fuera de su rango efectivo
+    // ADS: la cámara define la intención, pero el anillo se coloca sobre el
+    // primer punto que la trayectoria física DESDE EL MUZZLE puede alcanzar.
+    // Así una caja/esquina entre arma y objetivo desplaza la retícula al
+    // obstáculo en lugar de mantener una promesa falsa en el centro.
     const def = G.weapons.def;
     const ringPx = Math.tan(def.spreadAim * Math.PI / 180) /
       Math.tan(camera.fov * Math.PI / 360) * (innerHeight / 2);
     const ray = shoulderCam.aimRay();
-    const t = staticHitDistance(ray.origin, ray.dir, 200);
-    hud.reticle(true, null, { r: Math.min(190, ringPx), inRange: t <= def.range });
+    const guideT = staticHitDistance(ray.origin, ray.dir, 200);
+    G.rig.root.updateWorldMatrix(true, true);
+    const muzzle = G.rig.muzzleWorld(_v1);
+    const hit = def.projectile
+      // Los cohetes conservan la dirección paralela a cámara que usa fireShot.
+      ? resolveShot(world, currentTargets(), muzzle, ray.dir, def.range, null)
+      : resolveGuidedShot(world, currentTargets(), ray.origin, muzzle,
+        ray.dir, def.range, null);
+    _v3.copy(hit.point).project(camera);
+    if (_v3.z > 1) { hud.reticle(false, null); return; }
+    const tx = (_v3.x * 0.5 + 0.5) * innerWidth;
+    const ty = (-_v3.y * 0.5 + 0.5) * innerHeight;
+    hud.reticle(true, { x: tx, y: ty }, {
+      r: Math.min(190, ringPx),
+      inRange: guideT <= def.range,
+    });
     return;
   }
 
@@ -2629,6 +2818,10 @@ window.BREACH_AUDIO = audio;
 window.BREACH_WORLD = world;
 window.BREACH_EFFECTS = effects;
 window.BREACH_SMOKE = smoke;
+// editor: handles para suites headless y depuración de nivel
+Object.defineProperty(window, 'BREACH_EDITOR', { get: () => editor });
+window.BREACH_EDITOR_PLAYTEST = () => editorPlaytest();
+window.BREACH_MAPDATA = { mapLayoutId, isCustomLayout, getMap, listMaps, footprint };
 window.BREACH_SPECIALS = specials;
 window.BREACH_ROCKETS = rockets;
 window.BREACH_RIG = Rig; // para tests visuales de poses/animaciones
@@ -2741,6 +2934,13 @@ function simStep(dt) {
   }
   if (G.specialClaimT > 0) G.specialClaimT -= dt;
 
+  // Un cambio de arma o el lanzamiento de una granada ya comprometidos no se
+  // cancelan con B/V. Durante melee ocurre lo inverso: swap/evade quedan
+  // bloqueados por el estado hasta terminar su recovery.
+  if (input.meleePressed && (G.weapons.swapping || G.throwT > 0)) {
+    input.meleePressed = false;
+  }
+
   // la intención de disparo SIEMPRE llega al controller: cancela el roadie
   // (en tierra o en el aire) y gira el cuerpo para disparar
   p.update(dt, input, (input.fireHeld || G.fireBuffer > 0) && !p.dead && hasAmmo);
@@ -2793,23 +2993,10 @@ function simStep(dt) {
     }
   }
 
-  // RECARGA ACTIVA: el primer toque recarga; un segundo toque durante la
-  // recarga intenta clavar la ventana (perfecta = instantánea + bonus;
-  // fallada = atasco). Sin ventana disponible, el toque recarga normal.
-  if (input.reloadPressed && p.state !== 'melee') {
-    const active = G.weapons.reloading ? G.weapons.tryActiveReload() : null;
-    if (active === 'perfect') {
-      audio.reloadDone();
-      hud.hint(t('msg.activeReload'), 1200);
-      hud.activeReloadFlash?.('perfect');
-      input.pad.rumble(60, 0.3, 0.5);
-    } else if (active === 'jam') {
-      audio.reload();
-      hud.hint(t('msg.jammed'), 1200);
-      hud.activeReloadFlash?.('jam');
-    } else if (!G.weapons.reloading) {
-      G.weapons.startReload();
-    }
+  // Recarga normal: pulsar otra vez mientras ya está en curso no modifica la
+  // duración, no completa el cargador y no aplica bonus/penalizaciones.
+  if (input.reloadPressed && p.state !== 'melee' && !G.weapons.reloading) {
+    G.weapons.startReload();
   }
   if (!wasReloading && G.weapons.reloading) audio.reload(); // incluye auto-recarga
   // Una recarga interrumpida abandona el gesto sin reproducir el sonido que
@@ -2851,7 +3038,8 @@ function simStep(dt) {
     }
     if (!G.meleeHitDone && p.meleeT >= TUNING.melee.hitAt) {
       G.meleeHitDone = true;
-      resolveMelee();
+      const result = resolveMelee();
+      p.confirmMelee(result.connected, result.killed);
     }
   } else {
     G.meleeSwung = false;
@@ -2979,6 +3167,15 @@ function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
+
+  // MODO EDITOR: cámara y overlays propios; el gameplay no corre
+  if (G.mode === 'editor') {
+    editor.update(dt);
+    effects.update(dt);
+    renderer.render(scene, camera);
+    input.endFrame();
+    return;
+  }
 
   const menuOpen = menuIsOpen();
   if (!G.mode) updateMenuBackdrop(now);

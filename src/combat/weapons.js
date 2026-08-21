@@ -19,12 +19,12 @@ export class Weapons {
     this._swapTarget = null;
     this.reloadInterrupted = false; // evento de un frame para audio/animación
     this.reloadInserted = 0; // cartuchos insertados físicamente este frame
-    this.bonusT = 0;         // tiempo restante del bonus de recarga activa
+    this._reloadInterruptPending = false;
   }
 
   _freshState(k) {
     const d = TUNING.weapons[k];
-    return { mag: d.mag, reserve: d.reserve, cd: 0, reload: 0, active: null, jammed: false };
+    return { mag: d.mag, reserve: d.reserve, cd: 0, reload: 0 };
   }
 
   get def() { return TUNING.weapons[this.cur]; }
@@ -42,7 +42,7 @@ export class Weapons {
     this._swapTarget = null;
     this.reloadInterrupted = false;
     this.reloadInserted = 0;
-    this.bonusT = 0;
+    this._reloadInterruptPending = false;
   }
 
   // La muerte tiene prioridad absoluta sobre gestos del arma. Congelar el
@@ -52,6 +52,7 @@ export class Weapons {
     this.swapT = 0;
     this._swapped = false;
     this._swapTarget = null;
+    this._reloadInterruptPending = false;
     for (const k of this.slots) this.state[k].reload = 0;
   }
 
@@ -123,58 +124,32 @@ export class Weapons {
     if (d.thrown) return false; // la granada no recarga
     if (s.reload > 0 || this.swapT > 0 || s.mag >= d.mag || s.reserve <= 0) return false;
     s.reload = d.reloadTime;
-    s.active = 'open';   // 'open' → aún se puede clavar | 'done' | 'jam'
-    s.jammed = false;
     return true;
   }
 
-  // Progreso 0..1 de la recarga en curso (para el HUD y la ventana activa)
+  // Melee puede cortar una recarga de forma explícita conservando exactamente
+  // la munición ya insertada. El evento sobrevive al update del mismo frame
+  // para que audio/HUD no comuniquen una recarga completada.
+  interruptReload() {
+    if (!this.reloading) return false;
+    this.st.reload = 0;
+    this._reloadInterruptPending = true;
+    return true;
+  }
+
+  // Progreso 0..1 de la recarga normal en curso (solo feedback del HUD).
   get reloadProgress() {
     const s = this.st, d = this.def;
     if (s.reload <= 0) return 0;
-    const total = d.perShell ? d.reloadTime : d.reloadTime * (s.jammed ? TUNING.activeReload.jamMul : 1);
-    return Math.max(0, Math.min(1, 1 - s.reload / total));
+    return Math.max(0, Math.min(1, 1 - s.reload / d.reloadTime));
   }
-
-  // Ventana activa del arma actual: null si no aplica (per-shell o ya usada)
-  activeWindow() {
-    const d = this.def, s = this.st;
-    if (d.perShell || d.thrown || s.reload <= 0 || s.active !== 'open') return null;
-    const a = TUNING.activeReload;
-    return { start: a.windowStart, end: a.windowEnd };
-  }
-
-  // Intento de recarga activa. Devuelve 'perfect' | 'jam' | null (sin efecto)
-  tryActiveReload() {
-    const s = this.st, d = this.def;
-    if (d.perShell || d.thrown || s.reload <= 0 || s.active !== 'open') return null;
-    const a = TUNING.activeReload;
-    const p = this.reloadProgress;
-    if (p >= a.windowStart && p <= a.windowEnd + a.perfectPad) {
-      // clavada: cargador lleno YA + bonus temporal de daño
-      const take = Math.min(d.mag - s.mag, s.reserve);
-      s.mag += take; s.reserve -= take;
-      s.reload = 0;
-      s.active = 'done';
-      this.bonusT = a.bonusTime;
-      return 'perfect';
-    }
-    // fallada: se atasca y el resto de la recarga se alarga
-    s.active = 'jam';
-    s.jammed = true;
-    s.reload *= a.jamMul;
-    return 'jam';
-  }
-
-  // Multiplicador de daño vigente (bonus de recarga activa)
-  get damageMul() { return this.bonusT > 0 ? 1 + TUNING.activeReload.damageBonus : 1; }
 
   // Devuelve true si disparó (o lanzó) este frame.
   update(dt, wantsFire, wantsFirePressed, canFire) {
     const s = this.st, d = this.def;
-    this.reloadInterrupted = false;
+    this.reloadInterrupted = this._reloadInterruptPending;
+    this._reloadInterruptPending = false;
     this.reloadInserted = 0;
-    this.bonusT = Math.max(0, this.bonusT - dt);
     // el cooldown corre para TODAS las armas (guardarlas no lo congela)
     for (const k of this.slots) this.state[k].cd = Math.max(0, this.state[k].cd - dt);
 

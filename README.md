@@ -62,11 +62,42 @@ Cerrada** (avenida al atardecer), **Estación de Metro** (subterráneo),
 Selector en el menú y en el lobby; 5 variantes de soldado por equipo en
 PERSONAJE. Opciones (Audio / Video / Idioma / Controles) en el menú.
 
+## Editor de mapas (sandbox)
+
+Botón **EDITOR DE MAPAS** en el menú. Está construido sobre el pipeline real:
+un mapa del editor es un objeto de datos (`src/world/map-data.js`) que
+`world.setLayout()` construye con las MISMAS primitivas que los mapas
+escritos a mano, así que lo que ves en el editor es lo que el juego simula
+— no hay un "formato de editor" y otro "formato de juego".
+
+- **Cámara:** WASD mover · E/C subir-bajar · clic derecho mirar · rueda zoom
+  · `T` vista superior.
+- **Construir:** biblioteca a la izquierda, `ALT+CLIC` para colocar, clic
+  para seleccionar, `SHIFT+CLIC` multi-selección.
+- **Editar:** mover/rotar/escalar, `CTRL+D` duplicar, `SUPR` borrar,
+  `CTRL+Z`/`CTRL+SHIFT+Z` deshacer-rehacer, valores exactos X/Z/W/D/H/ROT
+  en el panel derecho, snapping de posición y rotación, **espejo X/Z**.
+- **Marcadores:** spawns por equipo (con orientación), munición y punto de
+  arma especial. Se ven en el editor, no en partida.
+- **Visualización:** overlay de **cover real** (leído de `world.faces`, con
+  color por altura) y de **navegación** (celdas transitables según la física
+  del juego) + **ruta A→B** para detectar zonas inaccesibles.
+- **Validación** en vivo: spawns, separación entre bandos, límites, pickups
+  dentro de geometría, cobertura utilizable y conexión rojo↔azul.
+- **Playtest** instantáneo: juegas el mapa en edición y `ESC` vuelve al
+  editor con todo intacto. Un mapa válido aparece en el selector y en el
+  lobby local, y los bots lo navegan.
+
+Nota de arquitectura: la colisión y el cover del juego son **AABB**, así que
+la geometría jugable rota en pasos de 90° (intercambia ancho/fondo). Los
+props decorativos sí giran libremente porque no colisionan.
+
 ## Validación (headless, sin abrir ventana)
 
 ```bash
 node scripts/smoke.mjs               # suite integral (movimiento, bots, MP, UI)
 node scripts/check-movement.mjs      # harness agresivo de movilidad + muertes
+node scripts/check-editor.mjs        # editor: construir, validar, playtest, volver
 node scripts/check-arsenal.mjs       # armas: slots, melee, humo, especiales
 node scripts/check-match-systems.mjs # pedestal por ronda, humo vs bots, spam
 node scripts/check-ai.mjs            # métricas tácticas de la IA (mapa, segundos)

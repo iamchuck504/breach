@@ -1,14 +1,49 @@
 // Granadas de humo: proyectil físico con rebote real (paredes y suelo),
-// delay de activación y nube OPACA de bajo poligonaje que bloquea la visión.
-// Los jugadores no ven a través porque la geometría es opaca; los bots
-// consultan blocksSegment() desde su chequeo de línea de visión.
+// delay de activación y nube volumétrica ligera formada por sprites suaves.
+// Los bots consultan blocksSegment() desde su chequeo de línea de visión.
 import * as THREE from 'three';
 import { TUNING } from '../config/tuning.js';
 
 const GRAVITY = 14;
-const PUFFS = 9;
+const PUFFS = 18;
 const TMP_P = { x: 0, z: 0 };
 const TMP_V = new THREE.Vector3();
+
+// Textura procedural pequeña: borde erosionado + densidad interior irregular.
+// Evita depender de un asset externo y, sobre todo, elimina la silueta de
+// esfera plástica que producían los MeshStandardMaterial opacos.
+function smokeTexture(size = 128) {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const image = ctx.createImageData(size, size);
+  const smooth = (a, b, x) => {
+    const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
+    return t * t * (3 - 2 * t);
+  };
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    const nx = (x + 0.5) / size * 2 - 1;
+    const ny = (y + 0.5) / size * 2 - 1;
+    const angle = Math.atan2(ny, nx);
+    const radius = Math.hypot(nx, ny);
+    const coarse = Math.sin(nx * 8.1 + ny * 5.7) * 0.045 +
+      Math.sin(nx * 17.3 - ny * 13.1) * 0.022 +
+      Math.sin(angle * 7 + radius * 9.4) * 0.035;
+    const edge = 1 - smooth(0.48 + coarse, 0.98 + coarse, radius);
+    const interior = 0.82 + 0.10 * Math.sin(nx * 11.7 + ny * 7.9) +
+      0.08 * Math.sin(nx * 23.1 - ny * 19.7);
+    const alpha = Math.max(0, Math.min(1, edge * interior));
+    const i = (y * size + x) * 4;
+    image.data[i] = image.data[i + 1] = image.data[i + 2] = 255;
+    image.data[i + 3] = Math.round(alpha * 255);
+  }
+  ctx.putImageData(image, 0, 0);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.generateMipmaps = true;
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  return texture;
+}
 
 export class SmokeSystem {
   constructor(scene, world, audio) {
@@ -17,10 +52,17 @@ export class SmokeSystem {
     this.audio = audio;
     this.projs = [];
     this.clouds = [];
-    this._mat = new THREE.MeshStandardMaterial({
-      color: 0x9ba1a6, roughness: 1, metalness: 0, flatShading: true,
+    this._smokeTexture = smokeTexture();
+    this._smokeStyles = [
+      [0x858b90, 0.46], [0xa4a9ad, 0.38], [0x6f767c, 0.34],
+    ].map(([color, opacity]) => {
+      const material = new THREE.SpriteMaterial({
+        map: this._smokeTexture, color, opacity, transparent: true,
+        depthTest: true, depthWrite: false, alphaTest: 0.012,
+      });
+      material.userData.baseOpacity = opacity;
+      return material;
     });
-    this._geo = new THREE.SphereGeometry(1, 7, 5);
     this._nadeGeo = new THREE.CylinderGeometry(0.055, 0.055, 0.16, 8);
     this._nadeMat = new THREE.MeshStandardMaterial({
       color: 0x525a61, roughness: 0.8, metalness: 0.2, flatShading: true,
@@ -87,18 +129,34 @@ export class SmokeSystem {
     for (let i = this.clouds.length - 1; i >= 0; i--) {
       const c = this.clouds[i];
       c.t += dt;
-      // crece rápido, se mantiene plena y muere ENCOGIENDO (nítido, sin alpha)
+      // Nace rápido, deriva lentamente y se disipa por alpha mientras continúa
+      // expandiéndose. El humo real no colapsa como una burbuja al desaparecer.
       const grow = Math.min(1, c.t / 0.55);
-      const fade = Math.max(0, Math.min(1, (total - c.t) / 0.9));
-      const k = grow * grow * (3 - 2 * grow) * fade;
-      c.r = d.smokeRadius * Math.max(0.01, k);
+      const growEase = grow * grow * (3 - 2 * grow);
+      const fadeRaw = Math.max(0, Math.min(1, (total - c.t) / 1.25));
+      const fade = fadeRaw * fadeRaw * (3 - 2 * fadeRaw);
+      const appear = Math.min(1, c.t / 0.24);
+      const expansion = 1 + Math.min(1, c.t / total) * 0.16;
+      c.r = d.smokeRadius * Math.max(0.01, growEase * fade);
+      for (const mat of c.materials) {
+        mat.opacity = mat.userData.baseOpacity * appear * fade;
+        mat.rotation += dt * mat.userData.spin;
+      }
       for (const m of c.puffs) {
-        const wob = 1 + Math.sin(c.t * 1.7 + m.userData.ph) * 0.06;
-        m.scale.setScalar(Math.max(0.01, m.userData.s * d.smokeRadius * 0.6 * k * wob));
-        m.rotation.y += dt * 0.25;
+        const u = m.userData;
+        const wob = 1 + Math.sin(c.t * u.wobble + u.phase) * 0.055;
+        m.position.x = u.x + u.vx * c.t + Math.sin(c.t * 0.48 + u.phase) * 0.035;
+        m.position.y = u.y + u.rise * c.t;
+        m.position.z = u.z + u.vz * c.t + Math.cos(c.t * 0.43 + u.phase) * 0.035;
+        m.scale.set(
+          Math.max(0.01, u.sx * growEase * expansion * wob),
+          Math.max(0.01, u.sy * growEase * expansion / wob),
+          1,
+        );
       }
       if (c.t >= total) {
         this.scene.remove(c.group);
+        for (const mat of c.materials) mat.dispose();
         this.clouds.splice(i, 1);
       }
     }
@@ -109,25 +167,44 @@ export class SmokeSystem {
     const group = new THREE.Group();
     group.position.set(p.x, p.y, p.z);
     const puffs = [];
+    // Tres materiales por nube permiten variar densidad y hacer fade con solo
+    // tres cambios de estado, no un material nuevo por partícula.
+    const materials = this._smokeStyles.map((base, i) => {
+      const material = base.clone();
+      material.userData.baseOpacity = base.userData.baseOpacity;
+      material.userData.spin = (i - 1) * 0.018;
+      return material;
+    });
     for (let i = 0; i < PUFFS; i++) {
-      const m = new THREE.Mesh(this._geo, this._mat);
-      const a = (i / PUFFS) * Math.PI * 2 + Math.random() * 0.7;
-      const rr = i === 0 ? 0 : (0.3 + Math.random() * 0.5) * d.smokeRadius * 0.6;
-      m.position.set(
-        Math.cos(a) * rr,
-        0.5 + Math.random() * (d.smokeRadius * 0.55),
-        Math.sin(a) * rr,
-      );
-      m.userData.s = 0.5 + Math.random() * 0.4;
-      m.userData.ph = Math.random() * Math.PI * 2;
-      m.scale.setScalar(0.01);
-      m.castShadow = false;
+      const m = new THREE.Sprite(materials[i % materials.length]);
+      const a = Math.random() * Math.PI * 2;
+      // Varios núcleos centrales garantizan densidad; el resto forma un
+      // volumen irregular, sin anillos ni siluetas esféricas evidentes.
+      const rr = i < 4 ? Math.random() * 0.28
+        : Math.sqrt(Math.random()) * d.smokeRadius * 0.72;
+      const x = Math.cos(a) * rr;
+      const z = Math.sin(a) * rr;
+      const y = 0.34 + Math.random() * d.smokeRadius * 0.62;
+      const baseSize = d.smokeRadius * (0.62 + Math.random() * 0.38);
+      m.position.set(x, y, z);
+      Object.assign(m.userData, {
+        x, y, z,
+        sx: baseSize * (0.9 + Math.random() * 0.35),
+        sy: baseSize * (0.85 + Math.random() * 0.42),
+        vx: Math.cos(a) * (0.018 + Math.random() * 0.024),
+        vz: Math.sin(a) * (0.018 + Math.random() * 0.024),
+        rise: 0.018 + Math.random() * 0.035,
+        phase: Math.random() * Math.PI * 2,
+        wobble: 0.7 + Math.random() * 0.65,
+      });
+      m.scale.set(0.01, 0.01, 1);
+      m.renderOrder = 3;
       group.add(m);
       puffs.push(m);
     }
     this.scene.add(group);
     // el centro visual de la nube queda a media altura de un personaje
-    this.clouds.push({ group, puffs, x: p.x, y: p.y + 1.0, z: p.z, t: 0, r: 0 });
+    this.clouds.push({ group, puffs, materials, x: p.x, y: p.y + 1.0, z: p.z, t: 0, r: 0 });
   }
 
   // ¿El segmento a→b cruza el núcleo denso de alguna nube activa? Usado por
@@ -147,7 +224,10 @@ export class SmokeSystem {
 
   clear() {
     for (const p of this.projs) this.scene.remove(p.mesh);
-    for (const c of this.clouds) this.scene.remove(c.group);
+    for (const c of this.clouds) {
+      this.scene.remove(c.group);
+      for (const mat of c.materials) mat.dispose();
+    }
     this.projs.length = 0;
     this.clouds.length = 0;
   }

@@ -88,6 +88,9 @@ export class Bot {
     this.muzzleT = 0; // pose de fogonazo de la escopeta (separado de burstT)
     this.meleeT = 0;    // gesto de golpe en curso
     this.meleeCd = 0;
+    this.meleeFreezeT = 0;
+    this.meleeTravel = 0;
+    this.meleeEntrySpeed = 0;
     this.nadeCd = 4 + Math.random() * 5; // humo: no todos lo usan al segundo 0
     this.nades = 1;     // botes de humo por vida
     this.specialHoldT = 0; // progreso de recogida del arma especial
@@ -587,14 +590,26 @@ export class Bot {
     // MELEE: a bocajarro el disparo pierde sentido y el golpe es más rápido
     // que reposicionarse. Corta cualquier otro comportamiento mientras dura.
     if (this.meleeT > 0) {
-      this.meleeT -= dt;
       const ml = TUNING.melee;
+      if (this.meleeFreezeT > 0) this.meleeFreezeT = Math.max(0, this.meleeFreezeT - dt);
+      else this.meleeT -= dt;
       if (!this._meleeHit && this.meleeT <= ml.time - ml.hitAt) {
         this._meleeHit = true;
-        match.botMelee(this);
+        const result = match.botMelee(this);
+        if (result.connected) {
+          this.meleeFreezeT = ml.hitStop;
+          this.meleeT = Math.min(this.meleeT,
+            result.killed ? ml.killRecovery : ml.hitRecovery);
+        }
       }
       const f = this.facing ? this.facing() : { x: -Math.sin(this.yaw), z: -Math.cos(this.yaw) };
-      const push = ml.lungeSpeed * Math.max(0, this.meleeT / ml.time);
+      const elapsed = ml.time - this.meleeT;
+      const wind = Math.max(0, 1 - elapsed / Math.max(0.001, ml.hitAt));
+      const runFactor = Math.min(1, this.meleeEntrySpeed / TUNING.move.roadieSpeed);
+      let push = (ml.lungeSpeed + runFactor * ml.runLungeBonus) * wind;
+      const remaining = Math.max(0, ml.maxLunge - this.meleeTravel);
+      push = Math.min(push, remaining / Math.max(dt, 1e-4));
+      this.meleeTravel += push * dt;
       this.pos.x += f.x * push * dt;
       this.pos.z += f.z * push * dt;
       this.world.resolveCircle(this.pos, 0.38, this.y);
@@ -602,10 +617,14 @@ export class Bot {
       this.speed = push;
       animOverride = 'melee';
       if (this.meleeT <= 0) { this.meleeT = 0; this._meleeHit = false; }
-    } else if (enemy && dist < TUNING.melee.range * 0.85 && this.meleeCd <= 0 &&
-               this.grounded && this.state !== 'cover' && Math.abs((enemy.y ?? 0) - this.y) < 1.2) {
+    } else if (enemy && dist < TUNING.melee.range * 0.9 && this.meleeCd <= 0 &&
+               this.grounded && this.state !== 'cover' && match.canBotMelee(this, enemy)) {
       this.meleeT = TUNING.melee.time;
-      this.meleeCd = TUNING.melee.cooldown + Math.random() * 0.5;
+      this.meleeCd = TUNING.melee.botCooldownMin +
+        Math.random() * (TUNING.melee.botCooldownMax - TUNING.melee.botCooldownMin);
+      this.meleeFreezeT = 0;
+      this.meleeTravel = 0;
+      this.meleeEntrySpeed = this.speed;
       this._meleeHit = false;
       this._face(enemy.x - this.pos.x, enemy.z - this.pos.z, dt, 14);
       animOverride = 'melee';
@@ -939,6 +958,9 @@ export class Bot {
       aimPitch: 0,
       firing: this.burstT > 0 || this.muzzleT > 0,
       swapping: this.swapAnim > 0,
+      meleePhase: anim === 'melee'
+        ? Math.min(1, 1 - this.meleeT / Math.max(0.001, TUNING.melee.time))
+        : undefined,
       flipT: this.flip ? this.flip.t : 0,
       flipDir: this.flip?.dir ?? 1,
       flipAxis: this.flip?.axis ?? 'z',
@@ -1129,7 +1151,8 @@ export class BotMatch {
   targets() { // enemigos del jugador local
     return this.bots
       .filter((b) => b.team !== this.playerTeam && b.alive)
-      .map((b) => ({ id: b.id, x: b.pos.x, z: b.pos.z, y: b.y, alive: true, crouch: this._crouched(b) }));
+      .map((b) => ({ id: b.id, x: b.pos.x, z: b.pos.z, y: b.y,
+        team: b.team, alive: true, crouch: this._crouched(b) }));
   }
 
   _enemiesOf(bot) {
@@ -1553,8 +1576,25 @@ export class BotMatch {
     return best;
   }
 
-  // Golpe cuerpo a cuerpo de un bot: mismo arco y daño que el del jugador,
-  // con la misma comprobación de pared (no atraviesa cobertura).
+  canBotMelee(bot, enemy) {
+    const ml = TUNING.melee;
+    const dx = enemy.x - bot.pos.x, dz = enemy.z - bot.pos.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist > ml.range || Math.abs((enemy.y ?? 0) - bot.y) > ml.heightTolerance) return false;
+    const f = { x: -Math.sin(bot.yaw), z: -Math.cos(bot.yaw) };
+    const dot = dist < 0.001 ? 1 : (dx * f.x + dz * f.z) / dist;
+    if (dot < Math.cos(ml.acquireArcDeg * Math.PI / 360)) return false;
+    _v1.set(bot.pos.x, bot.y + 1.08, bot.pos.z);
+    _v2.set(enemy.x - bot.pos.x,
+      (enemy.y ?? 0) + (enemy.crouch ? 0.78 : 1.02) - (bot.y + 1.08),
+      enemy.z - bot.pos.z);
+    const len = _v2.length();
+    return len <= 0.4 || this.world.raycast(_v1, _v2.normalize(),
+      Math.max(0, len - ml.wallPadding)) === null;
+  }
+
+  // Golpe cuerpo a cuerpo de un bot: misma geometría que el jugador y, en
+  // online, el servidor sigue siendo quien decide el daño definitivo.
   botMelee(bot) {
     const ml = TUNING.melee;
     const f = { x: -Math.sin(bot.yaw), z: -Math.cos(bot.yaw) };
@@ -1564,22 +1604,43 @@ export class BotMatch {
       if (e.alive === false) continue;
       const dx = e.x - bot.pos.x, dz = e.z - bot.pos.z;
       const d = Math.hypot(dx, dz);
-      if (d > ml.range || Math.abs((e.y ?? 0) - bot.y) > 1.4) continue;
-      if (d > 0.001 && (dx * f.x + dz * f.z) / d < cosHalf) continue;
-      if (!best || d < best.d) best = { e, d, dx, dz };
+      if (d > ml.range || Math.abs((e.y ?? 0) - bot.y) > ml.heightTolerance) continue;
+      const dot = d > 0.001 ? (dx * f.x + dz * f.z) / d : 1;
+      if (dot < cosHalf) continue;
+      const score = d + (1 - dot) * 0.42;
+      if (!best || score < best.score) best = { e, d, dx, dz, dot, score };
     }
-    if (!best) return;
-    _v1.set(bot.pos.x, bot.y + 1.1, bot.pos.z);
-    _v2.set(best.dx, 0, best.dz).normalize();
-    if (best.d > 0.4 && this.world.raycast(_v1, _v2, best.d - 0.2) !== null) return;
-    this.cb.audio?.thump?.();
-    const ctx = { weapon: 'melee', distance: best.d, damage: ml.dmg, part: 'body', gib: false };
-    if (best.e.id === 'player') {
-      this.cb.damagePlayer(ml.dmg * BOT_DMG, bot.name,
+    if (!best) return { connected: false, killed: false };
+    const origin = _v1.set(bot.pos.x, bot.y + 1.08, bot.pos.z).clone();
+    const point = _v3.set(best.e.x,
+      (best.e.y ?? 0) + (best.e.crouch ? 0.78 : 1.02), best.e.z).clone();
+    _v2.copy(point).sub(origin);
+    const len = _v2.length();
+    if (len > 0.4 && this.world.raycast(origin, _v2.normalize(),
+      Math.max(0, len - ml.wallPadding)) !== null) {
+      return { connected: false, killed: false };
+    }
+    bot.protT = 0;
+    const ctx = { weapon: 'melee', distance: best.d, damage: ml.dmg,
+      part: 'body', gib: false, attackerState: bot.state };
+    let killed = false;
+    if (this.external) {
+      this.cb.botFire?.(bot, origin, point, 'melee', []);
+      this.cb.botHit?.(bot, best.e.id, ml.dmg, 'body', false, point);
+    } else if (best.e.id === 'player') {
+      killed = !!this.cb.damagePlayer(ml.dmg * BOT_DMG, bot.name,
         { x: bot.pos.x, z: bot.pos.z }, ctx);
+      if (killed) this._onDeath('player', bot.id, false);
     } else {
-      this.damageBot(best.e.id, ml.dmg * BOT_DMG, bot.id, false, false, ctx);
+      killed = !!this.damageBot(best.e.id, ml.dmg * BOT_DMG,
+        bot.id, false, false, ctx);
     }
+    const team = best.e.id === 'player' ? this.playerTeam
+      : (this.bots.find((b) => b.id === best.e.id)?.team || 'blue');
+    const normal = _v2.set(best.dx, 0.12, best.dz).normalize();
+    this.cb.effects?.meleeImpact?.(point, TEAM_HEX[team], normal);
+    this.cb.audio?.meleeImpact?.({ position: point }, killed);
+    return { connected: true, killed };
   }
 
   // Humo defensivo: el bot lo lanza hacia la amenaza para cortar la línea de
@@ -1767,6 +1828,18 @@ export class BotMatch {
       ? (() => { const p = this.cb.player(); return p.alive ? { x: p.x, z: p.z } : null; })()
       : (() => { const ab = this.bots.find((x) => x.id === from); return ab?.alive ? { x: ab.pos.x, z: ab.pos.z } : null; })();
     if (att) b.lastThreat = { x: att.x, z: att.z, age: 0 };
+    if (att && hitCtx?.weapon === 'melee') {
+      const dx = b.pos.x - att.x, dz = b.pos.z - att.z;
+      const len = Math.max(0.001, Math.hypot(dx, dz));
+      const rightX = Math.cos(b.yaw), rightZ = -Math.sin(b.yaw);
+      const side = (dx * rightX + dz * rightZ) / len;
+      b.rig.hitReact(side, Math.min(1.2, dmg / 50), 'melee');
+      b.pos.x += (dx / len) * 0.13;
+      b.pos.z += (dz / len) * 0.13;
+      this.world.resolveCircle(b.pos, 0.38, b.y);
+      b.commitMove = false; // vuelve a evaluar: ya no sigue corriendo ciego
+      b.decisionT = 0;
+    }
     if (!silent) this.cb.effects.blood(_v3.set(b.pos.x, b.y + 1, b.pos.z), TEAM_HEX[b.team]);
     if (b.hp <= 0) {
       b.alive = false;

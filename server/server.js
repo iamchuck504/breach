@@ -29,8 +29,8 @@ const FIRE_RULES = {
   // el splash puede alcanzar a varios: el presupuesto cubre 3 impactos y su
   // "rango" al validar hits es el radio de la explosión, no el del vuelo
   bazooka: { interval: 60 / 28, range: 110, maxDamage: 115 * 3, hitRange: 5 },
-  // el golpe cuerpo a cuerpo viaja como "disparo" de rango mínimo
-  melee: { interval: 0.55, range: 2.6, maxDamage: 60 },
+  // tolerancia de red pequeña sobre los 1.82 m físicos del cliente
+  melee: { interval: 0.4, range: 1.95, hitRange: 1.95, maxDamage: 60 },
 };
 // ids replicables en 'w' (la granada solo aparece EN MANO, nunca dispara aquí)
 const VALID_WEAPONS = new Set(['smg', 'shotgun', 'pistol', 'grenade', 'sniper', 'bazooka']);
@@ -206,9 +206,16 @@ function registerFire(shooter, msg, isBotFire = false) {
   // el punto de la explosión, así que no se le exige nacer junto al tirador
   // (sí el resto: cadencia, arma en mano y alcance del splash).
   const proj = weapon === 'bazooka';
-  if (!proj && (Math.hypot(o[0] - shooter.x, o[2] - shooter.z) > (isBotFire ? 6 : 5) || Math.abs(o[1] - ((shooter.y || 0) + 1.1)) > 4)) return false;
+  const melee = weapon === 'melee';
+  const originTolerance = melee ? 0.9 : (isBotFire ? 6 : 5);
+  if (!proj && (Math.hypot(o[0] - shooter.x, o[2] - shooter.z) > originTolerance || Math.abs(o[1] - ((shooter.y || 0) + 1.1)) > (melee ? 1.1 : 4))) return false;
   if (proj && Math.hypot(o[0] - shooter.x, o[2] - shooter.z) > rule.range + 4) return false;
-  if (Math.hypot(pt[0] - o[0], pt[1] - o[1], pt[2] - o[2]) > rule.range + 2) return false;
+  if (Math.hypot(pt[0] - o[0], pt[1] - o[1], pt[2] - o[2]) > rule.range + (melee ? 0.22 : 2)) return false;
+  if (melee) {
+    const dx = pt[0] - o[0], dz = pt[2] - o[2], len = Math.hypot(dx, dz);
+    const fx = -Math.sin(shooter.yaw || 0), fz = -Math.cos(shooter.yaw || 0);
+    if (len > 0.001 && (dx * fx + dz * fz) / len < Math.cos(62 * Math.PI / 180)) return false;
+  }
   const decals = Array.isArray(msg.d) ? msg.d.slice(0, 8).map(vec3).filter(Boolean) : undefined;
   shooter.lastFireAt = now; shooter.pendingShot = { at: now, wep: weapon, origin: o, remainingDamage: rule.maxDamage, hitIds: new Set() };
   shooter.prot = 0;
@@ -222,9 +229,20 @@ function registerHit(shooter, msg) {
   if (target.team === shooter.team && !selfRocket) return;
   if (!shot || !rule || now - shot.at > HIT_WINDOW || shot.hitIds.has(target.id)) return;
   const dist = Math.hypot(target.x - shot.origin[0], (target.y || 0) + 1 - shot.origin[1], target.z - shot.origin[2]);
-  if (dist > (rule.hitRange ?? rule.range) + 2) return;
+  const hitTolerance = shot.wep === 'melee' ? 0.28 : 2;
+  if (dist > (rule.hitRange ?? rule.range) + hitTolerance) return;
+  if (shot.wep === 'melee') {
+    const dx = target.x - shooter.x, dz = target.z - shooter.z, len = Math.hypot(dx, dz);
+    const fx = -Math.sin(shooter.yaw || 0), fz = -Math.cos(shooter.yaw || 0);
+    if (len > 0.001 && (dx * fx + dz * fz) / len < Math.cos(58 * Math.PI / 180)) return;
+  }
   const dmg = Math.min(Math.max(0, num(msg.dmg)), shot.remainingDamage); if (dmg <= 0) return;
   shot.hitIds.add(target.id); shot.remainingDamage -= dmg; target.hp -= dmg; target.lastDamage = now;
+  if (shot.wep === 'melee') {
+    const p = vec3(msg.p) || [target.x, (target.y || 0) + 1, target.z];
+    broadcastRaw({ t: 'hitConfirm', target: target.id, from: shooter.id,
+      w: 'melee', dmg: Math.round(dmg), p });
+  }
   if (target.hp > 0) return;
   target.hp = 0; target.alive = false; target.deaths++;
   if (target.id !== shooter.id) shooter.kills++;

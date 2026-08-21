@@ -137,25 +137,27 @@ export const TUNING = {
       projSpeed: 26, splashRadius: 4.2, // el splash también daña al tirador
     },
   },
-  // Recarga activa: al recargar aparece una ventana; pulsar recargar dentro
-  // de ella completa el cargador al instante y da un bonus temporal. Fallar
-  // ATASCA el arma (la recarga se alarga). Riesgo/recompensa, sin obligar.
-  activeReload: {
-    windowStart: 0.42,  // fracción del progreso donde abre la ventana
-    windowEnd: 0.60,    // y donde cierra
-    perfectPad: 0.04,   // margen extra tras el centro que sigue contando
-    damageBonus: 0.2,   // +20% de daño mientras dure
-    bonusTime: 5,       // seg de bonus tras clavarla
-    jamMul: 1.55,       // penalización: el resto de la recarga se alarga
-  },
   melee: {
     dmg: 60,          // dos golpes matan a un rival sano
-    range: 1.7,       // alcance del arco frontal
-    arcDeg: 100,      // apertura total del arco
-    time: 0.34,       // duración del gesto completo
-    hitAt: 0.14,      // momento del impacto dentro del gesto
-    cooldown: 0.7,
-    lungeSpeed: 2.6,  // empujoncito hacia adelante durante el golpe
+    range: 1.82,      // alcance físico desde el centro del atacante
+    arcDeg: 108,      // arco tolerante, todavía inequívocamente frontal
+    acquireArcDeg: 124, // cono donde puede ayudar a orientar, no lock-on
+    assistDeg: 16,    // corrección máxima del cuerpo hacia cámara/objetivo
+    assistTurnDeg: 300,
+    time: 0.48,       // duración máxima: golpe fallado + recovery
+    hitAt: 0.13,      // contacto temprano y reactivo
+    hitRecovery: 0.21,
+    killRecovery: 0.25,
+    missRecovery: 0.35,
+    hitStop: 0.035,   // pausa solo del gesto local; el mundo no se congela
+    inputGuard: 0.045,// separa pulsaciones sin cooldown artificial largo
+    lungeSpeed: 2.05,
+    runLungeBonus: 0.8,
+    maxLunge: 0.3,    // nunca es un dash ni magnetiza al blanco
+    heightTolerance: 1.35,
+    wallPadding: 0.18,
+    botCooldownMin: 0.68,
+    botCooldownMax: 1.05,
   },
   combat: {
     spawnProtection: 5,   // seg de invulnerabilidad al nacer (se rompe al disparar)

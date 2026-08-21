@@ -1,5 +1,6 @@
 import { t } from '../core/i18n.js';
 import { LIFE_OPTIONS, MAPS, ROUND_OPTIONS } from '../game/lobby-rules.js';
+import { listMaps, mapLayoutId, isCustomLayout, getMap } from '../world/map-data.js';
 
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -83,6 +84,16 @@ export class LobbyUI {
     return `<div class="lobby-team-head"><span>${esc(t(team === 'red' ? 'lobby.teamRed' : 'lobby.teamBlue'))}</span><span>${members.length}/${cap}</span></div><div class="lobby-slots">${rows}</div><button class="lobby-mini lobby-add" data-action="team" data-team="${team}" data-nav-key="team:${team}" ${teamDisabled ? 'disabled' : ''}>${esc(teamAction)}</button>${host ? `<button class="lobby-mini lobby-add" data-action="add" data-team="${team}" data-nav-key="add:${team}" ${full ? 'disabled' : ''}>+ ${esc(t('lobby.addBot'))}</button>` : ''}`;
   }
 
+  // Los mapas creados en el editor son jugables en LOCAL. El lobby online
+  // se queda con los mapas que el servidor conoce.
+  mapOptions() {
+    if (this.kind === 'online') return MAPS;
+    return [...MAPS, ...listMaps().map((m) => mapLayoutId(m))];
+  }
+  mapName(id) {
+    return isCustomLayout(id) ? (getMap(id)?.name ?? 'MAPA') : t(`map.${id}`);
+  }
+
   settingsMarkup(s, host, validation) {
     const disabled = host ? '' : 'disabled';
     const opts = (values, selected, label) => values.map((v) => `<option value="${esc(v)}" ${v === selected ? 'selected' : ''}>${esc(label(v))}</option>`).join('');
@@ -90,7 +101,7 @@ export class LobbyUI {
     const status = errors.length ? errors.map((e) => t(`lobby.error.${e}`)).join(' · ') : t('lobby.ready');
     return `<div class="lobby-settings-head"><span>${esc(t('lobby.settings'))}</span><span>${esc(host ? t('lobby.hostControls') : t('lobby.readOnly'))}</span></div><div class="lobby-settings-body">
       <div class="lobby-field"><label>${esc(t('lobby.mode'))}</label><div class="lobby-value">${esc(t('mode.teamDeathmatch'))}</div></div>
-      <div class="lobby-field"><label>${esc(t('lobby.map'))}</label><select data-setting="map" data-nav-key="setting:map" ${disabled}>${opts(MAPS, s.map, (v) => t(`map.${v}`))}</select></div>
+      <div class="lobby-field"><label>${esc(t('lobby.map'))}</label><select data-setting="map" data-nav-key="setting:map" ${disabled}>${opts(this.mapOptions(), s.map, (v) => this.mapName(v))}</select></div>
       <div class="lobby-field"><label>${esc(t('lobby.rounds'))}</label><select data-setting="rounds" data-nav-key="setting:rounds" ${disabled}>${opts(ROUND_OPTIONS, s.rounds, String)}</select></div>
       <div class="lobby-field"><label>${esc(t('lobby.lives'))}</label><select data-setting="lives" data-nav-key="setting:lives" ${disabled}>${opts(LIFE_OPTIONS, s.lives, String)}</select></div>
       <div class="lobby-field"><label>${esc(t('lobby.afterMatch'))}</label><select data-setting="postMatch" data-nav-key="setting:postMatch" ${disabled}><option value="lobby" ${s.postMatch === 'lobby' ? 'selected' : ''}>${esc(t('lobby.returnLobby'))}</option><option value="next-map" ${s.postMatch === 'next-map' ? 'selected' : ''}>${esc(t('lobby.nextMap'))}</option></select></div>

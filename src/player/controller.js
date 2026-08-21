@@ -54,6 +54,14 @@ export class Controller {
     this.mantle = null;     // vault sobre cover bajo en progreso
     this.meleeT = 0;        // progreso del golpe melee en curso
     this.meleeCd = 0;
+    this.meleeEndT = 0;
+    this.meleeFreezeT = 0;
+    this.meleeConnected = false;
+    this.meleeKilled = false;
+    this.meleeEntrySpeed = 0;
+    this.meleeEntryState = 'idle';
+    this.meleeFromCover = false;
+    this.meleeTravel = 0;
     this.detachT = 0;
     this.aim = false;
     this.firingBlind = 0;   // timer para mantener pose de blindfire
@@ -156,6 +164,12 @@ export class Controller {
       coverKind: this.cover?.kind,
       latMove: this._latMove(),
       groundPitch: this.groundPitch,
+      meleePhase: this.state === 'melee'
+        ? Math.min(1, this.meleeT / Math.max(0.001, this.meleeEndT || TUNING.melee.time))
+        : 0,
+      meleeConnected: this.meleeConnected,
+      meleeFromCover: this.meleeFromCover,
+      meleeEntrySpeed: this.meleeEntrySpeed,
     };
   }
 
@@ -186,6 +200,16 @@ export class Controller {
     this.bounceWindow = 0;
     this.chain = 0;
     this.usedDouble = false;
+    this.meleeT = 0;
+    this.meleeCd = 0;
+    this.meleeEndT = 0;
+    this.meleeFreezeT = 0;
+    this.meleeConnected = false;
+    this.meleeKilled = false;
+    this.meleeEntrySpeed = 0;
+    this.meleeEntryState = 'idle';
+    this.meleeFromCover = false;
+    this.meleeTravel = 0;
   }
 
   respawn(spawn) {
@@ -222,6 +246,47 @@ export class Controller {
   }
 
   _setState(s) { this.state = s; this.stateT = 0; }
+
+  _beginMelee(fromCover = false) {
+    const ml = TUNING.melee;
+    if (!this.grounded || this.meleeCd > 0 || this.state === 'melee') return false;
+    const previousState = this.state;
+    this.meleeT = 0;
+    this.meleeEndT = ml.hitAt + ml.missRecovery;
+    this.meleeFreezeT = 0;
+    this.meleeConnected = false;
+    this.meleeKilled = false;
+    this.meleeEntrySpeed = Math.min(TUNING.move.roadieSpeed, this.speed);
+    this.meleeEntryState = previousState;
+    this.meleeFromCover = fromCover;
+    this.meleeTravel = 0;
+    this.aim = false;
+    this.firingBlind = 0;
+    if (fromCover) {
+      this.cover = null;
+      this.coverEntry = null;
+      this.coverLeanAnim = 0;
+      this.detachT = 0;
+      this.vel.x = 0;
+      this.vel.z = 0;
+    }
+    this._setState('melee');
+    this.ev.onMeleeStart?.();
+    return true;
+  }
+
+  // El resultado llega exactamente en la ventana de contacto. Un acierto
+  // recupera antes que un fallo y congela solo el gesto unas milésimas para
+  // vender peso, sin detener la simulación ni el networking.
+  confirmMelee(connected, killed = false) {
+    if (this.state !== 'melee' || !connected) return;
+    const ml = TUNING.melee;
+    this.meleeConnected = true;
+    this.meleeKilled = !!killed;
+    this.meleeFreezeT = Math.max(this.meleeFreezeT, ml.hitStop);
+    const recovery = killed ? ml.killRecovery : ml.hitRecovery;
+    this.meleeEndT = Math.max(this.meleeT + recovery, ml.hitAt + recovery);
+  }
 
   // Busca cobertura y entra en slide, o hace dive. Devuelve 'slide' | 'dive'
   // | false — SOLO 'slide' cuenta como rebote (chain/SFX/bonus); el fallback
@@ -380,30 +445,47 @@ export class Controller {
           else this._tryEvade(dir, range);
         }
 
-        // melee: golpe rápido y pesado con el arma. Solo en el suelo y con el
-        // cooldown listo; corta el sprint (el golpe manda sobre correr) pero
-        // una evasión resuelta este mismo frame tiene prioridad.
+        // El ataque conserva la lectura del movimiento previo, pero no su
+        // velocidad completa: correr aporta peso, nunca un dash gratuito.
+        // Una evasión resuelta este mismo frame sigue teniendo prioridad.
         if (input.meleePressed && this.grounded && this.meleeCd <= 0 &&
             (this.state === 'idle' || this.state === 'run' || this.state === 'roadie')) {
-          this.meleeT = 0;
-          this.meleeCd = TUNING.melee.cooldown;
-          this._setState('melee');
+          this._beginMelee(false);
         }
         break;
       }
 
       case 'melee': {
         const ml = TUNING.melee;
+        if (this.meleeFreezeT > 0) {
+          this.meleeFreezeT = Math.max(0, this.meleeFreezeT - dt);
+          this.vel.x *= Math.exp(-18 * dt);
+          this.vel.z *= Math.exp(-18 * dt);
+          break;
+        }
         this.meleeT += dt;
-        // embiste un paso al frente mientras el golpe conecta, y se apaga
-        const push = ml.lungeSpeed * Math.max(0, 1 - (this.meleeT / ml.time) * 1.4);
+        // Impulso corto hasta el contacto. El bonus depende de velocidad REAL
+        // de entrada y el recorrido total queda limitado a 30 cm.
+        const wind = Math.max(0, 1 - this.meleeT / Math.max(0.001, ml.hitAt));
+        const runFactor = Math.min(1, this.meleeEntrySpeed / TUNING.move.roadieSpeed);
+        let push = (ml.lungeSpeed + runFactor * ml.runLungeBonus) * wind;
+        const remaining = Math.max(0, ml.maxLunge - this.meleeTravel);
+        push = Math.min(push, remaining / Math.max(dt, 1e-4));
+        this.meleeTravel += push * dt;
         const f = this.facing();
         this.vel.x = f.x * push;
         this.vel.z = f.z * push;
-        // corrección leve hacia la cámara: el golpe se puede apuntar un poco
-        this.yaw = lerpAngle(this.yaw, this.cam.yaw, 1 - Math.exp(-10 * dt));
-        if (this.meleeT >= ml.time) {
+        // Asistencia pequeña: solo dentro de un cono frontal razonable y con
+        // tope angular. Un giro de cámara de 90/180° nunca arrastra el golpe.
+        const camDelta = angleDelta(this.yaw, this.cam.yaw);
+        const assist = ml.assistDeg * Math.PI / 180;
+        if (this.meleeT <= ml.hitAt && Math.abs(camDelta) <= assist) {
+          this.yaw = approachAngle(this.yaw, this.cam.yaw,
+            ml.assistTurnDeg * Math.PI / 180 * dt);
+        }
+        if (this.meleeT >= this.meleeEndT) {
           this._setState(hasInput ? 'run' : 'idle');
+          this.meleeCd = ml.inputGuard;
         }
         break;
       }
@@ -533,6 +615,15 @@ export class Controller {
           : -1;
         let aimLeanSide = 0;
         if (!low && this.aim) aimLeanSide = edgeSide;
+
+        // Melee contextual desde una orilla: abandonar cover requiere una
+        // pulsación explícita y solo se permite donde el arma/brazos pueden
+        // salir lateralmente. La resolución física decidirá después si hay
+        // pared o box entre el atacante y la víctima.
+        if (input.meleePressed && edgeSide !== 0 && this.meleeCd <= 0) {
+          this._beginMelee(true);
+          break;
+        }
 
         // Blindfire contextual. En cover alto la POSICIÓN en la orilla elige
         // automáticamente el lado: la cámara guía el tiro, pero ya no hay que

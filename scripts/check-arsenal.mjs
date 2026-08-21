@@ -145,13 +145,32 @@ nade = await page.evaluate(() => {
   return {
     clouds: S.clouds.length,
     r: c ? +c.r.toFixed(2) : 0,
+    puffs: c?.puffs.length ?? 0,
+    sprites: c?.puffs.every((p) => p.isSprite) ?? false,
+    soft: c?.materials.every((m) => m.transparent && !m.depthWrite && !!m.map) ?? false,
+    maxOpacity: c ? +Math.max(...c.materials.map((m) => m.opacity)).toFixed(2) : 0,
     blocks: c ? S.blocksSegment(c.x - 6, c.y, c.z, c.x + 6, c.y, c.z) : false,
     clear: S.blocksSegment(500, 1, 500, 506, 1, 500),
   };
 });
 check('nube activa y crecida', nade.clouds > 0 && nade.r > 1.5, JSON.stringify(nade));
+check('humo volumétrico suave (sin esferas opacas)',
+  nade.puffs >= 16 && nade.sprites && nade.soft && nade.maxOpacity >= 0.4, JSON.stringify(nade));
 check('la nube bloquea visión', nade.blocks === true);
 check('segmento lejano NO bloqueado', nade.clear === false);
+await page.waitForTimeout(2000);
+nade = await page.evaluate(() => {
+  const c = window.BREACH_SMOKE.clouds[0];
+  return {
+    clouds: window.BREACH_SMOKE.clouds.length,
+    r: c ? +c.r.toFixed(2) : 0,
+    maxOpacity: c ? +Math.max(...c.materials.map((m) => m.opacity)).toFixed(2) : 0,
+    visiblePuffs: c?.puffs.filter((p) => p.visible && p.scale.x > 0.5).length ?? 0,
+  };
+});
+check('humo sigue visible a media duración',
+  nade.clouds > 0 && nade.r > 2 && nade.maxOpacity >= 0.4 && nade.visiblePuffs >= 16,
+  JSON.stringify(nade));
 await page.waitForTimeout(6500);
 nade = await page.evaluate(() => ({ clouds: window.BREACH_SMOKE.clouds.length }));
 check('nube disipada a tiempo', nade.clouds === 0, `clouds=${nade.clouds}`);

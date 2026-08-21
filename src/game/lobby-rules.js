@@ -48,12 +48,17 @@ export const DEFAULT_LOBBY_SETTINGS = Object.freeze({
   postMatch: 'lobby',
 });
 
-export function normalizeLobbySettings(value = {}) {
+// Los mapas del editor viven en el cliente ('custom:<id>'). El lobby LOCAL
+// los acepta; online sigue restringido a los mapas que el servidor conoce.
+export const isCustomMapId = (id) => typeof id === 'string' && id.startsWith('custom:');
+
+export function normalizeLobbySettings(value = {}, { allowCustom = false } = {}) {
   const rounds = Number(value.rounds);
   const lives = Number(value.lives);
+  const mapOk = MAPS.includes(value.map) || (allowCustom && isCustomMapId(value.map));
   return {
     mode: 'tdm',
-    map: MAPS.includes(value.map) ? value.map : DEFAULT_LOBBY_SETTINGS.map,
+    map: mapOk ? value.map : DEFAULT_LOBBY_SETTINGS.map,
     rounds: ROUND_OPTIONS.includes(rounds) ? rounds : DEFAULT_LOBBY_SETTINGS.rounds,
     lives: LIFE_OPTIONS.includes(lives) ? lives : DEFAULT_LOBBY_SETTINGS.lives,
     postMatch: POST_MATCH_OPTIONS.includes(value.postMatch)

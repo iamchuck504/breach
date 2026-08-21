@@ -14,9 +14,9 @@ const KB_DEFAULT = {
 const PAD_DEFAULT = { sprint: 0, evade: 2, melee: 1, jump: 3, reload: 5, aim: 6, fire: 7, score: 8, pause: 9 };
 
 // D-pad → índice de SLOT (no id de arma: si una especial reemplazó la SMG,
-// izquierda sigue seleccionando ese slot). Arriba=granada, abajo=pistola,
-// izquierda=SMG, derecha=escopeta. Fijo por pedido de Chuck.
-export const PAD_DPAD_SLOTS = { 12: 3, 13: 2, 14: 0, 15: 1 };
+// derecha sigue seleccionando ese slot). Arriba=granada, abajo=pistola,
+// izquierda=escopeta, derecha=SMG. Fijo por pedido de Chuck.
+export const PAD_DPAD_SLOTS = { 12: 3, 13: 2, 14: 1, 15: 0 };
 
 export const BINDS = { kb: { ...KB_DEFAULT }, pad: { ...PAD_DEFAULT } };
 

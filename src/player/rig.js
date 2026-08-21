@@ -554,6 +554,7 @@ export class Rig {
     this._recoil = 0;
     this._deadT = 0;
     this._meleeT = 0;
+    this._hitReact = null;
     this.rag = null; // estado del ragdoll de muerte
     this.groundFn = null;  // (x,z,y)->alturaSuelo — lo inyecta quien tiene el world
     this.collideFn = null; // (p,y)->muta p fuera de los AABBs (colisión del cadáver)
@@ -993,6 +994,19 @@ export class Rig {
 
   kick(amount) { this._recoil = Math.min(1.2, this._recoil + amount); }
 
+  // Reacción no letal independiente de la locomoción. Se suma a la pose
+  // actual (run/aim/cover), de modo que recibir melee no teletransporta al
+  // personaje a una animación genérica ni le roba su estado de gameplay.
+  hitReact(direction = 0, strength = 1, kind = 'shot') {
+    this._hitReact = {
+      t: 0,
+      dur: kind === 'melee' ? 0.29 : 0.18,
+      side: Math.max(-1, Math.min(1, Number(direction) || 0)),
+      strength: Math.max(0.25, Math.min(1.25, Number(strength) || 1)),
+      kind,
+    };
+  }
+
   // IK analítico de dos huesos en espacio del aimRig. Prueba las dos
   // soluciones de codo y elige la que alcanza el target con el codo
   // hacia abajo/afuera (vector polo).
@@ -1047,6 +1061,11 @@ export class Rig {
     };
     const R = (grp, x = 0, y = 0, z = 0) => {
       set(grp.rotation, 'x', x); set(grp.rotation, 'y', y); set(grp.rotation, 'z', z);
+    };
+    const add = (o, k, v) => {
+      let e = T.get(o);
+      if (!e) { e = {}; T.set(o, e); }
+      e[k] = (e[k] ?? 0) + v;
     };
     // postura del arma: posición/rotación del mount (relativo al pecho)
     const M = (x, y, z, rx = 0, ry = 0, rz = 0) => {
@@ -1248,32 +1267,51 @@ export class Rig {
         break;
       }
       case 'melee': {
-        // golpe con el arma en tres tiempos: carga corta, estocada violenta
-        // y recuperación. Timer interno del rig: los remotos solo mandan el
-        // estado, así que el gesto no depende de datos del controller local.
+        // Fases corporales reales. Local usa el progreso del controller para
+        // conservar el hit-stop; remotos/bots recurren al reloj interno.
         this._meleeT += dt;
-        damp = 26; // gesto seco: los targets se alcanzan casi de inmediato
-        const ph = Math.min(1, this._meleeT / TUNING.melee.time);
-        hipsY = 0.6;
-        if (ph < 0.35) {
-          // carga: arma atrás y arriba junto al hombro, torso armado
-          R(this.torso, 0.06, 0.4, 0);
-          R(this.head, 0.04, -0.28, 0);
-          M(0.3, 0.16, -0.06, 0.55, -0.35, 0.3);
-        } else if (ph < 0.62) {
-          // estocada: la culata cruza al frente con el torso volcado
-          R(this.torso, 0.26, -0.42, 0);
-          R(this.head, 0.1, 0.18, 0);
-          M(-0.04, 0.04, -0.5, -0.5, 0.12, -0.25);
+        damp = 30;
+        const localPhase = Number.isFinite(p.meleePhase) ? p.meleePhase : null;
+        const ph = Math.min(1, localPhase ?? this._meleeT / TUNING.melee.time);
+        const compact = this._wep === 'pistol' || this._wep === 'grenade';
+        const heavy = this._wep === 'bazooka' || this._wep === 'sniper';
+        const contact = ph < 0.27 ? ph / 0.27
+          : ph < 0.5 ? 1
+          : Math.max(0, 1 - (ph - 0.5) / 0.5);
+        hipsY = 0.57 - contact * 0.055;
+        rootRotX = (p.groundPitch ?? 0) * 0.35 - contact * 0.035;
+
+        if (ph < 0.27) {
+          // preparación breve: hombro y cadera cargan juntos.
+          const k = ph / 0.27;
+          R(this.torso, -0.08 - k * 0.08, 0.38 * k, 0.12 * k);
+          R(this.head, 0.08, -0.18 * k, -0.04 * k);
+          M(compact ? 0.2 : 0.28, compact ? 0.08 : 0.14,
+            compact ? -0.18 : -0.08, compact ? 0.15 : 0.48,
+            -0.3 * k, compact ? 0.55 : 0.32);
+        } else if (ph < 0.5) {
+          // Contacto: pistola/artefacto da un golpe corto de antebrazo; armas
+          // largas cruzan la culata; las pesadas se convierten en un shove.
+          R(this.torso, heavy ? -0.34 : -0.28, heavy ? -0.32 : -0.52, -0.12);
+          R(this.head, 0.18, 0.16, 0.04);
+          if (compact) M(-0.12, -0.03, -0.48, -0.2, 0.28, -0.62);
+          else if (heavy) M(-0.03, -0.01, -0.52, -0.22, 0.05, -0.12);
+          else M(-0.12, 0.02, -0.56, -0.42, 0.18, -0.34);
         } else {
-          // recuperación a ready
-          R(this.torso, 0.1, -0.05, 0);
-          R(this.head, 0.03, 0, 0);
-          M(0.06, -0.02, -0.32, 0.1, 0, 0);
+          // Follow-through visible y regreso breve a guardia.
+          const k = (ph - 0.5) / 0.5;
+          R(this.torso, -0.2 * (1 - k), -0.25 * (1 - k), -0.08 * (1 - k));
+          R(this.head, 0.08 * (1 - k), 0.08 * (1 - k), 0);
+          M(0.08, -0.01, -0.34 - (1 - k) * 0.08,
+            0.08 * (1 - k), 0.04 * (1 - k), -0.08 * (1 - k));
         }
-        // zancada plantada durante la embestida
-        R(this.legL.hip, -0.3, 0, 0.05); R(this.legL.knee, -0.5, 0, 0);
-        R(this.legR.hip, 0.28, 0, -0.05); R(this.legR.knee, -0.25, 0, 0);
+        // Zancada asimétrica y brazos participan incluso con arma compacta.
+        R(this.legL.hip, -0.42 * contact, 0, 0.08); R(this.legL.knee, -0.62 * contact, 0, 0);
+        R(this.legR.hip, 0.3 * contact, 0, -0.08); R(this.legR.knee, -0.28, 0, 0);
+        R(this.armL.shoulder, 0.5 + contact * 0.45, 0, -0.18);
+        R(this.armL.elbow, 0.5 + contact * 0.3, 0, 0);
+        R(this.armR.shoulder, 0.45 + contact * 0.35, 0, 0.16);
+        R(this.armR.elbow, 0.35 + contact * 0.4, 0, 0);
         set(this.aimRig.rotation, 'x', 0);
         set(this.aimRig.rotation, 'y', 0);
         break;
@@ -1412,6 +1450,26 @@ export class Rig {
     if (reloadPose && p.state !== 'dead') {
       set(this.gunMount.rotation, 'x', -0.12);
       set(this.gunMount.rotation, 'z', 0.3);
+    }
+
+    // Encaje direccional del impacto sobre la pose que ya tenía la víctima.
+    // En melee dura más y compromete hombros/cadera; un disparo conserva una
+    // reacción menor. Nunca sustituye locomoción, cover ni aiming.
+    if (this._hitReact && p.state !== 'dead') {
+      const r = this._hitReact;
+      r.t += dt;
+      const q = Math.min(1, r.t / r.dur);
+      const wave = Math.sin(Math.PI * q) * r.strength;
+      const melee = r.kind === 'melee';
+      const side = Math.abs(r.side) > 0.12 ? r.side : 0.35;
+      add(this.torso.rotation, 'x', (melee ? 0.24 : 0.1) * wave);
+      add(this.torso.rotation, 'y', -side * (melee ? 0.38 : 0.16) * wave);
+      add(this.torso.rotation, 'z', side * (melee ? 0.15 : 0.07) * wave);
+      add(this.head.rotation, 'x', (melee ? 0.2 : 0.08) * wave);
+      add(this.head.rotation, 'y', side * (melee ? 0.28 : 0.12) * wave);
+      add(this.armL.shoulder.rotation, 'x', (melee ? 0.18 : 0.08) * wave);
+      add(this.armR.shoulder.rotation, 'x', (melee ? 0.22 : 0.08) * wave);
+      if (q >= 1) this._hitReact = null;
     }
 
     // recoil: empuja el conjunto brazos+arma hacia atrás

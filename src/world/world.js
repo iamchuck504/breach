@@ -5,6 +5,9 @@
 // y las caras de cobertura que consume el sistema de cover.
 import * as THREE from 'three';
 import { MAP_RUNTIME } from '../game/lobby-rules.js';
+import { BLOCK } from './block-heights.js';
+import { getMap, isCustomLayout, cratesOf, specialOf, spawnsOf, footprint, paletteById }
+  from './map-data.js';
 
 const FIELD_X = 15, FIELD_Z = 18; // semiancho / semilargo
 
@@ -13,7 +16,7 @@ const FIELD_X = 15, FIELD_Z = 18; // semiancho / semilargo
 //   MID  (1.9): cubre al personaje DE PIE completo (cabeza ~1.63); no saltable
 //   HIGH (3.0): inalcanzable incluso saltando; muros y estructuras
 // Ninguna pieza de mapa puede usar otra altura.
-export const BLOCK = { LOW: 1.1, MID: 1.9, HIGH: 3.0 };
+export { BLOCK };
 const HELIPAD_RADIUS = 6.2;
 const HELIPAD = {
   height: BLOCK.LOW,
@@ -41,8 +44,9 @@ export class World {
 
   // Cambia de mapa en caliente:
   // 'foundry' | 'arena' (compacto) | 'fortaleza' (día) | 'azoteas' (noche)
-  setLayout(layout) {
-    if (this.layout === layout && this.mapGroup) return;
+  // force: el editor reconstruye el MISMO id tras cada cambio de datos
+  setLayout(layout, force = false) {
+    if (!force && this.layout === layout && this.mapGroup) return;
     this.layout = layout;
     if (this.mapGroup) {
       this.scene.remove(this.mapGroup);
@@ -71,12 +75,20 @@ export class World {
     // fz de fortaleza 26.6: bolsillo de spawn de 3.2m (spawns fijos en ±23.4)
     // — la cámara (dist 2.7) ya no choca con la muralla y no hace zoom forzado
     // azoteas ×1.5 (pedido de Chuck): 63×80 — spawns propios en ±35.1
+    // Mapas POR DATOS (editor): mismo pipeline que los escritos a mano — solo
+    // cambia de dónde salen dims/tema/piezas. El "tema" reutiliza texturas,
+    // piso y ambiente de un mapa existente.
+    this.customMap = isCustomLayout(layout) ? getMap(layout) : null;
+    const theme = this.customMap?.theme ?? layout;
+    this.theme = theme;
+
     const dims = {
       arena: [11, 13], fortaleza: [21, 26.6], azoteas: [31.5, 40],
       calle: [17, 30], metro: [16, 26], prision: [22, 30], pueblo: [26, 34],
       foundry: [FIELD_X, FIELD_Z],
     };
-    [this.fx, this.fz] = dims[layout] ?? dims.foundry;
+    if (this.customMap) [this.fx, this.fz] = [this.customMap.fx, this.customMap.fz];
+    else [this.fx, this.fz] = dims[layout] ?? dims.foundry;
     // texturas del batch por mapa (piedra, concreto, azulejo o ladrillo)
     this._batchTexIds = {
       azoteas: ['concrete', 'concreteTop'],
@@ -84,21 +96,25 @@ export class World {
       metro: ['tile', 'tileTop'],
       prision: ['concrete', 'concreteTop'],
       pueblo: ['brick', 'brickTop'],
-    }[layout] ?? ['stone', 'stoneTop'];
+    }[theme] ?? ['stone', 'stoneTop'];
     // cajas de munición por mapa: en azoteas van sobre el eje del helipuerto,
     // libres de cover (las ±7,0 por defecto chocaban con el anillo)
     const runtime = MAP_RUNTIME[layout];
-    this.cratePos = runtime?.crates ?? null;
+    const customCrates = this.customMap ? cratesOf(this.customMap) : null;
+    this.cratePos = this.customMap
+      ? (customCrates.length ? customCrates : null)
+      : (runtime?.crates ?? null);
     // pedestal del arma ESPECIAL (sniper/bazooka alternando por ronda):
     // zona central de riesgo, equidistante de ambos spawns
     // Descentrado sobre el eje X (equidistante de ambos spawns, que están en
     // ±z): en el centro exacto todo el tráfico converge al mismo carril y la
     // escuadra se amontona. Azoteas es la excepción: su centro es el
     // helipuerto despejado, que ya es una zona de riesgo con rutas propias.
-    this.specialSpot = runtime?.special ?? null;
+    this.specialSpot = this.customMap ? specialOf(this.customMap) : (runtime?.special ?? null);
 
     this._buildFloor();
-    if (layout === 'arena') this._buildArena();
+    if (this.customMap) this._buildFromData(this.customMap);
+    else if (layout === 'arena') this._buildArena();
     else if (layout === 'fortaleza') this._buildFortaleza();
     else if (layout === 'azoteas') this._buildAzoteas();
     else if (layout === 'calle') this._buildCalle();
@@ -117,7 +133,9 @@ export class World {
       sc.left = -r; sc.right = r; sc.top = r; sc.bottom = -r;
       sc.updateProjectionMatrix();
     }
-    this._applyEnvironment(layout);
+    // el tema decide luz/cielo/niebla (un mapa de datos hereda el ambiente
+    // completo del mapa en el que se inspira)
+    this._applyEnvironment(theme);
   }
 
   // ---------- texturas procedurales (canvas nítido — cero blur/filtros) ----------
@@ -788,7 +806,7 @@ export class World {
   }
 
   _buildFloor() {
-    // piso por mapa: [textura, escala de repetición, tinte]
+    // piso por TEMA: [textura, escala de repetición, tinte]
     const [texId, cell, tint] = {
       azoteas: ['roofFloor', 4.2, 0xcdd0d4],   // grava/brea de techo urbano
       fortaleza: ['floor', 2.6, 0xc3b79f],     // losas de arenisca
@@ -796,7 +814,7 @@ export class World {
       metro: ['tileTop', 3.2, 0xb9c2c6],       // andén de azulejo
       prision: ['concreteTop', 3.4, 0xb4b6b8], // patio de concreto
       pueblo: ['floor', 2.6, 0xd0bd97],        // tierra/empedrado cálido
-    }[this.layout] ?? ['floor', 2.6, 0xffffff];
+    }[this.theme ?? this.layout] ?? ['floor', 2.6, 0xffffff];
     const tex = this._tex(texId, this.fx * 2 / cell, this.fz * 2 / cell);
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(this.fx * 2, this.fz * 2),
@@ -847,7 +865,7 @@ export class World {
       if (visual) this._batchBox(px, pz, w, d, h, c, t);
       const minx = px - w / 2, maxx = px + w / 2, minz = pz - d / 2, maxz = pz + d / 2;
       const material = surface ||
-        (this.layout === 'fortaleza' || this.layout === 'pueblo' ? 'stone' : 'concrete');
+        ((this.theme ?? this.layout) === 'fortaleza' || (this.theme ?? this.layout) === 'pueblo' ? 'stone' : 'concrete');
       const collider = { minx, minz, maxx, maxz, h, surface: material };
       this.colliders.push(collider);
       if (cover) {
@@ -946,6 +964,69 @@ export class World {
     // centro: pilar contestado + baja lateral (el espejo crea el par)
     this._box(0, 0, 1.3, 1.3, HIGH, { ...highOpts, mirror: false, top: 0xffb075 });
     this._box(-4.6, 0.4, 0.9, 2.0, LOW, lowOpts);
+  }
+
+  // ---------------------------------------------------------------------
+  // MAPAS POR DATOS (editor). Construye con las MISMAS primitivas que los
+  // mapas escritos a mano: _box genera colisión, cover y batch igual que
+  // siempre, así que un mapa del editor es un mapa de producción.
+  // ---------------------------------------------------------------------
+  _buildFromData(map) {
+    const { LOW, MID, HIGH } = BLOCK;
+    // paleta tonal del tema (misma jerarquía: tapa clara = jugable)
+    const tone = {
+      fortaleza: [0x968b79, 0xcbbd9f, 0x81786b, 0xb5a790, 0x817970, 0xa69b89],
+      azoteas: [0x8b9096, 0xb9bfc4, 0x7d838a, 0xa7adb3, 0x6f757c, 0x939aa1],
+      calle: [0x8f8c86, 0xb8b4ab, 0x7d7a74, 0xa9a59c, 0x8b857c, 0xa39d92],
+      metro: [0x7f8a8d, 0xa5adaf, 0x74807f, 0x9aa5a2, 0x5e696e, 0x7d878a],
+      prision: [0x8e9092, 0xb2b4b4, 0x7f8285, 0xa2a5a6, 0x74777b, 0x92959a],
+      pueblo: [0x9a8672, 0xc4ac8c, 0x8d7a66, 0xb59d7f, 0x86735f, 0xa89075],
+    }[map.theme] ?? [0x9c968c, 0xc6c1b5, 0x81786b, 0xb5a790, 0x969188, 0xaba69d];
+    const opts = (h) => (h <= LOW ? { color: tone[0], top: tone[1] }
+      : h <= MID ? { color: tone[2], top: tone[3] }
+      : { color: tone[4], top: tone[5] });
+
+    // límites del mapa: perímetro cerrado (mismo patrón que todos los mapas)
+    if (map.walls !== false) {
+      const wallOpts = { mirror: false, color: tone[4], top: tone[5] };
+      this._box(0, -this.fz - 0.4, this.fx * 2 + 2, 0.8, HIGH, wallOpts);
+      this._box(0, this.fz + 0.4, this.fx * 2 + 2, 0.8, HIGH, wallOpts);
+      this._box(-this.fx - 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
+      this._box(this.fx + 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
+    }
+
+    for (const o of map.objects) {
+      const piece = paletteById(o.p);
+      if (!piece) continue;
+      if (piece.t === 'box') {
+        const fp = footprint(o);
+        this._box(o.x, o.z, fp.w, fp.d, o.h ?? piece.h, {
+          mirror: false, cover: piece.cover !== false, ...opts(o.h ?? piece.h),
+        });
+      } else if (piece.t === 'prop') {
+        this._dataProp(o, piece, tone);
+      }
+      // spawn/crate/special son marcadores: los consume el juego, no la escena
+    }
+  }
+
+  // Props decorativos del editor: SIN colisión (no alteran cover ni rutas).
+  // Usan las mismas texturas del tema para no romper el universo visual.
+  _dataProp(o, piece, tone) {
+    const h = o.h ?? piece.h, w = o.w ?? piece.w, d = o.d ?? piece.d;
+    const texId = this._batchTexIds[0];
+    const mat = new THREE.MeshLambertMaterial({
+      color: tone[2], map: this._tex(texId, Math.max(1, w / 2), Math.max(1, h / 2)),
+    });
+    const geo = piece.kind === 'cyl'
+      ? new THREE.CylinderGeometry(w / 2, w / 2, h, 10)
+      : new THREE.BoxGeometry(w, h, d);
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(o.x, h / 2, o.z);
+    mesh.rotation.y = (o.rot ?? 0) * Math.PI / 180;
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    this.mapGroup.add(mesh);
   }
 
   // Mapa "Calle Cerrada" (34×60): avenida urbana al atardecer. Ruta central
@@ -2602,6 +2683,20 @@ export class World {
   }
 
   _buildSpawns() {
+    // Mapa por datos: los spawns son marcadores colocados en el editor. El
+    // juego siempre pide 4 por equipo, así que se repiten en ciclo si hay
+    // menos (y sobran los extra) — un mapa con 1 spawn por bando funciona.
+    if (this.customMap) {
+      const s = spawnsOf(this.customMap);
+      for (const team of ['red', 'blue']) {
+        const list = s[team];
+        if (!list.length) continue;
+        for (let i = 0; i < 4; i++) this.spawns[team].push({ ...list[i % list.length] });
+      }
+      if (this.spawns.red.length && this.spawns.blue.length) return;
+      // sin marcadores: caer al reparto por defecto para no dejar el mapa roto
+      this.spawns.red.length = 0; this.spawns.blue.length = 0;
+    }
     // spawns FIJOS por mapa con bolsillo respecto al muro trasero (la cámara
     // no debe chocar la muralla al nacer). El server duplica esta tabla en
     // spawnSet() — mantener ambos sincronizados.
@@ -2676,7 +2771,7 @@ export class World {
     }
 
     const groundSurface =
-      this.layout === 'fortaleza' || this.layout === 'pueblo' ? 'stone' : 'concrete';
+      (this.theme ?? this.layout) === 'fortaleza' || (this.theme ?? this.layout) === 'pueblo' ? 'stone' : 'concrete';
     const plane = (t, normal, surface, contains) => {
       if (!Number.isFinite(t) || t < 0.0001 || t > maxDist) return;
       const x = origin.x + dir.x * t, z = origin.z + dir.z * t;

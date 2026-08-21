@@ -11,6 +11,8 @@
     "check:controller": "node scripts/check-controller.mjs",
     "check:menu-controller": "node scripts/check-menu-controller.mjs",
     "check:reload-cancel": "node scripts/check-reload-cancel.mjs",
+    "check:melee": "node scripts/check-melee-revamp.mjs",
+    "check:melee-net": "node scripts/check-melee-net.mjs",
     "check:round-flow": "node scripts/check-round-flow.mjs",
     "check:bot-stuck": "node scripts/check-bot-stuck.mjs",
     "check:combat-orientation": "node scripts/check-combat-orientation.mjs",
@@ -27,7 +29,7 @@
     "check:lobby": "node scripts/check-lobby.mjs",
     "check:online-map-items": "node scripts/check-online-map-items.mjs",
     "check:mp-bot-special": "node scripts/check-mp-bot-special.mjs",
-    "test": "npm run check:controller && npm run check:menu-controller && npm run check:reload-cancel && npm run check:round-flow && npm run check:combat-orientation && npm run check:cover-fire && npm run check:impacts && npm run check:spatial-audio && npm run check:i18n && npm run check:shotgun-pattern && npm run check:warmup && npm run check:lobby && npm run check:online-map-items && npm run check:mp-bot-special && npm run check:online-fire"
+    "test": "npm run check:controller && npm run check:menu-controller && npm run check:reload-cancel && npm run check:melee && npm run check:melee-net && npm run check:round-flow && npm run check:combat-orientation && npm run check:cover-fire && npm run check:impacts && npm run check:spatial-audio && npm run check:i18n && npm run check:shotgun-pattern && npm run check:warmup && npm run check:lobby && npm run check:online-map-items && npm run check:mp-bot-special && npm run check:online-fire"
   },
   "dependencies": {
     "lil-gui": "^0.20.0",

@@ -529,6 +529,16 @@ export class Audio {
   kill() { this._tone('sine', 500, 150, 0.3, 0.25); this._noiseShot(0.2, 0.2, 900, 200); }
   whoosh() { this._noiseShot(0.22, 0.16, 500, 2400, 0.6); }
   thump() { this._tone('sine', 110, 55, 0.4, 0.11); this._noiseShot(0.12, 0.07, 500, 150); }
+  meleeImpact(options = null, lethal = false) {
+    const out = this._eventOutput(lethal ? 0.78 : 0.66, options,
+      'impact', this.combatBus || this.master);
+    if (!out) return;
+    // Golpe grave (masa) + crack corto (contacto de arma/armadura).
+    this._tone('sine', lethal ? 105 : 125, 48, lethal ? 0.26 : 0.19,
+      lethal ? 0.19 : 0.14, out);
+    this._noiseShot(lethal ? 0.42 : 0.32, 0.075, 1250, 220, 1.45, out);
+    this._tone('triangle', 620, 190, 0.055, 0.055, out);
+  }
   jump() { this.footstep('jump'); this._noiseShot(0.1, 0.09, 800, 2300, 0.6); }
   land() { this.footstep('land'); }
   hurt() { this._tone('sawtooth', 220, 90, 0.2, 0.12); }

@@ -1,8 +1,8 @@
 import { t, getLanguage } from '../core/i18n.js';
 import { TUNING } from '../config/tuning.js';
 
-// HUD sobre DOM. La retícula de blindfire/hipfire se proyecta desde el cañón
-// (shoot from the barrel): #barrel-dot sigue el punto real de impacto del arma.
+// HUD sobre DOM. Toda retícula se proyecta desde la trayectoria física del
+// cañón: ADS usa el anillo y hip/blind usa #barrel-dot.
 export class HUD {
   constructor() {
     this.el = {
@@ -37,11 +37,6 @@ export class HUD {
     };
     this._centerT = null;
     this._hintT = null;
-  }
-
-  // destello del panel al clavar o fallar la recarga activa
-  activeReloadFlash(kind) {
-    this._pulse(this.el.weapon, kind === 'perfect' ? 'ar-perfect' : 'ar-jam');
   }
 
   _pulse(el, cls) {
@@ -135,26 +130,9 @@ export class HUD {
       chips[i].classList.toggle('dry', !!st && st.mag <= 0 && st.reserve <= 0);
     }
 
-    // progreso real (respeta el atasco, que alarga la recarga)
+    // progreso real de la recarga normal
     const rel = w.reloading ? w.reloadProgress : null;
     bar.classList.toggle('reloading', w.reloading);
-    bar.classList.toggle('jammed', !!w.st.jammed && w.reloading);
-    this.el.weapon.classList.toggle('dmg-bonus', w.bonusT > 0);
-    // ventana de recarga activa: banda marcada sobre la barra
-    const win = w.activeWindow?.();
-    if (win) {
-      if (!this._winEl) {
-        this._winEl = document.createElement('div');
-        this._winEl.className = 'ar-window';
-        bar.append(this._winEl);
-      }
-      if (this._winEl.parentElement !== bar) bar.append(this._winEl);
-      this._winEl.style.display = 'block';
-      this._winEl.style.left = (win.start * 100).toFixed(1) + '%';
-      this._winEl.style.width = ((win.end - win.start) * 100).toFixed(1) + '%';
-    } else if (this._winEl) {
-      this._winEl.style.display = 'none';
-    }
     if (cap <= 12) {
       // En per-shell solo se encienden cartuchos ya insertados; la animación
       // por sí sola nunca debe representar munición todavía inutilizable.
@@ -327,6 +305,11 @@ export class HUD {
       this.el.crossRing.setAttribute('r', Math.max(5, aimInfo.r).toFixed(1));
       // fuera del rango efectivo del arma: el anillo se atenúa
       this.el.crossRing.setAttribute('stroke-opacity', aimInfo.inRange ? '0.9' : '0.28');
+      // En ADS la cámara elige el objetivo, pero el proyectil nace en el
+      // muzzle. Si una esquina bloquea esa segunda línea, el anillo debe
+      // señalar el impacto real en vez de prometer el centro de pantalla.
+      this.el.crosshair.style.left = (barrelXY?.x ?? innerWidth * 0.5) + 'px';
+      this.el.crosshair.style.top = (barrelXY?.y ?? innerHeight * 0.5) + 'px';
     }
     if (!aiming && barrelXY) {
       this.el.barrel.classList.add('on');

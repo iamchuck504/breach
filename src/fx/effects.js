@@ -278,6 +278,12 @@ export class Effects {
     else this._burst(pos, 5, 0xb8bec0, 2.4, 0.05, 0.3, 7, normal);
   }
   blood(pos, teamColor) { this._burst(pos, 10, teamColor, 2.6, 0.07, 0.4); }
+  meleeImpact(pos, teamColor, direction = null) {
+    // Contacto compacto: destello cálido + partículas del color de la víctima.
+    // Es deliberadamente menor que una explosión y no deja decal de bala.
+    this._burst(pos, 5, 0xffc27a, 3.2, 0.055, 0.16, 5, direction);
+    this._burst(pos, 7, teamColor, 2.15, 0.07, 0.34, 7, direction);
+  }
   dust(pos) { this._burst(new THREE.Vector3(pos.x, 0.15, pos.z), 9, 0xbdb6a8, 1.6, 0.09, 0.5, 2.5); }
 
   // explosión de piezas al morir por gib (cubos del color del equipo + gris)
@@ -352,6 +358,7 @@ export class Effects {
     this.impact(p, n, 'concrete');
     this.impact(q, n, 'metal');
     this.blood(p, 0xd94f3f);
+    this.meleeImpact(q, 0x4f8de0, n);
     this.dust(q);
     if (renderer.compileAsync) await renderer.compileAsync(this.scene, camera);
     else renderer.compile(this.scene, camera);
