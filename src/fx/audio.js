@@ -13,12 +13,14 @@ export const AUDIO_PROFILES = Object.freeze({
 });
 
 export const AMBIENCE_PROFILES = Object.freeze({
-  fortaleza: Object.freeze({ continuousNoise: true, gain: 0.016 }),
+  // Todos los mapas usan acentos espaciados, no una capa de ruido continuo.
+  // Esto conserva la orientación sonora y evita fatiga/"hiss" sobre combate.
+  fortaleza: Object.freeze({ continuousNoise: false, gain: 0.015, pulseMinMs: 6200 }),
   azoteas: Object.freeze({ continuousNoise: false, gain: 0.014, pulseMinMs: 4800 }),
-  calle: Object.freeze({ continuousNoise: true, gain: 0.014 }),
-  metro: Object.freeze({ continuousNoise: true, gain: 0.02 }),
-  prision: Object.freeze({ continuousNoise: true, gain: 0.012 }),
-  pueblo: Object.freeze({ continuousNoise: true, gain: 0.013 }),
+  calle: Object.freeze({ continuousNoise: false, gain: 0.013, pulseMinMs: 5200 }),
+  metro: Object.freeze({ continuousNoise: false, gain: 0.016, pulseMinMs: 4300 }),
+  prision: Object.freeze({ continuousNoise: false, gain: 0.012, pulseMinMs: 6500 }),
+  pueblo: Object.freeze({ continuousNoise: false, gain: 0.012, pulseMinMs: 7000 }),
 });
 
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
@@ -266,12 +268,12 @@ export class Audio {
     gain.connect(this.worldBus || this.master);
     const nodes = { gain, sources: [], timers: new Set() };
     const hum = this.ctx.createOscillator();
-    // zumbido base por mapa: el metro late más grave y fuerte (ventilación),
-    // la calle con el murmullo urbano, el resto viento/aire suave
+    // Cama tonal casi imperceptible: sitúa el lugar sin crear una capa de
+    // ruido blanco. La personalidad llega en acentos cortos y espaciados.
     hum.type = 'sine';
     hum.frequency.value = { azoteas: 49, metro: 41, calle: 46 }[name] ?? 47;
     const humGain = this.ctx.createGain();
-    humGain.gain.value = { azoteas: 0.045, metro: 0.5, calle: 0.28, prision: 0.2, pueblo: 0.18 }[name] ?? 0.32;
+    humGain.gain.value = { azoteas: 0.025, metro: 0.065, calle: 0.035, prision: 0.028, pueblo: 0.022 }[name] ?? 0.03;
     hum.connect(humGain).connect(gain);
     hum.start(now); nodes.sources.push(hum);
 
@@ -287,6 +289,7 @@ export class Audio {
     }
     this._ambienceNodes = nodes;
     if (name === 'azoteas') this._scheduleRooftopAmbience(nodes, 1800);
+    else this._scheduleMapAmbience(name, nodes, 2400 + Math.random() * 1600);
   }
 
   _scheduleRooftopAmbience(nodes, delay) {
@@ -315,6 +318,61 @@ export class Audio {
       // Ráfagas bajas y separadas: sugieren viento/ciudad sin mantener un
       // hiss continuo por encima de pasos y combate.
       this._scheduleRooftopAmbience(nodes, AMBIENCE_PROFILES.azoteas.pulseMinMs + Math.random() * 5200);
+    }, delay);
+    nodes.timers.add(timer);
+  }
+
+  // Acentos ambientales sintéticos, bajos en la mezcla y con huecos largos.
+  // Se mantienen deliberadamente no-direccionales: son atmósfera de mapa, no
+  // información de combate que pueda confundirse con pasos o disparos.
+  _scheduleMapAmbience(name, nodes, delay) {
+    const timer = setTimeout(() => {
+      nodes.timers.delete(timer);
+      if (this._ambienceNodes !== nodes || !this.ctx || !this._noise) return;
+      const now = this.ctx.currentTime;
+      const profile = AMBIENCE_PROFILES[name] || { pulseMinMs: 6000 };
+      const noise = this.ctx.createBufferSource();
+      noise.buffer = this._noise;
+      const filter = this.ctx.createBiquadFilter();
+      const accent = this.ctx.createGain();
+      let duration = 0.7;
+      let peak = 0.035;
+      if (name === 'calle') {
+        // tráfico lejano / un soplo de calle, no una sirena constante
+        filter.type = 'bandpass'; filter.frequency.value = 380 + Math.random() * 260; filter.Q.value = 0.55;
+        duration = 0.8 + Math.random() * 0.55; peak = 0.045;
+      } else if (name === 'metro') {
+        // ventilación que respira y pequeño toque metálico de túnel
+        filter.type = 'bandpass'; filter.frequency.value = 150 + Math.random() * 80; filter.Q.value = 1.4;
+        duration = 0.55 + Math.random() * 0.45; peak = 0.055;
+        this._tone('sine', 260 + Math.random() * 80, 170 + Math.random() * 45, 0.012, 0.32, nodes.gain);
+      } else if (name === 'prision') {
+        // golpe de reja remoto: breve y sin competir con una granada/arma
+        filter.type = 'bandpass'; filter.frequency.value = 820 + Math.random() * 260; filter.Q.value = 4.2;
+        duration = 0.16; peak = 0.026;
+        this._tone('triangle', 760 + Math.random() * 210, 320, 0.009, 0.18, nodes.gain);
+      } else if (name === 'pueblo') {
+        // viento entre ruinas + un chirrido/ave muy ocasional
+        filter.type = 'lowpass'; filter.frequency.value = 520 + Math.random() * 180; filter.Q.value = 0.55;
+        duration = 0.7 + Math.random() * 0.6; peak = 0.025;
+        this._tone('sine', 1500 + Math.random() * 500, 2100 + Math.random() * 450, 0.006, 0.11, nodes.gain);
+      } else {
+        // fortaleza: aire y una resonancia muy baja, nunca un loop perceptible
+        filter.type = 'lowpass'; filter.frequency.value = 340 + Math.random() * 130; filter.Q.value = 0.5;
+        duration = 0.65 + Math.random() * 0.45; peak = 0.026;
+      }
+      accent.gain.setValueAtTime(0.0001, now);
+      accent.gain.exponentialRampToValueAtTime(peak, now + 0.08);
+      accent.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+      noise.connect(filter).connect(accent).connect(nodes.gain);
+      noise.start(now, Math.random() * 0.12, Math.min(0.98, duration));
+      noise.stop(now + duration + 0.03);
+      nodes.sources.push(noise);
+      noise.onended = () => {
+        const i = nodes.sources.indexOf(noise);
+        if (i >= 0) nodes.sources.splice(i, 1);
+      };
+      this._scheduleMapAmbience(name, nodes, profile.pulseMinMs + Math.random() * 6500);
     }, delay);
     nodes.timers.add(timer);
   }
