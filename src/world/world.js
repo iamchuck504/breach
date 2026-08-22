@@ -2308,10 +2308,12 @@ export class World {
       const bays = Math.max(2, Math.floor(span / 2.35));
       const upperFloorBase = 3.02;
       const windowH = 1.46;
+      const upperWindowSill = 0.96;
       for (let row = 0; row < floors; row++) {
-        // Cada ventana se centra en su planta real: 4.37 m en el segundo piso
-        // y 7.07 m en el tercero. Antes arrancaban 37 cm demasiado abajo.
-        const y = upperFloorBase + STREET_SCALE.floor * (row + 0.5);
+        // El alféizar queda a una altura residencial creíble dentro de cada
+        // planta. Así las ventanas no parecen apoyadas sobre la losa/cornisa
+        // del segundo ni del tercer piso.
+        const y = upperFloorBase + upperWindowSill + windowH * 0.5 + STREET_SCALE.floor * row;
         if (y > height - 0.82) continue;
         for (let col = 0; col < bays; col++) {
           const zi = z - span * 0.39 + col * (span * 0.78 / Math.max(1, bays - 1));
