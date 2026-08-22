@@ -18,8 +18,8 @@ const STREET_SCALE = Object.freeze({
   floor: 2.7,
   lamp: 6.2,
   car: Object.freeze({ width: 2.02, length: 4.58, height: 1.52, wheel: 0.41 }),
-  truck: Object.freeze({ width: 2.4, length: 6.8, height: 2.9, wheel: 0.46 }),
-  bus: Object.freeze({ width: 2.5, length: 9.0, height: 3.08, wheel: 0.50 }),
+  truck: Object.freeze({ width: 2.4, length: 6.8, height: 2.9, wheel: 0.54 }),
+  bus: Object.freeze({ width: 2.5, length: 9.0, height: 3.08, wheel: 0.55 }),
 });
 
 // REGLA DE DISEÑO (Chuck): solo existen TRES alturas de bloque/pared.
@@ -1540,76 +1540,132 @@ export class World {
       w: STREET_SCALE.truck.width, d: STREET_SCALE.truck.length, h: 3.0,
     });
     if (this._suppressEditableDecor) return true;
+    const cabColor = new THREE.Color(color).lerp(new THREE.Color(0x52646b), 0.38);
     const cargoMat = new THREE.MeshStandardMaterial({
       color, map: this._tex('vehicleWear', 2.4, 1), metalness: 0.30, roughness: 0.64,
     });
     const cabMat = new THREE.MeshStandardMaterial({
-      color: 0x465a62, map: this._tex('vehicleWear', 1.2, 1), metalness: 0.42, roughness: 0.48,
+      color: cabColor, map: this._tex('vehicleWear', 1.2, 1), metalness: 0.42, roughness: 0.48,
     });
-    const glassMat = new THREE.MeshStandardMaterial({ color: 0x091218, metalness: 0.56, roughness: 0.22 });
-    const tireMat = new THREE.MeshLambertMaterial({ color: 0x151719 });
+    const cabInsetMat = new THREE.MeshStandardMaterial({
+      color: cabColor.clone().multiplyScalar(0.78), metalness: 0.38, roughness: 0.54,
+    });
+    const glassMat = new THREE.MeshStandardMaterial({
+      color: 0x09141a, metalness: 0.50, roughness: 0.18,
+      emissive: 0x020609, emissiveIntensity: 0.16, side: THREE.DoubleSide,
+      polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3,
+    });
+    const tireMat = new THREE.MeshStandardMaterial({ color: 0x030405, metalness: 0.01, roughness: 0.94 });
+    const hubMat = new THREE.MeshStandardMaterial({ color: 0x687177, metalness: 0.67, roughness: 0.34 });
     const stripeMat = new THREE.MeshBasicMaterial({ color: variant ? 0xb34d3f : 0xd7903e });
-    const serviceMat = new THREE.MeshBasicMaterial({ color: variant ? 0xe3d7c0 : 0xd3e0dc });
     const trimMat = new THREE.MeshStandardMaterial({ color: 0x202427, metalness: 0.6, roughness: 0.42 });
+    const seamMat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(color).multiplyScalar(0.42), metalness: 0.28, roughness: 0.60,
+    });
     const lampMat = new THREE.MeshBasicMaterial({ color: 0xffd7a2 });
+    const rearLampMat = new THREE.MeshBasicMaterial({ color: 0xb72f27 });
     const group = new THREE.Group();
     group.position.set(x, 0, z); group.rotation.y = rot;
-    const add = (w, h, d, px, py, pz, mat) => {
+    const add = (w, h, d, px, py, pz, mat, rx = 0, rz = 0) => {
       const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-      m.position.set(px, py, pz); m.castShadow = true; m.receiveShadow = true; group.add(m); return m;
+      m.position.set(px, py, pz); m.rotation.x = rx; m.rotation.z = rz;
+      m.castShadow = true; m.receiveShadow = true; group.add(m); return m;
     };
     const S = STREET_SCALE.truck;
-    // Camión urbano cab-over: la cabina alta, casi vertical, aprovecha el
-    // largo compacto y se distingue claramente de un pickup o una van.
-    add(S.width + 0.04, 2.62, 4.65, 0, 1.51, 1.06, cargoMat);
+    const panel = (pts, mat, order = 2) => {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pts.flat(), 3));
+      const indices = [];
+      for (let i = 1; i < pts.length - 1; i++) indices.push(0, i, i + 1);
+      geo.setIndex(indices); geo.computeVertexNormals();
+      const mesh = new THREE.Mesh(geo, mat); mesh.renderOrder = order;
+      mesh.castShadow = true; mesh.receiveShadow = true; group.add(mesh); return mesh;
+    };
+    const sidePanel = (side, pts, mat, offset = 0.068, order = 3) => {
+      const mapped = pts.map(([pz, py]) => [side * (S.width / 2 + offset), py, pz]);
+      if (side < 0) mapped.reverse();
+      return panel(mapped, mat, order);
+    };
+
+    // Misma huella táctica, pero la caja recibe esquinas superiores suaves y
+    // la cabina cab-over gana una línea de techo/ventanas de escala humana.
     this._addVehicleProfile(group, [
-      [-S.length / 2, 0.22], [-S.length / 2, 1.94], [-3.12, 2.28],
-      [-1.58, 2.28], [-1.28, 2.02], [-1.28, 0.22],
-    ], S.width - 0.06, cabMat, 0.045);
-    const windshield = new THREE.Mesh(new THREE.PlaneGeometry(1.84, 0.82), glassMat);
-    windshield.position.set(0, 1.68, -3.23); windshield.rotation.x = -0.18; group.add(windshield);
+      [-1.28, 0.28], [-1.28, 2.72], [-1.18, 2.82], [3.30, 2.82],
+      [3.40, 2.72], [3.40, 0.28],
+    ], S.width, cargoMat, 0.035);
+    this._addVehicleProfile(group, [
+      [-S.length / 2, 0.24], [-S.length / 2, 1.52], [-3.22, 2.15],
+      [-2.94, 2.46], [-1.62, 2.46], [-1.28, 2.14], [-1.28, 0.24],
+    ], S.width - 0.04, cabMat, 0.045);
+
+    // Parabrisas alineado con el perfil real de la cabina. El marco y el
+    // vidrio comparten trapecio, como en los sedanes, y no flotan como planos.
+    panel([
+      [-1.06, 1.18, -3.445], [-0.98, 2.25, -3.135],
+      [0.98, 2.25, -3.135], [1.06, 1.18, -3.445],
+    ], trimMat, 3);
+    panel([
+      [-0.99, 1.25, -3.454], [-0.91, 2.18, -3.145],
+      [0.91, 2.18, -3.145], [0.99, 1.25, -3.454],
+    ], glassMat, 4);
+    add(0.035, 0.92, 0.025, 0, 1.72, -3.30, trimMat, -0.28);
+
     for (const side of [-1, 1]) {
-      const window = new THREE.Mesh(new THREE.PlaneGeometry(1.02, 0.72), glassMat);
-      window.position.set(side * (S.width / 2 + 0.06), 1.66, -2.33); window.rotation.y = side * Math.PI / 2; group.add(window);
+      const skinX = side * (S.width / 2 + 0.068);
+      // Marco y ventana lateral trapezoidales; la puerta queda definida por
+      // juntas finas sobre la propia cabina, nunca por una caja que tape vidrio.
+      sidePanel(side, [
+        [-3.22, 1.16], [-2.93, 2.37], [-1.70, 2.37], [-1.43, 1.16],
+      ], trimMat, 0.064, 3);
+      sidePanel(side, [
+        [-3.13, 1.27], [-2.86, 2.27], [-1.77, 2.27], [-1.51, 1.27],
+      ], glassMat, 0.070, 4);
+      add(0.016, 1.86, 0.018, skinX, 1.16, -1.48, seamMat);
+      add(0.016, 0.018, 1.58, skinX, 0.34, -2.25, seamMat);
+      add(0.026, 0.040, 0.25, skinX + side * 0.010, 1.08, -1.66, trimMat);
+      // Retrovisor anclado al pilar A con carcasa negra de proporción útil.
+      add(0.26, 0.035, 0.035, side * (S.width / 2 + 0.18), 1.90, -3.03, trimMat);
+      add(0.13, 0.26, 0.17, side * (S.width / 2 + 0.28), 1.82, -3.03, trimMat);
       for (const dz of [-2.42, 2.22]) {
         const wheel = new THREE.Mesh(new THREE.CylinderGeometry(S.wheel, S.wheel, 0.18, 14), tireMat);
         wheel.rotation.z = Math.PI / 2; wheel.position.set(side * (S.width / 2 + 0.035), S.wheel, dz); group.add(wheel);
-        const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.21, 0.21, 0.19, 12), trimMat);
+        const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 0.19, 14), hubMat);
         hub.rotation.z = Math.PI / 2; hub.position.set(side * (S.width / 2 + 0.045), S.wheel, dz); group.add(hub);
+        const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.095, 0.095, 0.205, 12), trimMat);
+        cap.rotation.z = Math.PI / 2; cap.position.set(side * (S.width / 2 + 0.052), S.wheel, dz); group.add(cap);
+      }
+      // Caja de carga: nervaduras casi al ras, tres paneles coherentes y una
+      // única banda de servicio. Ya no parece una colección de barrotes.
+      add(0.025, 0.15, 3.70, side * (S.width / 2 + 0.060), 1.62, 0.88, stripeMat);
+      for (const pz of [-0.08, 1.06, 2.20]) {
+        add(0.020, 1.78, 0.018, side * (S.width / 2 + 0.062), 1.48, pz, seamMat);
+        add(0.024, 0.025, 0.92, side * (S.width / 2 + 0.064), 0.62, pz + 0.45, seamMat);
       }
     }
-    // puerta, parrilla, faros y nervaduras de la caja de reparto
-    for (const side of [-1, 1]) {
-      add(0.035, 1.62, 1.24, side * (S.width / 2 + 0.065), 1.04, -2.16, cabMat);
-      add(0.045, 0.045, 0.34, side * (S.width / 2 + 0.085), 1.18, -2.16, trimMat);
-      add(0.26, 0.06, 0.08, side * (S.width / 2 + 0.16), 1.78, -3.02, trimMat);
-      add(0.11, 0.24, 0.17, side * (S.width / 2 + 0.19), 1.82, -3.02, glassMat);
-      for (let p = -0.82; p <= 2.80; p += 0.62) {
-        add(0.055, 2.28, 0.055, side * (S.width / 2 + 0.045), 1.55, p, trimMat);
-      }
-    }
-    add(S.width + 0.12, 0.12, 4.72, 0, 2.86, 1.06, trimMat);
-    // Cada camión cuenta una parte distinta del incidente: uno pertenece a
-    // servicios urbanos y el otro a evacuación. La silueta y la huella no
-    // cambian, pero el centro deja de parecer un par de covers duplicados.
-    for (const side of [-1, 1]) {
-      add(0.045, 0.20, 3.25, side * (S.width / 2 + 0.055), 1.72, 0.82, stripeMat);
-      for (const pz of [-0.34, 0.82, 1.98]) {
-        add(0.048, 0.42, 0.56, side * (S.width / 2 + 0.061), 1.72, pz, serviceMat);
-      }
-    }
+    add(S.width + 0.10, 0.12, 4.68, 0, 2.88, 1.06, trimMat);
+    add(S.width - 0.28, 0.20, 5.86, 0, 0.26, 0.25, trimMat); // chasis continuo
+    add(S.width + 0.025, 2.40, 0.060, 0, 1.50, -1.245, seamMat); // separación cabina/carga
     for (const sx of [-0.42, 0.42]) {
       const beacon = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.10, 0.12, 8), stripeMat);
-      beacon.position.set(sx, 2.42, -2.18); group.add(beacon);
+      beacon.position.set(sx, 2.57, -2.05); group.add(beacon);
     }
-    add(1.34, 0.36, 0.05, 0, 0.57, -S.length / 2 - 0.05, trimMat);
-    for (const side of [-0.78, 0.78]) add(0.32, 0.23, 0.055, side, 0.80, -S.length / 2 - 0.06, lampMat);
-    // Puertas traseras, bisagras y reflectores hacen legible el volumen de carga.
-    add(S.width - 0.12, 2.42, 0.055, 0, 1.53, S.length / 2 + 0.01, trimMat);
-    add(0.055, 2.26, 0.06, 0, 1.52, S.length / 2 + 0.05, stripeMat);
-    for (const side of [-0.82, 0.82]) for (const y of [0.62, 2.30]) {
-      add(0.12, 0.12, 0.065, side, y, S.length / 2 + 0.06, stripeMat);
+    // Frente completo: fascia, parrilla, bumper, faros y placa bien separados.
+    add(1.34, 0.34, 0.055, 0, 0.64, -S.length / 2 - 0.055, trimMat);
+    add(S.width + 0.10, 0.18, 0.16, 0, 0.31, -S.length / 2 - 0.075, trimMat);
+    add(0.44, 0.12, 0.032, 0, 0.40, -S.length / 2 - 0.165, cabInsetMat);
+    for (const sx of [-0.80, 0.80]) {
+      add(0.34, 0.22, 0.060, sx, 0.86, -S.length / 2 - 0.070, lampMat);
+      add(0.16, 0.11, 0.065, sx, 0.58, -S.length / 2 - 0.075, stripeMat);
     }
+    // Portones traseros con paneles, bisagras, cierre y luces verticales.
+    add(S.width - 0.14, 2.38, 0.050, 0, 1.52, S.length / 2 + 0.035, cargoMat);
+    add(0.030, 2.22, 0.060, 0, 1.50, S.length / 2 + 0.070, seamMat);
+    for (const sx of [-0.84, 0.84]) {
+      add(0.08, 1.90, 0.065, sx, 1.52, S.length / 2 + 0.075, seamMat);
+      for (const y of [0.82, 2.20]) add(0.16, 0.09, 0.070, sx, y, S.length / 2 + 0.080, trimMat);
+      add(0.15, 0.38, 0.075, sx, 0.67, S.length / 2 + 0.085, rearLampMat);
+    }
+    add(S.width + 0.10, 0.18, 0.16, 0, 0.32, S.length / 2 + 0.090, trimMat);
     this.mapGroup.add(group);
     return group;
   }
@@ -1654,39 +1710,56 @@ export class World {
       const mesh = new THREE.Mesh(geo, mat); mesh.renderOrder = order;
       mesh.castShadow = true; mesh.receiveShadow = true; group.add(mesh); return mesh;
     };
-    const sidePanel = (side, pts, mat, offset = 0.078, order = 3) => panel(
-      pts.map(([pz, py]) => [side * (S.width / 2 + offset), py, pz]), mat, order,
-    );
+    const sidePanel = (side, pts, mat, offset = 0.078, order = 3) => {
+      const mapped = pts.map(([pz, py]) => [side * (S.width / 2 + offset), py, pz]);
+      if (side < 0) mapped.reverse();
+      return panel(mapped, mat, order);
+    };
 
-    // Coach/tour bus: frente inclinado, techo continuo y trasera suavemente
-    // recortada. La huella sigue siendo exactamente la del collider existente.
+    // Coach urbano: frente inclinado, techo continuo y trasera recortada. La
+    // huella sigue siendo exactamente la del collider existente.
     this._addVehicleProfile(group, [
-      [-4.50, 0.22], [-4.50, 1.16], [-4.39, 1.70], [-4.16, 2.54],
-      [-3.86, 2.94], [-3.55, S.height], [3.94, S.height],
-      [4.28, 2.98], [4.50, 2.70], [4.50, 0.22],
+      [-4.50, 0.22], [-4.50, 1.14], [-4.40, 1.60], [-4.14, 2.50],
+      [-3.82, 2.92], [-3.52, S.height], [3.96, S.height],
+      [4.28, 2.94], [4.50, 2.64], [4.50, 0.22],
     ], S.width, body, 0.055);
 
-    // El parabrisas ocupa la cara frontal completa y acompaña su inclinación.
-    // Una lámina con espesor evita que la piel extruida oculte el vidrio por
-    // diferencias mínimas de profundidad en GPU integradas.
-    add(2.12, 1.54, 0.060, 0, 1.94, -4.47, glass, 0.27);
-    add(0.050, 1.56, 0.038, 0, 1.94, -4.31, lower, 0.27);
-    add(1.46, 0.20, 0.055, 0, 0.67, -4.55, lower);
-    for (const sx of [-0.76, 0.76]) add(0.34, 0.16, 0.058, sx, 0.77, -4.57, lamp);
-    add(1.18, 0.12, 0.060, 0, 0.43, -4.59, lower);
+    // Parabrisas grande realmente apoyado sobre la pendiente del morro. Marco
+    // y vidrio comparten trapecio, evitando el rectángulo que sobresalía.
+    panel([
+      [-1.12, 1.20, -4.525], [-0.98, 2.76, -3.89],
+      [0.98, 2.76, -3.89], [1.12, 1.20, -4.525],
+    ], lower, 3);
+    panel([
+      [-1.05, 1.28, -4.535], [-0.91, 2.68, -3.91],
+      [0.91, 2.68, -3.91], [1.05, 1.28, -4.535],
+    ], glass, 4);
+    add(0.042, 1.40, 0.026, 0, 1.98, -4.22, lower, -0.39);
+    add(1.50, 0.20, 0.055, 0, 0.70, -4.55, lower);
+    add(S.width + 0.08, 0.18, 0.16, 0, 0.31, -4.57, lower);
+    add(0.48, 0.12, 0.040, 0, 0.40, -4.665, bodyInset);
+    for (const sx of [-0.78, 0.78]) {
+      add(0.36, 0.18, 0.060, sx, 0.80, -4.59, lamp);
+      add(0.14, 0.09, 0.062, sx, 0.55, -4.60, trim);
+    }
 
-    // Luneta posterior alta, fascia limpia y pilotos verticales como la referencia.
-    add(2.02, 0.84, 0.060, 0, 2.28, 4.535, glass);
-    add(1.20, 0.20, 0.055, 0, 0.70, 4.55, bodyInset);
+    // Luneta posterior con marco propio, fascia y pilotos verticales.
+    add(2.18, 1.02, 0.058, 0, 2.30, 4.535, lower);
+    add(2.02, 0.88, 0.062, 0, 2.30, 4.548, glass);
+    add(1.22, 0.20, 0.055, 0, 0.72, 4.55, bodyInset);
     for (const sx of [-1.02, 1.02]) {
       add(0.16, 0.54, 0.060, sx, 0.91, 4.56, rearLamp);
       add(0.13, 0.10, 0.062, sx, 0.55, 4.57, lamp);
     }
 
     const serviceSide = 1;
-    const frontWheelZ = -2.70;
+    const frontWheelZ = -2.66;
     const rearWheelZ = 2.92;
-    const wheelR = 0.58;
+    const wheelR = S.wheel;
+    const passengerWindows = [
+      [-3.18, -2.18], [-2.06, -1.06], [-0.94, 0.06],
+      [0.18, 1.18], [1.30, 2.30], [2.42, 3.42], [3.54, 4.18],
+    ];
     for (const side of [-1, 1]) {
       const skinX = side * (S.width / 2 + 0.084);
 
@@ -1700,13 +1773,15 @@ export class World {
           [-3.86, 2.88], [-4.12, 2.50],
         ], glass);
       }
-      const windows = new THREE.Mesh(new THREE.PlaneGeometry(7.30, 1.02), glass);
-      windows.position.set(skinX, 2.24, 0.38);
-      windows.rotation.y = side * Math.PI / 2; windows.renderOrder = 4; group.add(windows);
-      for (const pz of [-3.27, -2.16, -1.05, 0.06, 1.17, 2.28, 3.39, 4.03]) {
-        add(0.040, 1.02, 0.038, side * (S.width / 2 + 0.098), 2.24, pz, lower);
+      // Cristales individuales: la carrocería visible entre ellos forma pilares
+      // reales y rompe la antigua franja negra continua de aspecto provisional.
+      for (const [a, b] of passengerWindows) {
+        sidePanel(side, [
+          [a, 1.74], [a, 2.73], [b, 2.73], [b, 1.74],
+        ], glass, 0.087, 4);
       }
-      add(0.045, 0.085, 7.55, side * (S.width / 2 + 0.101), 1.67, 0.28, trim);
+      add(0.042, 0.075, 7.55, side * (S.width / 2 + 0.099), 1.68, 0.28, trim);
+      add(0.040, 0.055, 7.55, side * (S.width / 2 + 0.098), 2.79, 0.28, lower);
 
       // Bodegas de equipaje entre los ejes: paneles anchos y bajos, no barras.
       for (const pz of [-1.72, -0.54, 0.64, 1.82]) {
@@ -1715,40 +1790,32 @@ export class World {
       }
       add(0.042, 0.66, 0.72, side * (S.width / 2 + 0.088), 0.96, 3.84, bodyInset);
 
-      // Puerta de acceso integrada, solo del lado de servicio y completamente
-      // delante del eje delantero. No se monta una placa completa por fuera del
-      // bus: el panel inferior queda al ras, el marco sigue la silueta del morro
-      // y el cristal es un polígono inset contenido dentro de ese marco.
+      // Puerta de acceso integrada, solo del lado de servicio y delante del eje.
+      // La carrocería sigue visible debajo: sólo cambian el panel inferior,
+      // vidrio y juntas, sin una gran placa negra superpuesta.
       if (side === serviceSide) {
-        // 0.92 m de ancho y 2.30 m de alto: dimensiones derivadas del soldado
-        // de 1.63 m, no de la escala visual del propio autobús.
         const doorZ = -3.80;
-        const doorWidth = 0.92;
-        add(0.022, 0.82, doorWidth, side * (S.width / 2 + 0.064), 0.67, doorZ, body);
+        const doorWidth = 1.00;
         sidePanel(side, [
-          [-4.28, 0.25], [-3.34, 0.25], [-3.34, 2.50],
-          [-3.80, 2.80], [-4.14, 2.48],
-        ], body, 0.066, 4);
+          [-4.30, 0.25], [-3.28, 0.25], [-3.28, 1.08], [-4.30, 1.08],
+        ], bodyInset, 0.084, 4);
         sidePanel(side, [
-          [-4.23, 0.91], [-3.41, 0.91], [-3.41, 2.45],
-          [-3.80, 2.72], [-4.08, 2.43],
-        ], lower, 0.070, 5);
-        sidePanel(side, [
-          [-4.15, 1.01], [-3.49, 1.01], [-3.49, 2.37],
-          [-3.80, 2.59], [-4.00, 2.36],
-        ], glass, 0.073, 6);
-        // Juntas finas y manija: delimitan la puerta sin convertirla en una
-        // placa negra separada del costado.
-        add(0.018, 2.24, 0.018, side * (S.width / 2 + 0.078), 1.37, -3.33, lower);
-        add(0.018, 0.022, doorWidth - 0.08, side * (S.width / 2 + 0.078), 0.25, doorZ, lower);
-        add(0.036, 0.055, 0.16, side * (S.width / 2 + 0.086), 0.83, -3.43, lower);
+          [-4.20, 1.16], [-3.36, 1.16], [-3.36, 2.42],
+          [-3.76, 2.68], [-4.05, 2.40],
+        ], glass, 0.088, 5);
+        add(0.016, 2.34, 0.018, side * (S.width / 2 + 0.100), 1.42, -3.29, lower);
+        add(0.016, 2.22, 0.018, side * (S.width / 2 + 0.100), 1.37, -4.29, lower);
+        add(0.016, 0.018, doorWidth - 0.07, side * (S.width / 2 + 0.100), 0.27, doorZ, lower);
+        add(0.020, 2.15, 0.018, side * (S.width / 2 + 0.101), 1.37, -3.79, lower);
+        add(0.022, 0.060, doorWidth - 0.08, side * (S.width / 2 + 0.108), 1.63, doorZ, trim);
+        add(0.034, 0.052, 0.17, side * (S.width / 2 + 0.108), 0.91, -3.39, lower);
       }
 
       for (const pz of [frontWheelZ, rearWheelZ]) {
         const wheel = new THREE.Mesh(new THREE.CylinderGeometry(wheelR, wheelR, 0.23, 20), tire);
         wheel.rotation.z = Math.PI / 2;
         wheel.position.set(side * (S.width / 2 + 0.075), wheelR, pz); group.add(wheel);
-        const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.30, 0.30, 0.25, 18), hubMat);
+        const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.25, 18), hubMat);
         hub.rotation.z = Math.PI / 2;
         hub.position.set(side * (S.width / 2 + 0.092), wheelR, pz); group.add(hub);
         const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.27, 14), lower);
@@ -1757,10 +1824,12 @@ export class World {
       }
     }
 
-    // Rocker, parachoques y climatización completan la lectura de coach.
+    // Rocker, parachoques, marcadores y climatización completan la lectura.
     add(S.width + 0.04, 0.16, S.length - 0.26, 0, 0.30, 0, lower);
-    add(S.width + 0.08, 0.18, 0.16, 0, 0.31, -4.56, lower);
     add(S.width + 0.08, 0.18, 0.16, 0, 0.31, 4.56, lower);
+    for (const side of [-1, 1]) for (const pz of [-2.05, 0.30, 2.50]) {
+      add(0.020, 0.08, 0.14, side * (S.width / 2 + 0.105), 1.48, pz, trim);
+    }
     add(1.30, 0.18, 1.04, 0, S.height + 0.15, 0.70, lower);
     add(0.88, 0.10, 0.70, 0, S.height + 0.10, -1.35, lower);
 
