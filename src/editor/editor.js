@@ -91,9 +91,43 @@ export class MapEditor {
 
   // Reconstruye el mundo REAL desde los datos (una sola fuente de verdad)
   rebuild() {
+    this._upgradeBaseDecor();
     stageMap(this.map);                      // borrador en memoria, no persistencia
     this.world.setLayout(mapLayoutId(this.map), true); // force: mismo id, datos nuevos
     this.refreshOverlay();
+  }
+
+  // Migración transparente de clones guardados antes de que los assets base
+  // fueran editables. Conserva la posición actual de cada collider y le
+  // adjunta su carrocería; el usuario no tiene que borrar ni volver a clonar.
+  _upgradeBaseDecor() {
+    if (!this.map?.base || this.map.decorCaptured) return false;
+    const template = mapFromSnapshot(this.map.base, this.world.snapshotLayout(this.map.base));
+    const isBox = (o) => paletteById(o.p)?.t === 'box';
+    const sourceBoxes = template.objects.filter(isBox);
+    const targetBoxes = this.map.objects.filter(isBox);
+    const newLinks = new Map();
+    for (const source of template.objects.filter((o) => o.baseDecor)) {
+      const copy = JSON.parse(JSON.stringify(source));
+      copy.id = 'o' + Math.random().toString(36).slice(2, 9);
+      if (source.link) {
+        const sourceIndex = sourceBoxes.findIndex((o) => o.link === source.link);
+        const target = targetBoxes[sourceIndex];
+        if (!target) continue;
+        if (!newLinks.has(source.link)) {
+          newLinks.set(source.link, 'link-' + Math.random().toString(36).slice(2, 9));
+        }
+        copy.link = newLinks.get(source.link);
+        target.link = copy.link;
+        // Si el collider ya se movió en el clon antiguo, recuperar el visual
+        // directamente sobre su posición actual, no sobre la original.
+        copy.x = target.x;
+        copy.z = target.z;
+      }
+      this.map.objects.push(copy);
+    }
+    this.map.decorCaptured = true;
+    return true;
   }
 
   frameCamera() {
@@ -162,6 +196,11 @@ export class MapEditor {
 
   selected() { return this.map.objects.filter((o) => this.selection.has(o.id)); }
 
+  linkedSelection(o) {
+    if (!o?.link) return [o?.id].filter(Boolean);
+    return this.map.objects.filter((x) => x.link === o.link).map((x) => x.id);
+  }
+
   deleteSelection() {
     if (!this.selection.size) return;
     this.pushUndo('borrar');
@@ -175,9 +214,14 @@ export class MapEditor {
     if (!sel.length) return;
     this.pushUndo('duplicar');
     const ids = [];
+    const links = new Map();
     for (const o of sel) {
       const copy = JSON.parse(JSON.stringify(o));
       copy.id = 'o' + Math.random().toString(36).slice(2, 9);
+      if (copy.link) {
+        if (!links.has(copy.link)) links.set(copy.link, 'link-' + Math.random().toString(36).slice(2, 9));
+        copy.link = links.get(copy.link);
+      }
       if (offset) { copy.x += this.snapPos || 1; copy.z += this.snapPos || 1; }
       this.map.objects.push(copy);
       ids.push(copy.id);
@@ -219,7 +263,7 @@ export class MapEditor {
     if (!sel.length) return;
     this.pushUndo('escalar');
     for (const o of sel) {
-      if (paletteById(o.p)?.t === 'urban') {
+      if (['urban', 'street'].includes(paletteById(o.p)?.t)) {
         o.scale = Math.max(0.1, Math.min(8, +((o.scale ?? 1) * f).toFixed(2)));
         continue;
       }
@@ -308,11 +352,16 @@ export class MapEditor {
     const piece = paletteById(o.p);
     const marker = piece && (piece.t === 'spawn' || piece.t === 'crate' || piece.t === 'special');
     // el personaje de referencia se pickea por su cápsula real de gameplay
+    const editableAsset = piece?.t === 'urban' || piece?.t === 'street';
+    const assetFootprint = footprint({
+      w: (o.w ?? piece?.w ?? 2.2) * (o.scale ?? 1),
+      d: (o.d ?? piece?.d ?? 2.2) * (o.scale ?? 1), rot: o.rot ?? 0,
+    });
     const fp = piece?.t === 'charRef' ? { w: 0.8, d: 0.8 }
-      : piece?.t === 'urban' ? { w: 2.2 * (o.scale ?? 1), d: 2.2 * (o.scale ?? 1) }
+      : editableAsset ? assetFootprint
       : marker ? { w: 1.1, d: 1.1 } : footprint(o);
     const h = piece?.t === 'charRef' ? CHAR_HEAD
-      : piece?.t === 'urban' ? 3 * (o.scale ?? 1)
+      : editableAsset ? (o.h ?? piece?.h ?? 3) * (o.scale ?? 1)
       : marker ? 1.6 : (o.h ?? 1);
     return {
       minx: o.x - fp.w / 2, maxx: o.x + fp.w / 2,
@@ -853,11 +902,15 @@ export class MapEditor {
       return;
     }
     if (hit) {
+      const linked = this.linkedSelection(hit);
       if (shift) {
-        if (this.selection.has(hit.id)) this.selection.delete(hit.id);
-        else this.selection.add(hit.id);
+        const remove = linked.every((id) => this.selection.has(id));
+        for (const id of linked) {
+          if (remove) this.selection.delete(id);
+          else this.selection.add(id);
+        }
       } else if (!this.selection.has(hit.id)) {
-        this.selection = new Set([hit.id]);
+        this.selection = new Set(linked);
       }
       const g = this.groundPoint(nx, ny);
       // Snapshot del estado inicial: rotar/escalar aplican un delta ABSOLUTO
@@ -921,7 +974,7 @@ export class MapEditor {
       for (const s of this.drag.start) {
         const o = this.map.objects.find((x) => x.id === s.id);
         if (!o) continue;
-        if (paletteById(o.p)?.t === 'urban') {
+        if (['urban', 'street'].includes(paletteById(o.p)?.t)) {
           o.scale = Math.max(0.1, Math.min(8, +((s.scale ?? 1) * f).toFixed(2)));
           continue;
         }

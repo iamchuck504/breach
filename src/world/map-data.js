@@ -68,6 +68,14 @@ export const PALETTE = [
       id: 'urban:' + assetId, group: 'assets', label: assetId.toUpperCase(),
       icon: '⌂', metaKey: 'editor.meta.urban', t: 'urban', assetId,
     })),
+  // Props procedurales de Calle Cerrada. Al clonar el mapa pasan a ser datos
+  // editables para que la carrocería visible y su collider se muevan juntos.
+  { id: 'street:vehicle', group: 'assets', label: 'SEDÁN', icon: '▰',
+    metaKey: 'editor.meta.urban', t: 'street', assetKind: 'vehicle', w: 2.05, d: 4.45, h: 1.48 },
+  { id: 'street:truck', group: 'assets', label: 'CAMIÓN', icon: '▮',
+    metaKey: 'editor.meta.urban', t: 'street', assetKind: 'truck', w: 2.4, d: 7, h: 3.0 },
+  { id: 'street:bus', group: 'assets', label: 'AUTOBÚS', icon: '▬',
+    metaKey: 'editor.meta.urban', t: 'street', assetKind: 'bus', w: 2.65, d: 9, h: 3.25 },
   // --- herramienta del editor: personaje de REFERENCIA con las dimensiones
   // reales del juego. No colisiona, no aparece en partida y el export lo
   // elimina — es la regla de escala del entorno.
@@ -216,6 +224,33 @@ export function mapFromSnapshot(layout, snap, name = null) {
     ...(b.visual === false ? { visual: false } : null),
     ...(b.surface ? { surface: b.surface } : null),
   }));
+  // La decoración editable se captura separada de las cajas jugables.
+  // Los vehículos se enlazan con el collider invisible que comparte centro,
+  // de modo que moverlos actualice visual, cover, disparos y navegación.
+  for (const d of snap.decor ?? []) {
+    const p = d.kind === 'urban' ? `urban:${d.assetId}` : `street:${d.kind}`;
+    if (!paletteById(p)) continue;
+    const object = {
+      id: oid(), p, x: d.x, z: d.z,
+      rot: (((d.rotation ?? 0) * 180 / Math.PI) % 360 + 360) % 360,
+      ...(d.y ? { y: d.y } : null),
+      ...(d.scale && d.scale !== 1 ? { scale: d.scale } : null),
+      ...(d.color != null ? { color: d.color } : null),
+      ...(d.variant != null ? { variant: d.variant } : null),
+      ...(d.w ? { w: d.w } : null),
+      ...(d.d ? { d: d.d } : null),
+      ...(d.h ? { h: d.h } : null),
+      baseDecor: true,
+    };
+    const collider = objects.find((o) => o.visual === false && !o.link &&
+      Math.hypot(o.x - object.x, o.z - object.z) < 0.12);
+    if (collider) {
+      const link = 'link-' + Math.random().toString(36).slice(2, 9);
+      collider.link = link;
+      object.link = link;
+    }
+    objects.push(object);
+  }
   for (const team of ['red', 'blue']) {
     for (const s of snap.spawns[team] ?? []) {
       const yaw = s.yaw ?? 0;
@@ -238,6 +273,7 @@ export function mapFromSnapshot(layout, snap, name = null) {
     name: name || (layout.toUpperCase() + ' COPIA'),
     theme: layout,
     base: layout,     // decoración: el builder original corre intacto
+    decorCaptured: true,
     fx: snap.fx, fz: snap.fz,
     walls: false,     // el perímetro ya viene capturado como cajas editables
     objects,
@@ -306,8 +342,12 @@ export function validateMap(map, world = null) {
   });
   const { red, blue } = spawnsOf(map);
   const inBounds = (o) => {
+    // Fachadas/skyline capturados del builder viven deliberadamente fuera
+    // del rectángulo jugable. Siguen siendo editables, pero no invalidan el
+    // mapa mientras conserven esa condición de decoración base.
+    if (o.baseDecor && !o.link) return true;
     const piece = paletteById(o.p);
-    const fp = piece && (piece.t === 'box' || piece.t === 'prop')
+    const fp = piece && (piece.t === 'box' || piece.t === 'prop' || piece.t === 'street')
       ? footprint(o) : { w: 1.2, d: 1.2 };
     // margen +1.2: los muros perimetrales de un CLON son cajas normales que
     // viven justo fuera de fx/fz (±fx+0.4, medio ancho 0.4/1.0)

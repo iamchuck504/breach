@@ -163,6 +163,7 @@ export class World {
   // el editor hace setLayout del clon inmediatamente después.
   snapshotLayout(layout) {
     this._capture = [];
+    this._captureDecor = [];
     try {
       this.setLayout(layout, true);
       return {
@@ -174,9 +175,11 @@ export class World {
         },
         crates: (this.cratePos ?? []).map((c) => ({ ...c })),
         special: this.specialSpot ? { ...this.specialSpot } : null,
+        decor: this._captureDecor.slice(),
       };
     } finally {
       this._capture = null;
+      this._captureDecor = null;
     }
   }
 
@@ -1145,10 +1148,15 @@ export class World {
     // instancias, helipuerto con sus barandales y zonas transitables) y las
     // cajas jugables — capturadas como datos al clonar — toman su lugar.
     const decorOn = Boolean(map.base) && map.decor !== false;
+    const editableDecor = map.objects.some((o) => o.baseDecor);
     if (decorOn) {
       this._suppressBoxes = true;
+      this._suppressEditableDecor = editableDecor;
       try { this._runBuilder(map.base); }
-      finally { this._suppressBoxes = false; }
+      finally {
+        this._suppressBoxes = false;
+        this._suppressEditableDecor = false;
+      }
     }
 
     // límites del mapa: perímetro cerrado (mismo patrón que todos los mapas)
@@ -1179,13 +1187,27 @@ export class World {
           ...(o.top != null ? { top: o.top } : null),
         });
       } else if (piece.t === 'prop') {
+        if (map.decor === false) continue;
         this._dataProp(o, piece, tone);
       } else if (piece.t === 'urban') {
+        if (map.decor === false) continue;
         // misma biblioteca GLB que usa Calle en vivo; sin colisión propia
         // (igual que en el mapa real: la colisión son cajas visual:false)
         this._addUrbanAsset(piece.assetId, o.x, o.z, {
           y: o.y ?? 0, scale: o.scale ?? 1, rotation: (o.rot ?? 0) * Math.PI / 180,
         });
+      } else if (piece.t === 'street') {
+        if (map.decor === false) continue;
+        const rot = (o.rot ?? 0) * Math.PI / 180;
+        let model = null;
+        if (piece.assetKind === 'vehicle') {
+          model = this._addStreetVehicle(o.x, o.z, rot, o.color ?? 0x53616b, o.variant ?? 0);
+        } else if (piece.assetKind === 'truck') {
+          model = this._addStreetTruck(o.x, o.z, rot, o.color ?? 0x6d5a48, o.variant ?? 0);
+        } else if (piece.assetKind === 'bus') {
+          model = this._addStreetBus(o.x, o.z, rot, o.variant ?? 0);
+        }
+        if (model?.isObject3D && o.scale && o.scale !== 1) model.scale.setScalar(o.scale);
       }
       // spawn/crate/special son marcadores: los consume el juego, no la
       // escena. charRef es una herramienta del editor: la dibuja el editor.
@@ -1318,6 +1340,11 @@ export class World {
   }
 
   _addStreetVehicle(x, z, rot = 0, color = 0x53616b, variant = 0) {
+    if (this._captureDecor) this._captureDecor.push({
+      kind: 'vehicle', x, z, rotation: rot, color, variant,
+      w: STREET_SCALE.car.width, d: STREET_SCALE.car.length, h: STREET_SCALE.car.height,
+    });
+    if (this._suppressEditableDecor) return true;
     const bodyMat = new THREE.MeshStandardMaterial({
       color, map: this._tex('vehicleWear', 1.6, 1), metalness: 0.46, roughness: 0.46,
     });
@@ -1465,9 +1492,15 @@ export class World {
     }
     if (variant === 2) add(0.48, 0.012, 0.72, 0.40, S.height + 0.007, 0.30, trimMat);
     this.mapGroup.add(group);
+    return group;
   }
 
   _addStreetTruck(x, z, rot = 0, color = 0x6d5a48, variant = 0) {
+    if (this._captureDecor) this._captureDecor.push({
+      kind: 'truck', x, z, rotation: rot, color, variant,
+      w: STREET_SCALE.truck.width, d: STREET_SCALE.truck.length, h: 3.0,
+    });
+    if (this._suppressEditableDecor) return true;
     const cargoMat = new THREE.MeshStandardMaterial({
       color, map: this._tex('vehicleWear', 2.4, 1), metalness: 0.30, roughness: 0.64,
     });
@@ -1539,9 +1572,15 @@ export class World {
       add(0.12, 0.12, 0.065, side, y, S.length / 2 + 0.06, stripeMat);
     }
     this.mapGroup.add(group);
+    return group;
   }
 
   _addStreetBus(x, z, rot = 0, variant = 0) {
+    if (this._captureDecor) this._captureDecor.push({
+      kind: 'bus', x, z, rotation: rot, variant,
+      w: STREET_SCALE.bus.width, d: STREET_SCALE.bus.length, h: STREET_SCALE.bus.height,
+    });
+    if (this._suppressEditableDecor) return true;
     const bodyColor = variant ? 0x7f4638 : 0xa45c43;
     const body = new THREE.MeshStandardMaterial({
       color: bodyColor, map: this._tex('vehicleWear', 3.2, 1), metalness: 0.36, roughness: 0.50,
@@ -1705,6 +1744,7 @@ export class World {
       cracked.position.set(0.48, 2.14, -4.43); cracked.rotation.x = 0.27; group.add(cracked);
     }
     this.mapGroup.add(group);
+    return group;
   }
 
   _addTransitCar(x, z, w, d, { color = 0x526a73, stripe = 0xe4a24d, rot = 0, road = false } = {}) {
@@ -1783,6 +1823,17 @@ export class World {
       o.receiveShadow = receiveShadow;
       o.frustumCulled = true;
     });
+    if (this._captureDecor) {
+      const bounds = new THREE.Box3().setFromObject(model);
+      const size = bounds.getSize(new THREE.Vector3());
+      this._captureDecor.push({
+        kind: 'urban', assetId: id, x, z, y, scale, rotation,
+        w: size.x, d: size.z, h: size.y,
+      });
+    }
+    // El builder base conserva el resto de la ambientación del clon, pero
+    // estos assets se recrean desde datos para que sean realmente editables.
+    if (this._suppressEditableDecor) return model;
     this.mapGroup.add(model);
     return model;
   }

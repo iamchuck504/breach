@@ -256,7 +256,69 @@ check('asset urbano real: insertar, escalar y deshacer',
   decor.assetAdded && decor.assetScaled && decor.cleaned, JSON.stringify(decor));
 
 // ---------------------------------------------------------------------------
-// 6) PLAYTEST de un clon de Azoteas (helipuerto + especial elevado)
+// 6) REGRESIÓN: mover un vehículo mueve modelo visible + collider enlazado
+// ---------------------------------------------------------------------------
+const linkedMove = await page.evaluate(() => {
+  const ed = window.BREACH_EDITOR, W = window.BREACH_WORLD;
+  ed.cloneLayout('calle');
+  const asset = ed.map.objects.find((o) => o.p === 'urban:suvMinivan' && o.link);
+  if (!asset) return { found: false };
+  const before = { x: asset.x, z: asset.z };
+  ed.setTool('move');
+  ed.update(0);
+  ed.camera.updateMatrixWorld(true);
+  const box = ed.objectBox(asset);
+  const pointer = new window.THREE.Vector3(
+    asset.x, (box.miny + box.maxy) / 2, asset.z,
+  ).project(ed.camera);
+  ed.onPointerDown(pointer.x, pointer.y, { shift: false, alt: false, button: 0 });
+  ed.onPointerMove(pointer.x + 0.12, pointer.y - 0.03, 0, 0);
+  ed.onPointerUp();
+  const moved = ed.map.objects.find((o) => o.id === asset.id);
+  const visible = [];
+  W.mapGroup.traverse((o) => {
+    if (o.userData?.urbanAssetId === 'suvMinivan') visible.push([o.position.x, o.position.z]);
+  });
+  const colliderAtNewPosition = W.colliders.some((c) =>
+    Math.abs((c.minx + c.maxx) / 2 - moved.x) < 0.01 &&
+    Math.abs((c.minz + c.maxz) / 2 - moved.z) < 0.01);
+  const visualAtNewPosition = visible.some(([x, z]) =>
+    Math.abs(x - moved.x) < 0.01 && Math.abs(z - moved.z) < 0.01);
+  const staleVisual = visible.some(([x, z]) =>
+    Math.abs(x - before.x) < 0.01 && Math.abs(z - before.z) < 0.01);
+  return {
+    found: true, selected: ed.selection.size, before,
+    after: { x: moved.x, z: moved.z }, visualAtNewPosition,
+    colliderAtNewPosition, staleVisual,
+  };
+});
+check('mover vehículo clonado desplaza visual + collider, sin copia estática',
+  linkedMove.found && linkedMove.selected === 2 &&
+  (linkedMove.before.x !== linkedMove.after.x || linkedMove.before.z !== linkedMove.after.z) &&
+  linkedMove.visualAtNewPosition &&
+  linkedMove.colliderAtNewPosition && !linkedMove.staleVisual,
+  JSON.stringify(linkedMove));
+
+const migratedClone = await page.evaluate(() => {
+  const ed = window.BREACH_EDITOR;
+  ed.cloneLayout('calle');
+  ed.map.objects = ed.map.objects.filter((o) => !o.baseDecor);
+  delete ed.map.decorCaptured;
+  for (const o of ed.map.objects) delete o.link;
+  const before = ed.map.objects.length;
+  ed.rebuild();
+  const baseDecor = ed.map.objects.filter((o) => o.baseDecor);
+  return {
+    before, after: ed.map.objects.length, baseDecor: baseDecor.length,
+    linkedAssets: baseDecor.filter((o) => o.link).length,
+  };
+});
+check('clones antiguos se actualizan sin exigir volver a clonarlos',
+  migratedClone.after > migratedClone.before && migratedClone.baseDecor > 0 &&
+  migratedClone.linkedAssets > 0, JSON.stringify(migratedClone));
+
+// ---------------------------------------------------------------------------
+// 7) PLAYTEST de un clon de Azoteas (helipuerto + especial elevado)
 // ---------------------------------------------------------------------------
 await page.evaluate(() => {
   window.BREACH_EDITOR.cloneLayout('azoteas');
