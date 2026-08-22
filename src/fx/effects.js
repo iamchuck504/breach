@@ -50,8 +50,8 @@ class ImpactDecalPool {
       depthWrite: false,
       depthTest: true,
       polygonOffset: true,
-      polygonOffsetFactor: -2,
-      polygonOffsetUnits: -2,
+      polygonOffsetFactor: -3,
+      polygonOffsetUnits: -3,
       vertexShader: `
         attribute float instanceOpacity;
         attribute vec3 instanceColor;
@@ -119,7 +119,9 @@ class ImpactDecalPool {
     const base = surface === 'metal' ? 0.115 : surface === 'stone' ? 0.155 : 0.14;
     const scale = Math.max(0.5, Math.min(5, Number(sizeScale) || 1));
     const size = base * (0.82 + Math.random() * 0.36) * scale;
-    this._pos.copy(point).addScaledVector(this._normal, 0.008);
+    // Separación mínima de la superficie para evitar z-fighting al usar FOV
+    // estrecho. Sigue visualmente pegado al material (1.2 cm en el mundo).
+    this._pos.copy(point).addScaledVector(this._normal, 0.012);
     this._quat.setFromUnitVectors(PLUS_Z, this._normal);
     this._spin.setFromAxisAngle(PLUS_Z, Math.random() * Math.PI * 2);
     this._quat.multiply(this._spin);
@@ -216,18 +218,20 @@ export class Effects {
     this.items.push({ obj, life: 0, ttl, tick, release });
   }
 
-  tracer(from, to) {
+  tracer(from, to, emphasized = false) {
     const dir = to.clone().sub(from);
     const len = dir.length();
     if (len < 0.3) return;
     const m = this._tracerPool.acquire();
     if (!m) return; // priorizar frame time sobre un tracer extra
-    m.scale.set(0.025, 0.025, len);
+    const width = emphasized ? 0.038 : 0.025;
+    const ttl = emphasized ? 0.10 : 0.07;
+    m.scale.set(width, width, len);
     m.position.copy(from).addScaledVector(dir, 0.5);
     m.lookAt(to);
-    this._add(m, 0.07, (it) => {
+    this._add(m, ttl, (it) => {
       const fade = Math.max(0.15, 1 - it.life / it.ttl);
-      it.obj.scale.x = it.obj.scale.y = 0.025 * fade;
+      it.obj.scale.x = it.obj.scale.y = width * fade;
     }, (obj) => this._tracerPool.release(obj));
   }
 
@@ -277,17 +281,32 @@ export class Effects {
       p.needsUpdate = true;
       it.obj.material.opacity = 1 - it.life / it.ttl;
     });
+    return pts;
   }
 
-  impact(pos, normal = null, surface = 'concrete') {
-    if (normal) this.decals.add(pos, normal, surface);
+  impact(pos, normal = null, surface = 'concrete', options = null) {
+    const emphasized = !!options?.emphasized;
+    if (normal) this.decals.add(pos, normal, surface, emphasized ? 1.65 : 1);
     // Los decals siempre se registran; los puffs se presupuestan para que una
-    // escopeta no cree ocho sistemas de partículas en el mismo frame.
-    if (this._impactBurstBudget < 1) return;
-    this._impactBurstBudget--;
-    if (surface === 'metal') this._burst(pos, 4, 0xffb568, 4.1, 0.045, 0.24, 5, normal);
-    else if (surface === 'stone') this._burst(pos, 5, 0xb5a58d, 2.5, 0.052, 0.32, 8, normal);
-    else this._burst(pos, 5, 0xb8bec0, 2.4, 0.05, 0.3, 7, normal);
+    // escopeta no cree ocho sistemas de partículas en el mismo frame. Un
+    // impacto local de sniper scoped siempre conserva un puff único y breve:
+    // es el feedback que debe poder leerse dentro del FOV de 20 grados.
+    if (this._impactBurstBudget < 1 && !emphasized) return;
+    if (this._impactBurstBudget >= 1) this._impactBurstBudget--;
+    const sizeScale = emphasized ? 1.5 : 1;
+    const ttlScale = emphasized ? 1.22 : 1;
+    let puff;
+    if (surface === 'metal') puff = this._burst(pos, emphasized ? 7 : 4, 0xffb568,
+      4.1, 0.045 * sizeScale, 0.24 * ttlScale, 5, normal);
+    else if (surface === 'stone') puff = this._burst(pos, emphasized ? 8 : 5, 0xb5a58d,
+      2.5, 0.052 * sizeScale, 0.32 * ttlScale, 8, normal);
+    else puff = this._burst(pos, emphasized ? 8 : 5, 0xb8bec0,
+      2.4, 0.05 * sizeScale, 0.3 * ttlScale, 7, normal);
+    if (emphasized && puff) {
+      puff.name = 'sniper-impact-puff';
+      puff.renderOrder = 4;
+      puff.material.depthWrite = false;
+    }
   }
   blood(pos, teamColor) { this._burst(pos, 10, teamColor, 2.6, 0.07, 0.4); }
 

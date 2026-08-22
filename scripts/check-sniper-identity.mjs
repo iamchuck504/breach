@@ -85,11 +85,88 @@ try {
   check('scope usa zoom óptico real cercano a 20°',
     Math.abs(scoped.fov - 20) < 1.2, `fov=${scoped.fov.toFixed(2)}`);
 
+  // La cruz del scope es una referencia óptica fija. Antes seguía el punto
+  // resuelto desde el muzzle y alternaba a naranja cuando ese punto se alejaba
+  // del centro, de modo que paredes, enemigos o un giro podían moverla solos.
+  const scopeReticle = async () => page.evaluate(() => {
+    const el = document.getElementById('scope-reticle');
+    const r = el.getBoundingClientRect();
+    return {
+      x: r.left + r.width / 2,
+      y: r.top + r.height / 2,
+      cx: innerWidth / 2,
+      cy: innerHeight / 2,
+      color: getComputedStyle(el).color,
+      blocked: el.classList.contains('blocked'),
+      outRange: el.classList.contains('out-range'),
+      left: el.style.left,
+      top: el.style.top,
+    };
+  });
+  const reticleBefore = await scopeReticle();
+  await page.evaluate(() => {
+    const G = window.BREACH;
+    G.player.cam.yaw += 0.42;
+    G.player.cam.pitch = Math.max(-0.25, G.player.cam.pitch - 0.08);
+    G.player.pos.x += 0.35;
+  });
+  await page.waitForTimeout(140);
+  const reticleAfter = await scopeReticle();
+  const centered = (v) => Math.hypot(v.x - v.cx, v.y - v.cy) < 0.75;
+  check('retícula scoped permanece centrada al mover cámara y personaje',
+    centered(reticleBefore) && centered(reticleAfter) &&
+      reticleBefore.left === '50%' && reticleAfter.left === '50%' &&
+      reticleBefore.top === '50%' && reticleAfter.top === '50%',
+    JSON.stringify({ before: reticleBefore, after: reticleAfter }));
+  check('retícula scoped conserva el mismo color y estado visual',
+    reticleBefore.color === reticleAfter.color && !reticleBefore.blocked &&
+      !reticleAfter.blocked && !reticleBefore.outRange && !reticleAfter.outRange,
+    JSON.stringify({ before: reticleBefore, after: reticleAfter }));
+
   // Disparar no debe cerrar el scope. Además exigimos que el disparo sí haya
   // ocurrido, para no aceptar un falso positivo por un input ignorado.
-  const beforeShot = await page.evaluate(() => window.BREACH.weapons.state.sniper.mag);
+  const beforeShot = await page.evaluate(() => {
+    const G = window.BREACH, E = window.BREACH_EFFECTS;
+    G.weapons.state.sniper.mag = 1;
+    G.weapons.state.sniper.cd = 0;
+    G.weapons.state.sniper.reload = 0;
+    E.clearImpacts();
+    window.__sniperImpact = null;
+    window.__oldSniperImpact = E.impact.bind(E);
+    E.impact = (point, normal, surface, options) => {
+      window.__sniperImpact = {
+        point: point.toArray(), surface, emphasized: !!options?.emphasized,
+      };
+      return window.__oldSniperImpact(point, normal, surface, options);
+    };
+    return G.weapons.state.sniper.mag;
+  });
   await page.evaluate(() => { window.BREACH_INPUT.firePressed = true; });
-  await page.waitForTimeout(180);
+  await page.waitForTimeout(65);
+  const scopedImpact = await page.evaluate(() => {
+    const E = window.BREACH_EFFECTS;
+    const puff = E.items.find((it) => it.obj.name === 'sniper-impact-puff');
+    const captured = window.__sniperImpact;
+    E.impact = window.__oldSniperImpact;
+    delete window.__oldSniperImpact;
+    return {
+      captured,
+      scope: window.BREACH.scopeActive,
+      dom: document.getElementById('sniper-scope').classList.contains('on'),
+      decals: E.decals.activeCount,
+      decalVisible: E.decals.mesh.visible &&
+        (E.decals.mesh.layers.mask & window.BREACH_CAM.layers.mask) !== 0,
+      puffVisible: !!puff?.obj.visible,
+      puffDepthWrite: puff?.obj.material?.depthWrite,
+    };
+  });
+  check('impacto scoped crea decal y partículas visibles inmediatamente',
+    !!scopedImpact.captured && scopedImpact.captured.emphasized &&
+      scopedImpact.scope && scopedImpact.dom && scopedImpact.decals === 1 &&
+      scopedImpact.decalVisible && scopedImpact.puffVisible &&
+      scopedImpact.puffDepthWrite === false,
+    JSON.stringify(scopedImpact));
+  await page.waitForTimeout(115);
   const afterShot = await page.evaluate(() => {
     const G = window.BREACH;
     return {

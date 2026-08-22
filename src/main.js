@@ -2871,9 +2871,10 @@ function fireShot() {
       ? resolveGuidedShot(world, targets, cameraOrigin, origin, dir, def.range, null)
       : resolveShot(world, targets, origin, dir, def.range, null);
     anyPoint = hit.point;
-    effects.tracer(muzzle, hit.point);
+    effects.tracer(muzzle, hit.point, scoped && w.cur === 'sniper');
     if (hit.kind === 'world') {
-      effects.impact(hit.point, hit.normal, hit.surface);
+      effects.impact(hit.point, hit.normal, hit.surface,
+        scoped && w.cur === 'sniper' ? { emphasized: true } : null);
       audio.impact(hit.point, hit.surface);
       worldImpacts.push(hit.point);
     }
@@ -2993,6 +2994,15 @@ function updateReticle() {
     const ringPx = Math.tan(def.spreadAim * Math.PI / 180) /
       Math.tan(camera.fov * Math.PI / 360) * (innerHeight / 2);
     const ray = shoulderCam.aimRay();
+    // La cruz telescópica representa exclusivamente el eje óptico y debe ser
+    // una referencia estable. El disparo sigue usando resolveGuidedShot desde
+    // el muzzle, así que una pared cercana aún bloquea físicamente la bala sin
+    // mover ni recolorear la retícula.
+    if (scoped) {
+      hud.reticle(false, null);
+      hud.sniperScope(true);
+      return;
+    }
     const guideT = staticHitDistance(ray.origin, ray.dir, 200);
     G.rig.root.updateWorldMatrix(true, true);
     const muzzle = G.rig.muzzleWorld(_v1);
@@ -3005,14 +3015,6 @@ function updateReticle() {
     if (_v3.z > 1) { hud.reticle(false, null); hud.sniperScope(false); return; }
     const tx = (_v3.x * 0.5 + 0.5) * innerWidth;
     const ty = (-_v3.y * 0.5 + 0.5) * innerHeight;
-    if (scoped) {
-      hud.reticle(false, null);
-      hud.sniperScope(true, { x: tx, y: ty }, {
-        inRange: guideT <= def.range,
-        blocked: Math.hypot(tx - innerWidth * 0.5, ty - innerHeight * 0.5) > 7,
-      });
-      return;
-    }
     hud.sniperScope(false);
     hud.reticle(true, { x: tx, y: ty }, {
       r: Math.min(190, ringPx),
