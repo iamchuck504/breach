@@ -12,8 +12,19 @@ import {
   PALETTE, paletteById, newMap, makeObject, footprint, THEMES,
   listMaps, getMap, saveMap, deleteMap, duplicateMap, mapLayoutId,
   spawnsOf, validateMap, validationOk, stageMap, unstageMap,
+  mapFromSnapshot, serializeMap, parseMapFile,
 } from '../world/map-data.js';
+import { BLOCK } from '../world/block-heights.js';
+// El Rig REAL del juego como personaje de referencia: mismas proporciones y
+// altura que en gameplay. El editor entero es un chunk DEV (import dinámico
+// en main.js), así que esto no toca el bundle de producción.
+import { Rig } from '../player/rig.js';
 import { t } from '../core/i18n.js';
+
+// Alturas de la cápsula de impactos (ballistics): cuerpo hasta 1.30, cabeza
+// hasta 1.74. Junto a LOW/MID/HIGH forman la regla de escala del personaje.
+const CHAR_EYE = 1.3;
+const CHAR_HEAD = 1.74;
 
 const DEG = Math.PI / 180;
 const SNAP_POS = [0, 0.25, 0.5, 1, 2];
@@ -52,6 +63,10 @@ export class MapEditor {
 
     this.overlay = new THREE.Group();
     this.overlay.name = 'editor-overlay';
+    // personajes de referencia: pool por id (construir un Rig es caro y el
+    // rebuild corre en cada frame de un arrastre)
+    this._charRigs = new Map();
+    this.showCharRefs = true;
     this._buildOverlayResources();
     this._bindInput();
   }
@@ -204,6 +219,10 @@ export class MapEditor {
     if (!sel.length) return;
     this.pushUndo('escalar');
     for (const o of sel) {
+      if (paletteById(o.p)?.t === 'urban') {
+        o.scale = Math.max(0.1, Math.min(8, +((o.scale ?? 1) * f).toFixed(2)));
+        continue;
+      }
       if (o.w === undefined) continue;
       o.w = Math.max(0.3, +(o.w * f).toFixed(2));
       o.d = Math.max(0.3, +(o.d * f).toFixed(2));
@@ -288,8 +307,13 @@ export class MapEditor {
   objectBox(o) {
     const piece = paletteById(o.p);
     const marker = piece && (piece.t === 'spawn' || piece.t === 'crate' || piece.t === 'special');
-    const fp = marker ? { w: 1.1, d: 1.1 } : footprint(o);
-    const h = marker ? 1.6 : (o.h ?? 1);
+    // el personaje de referencia se pickea por su cápsula real de gameplay
+    const fp = piece?.t === 'charRef' ? { w: 0.8, d: 0.8 }
+      : piece?.t === 'urban' ? { w: 2.2 * (o.scale ?? 1), d: 2.2 * (o.scale ?? 1) }
+      : marker ? { w: 1.1, d: 1.1 } : footprint(o);
+    const h = piece?.t === 'charRef' ? CHAR_HEAD
+      : piece?.t === 'urban' ? 3 * (o.scale ?? 1)
+      : marker ? 1.6 : (o.h ?? 1);
     return {
       minx: o.x - fp.w / 2, maxx: o.x + fp.w / 2,
       minz: o.z - fp.d / 2, maxz: o.z + fp.d / 2,
@@ -306,7 +330,8 @@ export class MapEditor {
     this.navGroup = new THREE.Group();
     this.pathGroup = new THREE.Group();
     this.ghost = null;
-    this.overlay.add(this.selBox, this.markerGroup, this.coverGroup, this.navGroup, this.pathGroup);
+    this.charRefGroup = new THREE.Group();
+    this.overlay.add(this.selBox, this.markerGroup, this.coverGroup, this.navGroup, this.pathGroup, this.charRefGroup);
     this._matSel = new THREE.LineBasicMaterial({ color: 0xffb057 });
     this._matSelFill = new THREE.MeshBasicMaterial({
       color: 0xff8b42, transparent: true, opacity: 0.11, depthWrite: false,
@@ -330,6 +355,7 @@ export class MapEditor {
     this._refreshSelection();
     this._refreshCover();
     this._refreshNav();
+    this._refreshCharRefs();
     this.onChange?.();
   }
 
@@ -405,6 +431,100 @@ export class MapEditor {
       fill.position.copy(edges.position);
       this.selBox.add(fill, edges);
     }
+  }
+
+  // Personajes de referencia: el Rig REAL del juego (mismas proporciones que
+  // en gameplay) + regla de alturas. Viven en el overlay del editor: jamás
+  // aparecen en partida y el export los elimina.
+  _refreshCharRefs() {
+    const wanted = new Map();
+    for (const o of this.map.objects) {
+      if (paletteById(o.p)?.t === 'charRef') wanted.set(o.id, o);
+    }
+    for (const [id, entry] of [...this._charRigs]) {
+      if (wanted.has(id)) continue;
+      entry.rig.dispose(this.charRefGroup);
+      this.charRefGroup.remove(entry.ruler);
+      this._disposeRuler(entry.ruler);
+      this._charRigs.delete(id);
+    }
+    for (const [id, o] of wanted) {
+      let entry = this._charRigs.get(id);
+      if (!entry) {
+        const rig = new Rig(this.charRefGroup, 'red', null, this._charRigs.size % 5);
+        rig.setWeapon('smg');
+        const ruler = this._buildRuler();
+        this.charRefGroup.add(ruler);
+        entry = { rig, ruler };
+        this._charRigs.set(id, entry);
+      }
+      const yaw = (o.rot ?? 0) * DEG;
+      entry.rig.setTransform(o.x, o.z, yaw);
+      entry.ruler.position.set(o.x, 0, o.z);
+      entry.ruler.rotation.y = yaw;
+    }
+    this.charRefGroup.visible = this.showCharRefs;
+  }
+
+  // Regla de escala junto al personaje: las tres alturas de bloque del juego
+  // más ojos y coronilla de la cápsula de impactos.
+  _buildRuler() {
+    const g = new THREE.Group();
+    const marks = [
+      [BLOCK.LOW, 0x6ce0a0, 'LOW 1.1'],
+      [CHAR_EYE, 0x9fc2e8, 'OJOS 1.3'],
+      [CHAR_HEAD, 0xffffff, 'CABEZA 1.74'],
+      [BLOCK.MID, 0xffd166, 'MID 1.9'],
+      [BLOCK.HIGH, 0xe0566c, 'HIGH 3.0'],
+    ];
+    const post = new THREE.Mesh(
+      new THREE.BoxGeometry(0.045, BLOCK.HIGH, 0.045),
+      new THREE.MeshBasicMaterial({ color: 0x71808d, transparent: true, opacity: 0.85 }),
+    );
+    post.position.set(0.85, BLOCK.HIGH / 2, 0);
+    g.add(post);
+    for (const [h, color, text] of marks) {
+      const tick = new THREE.Mesh(
+        new THREE.BoxGeometry(0.5, 0.028, 0.028),
+        new THREE.MeshBasicMaterial({ color }),
+      );
+      tick.position.set(0.6, h, 0);
+      g.add(tick);
+      const label = this._textSprite(text, color);
+      label.position.set(1.75, h, 0);
+      g.add(label);
+    }
+    return g;
+  }
+
+  _textSprite(text, color) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256; canvas.height = 56;
+    const ctx = canvas.getContext('2d');
+    ctx.font = 'bold 30px monospace';
+    ctx.fillStyle = '#' + new THREE.Color(color).getHexString();
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, 6, 28);
+    const tex = new THREE.CanvasTexture(canvas);
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: tex, transparent: true, depthTest: false,
+    }));
+    sprite.scale.set(1.7, 0.37, 1);
+    return sprite;
+  }
+
+  _disposeRuler(ruler) {
+    ruler.traverse((o) => {
+      o.geometry?.dispose?.();
+      const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+      for (const m of mats) { m.map?.dispose?.(); m.dispose?.(); }
+    });
+  }
+
+  toggleCharRefs() {
+    this.showCharRefs = !this.showCharRefs;
+    this.charRefGroup.visible = this.showCharRefs;
+    this.onChange?.();
   }
 
   // Cover REAL reconocido por el juego: se lee de world.faces, no de los datos
@@ -620,6 +740,66 @@ export class MapEditor {
   remove(id) { deleteMap(id); this.setStatus(t('editor.status.deleted')); }
   maps() { return listMaps(); }
 
+  // ------------------------------------------------- clonado de mapas reales
+  // El original JAMÁS se toca: la radiografía lo reconstruye tal cual y el
+  // clon nace como mapa nuevo con id propio. Conserva TODO — cada caja con su
+  // color/cover/collider invisible/material, spawns con orientación, munición,
+  // especial con altura — y `base` mantiene la decoración original intacta.
+  cloneLayout(layout, name = null) {
+    const snap = this.world.snapshotLayout(layout);
+    if (this.map?.id) unstageMap(this.map.id);
+    this.map = mapFromSnapshot(layout, snap, name);
+    this.selection.clear();
+    this.undoStack.length = 0; this.redoStack.length = 0;
+    this.dirty = true;
+    this.rebuild();
+    this.frameCamera();
+    this.setStatus(t('editor.status.cloned', { name: this.map.name, count: snap.boxes.length }));
+    return this.map;
+  }
+
+  // Decoración del mapa base (fachadas, GLBs, helipuerto). Apagarla deja la
+  // geometría jugable desnuda: los colliders invisibles se vuelven visibles.
+  setDecor(on) {
+    if (!this.map.base) return;
+    this.pushUndo('decor');
+    if (on) delete this.map.decor; else this.map.decor = false;
+    this.rebuild();
+  }
+
+  // ------------------------------------------------------- fichero externo
+  // El JSON exportado ES el formato del juego (sin charRef). La validación
+  // acompaña el export para avisar — nunca bloquea ni destruye cambios.
+  exportFile() {
+    const report = this.validate();
+    const slug = String(this.map.name || 'mapa').toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'mapa';
+    return {
+      json: serializeMap(this.map),
+      filename: slug + '.breachmap.json',
+      report, ok: validationOk(report),
+    };
+  }
+
+  importFile(text) {
+    const parsed = parseMapFile(text);
+    if (parsed.error) {
+      this.setStatus(t('editor.status.importError', { error: parsed.error }));
+      return null;
+    }
+    if (this.map?.id) unstageMap(this.map.id);
+    this.map = parsed.map;
+    this.selection.clear();
+    this.undoStack.length = 0; this.redoStack.length = 0;
+    this.dirty = true;
+    this.rebuild();
+    this.frameCamera();
+    this.setStatus(parsed.unknownPieces
+      ? t('editor.status.importedUnknown', { name: this.map.name, count: parsed.unknownPieces })
+      : t('editor.status.imported', { name: this.map.name }));
+    return parsed;
+  }
+
   // ---------------------------------------------------------------- input
   _bindInput() {
     this._onKey = (e) => {
@@ -684,7 +864,7 @@ export class MapEditor {
       // desde aquí (un solo undo por gesto y sin deriva acumulada).
       this.drag = {
         kind: 'move', last: g, moved: false, acc: 0,
-        start: this.selected().map((o) => ({ id: o.id, rot: o.rot ?? 0, w: o.w, d: o.d })),
+        start: this.selected().map((o) => ({ id: o.id, rot: o.rot ?? 0, w: o.w, d: o.d, scale: o.scale })),
       };
       this.refreshOverlay();
     } else if (!shift) {
@@ -740,7 +920,12 @@ export class MapEditor {
       const f = Math.max(0.15, Math.min(6, 1 + this.drag.acc));
       for (const s of this.drag.start) {
         const o = this.map.objects.find((x) => x.id === s.id);
-        if (!o || s.w === undefined) continue;
+        if (!o) continue;
+        if (paletteById(o.p)?.t === 'urban') {
+          o.scale = Math.max(0.1, Math.min(8, +((s.scale ?? 1) * f).toFixed(2)));
+          continue;
+        }
+        if (s.w === undefined) continue;
         o.w = Math.max(0.3, +(s.w * f).toFixed(2));
         o.d = Math.max(0.3, +(s.d * f).toFixed(2));
       }
@@ -798,6 +983,11 @@ export class MapEditor {
     window.removeEventListener('keydown', this._onKey);
     window.removeEventListener('keyup', this._onKeyUp);
     window.removeEventListener('wheel', this._onWheel);
+    for (const entry of this._charRigs.values()) {
+      entry.rig.dispose(this.charRefGroup);
+      this._disposeRuler(entry.ruler);
+    }
+    this._charRigs.clear();
   }
 }
 

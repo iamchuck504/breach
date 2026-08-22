@@ -23,7 +23,10 @@ import { HUD } from './ui/hud.js';
 import { NetClient } from './net/client.js';
 import { BotMatch } from './game/botmatch.js';
 import { SmokeSystem } from './game/smoke.js';
-import { mapLayoutId, isCustomLayout, getMap, listMaps, listPlayableMaps, footprint } from './world/map-data.js';
+import {
+  mapLayoutId, isCustomLayout, getMap, listMaps, listPlayableMaps, footprint,
+  exportableMap, serializeMap, parseMapFile,
+} from './world/map-data.js';
 import { SpecialPickup, Rockets, SPECIAL_HOLD_TIME } from './game/special.js';
 import {
   DEFAULT_LOBBY_SETTINGS, MAPS, MAX_PLAYERS, TEAM_CAPACITY, makeBotName,
@@ -1635,7 +1638,9 @@ async function openEditor(map = null) {
   }
   cancelSanitize();
   teardown();
-  await ensureEditor();
+  // la biblioteca urbana (GLB) del editor y los clones de Calle la necesitan
+  // aunque nunca se haya preparado una partida
+  await Promise.all([ensureEditor(), preloadUrbanAssets()]);
   G.mode = 'editor';
   G.editorReturn = null;
   hud.showMenu(false);
@@ -2857,7 +2862,10 @@ window.BREACH_SMOKE = smoke;
 if (editorLocalOnly) {
   Object.defineProperty(window, 'BREACH_EDITOR', { get: () => editor });
   window.BREACH_EDITOR_PLAYTEST = () => editorPlaytest();
-  window.BREACH_MAPDATA = { mapLayoutId, isCustomLayout, getMap, listMaps, footprint };
+  window.BREACH_MAPDATA = {
+    mapLayoutId, isCustomLayout, getMap, listMaps, footprint,
+    exportableMap, serializeMap, parseMapFile,
+  };
 }
 window.BREACH_SPECIALS = specials;
 window.BREACH_ROCKETS = rockets;

@@ -59,7 +59,30 @@ export const PALETTE = [
   { id: 'spawnBlue', group: 'marker', label: 'SPAWN AZUL', labelKey: 'editor.piece.spawnBlue', icon: 'B', metaKey: 'editor.meta.marker', t: 'spawn', team: 'blue' },
   { id: 'ammo', group: 'marker', label: 'MUNICIÓN', labelKey: 'editor.piece.ammo', icon: 'A', metaKey: 'editor.meta.marker', t: 'crate' },
   { id: 'special', group: 'marker', label: 'ARMA ESPECIAL', labelKey: 'editor.piece.special', icon: '★', metaKey: 'editor.meta.marker', t: 'special' },
+  // --- assets urbanos GLB (misma biblioteca que usa Calle Cerrada en vivo).
+  // Decorativos: la colisión se pone aparte con cajas visual:false, igual que
+  // hace el propio mapa Calle.
+  ...['apartmentBlock', 'busShelter', 'cornerStore', 'shopfrontRow', 'fireHydrant',
+    'glassSkyscraper', 'glassSupertall', 'streetlight', 'suvMinivan', 'waterfrontTower']
+    .map((assetId) => ({
+      id: 'urban:' + assetId, group: 'assets', label: assetId.toUpperCase(),
+      icon: '⌂', metaKey: 'editor.meta.urban', t: 'urban', assetId,
+    })),
+  // --- herramienta del editor: personaje de REFERENCIA con las dimensiones
+  // reales del juego. No colisiona, no aparece en partida y el export lo
+  // elimina — es la regla de escala del entorno.
+  { id: 'charRef', group: 'editor', label: 'PERSONAJE REF.', labelKey: 'editor.piece.charRef',
+    icon: '☺', metaKey: 'editor.meta.charRef', t: 'charRef' },
 ];
+
+// Campos opcionales por objeto (los escribe el CLONADOR para fidelidad
+// exacta con los mapas hechos a mano):
+//   color/top   hex del cuerpo y la tapa (si faltan, paleta del tema)
+//   visual      false = collider invisible (Calle pone fachadas encima)
+//   cover       false = colisiona pero no genera caras de cobertura
+//   surface     material de impacto ('stone'|'concrete'|'metal')
+//   y           altura (special sobre el helipuerto, assets elevados)
+//   scale       solo assets urbanos
 
 export const paletteById = (id) => PALETTE.find((p) => p.id === id) ?? null;
 
@@ -82,6 +105,7 @@ export function makeObject(paletteId, x, z, extra = {}) {
   const o = { id: 'o' + Math.random().toString(36).slice(2, 9), p: paletteId, x, z, rot: 0 };
   if (p.t === 'box' || p.t === 'prop') { o.w = p.w; o.d = p.d; o.h = p.h; }
   if (p.t === 'spawn') o.yaw = p.team === 'red' ? Math.PI : 0;
+  if (p.t === 'urban') o.scale = 1;
   return Object.assign(o, extra);
 }
 
@@ -106,14 +130,17 @@ function writeStore(all) {
 }
 
 export function listMaps() {
-  return Object.values(readStore()).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  // los EMPAQUETADOS (src/world/maps/*.json, exportados desde el editor)
+  // conviven con los locales; un guardado local con el mismo id los tapa
+  const all = { ...bundledStore(), ...readStore() };
+  return Object.values(all).sort((a, b) => String(a.name).localeCompare(String(b.name)));
 }
 export function listPlayableMaps() {
   return listMaps().filter((map) => validationOk(validateMap(map)));
 }
 export function getMap(id) {
   if (typeof id === 'string' && id.startsWith(CUSTOM_PREFIX)) id = id.slice(CUSTOM_PREFIX.length);
-  return drafts.get(id) ?? readStore()[id] ?? null;
+  return drafts.get(id) ?? readStore()[id] ?? bundledStore()[id] ?? null;
 }
 export function stageMap(map) {
   const copy = JSON.parse(JSON.stringify(map));
@@ -166,8 +193,107 @@ export function cratesOf(map) {
 }
 export function specialOf(map) {
   const o = map.objects.find((x) => x.p === 'special');
-  return o ? { x: o.x, z: o.z } : null;
+  // conservar la altura: el pedestal de azoteas vive SOBRE el helipuerto
+  return o ? { x: o.x, z: o.z, y: o.y ?? 0 } : null;
 }
+
+// ---------------------------------------------------------------------------
+// CLONADO de mapas hechos a mano. world.snapshotLayout() reconstruye el mapa
+// capturando cada caja que su builder coloca (espejo ya resuelto); esto la
+// convierte en datos SIN perder nada: color exacto, cover, colliders
+// invisibles bajo fachadas, material de impacto. `base` hace que el mundo
+// corra el builder original para la decoración (fachadas, GLBs, helipuerto)
+// suprimiendo sus cajas — las de aquí, ya editables, las sustituyen.
+// ---------------------------------------------------------------------------
+export function mapFromSnapshot(layout, snap, name = null) {
+  const oid = () => 'o' + Math.random().toString(36).slice(2, 9);
+  const pieceFor = (h) => (h <= BLOCK.LOW + 1e-6 ? 'coverLow'
+    : h <= BLOCK.MID + 1e-6 ? 'coverMid' : 'wall');
+  const objects = snap.boxes.map((b) => ({
+    id: oid(), p: pieceFor(b.h), x: b.x, z: b.z, rot: 0,
+    w: b.w, d: b.d, h: b.h, color: b.color, top: b.top,
+    ...(b.cover === false ? { cover: false } : null),
+    ...(b.visual === false ? { visual: false } : null),
+    ...(b.surface ? { surface: b.surface } : null),
+  }));
+  for (const team of ['red', 'blue']) {
+    for (const s of snap.spawns[team] ?? []) {
+      const yaw = s.yaw ?? 0;
+      objects.push({
+        id: oid(), p: team === 'red' ? 'spawnRed' : 'spawnBlue',
+        x: s.x, z: s.z, rot: ((yaw * 180 / Math.PI) % 360 + 360) % 360, yaw,
+      });
+    }
+  }
+  for (const c of snap.crates ?? []) objects.push({ id: oid(), p: 'ammo', x: c.x, z: c.z, rot: 0 });
+  if (snap.special) {
+    objects.push({
+      id: oid(), p: 'special', x: snap.special.x, z: snap.special.z, rot: 0,
+      ...(snap.special.y ? { y: snap.special.y } : null),
+    });
+  }
+  return {
+    v: MAP_FORMAT_VERSION,
+    id: 'map-' + Math.random().toString(36).slice(2, 8),
+    name: name || (layout.toUpperCase() + ' COPIA'),
+    theme: layout,
+    base: layout,     // decoración: el builder original corre intacto
+    fx: snap.fx, fz: snap.fz,
+    walls: false,     // el perímetro ya viene capturado como cajas editables
+    objects,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// EXPORT / IMPORT a fichero. El fichero ES el formato del juego: no existe
+// una conversión — solo se eliminan las herramientas del editor (charRef).
+// ---------------------------------------------------------------------------
+export function exportableMap(map) {
+  const clean = JSON.parse(JSON.stringify(map));
+  clean.objects = clean.objects.filter((o) => paletteById(o.p)?.group !== 'editor');
+  return clean;
+}
+
+export function serializeMap(map) {
+  return JSON.stringify(exportableMap(map), null, 2);
+}
+
+// Devuelve { map } o { error } — jamás toca el almacén si el JSON no valida.
+export function parseMapFile(text) {
+  let data;
+  try { data = JSON.parse(text); } catch { return { error: 'JSON inválido' }; }
+  if (!data || typeof data !== 'object') return { error: 'Formato desconocido' };
+  if (typeof data.v !== 'number' || data.v > MAP_FORMAT_VERSION) {
+    return { error: `Versión de formato no soportada (${data.v})` };
+  }
+  if (!Array.isArray(data.objects)) return { error: 'El mapa no tiene objetos' };
+  if (typeof data.fx !== 'number' || typeof data.fz !== 'number') {
+    return { error: 'Dimensiones inválidas' };
+  }
+  const unknown = data.objects.filter((o) => !paletteById(o.p)).length;
+  data.id = data.id || ('map-' + Math.random().toString(36).slice(2, 8));
+  data.name = String(data.name || 'MAPA IMPORTADO');
+  return { map: data, unknownPieces: unknown };
+}
+
+// Mapas EMPAQUETADOS: ficheros exportados que se suben al repo en
+// src/world/maps/*.json y quedan disponibles como mapas del juego (modos
+// locales). import.meta.glob lo resuelve Vite en build; en Node (el server
+// importa esta cadena) la llamada revienta y el catch deja el almacén vacío.
+let _bundled = null;
+function bundledStore() {
+  if (_bundled) return _bundled;
+  _bundled = {};
+  try {
+    const files = import.meta.glob('./maps/*.json', { eager: true });
+    for (const mod of Object.values(files)) {
+      const map = mod.default ?? mod;
+      if (map?.id && Array.isArray(map.objects)) _bundled[map.id] = map;
+    }
+  } catch { /* Node: sin bundle */ }
+  return _bundled;
+}
+export function bundledMaps() { return Object.values(bundledStore()); }
 
 // ---------------------------------------------------------------------------
 // VALIDACIÓN: mismas reglas que exige el juego para un mapa jugable.
@@ -183,7 +309,9 @@ export function validateMap(map, world = null) {
     const piece = paletteById(o.p);
     const fp = piece && (piece.t === 'box' || piece.t === 'prop')
       ? footprint(o) : { w: 1.2, d: 1.2 };
-    return Math.abs(o.x) + fp.w / 2 <= map.fx && Math.abs(o.z) + fp.d / 2 <= map.fz;
+    // margen +1.2: los muros perimetrales de un CLON son cajas normales que
+    // viven justo fuera de fx/fz (±fx+0.4, medio ancho 0.4/1.0)
+    return Math.abs(o.x) + fp.w / 2 <= map.fx + 1.2 && Math.abs(o.z) + fp.d / 2 <= map.fz + 1.2;
   };
 
   if (red.length >= 4) add('ok', 'redSpawn', `Spawns rojos (${red.length}/4)`, { count: red.length });
@@ -229,8 +357,17 @@ export function validateMap(map, world = null) {
     if (blockedSpawns.length) add('error', 'spawnClear', `${blockedSpawns.length} spawn(s) dentro de geometría`, { count: blockedSpawns.length });
     else if (red.length || blue.length) add('ok', 'spawnClear', 'Spawns despejados');
 
+    // Para un pickup, la geometría LOW no es "pared": se recoge parado al
+    // lado o encima (en la fortaleza real un crate roza una plataforma baja).
+    // Solo MID/HIGH lo dejarían físicamente inaccesible.
+    const pickupFree = (x, z, r) => !world.colliders.some((c) => {
+      if (c.h <= BLOCK.LOW + 0.01) return false;
+      const dx = Math.max(c.minx - x, 0, x - c.maxx);
+      const dz = Math.max(c.minz - z, 0, z - c.maxz);
+      return Math.hypot(dx, dz) < r;
+    });
     const blockedPickups = [...crates, ...(special ? [special] : [])]
-      .filter((c) => !free(c.x, c.z, 0.45));
+      .filter((c) => !pickupFree(c.x, c.z, 0.45));
     if (blockedPickups.length) add('error', 'pickupClear', `${blockedPickups.length} pickup(s) dentro de geometría`, { count: blockedPickups.length });
     else if (crates.length || special) add('ok', 'pickupClear', 'Pickups accesibles');
 

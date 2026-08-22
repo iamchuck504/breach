@@ -87,10 +87,31 @@ escritos a mano, así que lo que ves en el editor es lo que el juego simula
 - **Playtest** instantáneo: juegas el mapa en edición y `ESC` vuelve al
   editor con todo intacto. Un mapa válido aparece en el selector y en el
   lobby local, y los bots lo navegan.
+- **Clonar mapa del juego:** cualquiera de los 6 layouts reales se clona a un
+  mapa editable conservando TODO — cada caja exacta del builder original
+  (color, cover, colliders invisibles, material de impacto), spawns con
+  orientación, munición y arma especial con altura. La decoración (fachadas,
+  GLBs, helipuerto) la sigue generando el builder original intacto (`base` en
+  los datos + supresión de cajas en `world._box`); el toggle **DECOR** la
+  apaga y revela los colliders ocultos. El original jamás se modifica.
+- **Biblioteca urbana:** los mismos GLB que usa Calle Cerrada
+  (`src/world/urban-assets.js`) se insertan como piezas (sin colisión, igual
+  que en el mapa real; la colisión se pone aparte con cajas).
+- **Personaje de referencia:** pieza que coloca el **Rig real del juego**
+  (proporciones y altura de gameplay) con regla de alturas (LOW 1.1 · ojos
+  1.3 · cabeza 1.74 · MID 1.9 · HIGH 3.0). Se mueve/duplica/oculta (botón
+  REF) y **nunca viaja en el export** ni aparece en partida.
+- **Exportar / Importar:** el JSON exportado ES el formato del juego (sin
+  conversión); la validación acompaña el export avisando sin bloquear. Un
+  fichero en `src/world/maps/*.json` queda empaquetado como mapa del juego
+  en modos locales.
 
 Nota de arquitectura: la colisión y el cover del juego son **AABB**, así que
 la geometría jugable rota en pasos de 90° (intercambia ancho/fondo). Los
 props decorativos sí giran libremente porque no colisionan.
+
+El editor completo es **solo DEV** (`import.meta.env.DEV` + import dinámico):
+Vite lo elimina del build de producción.
 
 ## Validación (headless, sin abrir ventana)
 
@@ -98,6 +119,7 @@ props decorativos sí giran libremente porque no colisionan.
 node scripts/smoke.mjs               # suite integral (movimiento, bots, MP, UI)
 node scripts/check-movement.mjs      # harness agresivo de movilidad + muertes
 node scripts/check-editor.mjs        # editor: construir, validar, playtest, volver
+node scripts/check-editor-clone.mjs  # clonador: fidelidad exacta + export/import
 node scripts/check-arsenal.mjs       # armas: slots, melee, humo, especiales
 node scripts/check-match-systems.mjs # pedestal por ronda, humo vs bots, spam
 node scripts/check-ai.mjs            # métricas tácticas de la IA (mapa, segundos)

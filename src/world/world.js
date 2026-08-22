@@ -126,14 +126,7 @@ export class World {
 
     this._buildFloor();
     if (this.customMap) this._buildFromData(this.customMap);
-    else if (layout === 'arena') this._buildArena();
-    else if (layout === 'fortaleza') this._buildFortaleza();
-    else if (layout === 'azoteas') this._buildAzoteas();
-    else if (layout === 'calle') this._buildCalle();
-    else if (layout === 'metro') this._buildMetro();
-    else if (layout === 'prision') this._buildPrision();
-    else if (layout === 'pueblo') this._buildPueblo();
-    else this._buildMap();
+    else this._runBuilder(layout);
     this._flushBoxBatch();
     this._buildSpawns();
 
@@ -148,6 +141,43 @@ export class World {
     // el tema decide luz/cielo/niebla (un mapa de datos hereda el ambiente
     // completo del mapa en el que se inspira)
     this._applyEnvironment(theme);
+  }
+
+  // Builder original de cada mapa hecho a mano. También lo corre
+  // _buildFromData (con las cajas suprimidas) para la decoración de un clon.
+  _runBuilder(layout) {
+    if (layout === 'arena') this._buildArena();
+    else if (layout === 'fortaleza') this._buildFortaleza();
+    else if (layout === 'azoteas') this._buildAzoteas();
+    else if (layout === 'calle') this._buildCalle();
+    else if (layout === 'metro') this._buildMetro();
+    else if (layout === 'prision') this._buildPrision();
+    else if (layout === 'pueblo') this._buildPueblo();
+    else this._buildMap();
+  }
+
+  // Radiografía de un mapa hecho a mano para el CLONADOR del editor:
+  // reconstruye el layout capturando cada caja que su builder coloca (espejo
+  // ya resuelto) y devuelve, además, spawns con orientación, cajas de
+  // munición y pedestal especial con altura. El llamador queda en ese layout;
+  // el editor hace setLayout del clon inmediatamente después.
+  snapshotLayout(layout) {
+    this._capture = [];
+    try {
+      this.setLayout(layout, true);
+      return {
+        fx: this.fx, fz: this.fz,
+        boxes: this._capture.slice(),
+        spawns: {
+          red: this.spawns.red.map((s) => ({ ...s })),
+          blue: this.spawns.blue.map((s) => ({ ...s })),
+        },
+        crates: (this.cratePos ?? []).map((c) => ({ ...c })),
+        special: this.specialSpot ? { ...this.specialSpot } : null,
+      };
+    } finally {
+      this._capture = null;
+    }
   }
 
   // ---------- texturas procedurales (canvas nítido — cero blur/filtros) ----------
@@ -753,7 +783,7 @@ export class World {
   }
 
   _flushBoxBatch() {
-    const build = (batch, texture) => {
+    const build = (batch, texture, name) => {
       if (!batch.count) return;
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.Float32BufferAttribute(batch.pos, 3));
@@ -767,10 +797,11 @@ export class World {
       }));
       mesh.castShadow = true;
       mesh.receiveShadow = true;
+      mesh.name = name; // identificable para tooling/tests (editor, clonador)
       this.mapGroup.add(mesh);
     };
-    build(this._boxBatch.sides, this._batchTexIds[0]);
-    build(this._boxBatch.tops, this._batchTexIds[1]);
+    build(this._boxBatch.sides, this._batchTexIds[0], 'box-batch-sides');
+    build(this._boxBatch.tops, this._batchTexIds[1], 'box-batch-tops');
     this._boxBatch = null;
   }
 
@@ -974,6 +1005,13 @@ export class World {
     surface = null,
   } = {}) {
     const place = (px, pz) => {
+      // CLONADO DE MAPAS: place() es el embudo por el que pasa cada caja de
+      // cada builder (el espejo ya está resuelto aquí). _capture registra la
+      // caja exacta como datos; _suppressBoxes deja correr el builder solo
+      // por su decoración (fachadas, GLBs, helipuerto) sin crear las cajas —
+      // las del clon, ya como datos editables, ocupan su lugar.
+      if (this._capture) this._capture.push({ x: px, z: pz, w, d, h, color, top, cover, visual, surface });
+      if (this._suppressBoxes) return;
       // variación sutil de tono por caja: rompe la monotonía sin romper la paleta
       const jit = 0.95 + Math.random() * 0.1;
       const c = new THREE.Color(color).multiplyScalar(jit).getHex();
@@ -1102,6 +1140,17 @@ export class World {
       : h <= MID ? { color: tone[2], top: tone[3] }
       : { color: tone[4], top: tone[5] });
 
+    // CLON de un mapa hecho a mano: correr su builder ORIGINAL con las cajas
+    // suprimidas. Toda la decoración se genera intacta (fachadas, GLBs,
+    // instancias, helipuerto con sus barandales y zonas transitables) y las
+    // cajas jugables — capturadas como datos al clonar — toman su lugar.
+    const decorOn = Boolean(map.base) && map.decor !== false;
+    if (decorOn) {
+      this._suppressBoxes = true;
+      try { this._runBuilder(map.base); }
+      finally { this._suppressBoxes = false; }
+    }
+
     // límites del mapa: perímetro cerrado (mismo patrón que todos los mapas)
     if (map.walls !== false) {
       const wallOpts = { mirror: false, color: tone[4], top: tone[5] };
@@ -1116,13 +1165,30 @@ export class World {
       if (!piece) continue;
       if (piece.t === 'box') {
         const fp = footprint(o);
-        this._box(o.x, o.z, fp.w, fp.d, o.h ?? piece.h, {
-          mirror: false, cover: piece.cover !== false, ...opts(o.h ?? piece.h),
+        const h = o.h ?? piece.h;
+        // Los campos explícitos del clon mandan (color exacto, colliders
+        // invisibles bajo fachadas, material de impacto). Sin decoración de
+        // base, las cajas invisibles SÍ se dibujan: son la única geometría.
+        this._box(o.x, o.z, fp.w, fp.d, h, {
+          mirror: false,
+          cover: o.cover ?? (piece.cover !== false),
+          visual: decorOn ? (o.visual ?? true) : true,
+          surface: o.surface ?? null,
+          ...opts(h),
+          ...(o.color != null ? { color: o.color } : null),
+          ...(o.top != null ? { top: o.top } : null),
         });
       } else if (piece.t === 'prop') {
         this._dataProp(o, piece, tone);
+      } else if (piece.t === 'urban') {
+        // misma biblioteca GLB que usa Calle en vivo; sin colisión propia
+        // (igual que en el mapa real: la colisión son cajas visual:false)
+        this._addUrbanAsset(piece.assetId, o.x, o.z, {
+          y: o.y ?? 0, scale: o.scale ?? 1, rotation: (o.rot ?? 0) * Math.PI / 180,
+        });
       }
-      // spawn/crate/special son marcadores: los consume el juego, no la escena
+      // spawn/crate/special son marcadores: los consume el juego, no la
+      // escena. charRef es una herramienta del editor: la dibuja el editor.
     }
   }
 

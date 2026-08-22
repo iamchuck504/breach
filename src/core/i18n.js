@@ -461,6 +461,20 @@ const EDITOR_RUNTIME_EN = {
   'editor.playtestProblems': 'The map has {count} problem(s):',
   'editor.playtestAnyway': 'Playtest anyway?',
   'editor.playtestHint': 'PLAYTEST · ESC TO RETURN TO EDITOR',
+  'editor.cloneMap': 'CLONE GAME MAP', 'editor.clone': 'CLONE',
+  'editor.decor': 'DECOR', 'editor.charRefs': 'REF',
+  'editor.export': 'EXPORT', 'editor.import': 'IMPORT',
+  'editor.assets': 'ASSETS', 'editor.reference': 'REFERENCE',
+  'editor.piece.charRef': 'CHARACTER REF.',
+  'editor.meta.charRef': 'REAL SCALE · NOT EXPORTED',
+  'editor.meta.urban': 'GLB ASSET · NO COLLISION',
+  'editor.baseLocked': 'Clone of {base}: size and theme are locked to the base map',
+  'editor.exportWarnings': 'The map has {count} issue(s). Export anyway?',
+  'editor.status.exported': 'Exported: {filename}',
+  'editor.status.cloned': 'Cloned: {name} ({count} boxes)',
+  'editor.status.imported': 'Imported: {name}',
+  'editor.status.importedUnknown': 'Imported: {name} · {count} unknown piece(s)',
+  'editor.status.importError': 'Import failed: {error}',
 };
 for (const dict of [en, es, pt, fr, ja, it, zh]) Object.assign(dict, EDITOR_RUNTIME_EN);
 Object.assign(es, {
@@ -507,6 +521,20 @@ Object.assign(es, {
   'editor.playtestProblems': 'El mapa tiene {count} problema(s):',
   'editor.playtestAnyway': '¿Probarlo de todas formas?',
   'editor.playtestHint': 'PLAYTEST · ESC PARA VOLVER AL EDITOR',
+  'editor.cloneMap': 'CLONAR MAPA DEL JUEGO', 'editor.clone': 'CLONAR',
+  'editor.decor': 'DECOR', 'editor.charRefs': 'REF',
+  'editor.export': 'EXPORTAR', 'editor.import': 'IMPORTAR',
+  'editor.assets': 'ASSETS', 'editor.reference': 'REFERENCIA',
+  'editor.piece.charRef': 'PERSONAJE REF.',
+  'editor.meta.charRef': 'ESCALA REAL · NO SE EXPORTA',
+  'editor.meta.urban': 'ASSET GLB · SIN COLISIÓN',
+  'editor.baseLocked': 'Clon de {base}: tamaño y tema van atados al mapa base',
+  'editor.exportWarnings': 'El mapa tiene {count} problema(s). ¿Exportar igual?',
+  'editor.status.exported': 'Exportado: {filename}',
+  'editor.status.cloned': 'Clonado: {name} ({count} cajas)',
+  'editor.status.imported': 'Importado: {name}',
+  'editor.status.importedUnknown': 'Importado: {name} · {count} pieza(s) desconocida(s)',
+  'editor.status.importError': 'Error al importar: {error}',
 });
 }
 

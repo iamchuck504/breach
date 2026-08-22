@@ -33,6 +33,7 @@ const CSS = `
 #editor-ui button.danger:hover { background: #7a2f2f; border-color: #b45a5a; }
 #editor-ui select, #editor-ui input { background: #12171c; color: #cfd6dc;
   border: 1px solid #36424c; font: inherit; font-size: 11px; min-height: 29px; padding: 4px 6px; }
+#editor-ui select:disabled, #editor-ui input:disabled { opacity: .45; cursor: not-allowed; }
 /* la barra superior puede envolver en pantallas estrechas: los paneles
    arrancan bajo su altura REAL, medida en runtime (--ed-top-h) */
 #ed-left { left: 0; top: var(--ed-top-h, 46px); bottom: 0; width: 224px;
@@ -115,6 +116,7 @@ export class EditorUI {
         <button id="ed-cover" data-ed-key="cover">${et('cover')}</button>
         <button id="ed-nav" data-ed-key="nav">${et('nav')}</button>
         <button id="ed-path" data-ed-key="route">${et('route')}</button>
+        <button id="ed-charref" data-ed-key="charRefs" title="Personajes de referencia">${et('charRefs')}</button>
         <button id="ed-top-view" data-ed-key="topView">${et('topView')}</button>
         <span class="sep"></span>
         <button id="ed-save" data-ed-key="save">${et('save')}</button>
@@ -143,6 +145,18 @@ export class EditorUI {
           <button id="ed-open" data-ed-key="open" style="flex:1">${et('open')}</button>
           <button id="ed-delmap" data-ed-key="delete" class="danger" style="flex:1">${et('delete')}</button>
         </div>
+        <div style="display:flex;gap:4px;margin-top:4px">
+          <button id="ed-export" data-ed-key="export" style="flex:1">${et('export')}</button>
+          <button id="ed-import" data-ed-key="import" style="flex:1">${et('import')}</button>
+        </div>
+        <input type="file" id="ed-import-file" accept=".json,application/json" style="display:none">
+        <h4 data-ed-key="cloneMap">${et('cloneMap')}</h4>
+        <select id="ed-clone-src" style="width:100%"></select>
+        <div style="display:flex;gap:4px;margin-top:4px">
+          <button id="ed-clone" data-ed-key="clone" style="flex:1">${et('clone')}</button>
+          <button id="ed-decor" data-ed-key="decor" style="flex:1">${et('decor')}</button>
+        </div>
+        <div id="ed-base-note" style="font-size:9px;color:#73808b;margin-top:5px;display:none"></div>
         <h4 data-ed-key="library">${et('library')}</h4>
         <div class="lib" id="ed-lib"></div>
       </div>
@@ -238,9 +252,49 @@ export class EditorUI {
       });
     }
 
+    // clonar mapas reales del juego (los 6 layouts, incluidos los no públicos)
+    const cloneSrc = $('ed-clone-src');
+    cloneSrc.innerHTML = THEMES.map((id) => `<option value="${id}">${themeName(id)}</option>`).join('');
+    $('ed-clone').addEventListener('click', () => {
+      if (ed.dirty && !confirm(et('unsavedOpen'))) return;
+      ed.cloneLayout(cloneSrc.value);
+      this.refresh();
+    });
+    $('ed-decor').addEventListener('click', () => {
+      ed.setDecor(ed.map.decor === false);
+      this.refresh();
+    });
+    $('ed-charref').addEventListener('click', () => { ed.toggleCharRefs(); this.refresh(); });
+
+    // export/import a fichero: el JSON ES el formato del juego
+    $('ed-export').addEventListener('click', () => {
+      const out = ed.exportFile();
+      const problems = out.report.filter((r) => r.level !== 'ok').length;
+      if (!out.ok && !confirm(et('exportWarnings', { count: problems }))) return;
+      const blob = new Blob([out.json], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = out.filename;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      ed.setStatus(et('status.exported', { filename: out.filename }));
+    });
+    $('ed-import').addEventListener('click', () => $('ed-import-file').click());
+    $('ed-import-file').addEventListener('change', async (e) => {
+      const file = e.target.files?.[0];
+      e.target.value = '';
+      if (!file) return;
+      if (ed.dirty && !confirm(et('unsavedOpen'))) return;
+      ed.importFile(await file.text());
+      this.refresh();
+    });
+
     // biblioteca por grupos
     const lib = $('ed-lib');
-    const groups = [['gameplay', 'gameplay'], ['env', 'environment'], ['marker', 'markers']];
+    const groups = [
+      ['gameplay', 'gameplay'], ['env', 'environment'], ['assets', 'assets'],
+      ['editor', 'reference'], ['marker', 'markers'],
+    ];
     for (const [g, labelKey] of groups) {
       const h = document.createElement('h4');
       h.dataset.groupKey = labelKey;
@@ -298,11 +352,24 @@ export class EditorUI {
     $('ed-cover').classList.toggle('on', ed.showCover);
     $('ed-nav').classList.toggle('on', ed.showNav);
     $('ed-path').classList.toggle('on', !!ed.pathTest);
+    $('ed-charref').classList.toggle('on', ed.showCharRefs);
     $('ed-name').value = ed.map.name;
     for (const option of $('ed-theme').options) option.textContent = `${et('theme')}: ${themeName(option.value)}`;
+    for (const option of $('ed-clone-src').options) option.textContent = themeName(option.value);
     $('ed-theme').value = ed.map.theme;
     $('ed-fx').value = ed.map.fx;
     $('ed-fz').value = ed.map.fz;
+    // clon de un mapa real: tamaño y tema van atados al mapa base; DECOR
+    // enciende/apaga la decoración del builder original
+    const base = ed.map.base;
+    $('ed-fx').disabled = !!base;
+    $('ed-fz').disabled = !!base;
+    $('ed-theme').disabled = !!base;
+    $('ed-decor').style.display = base ? '' : 'none';
+    $('ed-decor').classList.toggle('on', !!base && ed.map.decor !== false);
+    const note = $('ed-base-note');
+    note.style.display = base ? '' : 'none';
+    if (base) note.textContent = et('baseLocked', { base: themeName(base) });
     $('ed-status').textContent = ed.status + (ed.dirty ? ` · ${et('unsaved')}` : '');
     $('ed-name').placeholder = et('name');
     $('ed-fx').title = et('halfWidth'); $('ed-fz').title = et('halfLength');
@@ -342,6 +409,8 @@ export class EditorUI {
         <option value="1.1">1.1 ${et('heightLow')}</option><option value="1.9">1.9 ${et('heightMid')}</option>
         <option value="3">3.0 ${et('heightHigh')}</option></select></div>`;
     } else if (o.h !== undefined) html += num('H', 'h');
+    if (piece?.t === 'urban') html += num('ESC', 'scale', 0.1) + num('Y', 'y');
+    if (piece?.t === 'special') html += num('Y', 'y');
     html += num('ROT', 'rot', piece?.t === 'box' ? 90 : (ed.snapRot || 15));
     if (piece?.t === 'box') {
       html += `<div style="font-size:10px;color:#6f7a85;margin-top:4px">
