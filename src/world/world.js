@@ -2443,9 +2443,11 @@ export class World {
         ['PHARMACY', 0x9c8173, 'pharmacy'], ['BAKERY', 0x92766c, 'bakery'], 0],
       [-12, 11.7, 7.3,
         ['GARAGE', 0x746967, 'garage'], ['ELECTRONICS', 0x66757b, 'electronics'], 1],
-      [0, 10.8, 8.1,
+      // Todos los edificios de dos pisos comparten la altura del bloque más
+      // bajo para que cornisas, ventanas y línea de cubierta queden alineadas.
+      [0, 10.8, 7.3,
         ['HARDWARE', 0x846f67, 'hardware'], ['BARBER SHOP', 0x756b68, 'barber'], 2],
-      [12, 11.7, 7.8,
+      [12, 11.7, 7.3,
         ['LAUNDRY', 0x776c68, 'laundry'], ['PAPER & INK', 0x7b7567, 'stationery'], 3],
       [24, 11.7, 9.35,
         ['MINI MARKET', 0x95796c, 'market'], ['CORNER CAFE', 0x876f66, 'cafe'], 4],
