@@ -136,14 +136,15 @@ function controlsGraph(scope) {
 
   // volumen e idioma viven ahora en sus propios cards de Opciones (Audio /
   // Idioma); aquí solo quedan sensibilidades e inversión de eje
-  const mouse = query(scope, '#sl-mouse'), stick = query(scope, '#sl-pad');
+  const mouse = query(scope, '#sl-mouse'), zoom = query(scope, '#sl-zoom');
+  const stick = query(scope, '#sl-pad');
   const invertMouse = query(scope, '#chk-invert'), invertPad = query(scope, '#chk-invert-pad');
   const reset = query(scope, '#btn-reset-binds'), back = query(scope, '#btn-back');
   if (kb.length) link(graph, kb.at(-1), 'down', mouse);
   if (pad.length) setRoute(graph, pad.at(-1), 'down', stick);
   // Izquierda/derecha en sliders y selectores modifica el valor, por eso el
   // cambio de columna sucede verticalmente y nunca roba un ajuste.
-  linkLine(graph, [mouse, stick], 'down');
+  linkLine(graph, [mouse, zoom, stick], 'down');
   setRoute(graph, stick, 'down', invertMouse);
   link(graph, invertMouse, 'right', invertPad);
   setRoute(graph, invertMouse, 'up', stick); setRoute(graph, invertPad, 'up', stick);

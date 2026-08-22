@@ -538,6 +538,16 @@ Object.assign(es, {
 });
 }
 
+// Ajuste compartido por mouse y stick únicamente dentro del scope del sniper.
+// Se añade al diccionario central, no como texto hardcodeado del panel.
+Object.assign(en, { 'menu.zoomSensitivity': 'ZOOMED SENS.' });
+Object.assign(es, { 'menu.zoomSensitivity': 'SENS. CON ZOOM' });
+Object.assign(pt, { 'menu.zoomSensitivity': 'SENS. COM ZOOM' });
+Object.assign(fr, { 'menu.zoomSensitivity': 'SENS. ZOOM' });
+Object.assign(ja, { 'menu.zoomSensitivity': 'ズーム感度' });
+Object.assign(it, { 'menu.zoomSensitivity': 'SENS. ZOOM' });
+Object.assign(zh, { 'menu.zoomSensitivity': '缩放灵敏度' });
+
 const DICTIONARIES = Object.freeze({ en, es, pt, fr, ja, it, zh });
 const valid = new Set(LANGUAGES.map((l) => l.code));
 const storage = typeof globalThis.localStorage !== 'undefined' ? globalThis.localStorage : null;

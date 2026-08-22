@@ -18,6 +18,7 @@
     "check:combat-orientation": "node scripts/check-combat-orientation.mjs",
     "check:online-fire": "node scripts/check-online-fire.mjs",
     "check:weapon-balance": "node scripts/check-weapon-balance.mjs",
+    "check:sniper": "node scripts/check-sniper-identity.mjs",
     "check:cover-fire": "node scripts/check-cover-fire.mjs",
     "check:blindfire": "node scripts/check-blindfire.mjs",
     "check:reticle": "node scripts/check-reticle.mjs",
@@ -32,7 +33,7 @@
     "check:mp-bot-special": "node scripts/check-mp-bot-special.mjs",
     "check:editor": "node scripts/check-editor.mjs",
     "check:editor-sanity": "node scripts/check-editor-sanity.mjs",
-    "test": "npm run check:controller && npm run check:menu-controller && npm run check:reload-cancel && npm run check:melee && npm run check:melee-net && npm run check:round-flow && npm run check:combat-orientation && npm run check:cover-fire && npm run check:impacts && npm run check:spatial-audio && npm run check:i18n && npm run check:shotgun-pattern && npm run check:warmup && npm run check:lobby && npm run check:online-map-items && npm run check:mp-bot-special && npm run check:online-fire && npm run check:weapon-balance"
+    "test": "npm run check:controller && npm run check:menu-controller && npm run check:reload-cancel && npm run check:melee && npm run check:melee-net && npm run check:round-flow && npm run check:combat-orientation && npm run check:cover-fire && npm run check:impacts && npm run check:spatial-audio && npm run check:i18n && npm run check:shotgun-pattern && npm run check:warmup && npm run check:lobby && npm run check:online-map-items && npm run check:mp-bot-special && npm run check:online-fire && npm run check:weapon-balance && npm run check:sniper"
   },
   "dependencies": {
     "lil-gui": "^0.20.0",

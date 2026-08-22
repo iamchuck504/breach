@@ -66,6 +66,7 @@ export const TUNING = {
   cam: {
     sens: 0.045,          // sensibilidad ratón (deg por pixel; ~360° en 20cm a 1000dpi)
     padSens: 170,         // sensibilidad stick derecho (deg por segundo a full)
+    zoomSens: 0.75,       // multiplicador adicional dentro del scope del sniper
     pitchMin: -62, pitchMax: 55,
     fovNormal: 57, fovRoadie: 57, fovAim: 41, // sin FOV kick al correr
     fovLerp: 9,
@@ -124,7 +125,9 @@ export const TUNING = {
     sniper: {
       nameKey: 'weapon.sniper', rpm: 34, dmg: 85, headMult: 2.2, // headshot letal
       mag: 1, reserve: 5, reloadTime: 1.7,
-      spreadAim: 0.06, spreadHip: 5.2, spreadBlind: 7.0,
+      // Dentro del scope, retícula y trayectoria son exactamente el mismo
+      // rayo. Hip/blindfire conservan la imprecisión propia del power weapon.
+      spreadAim: 0, spreadHip: 5.2, spreadBlind: 7.0,
       recoil: 2.4, range: 130, pellets: 1, auto: false,
       special: true,
       // mira telescópica: zoom real al apuntar (vs 41 normal). La cámara ya

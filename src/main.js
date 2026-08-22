@@ -15,6 +15,7 @@ import { Dummies } from './player/practice.js';
 import { Weapons } from './combat/weapons.js';
 import { resolveShot, resolveGuidedShot, applySpread, applyPelletPattern } from './combat/ballistics.js';
 import { damageFalloff, rocketSplashDamage } from './combat/damage.js';
+import { deathImpactPoint, isSniperHeadshotDeath } from './combat/death-reactions.js';
 import { muzzleHasClearance, segmentsHaveClearance } from './combat/cover-fire.js';
 import { requiredFireBuffer } from './combat/fire-control.js';
 import { Effects } from './fx/effects.js';
@@ -107,6 +108,7 @@ resize();
 
 // ---------- estado de juego ----------
 const G = {
+  scopeActive: false,    // estado derivado expuesto para HUD/diagnósticos
   fireBuffer: 0,       // click de disparo pendiente mientras el cuerpo gira
   pendingShots: 0,     // tiros aprobados que esperan la pose/muzzle de este frame
   pendingThrows: 0,    // granadas aprobadas que esperan la pose de este frame
@@ -495,6 +497,8 @@ loadBinds();
   if (sm > 0) TUNING.cam.sens = Math.min(0.12, Math.max(0.01, sm));
   const sp = parseFloat(localStorage.getItem('breach.sens.pad'));
   if (sp > 0) TUNING.cam.padSens = Math.min(320, Math.max(60, sp));
+  const sz = parseFloat(localStorage.getItem('breach.sens.zoom'));
+  if (sz > 0) TUNING.cam.zoomSens = Math.min(1.25, Math.max(0.35, sz));
 }
 
 const inName = document.getElementById('in-name');
@@ -951,6 +955,8 @@ const slMouse = document.getElementById('sl-mouse');
 const slMouseV = document.getElementById('sl-mouse-v');
 const slPad = document.getElementById('sl-pad');
 const slPadV = document.getElementById('sl-pad-v');
+const slZoom = document.getElementById('sl-zoom');
+const slZoomV = document.getElementById('sl-zoom-v');
 const slVol = document.getElementById('sl-vol');
 const slVolV = document.getElementById('sl-vol-v');
 const chkInvert = document.getElementById('chk-invert');
@@ -1013,6 +1019,7 @@ function showControls(on) {
     renderBinds();
     slMouse.value = TUNING.cam.sens;
     slPad.value = TUNING.cam.padSens;
+    slZoom.value = TUNING.cam.zoomSens;
     chkInvert.checked = input.invertY;
     chkInvertPad.checked = input.invertYPad;
     updateSliderLabels();
@@ -1200,6 +1207,7 @@ document.getElementById('btn-reset-binds').addEventListener('click', () => { res
 function updateSliderLabels() {
   slMouseV.textContent = Number(slMouse.value).toFixed(3);
   slPadV.textContent = slPad.value + '°/s';
+  slZoomV.textContent = Math.round(Number(slZoom.value) * 100) + '%';
   slVolV.textContent = Math.round(audio.volume * 100) + '%';
 }
 slMouse.addEventListener('input', () => {
@@ -1210,6 +1218,11 @@ slMouse.addEventListener('input', () => {
 slPad.addEventListener('input', () => {
   TUNING.cam.padSens = parseFloat(slPad.value);
   localStorage.setItem('breach.sens.pad', slPad.value);
+  updateSliderLabels();
+});
+slZoom.addEventListener('input', () => {
+  TUNING.cam.zoomSens = parseFloat(slZoom.value);
+  localStorage.setItem('breach.sens.zoom', slZoom.value);
   updateSliderLabels();
 });
 slVol.addEventListener('input', () => {
@@ -1438,15 +1451,20 @@ function damagePlayerLocal(dmg, fromName, shooter, hitCtx = null) {
   if (G.selfHp <= 0) {
     G.selfHp = 0;
     G.selfAlive = false;
+    const sniperHeadshot = isSniperHeadshotDeath(hitCtx);
+    const impactPoint = deathImpactPoint(hitCtx, {
+      x: G.player.pos.x, y: G.player.y, z: G.player.pos.z,
+    });
+    const impact = shooter
+      ? { x: G.player.pos.x - shooter.x, z: G.player.pos.z - shooter.z }
+      : null;
     G.weapons.cancelActions();
     // morir a mitad del lanzamiento: el bote NO sale de una mano muerta
     G.throwT = 0; G.throwPending = false; G.pendingThrows = 0;
     // contexto físico de la muerte ANTES de matar (kill() borra la velocidad):
     // dirección del tiro, potencia del golpe final, momentum y estado
     G.rig.setDeathContext({
-      impact: shooter
-        ? { x: G.player.pos.x - shooter.x, z: G.player.pos.z - shooter.z }
-        : null,
+      impact,
       power: Math.min(1, dmg / 55),
       vel: { x: G.player.vel.x, z: G.player.vel.z },
       state: G.player.animState(),
@@ -1454,8 +1472,13 @@ function damagePlayerLocal(dmg, fromName, shooter, hitCtx = null) {
       distance: hitCtx?.distance,
       damage: hitCtx?.damage ?? dmg,
       part: hitCtx?.part,
+      point: impactPoint,
+      sniperHeadshot,
       gib: !!hitCtx?.gib,
     });
+    if (sniperHeadshot) {
+      effects.sniperHeadshot(impactPoint, TEAM_HEX[G.team], impact, G.player.y);
+    }
     G.player.kill();
     enterSpectator();
     audio.death();
@@ -2011,21 +2034,45 @@ function bindNet(net) {
     const isSelf = m.target === net.id;
     const hostedVictim = G.onlineBots?.botById(m.target);
     const victim = isSelf ? null : G.remotes.get(m.target);
+    // `hs` solo lo produce el servidor después de validar arma, zona y
+    // letalidad. El cliente nunca predice/desmiembra un headshot online.
+    const sniperHeadshot = !!m.hs && isSniperHeadshotDeath(m.w, m.part);
+    const killer = m.from === net.id
+      ? { x: G.player.pos.x, z: G.player.pos.z }
+      : (() => {
+        const k = G.remotes.get(m.from) || G.onlineBots?.botById(m.from)?.pos;
+        return k ? { x: k.x, z: k.z } : null;
+      })();
+    const deathCtx = {
+      weapon: m.w, distance: m.dist, damage: m.dmg, part: m.part,
+      point: m.p, sniperHeadshot, gib: !!m.gib,
+    };
     // sin víctima conocida y no soy yo: solo killfeed (el fallback anterior
     // reventaba la sangre encima del jugador local)
     if (victim || isSelf) {
-      const pos = victim ? { x: victim.x, z: victim.z } : G.player.pos;
+      const pos = victim
+        ? { x: victim.x, y: victim.y || 0, z: victim.z }
+        : { x: G.player.pos.x, y: G.player.y || 0, z: G.player.pos.z };
       const vteam = victim ? victim.team : G.team;
-      if (m.gib) effects.gib(new THREE.Vector3(pos.x, 0, pos.z), TEAM_HEX[vteam]);
+      const impact = killer ? { x: pos.x - killer.x, z: pos.z - killer.z } : null;
+      if (sniperHeadshot) {
+        effects.sniperHeadshot(deathImpactPoint(deathCtx, pos), TEAM_HEX[vteam], impact, pos.y);
+      } else if (m.gib) effects.gib(new THREE.Vector3(pos.x, pos.y, pos.z), TEAM_HEX[vteam]);
       else effects.blood(new THREE.Vector3(pos.x, 1, pos.z), TEAM_HEX[vteam]);
     }
     if (hostedVictim) {
       const attacker = m.from === net.id ? G.player?.pos : (G.onlineBots?.botById(m.from)?.pos || G.remotes.get(m.from));
       G.onlineBots.killExternal(m.target, {
         impact: attacker ? { x: hostedVictim.pos.x - attacker.x, z: hostedVictim.pos.z - attacker.z } : null,
-        weapon: m.w, distance: m.dist, damage: m.dmg, part: m.part, gib: !!m.gib,
+        ...deathCtx,
       });
-      if (m.gib) effects.gib(new THREE.Vector3(hostedVictim.pos.x, hostedVictim.y, hostedVictim.pos.z), TEAM_HEX[hostedVictim.team]);
+      const hostedPos = { x: hostedVictim.pos.x, y: hostedVictim.y || 0, z: hostedVictim.pos.z };
+      const hostedImpact = attacker
+        ? { x: hostedPos.x - attacker.x, z: hostedPos.z - attacker.z }
+        : null;
+      if (sniperHeadshot) {
+        effects.sniperHeadshot(deathImpactPoint(deathCtx, hostedPos), TEAM_HEX[hostedVictim.team], hostedImpact, hostedPos.y);
+      } else if (m.gib) effects.gib(new THREE.Vector3(hostedPos.x, hostedPos.y, hostedPos.z), TEAM_HEX[hostedVictim.team]);
       else effects.blood(new THREE.Vector3(hostedVictim.pos.x, hostedVictim.y + 1, hostedVictim.pos.z), TEAM_HEX[hostedVictim.team]);
     }
     hud.kill(m.kn, m.kt, m.vn, m.vt);
@@ -2034,12 +2081,6 @@ function bindNet(net) {
     if (killerRow) { killerRow.kills++; killerRow.score = killerRow.kills * 100; }
     if (victimRow) victimRow.deaths++;
     // contexto físico para el ragdoll (dirección del tiro + momentum previo)
-    const killer = m.from === net.id
-      ? { x: G.player.pos.x, z: G.player.pos.z }
-      : (() => {
-        const k = G.remotes.get(m.from) || G.onlineBots?.botById(m.from)?.pos;
-        return k ? { x: k.x, z: k.z } : null;
-      })();
     if (victim) {
       victim.alive = false; // cycling spectator no espera al siguiente snapshot
       // velocidad aproximada del remoto desde sus últimos snapshots
@@ -2052,14 +2093,10 @@ function bindNet(net) {
       }
       victim.rig.setDeathContext({
         impact: killer ? { x: victim.x - killer.x, z: victim.z - killer.z } : null,
-        power: m.gib || m.w === 'melee' ? 1 : 0.6,
+        power: m.gib || m.w === 'melee' ? 1 : sniperHeadshot ? 0.95 : 0.6,
         vel: rv,
         state: victim.st,
-        weapon: m.w,
-        distance: m.dist,
-        damage: m.dmg,
-        part: m.part,
-        gib: !!m.gib,
+        ...deathCtx,
       });
     }
     if (m.target === net.id) {
@@ -2067,14 +2104,10 @@ function bindNet(net) {
       G.weapons.cancelActions();
       G.rig.setDeathContext({
         impact: killer ? { x: G.player.pos.x - killer.x, z: G.player.pos.z - killer.z } : null,
-        power: m.gib || m.w === 'melee' ? 1 : 0.6,
+        power: m.gib || m.w === 'melee' ? 1 : sniperHeadshot ? 0.95 : 0.6,
         vel: { x: G.player.vel.x, z: G.player.vel.z },
         state: G.player.animState(),
-        weapon: m.w,
-        distance: m.dist,
-        damage: m.dmg,
-        part: m.part,
-        gib: !!m.gib,
+        ...deathCtx,
       });
       G.player.kill();
       enterSpectator();
@@ -2650,9 +2683,20 @@ function backWeapon() {
   return w.cur === w.slots[1] ? w.slots[0] : w.slots[1];
 }
 
+// Única fuente de verdad del scope. Es derivado, no un toggle: cualquier
+// acción incompatible lo apaga en ese mismo frame y nunca puede quedar
+// pegado después de cambiar arma, morir, golpear o entrar a spectator.
+function sniperScopeActive() {
+  const p = G.player, w = G.weapons;
+  return !!(G.mode && p && w && G.selfAlive && !p.dead && p.aim &&
+    w.cur === 'sniper' && !w.swapping && p.state !== 'melee' &&
+    !G.spectator.active && !matchControlsLocked() && !menuIsOpen());
+}
+
 function fireShot() {
   const w = G.weapons, def = w.def;
   const aiming = G.player.aim;
+  const scoped = sniperScopeActive();
   const inCover = G.player.state === 'cover';
   const spread = aiming ? def.spreadAim : (inCover ? def.spreadBlind : def.spreadHip);
 
@@ -2701,7 +2745,9 @@ function fireShot() {
   for (let i = 0; i < def.pellets; i++) {
     let dir = def.pellets > 1
       ? applyPelletPattern(baseDir, spread, i, def.pellets)
-      : applySpread(baseDir, spread);
+      // El scope promete exactamente su punto. Fuera del scope (incluido
+      // hip/blindfire del sniper) se conserva la dispersión configurada.
+      : scoped ? baseDir.clone() : applySpread(baseDir, spread);
     const hit = aiming
       ? resolveGuidedShot(world, targets, cameraOrigin, origin, dir, def.range, null)
       : resolveShot(world, targets, origin, dir, def.range, null);
@@ -2749,8 +2795,10 @@ function fireShot() {
       hitSomeone = true;
       effects.blood(e.point, TEAM_HEX.blue);
       const killed = G.dummies.damage(id, e.dmg, (d) => {
+        const sniperHeadshot = isSniperHeadshotDeath(w.cur, e.part);
+        const impact = { x: d.x - G.player.pos.x, z: d.z - G.player.pos.z };
         d.rig.setDeathContext({
-          impact: { x: d.x - G.player.pos.x, z: d.z - G.player.pos.z },
+          impact,
           power: Math.min(1, e.dmg / 55),
           vel: { x: 0, z: 0 },
           state: 'run',
@@ -2758,18 +2806,22 @@ function fireShot() {
           distance: e.dist,
           damage: e.dmg,
           part: e.part,
+          point: e.point,
+          sniperHeadshot,
           gib,
         });
         G.scores.red++;
         hud.score(G.scores.red, G.scores.blue);
         hud.kill(G.name, 'red', d.name, 'blue');
         audio.kill();
-        if (gib) effects.gib(new THREE.Vector3(d.x, 0, d.z), TEAM_HEX.blue);
+        if (sniperHeadshot) effects.sniperHeadshot(e.point, TEAM_HEX.blue, impact);
+        else if (gib) effects.gib(new THREE.Vector3(d.x, 0, d.z), TEAM_HEX.blue);
       });
       if (!killed) audio.hit();
     } else if (G.mode === 'bots' && G.botMatch) {
       const killed = G.botMatch.damageBot(id, e.dmg, 'player', gib, false, {
-        weapon: w.cur, distance: e.dist, damage: e.dmg, part: e.part, gib,
+        weapon: w.cur, distance: e.dist, damage: e.dmg, part: e.part,
+        point: e.point, gib,
       });
       if (killed === null) continue; // protegido o inválido: sin feedback falso
       hitSomeone = true;
@@ -2802,10 +2854,11 @@ function fireShot() {
 // ---------- retícula de cañón (shoot from the barrel) ----------
 function updateReticle() {
   const p = G.player;
+  const scoped = sniperScopeActive();
   const canShow = p && !p.dead && G.mode && !menuIsOpen() &&
     p.state !== 'roadie' && p.state !== 'dive' && p.state !== 'slide' &&
     p.state !== 'melee';
-  if (!canShow) { hud.reticle(false, null); return; }
+  if (!canShow) { hud.reticle(false, null); hud.sniperScope(false); return; }
 
   // shoulderCam.update cambia position/rotation antes de llegar aquí, pero
   // renderer.render actualiza matrices DESPUÉS. Proyectar sin esto usaba la
@@ -2830,9 +2883,18 @@ function updateReticle() {
       : resolveGuidedShot(world, currentTargets(), ray.origin, muzzle,
         ray.dir, def.range, null);
     _v3.copy(hit.point).project(camera);
-    if (_v3.z > 1) { hud.reticle(false, null); return; }
+    if (_v3.z > 1) { hud.reticle(false, null); hud.sniperScope(false); return; }
     const tx = (_v3.x * 0.5 + 0.5) * innerWidth;
     const ty = (-_v3.y * 0.5 + 0.5) * innerHeight;
+    if (scoped) {
+      hud.reticle(false, null);
+      hud.sniperScope(true, { x: tx, y: ty }, {
+        inRange: guideT <= def.range,
+        blocked: Math.hypot(tx - innerWidth * 0.5, ty - innerHeight * 0.5) > 7,
+      });
+      return;
+    }
+    hud.sniperScope(false);
     hud.reticle(true, { x: tx, y: ty }, {
       r: Math.min(190, ringPx),
       inRange: guideT <= def.range,
@@ -2843,11 +2905,12 @@ function updateReticle() {
   // Hip/blind: proyectar el MISMO rayo central que usa fireShot. Sin smoothing:
   // al girar rápido, una retícula atrasada también comunica un impacto falso.
   const dir = hipDir();
+  hud.sniperScope(false);
   G.rig.root.updateWorldMatrix(true, true);
   const origin = G.rig.muzzleWorld(_v1);
   const t = staticHitDistance(origin, dir, 60);
   _v3.copy(origin).addScaledVector(dir, t).project(camera);
-  if (_v3.z > 1) { hud.reticle(false, null); return; }
+  if (_v3.z > 1) { hud.reticle(false, null); hud.sniperScope(false); return; }
   const tx = (_v3.x * 0.5 + 0.5) * innerWidth;
   const ty = (-_v3.y * 0.5 + 0.5) * innerHeight;
   hud.reticle(false, { x: tx, y: ty });
@@ -3282,6 +3345,9 @@ function frame(now) {
   if (menuOpen) input.consumeEdges();
 
   if (G.mode && G.player) {
+    // El input de cámara de este frame usa el estado scoped ya válido del
+    // frame anterior; tras simStep se recalcula para cámara/HUD sin latencia.
+    shoulderCam.setScoped(sniperScopeActive());
     if (!menuOpen) {
       const spectatorLocked = G.spectator.active;
       if (!spectatorLocked && (input.locked || input.lockDisabled)) shoulderCam.applyMouse(input.mouseDX, input.mouseDY, input.invertY);
@@ -3315,9 +3381,12 @@ function frame(now) {
     const flowView = activePresentation(Date.now() / 1000);
     updatePresentationAudio(flowView);
     hud.presentation(flowView);
-    // zoom de apuntado del arma en mano (la mira del sniper cierra a 20°);
-    // durante el cambio manda el arma que YA está en la mano
-    shoulderCam.setAimFov(G.weapons.def.fovAim);
+    const scopeNow = sniperScopeActive();
+    G.scopeActive = scopeNow; // diagnóstico/tests; sigue siendo estado derivado
+    shoulderCam.setScoped(scopeNow);
+    // El sniper usa 20° solo durante un scope realmente válido. Al iniciar
+    // swap/melee vuelve de inmediato al ADS estándar aunque LT siga pulsado.
+    shoulderCam.setAimFov(scopeNow ? G.weapons.def.fovAim : TUNING.cam.fovAim);
     if (flowView && flowView.phase !== 'countdown') updateMatchCamera(now, flowView);
     else if (G.spectator.active) updateSpectatorCamera(dt, now);
     else shoulderCam.update(dt, G.player);
@@ -3383,8 +3452,12 @@ function frame(now) {
     } else if (G.mode === 'online') {
       hud.scoreboard(!flowView && input.scoreHeld && !menuOpen ? G.onlineRows : null, G.net?.id);
     }
-    if (flowView) hud.reticle(false, null);
+    if (flowView) { hud.reticle(false, null); hud.sniperScope(false); }
     else updateReticle();
+  } else {
+    G.scopeActive = false;
+    shoulderCam.setScoped(false);
+    hud.sniperScope(false);
   }
 
   effects.update(dt);

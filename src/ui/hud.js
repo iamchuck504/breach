@@ -9,6 +9,8 @@ export class HUD {
       hud: document.getElementById('hud'),
       crosshair: document.getElementById('crosshair'),
       crossRing: document.getElementById('cross-ring'),
+      sniperScope: document.getElementById('sniper-scope'),
+      scopeReticle: document.getElementById('scope-reticle'),
       barrel: document.getElementById('barrel-dot'),
       vignette: document.getElementById('vignette'),
       hitmarker: document.getElementById('hitmarker'),
@@ -318,6 +320,28 @@ export class HUD {
     } else {
       this.el.barrel.classList.remove('on');
     }
+  }
+
+  // La máscara es fija, pero la cruz representa el punto que la trayectoria
+  // física desde el muzzle realmente alcanzará. Cerca de una esquina puede
+  // moverse y ponerse naranja: el scope nunca promete atravesar geometría.
+  sniperScope(on, impactXY = null, info = null) {
+    const root = this.el.sniperScope;
+    const reticle = this.el.scopeReticle;
+    if (!root || !reticle) return;
+    root.classList.toggle('on', !!on);
+    root.setAttribute('aria-hidden', on ? 'false' : 'true');
+    this.el.hud.classList.toggle('scoped', !!on);
+    if (!on) {
+      reticle.classList.remove('blocked', 'out-range');
+      reticle.style.left = '50%';
+      reticle.style.top = '50%';
+      return;
+    }
+    reticle.style.left = (impactXY?.x ?? innerWidth * 0.5) + 'px';
+    reticle.style.top = (impactXY?.y ?? innerHeight * 0.5) + 'px';
+    reticle.classList.toggle('blocked', !!info?.blocked);
+    reticle.classList.toggle('out-range', info?.inRange === false);
   }
 
   kill(killerName, killerTeam, victimName, victimTeam) {

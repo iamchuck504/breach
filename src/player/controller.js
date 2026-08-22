@@ -337,7 +337,8 @@ export class Controller {
     const mw = this._moveWorld(input);
     const hasInput = mw.mag > 0.1;
     const aimAllowed = this.state !== 'dive' && this.state !== 'slide' &&
-      this.state !== 'roadie' && this.state !== 'flip' && this.state !== 'mantle';
+      this.state !== 'roadie' && this.state !== 'flip' && this.state !== 'mantle' &&
+      this.state !== 'melee';
     this.aim = input.aimHeld && aimAllowed;
     const lowCoverAim = this.state === 'cover' && this.aim && this.cover &&
       this.cover.h <= C.lowHeight;

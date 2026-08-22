@@ -19,12 +19,14 @@ export class ShoulderCamera {
     this._tmp = new THREE.Vector3();
     this._first = true;
     this._side = 1; // hombro actual: 1 = derecho, -1 = izquierdo (suavizado)
+    this._scoped = false;
   }
 
   applyMouse(dx, dy, invertY) {
     // escala por FOV: al apuntar (FOV cerrado) la sensibilidad baja proporcionalmente,
     // Sensibilidad de apuntado derivada del zoom real.
-    const s = TUNING.cam.sens * DEG * (this.fov / TUNING.cam.fovNormal);
+    const zoomScale = this._scoped ? TUNING.cam.zoomSens : 1;
+    const s = TUNING.cam.sens * DEG * (this.fov / TUNING.cam.fovNormal) * zoomScale;
     this.yaw -= dx * s;
     this.pitch += (invertY ? dy : -dy) * s;
     const c = TUNING.cam;
@@ -35,7 +37,8 @@ export class ShoulderCamera {
 
   // stick derecho del gamepad (valores -1..1 ya con curva), escala por FOV
   applyStick(cx, cy, dt, invertY) {
-    const s = TUNING.cam.padSens * DEG * dt * (this.fov / TUNING.cam.fovNormal);
+    const zoomScale = this._scoped ? TUNING.cam.zoomSens : 1;
+    const s = TUNING.cam.padSens * DEG * dt * (this.fov / TUNING.cam.fovNormal) * zoomScale;
     this.yaw -= cx * s;
     this.pitch += (invertY ? cy : -cy) * s;
     const c = TUNING.cam;
@@ -49,6 +52,10 @@ export class ShoulderCamera {
   // FOV de apuntado del arma actual (el sniper cierra más que el resto).
   // Lo inyecta main cada frame; null = valor global de TUNING.
   setAimFov(fov) { this._aimFov = fov ?? null; }
+
+  // Estado derivado por main: no queda latcheado al arma y por eso se apaga
+  // en el primer frame de swap, melee, muerte, spectator o pausa.
+  setScoped(on) { this._scoped = !!on; }
 
   update(dt, player) {
     const c = TUNING.cam;

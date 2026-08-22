@@ -235,7 +235,8 @@ export class Effects {
     }, (obj) => pool.release(obj));
   }
 
-  _burst(pos, count, color, speed, size, ttl, gravity = 9, normal = null) {
+  _burst(pos, count, color, speed, size, ttl, gravity = 9, normal = null, floorY = 0) {
+    const floor = Number.isFinite(floorY) ? floorY + 0.02 : 0.02;
     const geo = new THREE.BufferGeometry();
     const arr = new Float32Array(count * 3);
     const vels = [];
@@ -259,7 +260,7 @@ export class Effects {
       for (let i = 0; i < count; i++) {
         vels[i].y -= gravity * dt;
         p.array[i * 3] += vels[i].x * dt;
-        p.array[i * 3 + 1] = Math.max(0.02, p.array[i * 3 + 1] + vels[i].y * dt);
+        p.array[i * 3 + 1] = Math.max(floor, p.array[i * 3 + 1] + vels[i].y * dt);
         p.array[i * 3 + 2] += vels[i].z * dt;
       }
       p.needsUpdate = true;
@@ -278,6 +279,57 @@ export class Effects {
     else this._burst(pos, 5, 0xb8bec0, 2.4, 0.05, 0.3, 7, normal);
   }
   blood(pos, teamColor) { this._burst(pos, 10, teamColor, 2.6, 0.07, 0.4); }
+  // Remate exclusivo del sniper a la cabeza: sangre concentrada a la altura
+  // real del impacto + fragmentos pequeños de casco. Es deliberadamente más
+  // localizado que gib(), que representa daño destructivo de cuerpo completo.
+  sniperHeadshot(pos, teamColor, direction = null, floorY = 0) {
+    const origin = new THREE.Vector3(pos.x, pos.y, pos.z);
+    const floor = (Number.isFinite(floorY) ? floorY : 0) + 0.04;
+    let dir = null;
+    if (direction && Number.isFinite(direction.x) && Number.isFinite(direction.z)) {
+      dir = new THREE.Vector3(direction.x, direction.y ?? 0.08, direction.z);
+      if (dir.lengthSq() > 0.001) dir.normalize();
+      else dir = null;
+    }
+    this._burst(origin, 18, 0x7a2028, 4.8, 0.085, 0.58, 10, dir, floorY);
+    this._burst(origin, 9, teamColor, 5.4, 0.065, 0.5, 11, dir, floorY);
+    for (let i = 0; i < 8; i++) {
+      const c = i % 3 === 0 ? teamColor : (i % 3 === 1 ? 0x343941 : 0x606771);
+      let mat = this._gibMats.get(c);
+      if (!mat) {
+        mat = new THREE.MeshLambertMaterial({ color: c });
+        mat.userData.shared = true;
+        this._gibMats.set(c, mat);
+      }
+      const shard = new THREE.Mesh(this._gibGeo, mat);
+      const size = 0.035 + Math.random() * 0.055;
+      shard.scale.set(size * (0.7 + Math.random() * 0.8), size, size * 0.65);
+      const baseScale = shard.scale.clone();
+      shard.position.copy(origin);
+      shard.castShadow = true;
+      const vel = new THREE.Vector3(
+        (Math.random() - 0.5) * 4.8,
+        1.4 + Math.random() * 3.8,
+        (Math.random() - 0.5) * 4.8,
+      );
+      if (dir) vel.addScaledVector(dir, 2.4 + Math.random() * 1.5);
+      const rot = new THREE.Vector3(Math.random() * 11, Math.random() * 11, Math.random() * 11);
+      this._add(shard, 0.9, (it, dt) => {
+        vel.y -= 15 * dt;
+        it.obj.position.addScaledVector(vel, dt);
+        if (it.obj.position.y < floor) {
+          it.obj.position.y = floor;
+          vel.y *= -0.22; vel.x *= 0.62; vel.z *= 0.62;
+        }
+        it.obj.rotation.x += rot.x * dt;
+        it.obj.rotation.y += rot.y * dt;
+        if (it.life > it.ttl * 0.68) {
+          const fade = Math.max(0.02, 1 - (it.life - it.ttl * 0.68) / (it.ttl * 0.32));
+          it.obj.scale.copy(baseScale).multiplyScalar(fade);
+        }
+      });
+    }
+  }
   meleeImpact(pos, teamColor, direction = null) {
     // Contacto compacto: destello cálido + partículas del color de la víctima.
     // Es deliberadamente menor que una explosión y no deja decal de bala.
@@ -358,6 +410,7 @@ export class Effects {
     this.impact(p, n, 'concrete');
     this.impact(q, n, 'metal');
     this.blood(p, 0xd94f3f);
+    this.sniperHeadshot(q, 0x4f8de0, n);
     this.meleeImpact(q, 0x4f8de0, n);
     this.dust(q);
     if (renderer.compileAsync) await renderer.compileAsync(this.scene, camera);

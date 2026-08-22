@@ -10,6 +10,7 @@
 import * as THREE from 'three';
 import { TUNING } from '../config/tuning.js';
 import { coverAimPose, coverBlindPose } from '../combat/cover-fire.js';
+import { isSniperHeadshotDeath } from '../combat/death-reactions.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
@@ -784,6 +785,14 @@ export class Rig {
   }
 
   _applyContextualDamage(ctx, impactSide) {
+    // El sniper solo entrega este contexto cuando el impacto de cabeza ya fue
+    // confirmado como letal (localmente o por el servidor). Ocultar el grupo
+    // completo conserva exactamente la misma hitbox/esqueleto del ragdoll,
+    // pero elimina casco, visor y cabeza como una sola pieza coherente.
+    if (isSniperHeadshotDeath(ctx)) {
+      this._hideDeathPart(this.head);
+      return;
+    }
     const strongShotgun = !!ctx.gib && (!ctx.weapon || ctx.weapon === 'shotgun');
     if (!strongShotgun) return;
     const part = ctx.part === 'head' ? 'head' : 'body';
@@ -905,7 +914,7 @@ export class Rig {
       axis, angTarget,
       tilt: (imp ? side * 0.3 : rnd(-0.3, 0.3)) + rnd(-0.08, 0.08),
       spin: evading ? rnd(-0.9, 0.9) : imp ? -side * rnd(0.25, 0.5) : rnd(-0.4, 0.4),
-      severe: !!ctx.gib,
+      severe: !!ctx.gib || isSniperHeadshotDeath(ctx),
       pose: [
         rnd(-0.08, 0.16), rnd(-0.22, 0.22), rnd(0.34, 0.66), rnd(-0.58, 0.58),
         rnd(0.08, 0.42), rnd(0.82, 1.18), rnd(0.12, 0.4),

@@ -46,6 +46,24 @@
   #crosshair.aim { display: block; }
   #crosshair svg { position: absolute; left: -200px; top: -200px; display: block; }
 
+  /* Scope del sniper: zoom real lo hace la cámara; esto únicamente aporta
+     máscara óptica y una retícula que sigue el impacto físico del muzzle. */
+  #sniper-scope { position: fixed; inset: 0; z-index: 2; display: none;
+    background: radial-gradient(circle at 50% 50%, rgba(11,17,21,.04) 0 42.6vmin,
+      rgba(5,8,11,.88) 43vmin, rgba(2,4,6,.985) 44vmin 100%); }
+  #sniper-scope.on { display: block; animation: scope-in .13s ease-out; }
+  #sniper-scope::before { content: ""; position: absolute; left: 50%; top: 50%;
+    width: 86vmin; height: 86vmin; transform: translate(-50%,-50%); border-radius: 50%;
+    border: 1px solid rgba(196,211,218,.34); box-shadow: inset 0 0 24px rgba(0,0,0,.28),
+    0 0 0 1px rgba(0,0,0,.72); }
+  #scope-reticle { position: fixed; left: 50%; top: 50%; width: 92px; height: 92px;
+    transform: translate(-50%,-50%); color: rgba(230,238,241,.94);
+    filter: drop-shadow(0 1px 2px rgba(0,0,0,.9)); }
+  #scope-reticle svg { width: 100%; height: 100%; overflow: visible; }
+  #scope-reticle.blocked { color: #ff8a3d; }
+  #scope-reticle.out-range { opacity: .48; }
+  @keyframes scope-in { from { opacity: 0; } to { opacity: 1; } }
+
   #barrel-dot { position: fixed; left: -100px; top: -100px; width: 14px; height: 14px;
     margin: -7px 0 0 -7px; display: none; }
   #barrel-dot.on { display: block; }
@@ -271,6 +289,7 @@
     font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
   .spec-respawn { color: #d9dde1; } .spec-respawn.ready { color: var(--accent); }
   #hud.spectating #weapon, #hud.spectating #crosshair, #hud.spectating #barrel-dot,
+  #hud.spectating #sniper-scope,
   #hud.spectating #context-hint { opacity: 0 !important; }
 
   /* cursor virtual: el juego mantiene el pointer lock en pausa y dibuja su
@@ -582,6 +601,16 @@
       <circle cx="200" cy="200" r="1.8" fill="#fff"/>
     </svg>
   </div>
+  <div id="sniper-scope" aria-hidden="true">
+    <div id="scope-reticle">
+      <svg viewBox="0 0 92 92" fill="none" stroke="currentColor" stroke-width="1.25">
+        <path d="M46 2v32M46 58v32M2 46h32M58 46h32"/>
+        <path d="M46 39v14M39 46h14" stroke-width="1.8"/>
+        <circle cx="46" cy="46" r="2.2"/>
+        <path d="M42 70h8M43 78h6M42 22h8M22 42v8M70 42v8" opacity=".62"/>
+      </svg>
+    </div>
+  </div>
   <div id="barrel-dot">
     <svg width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="none" stroke="#ff8a3d" stroke-width="1.3" opacity=".9"/><circle cx="7" cy="7" r="1.2" fill="#ff8a3d"/></svg>
   </div>
@@ -834,6 +863,7 @@
     <div class="tag" data-i18n="menu.dpadWeapons">D-PAD: ↑ GRENADE · ↓ PISTOL · ← SHOTGUN · → SMG</div>
     <div class="settings-grid">
       <div class="slider-row"><label for="sl-mouse" data-i18n="menu.mouseSensitivity">MOUSE SENS.</label><span class="val" id="sl-mouse-v"></span><input type="range" id="sl-mouse" min="0.01" max="0.12" step="0.005" /></div>
+      <div class="slider-row"><label for="sl-zoom" data-i18n="menu.zoomSensitivity">ZOOMED SENS.</label><span class="val" id="sl-zoom-v"></span><input type="range" id="sl-zoom" min="0.35" max="1.25" step="0.05" /></div>
       <div class="slider-row"><label for="sl-pad" data-i18n="menu.stickSensitivity">STICK SENS.</label><span class="val" id="sl-pad-v"></span><input type="range" id="sl-pad" min="60" max="320" step="10" /></div>
     </div>
     <div class="check-grid">

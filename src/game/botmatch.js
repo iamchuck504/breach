@@ -17,6 +17,7 @@ import { ROUND_FINISH_HOLD } from './match-flow.js';
 import { Rig, RAGDOLL_R } from '../player/rig.js';
 import { resolveShot, applySpread, applyPelletPattern } from '../combat/ballistics.js';
 import { damageFalloff } from '../combat/damage.js';
+import { deathImpactPoint, isSniperHeadshotDeath } from '../combat/death-reactions.js';
 import { t } from '../core/i18n.js';
 
 const ROUND_TIME = 300;      // 5 minutos
@@ -1797,7 +1798,7 @@ export class BotMatch {
       const gib = bot.wep === 'shotgun' && hitCtx.dist <= TUNING.weapons.shotgun.gibRange;
       const deathCtx = {
         weapon: bot.wep, distance: hitCtx.dist, damage: dmg,
-        part: hitCtx.part, gib,
+        part: hitCtx.part, point: hitCtx.point, gib,
       };
       if (this.external) {
         this.cb.botHit?.(bot, id, dmg, hitCtx.part, gib, hitCtx.point, {
@@ -1847,6 +1848,8 @@ export class BotMatch {
     if (!silent) this.cb.effects.blood(_v3.set(b.pos.x, b.y + 1, b.pos.z), TEAM_HEX[b.team]);
     if (b.hp <= 0) {
       b.alive = false;
+      const sniperHeadshot = isSniperHeadshotDeath(hitCtx);
+      const impactPoint = deathImpactPoint(hitCtx, { x: b.pos.x, y: b.y, z: b.pos.z });
       // contexto físico del ragdoll: de dónde vino el tiro final, con qué
       // fuerza (daño del golpe), y el momentum/estado que llevaba el bot
       b.rig.setDeathContext({
@@ -1858,9 +1861,18 @@ export class BotMatch {
         distance: hitCtx?.distance,
         damage: hitCtx?.damage ?? dmg,
         part: hitCtx?.part,
+        point: impactPoint,
+        sniperHeadshot,
         gib: !!gib,
       });
-      if (gib) this.cb.effects.gib(_v3.set(b.pos.x, b.y, b.pos.z), TEAM_HEX[b.team]);
+      if (sniperHeadshot) {
+        const direction = att
+          ? { x: b.pos.x - att.x, y: 0.1, z: b.pos.z - att.z }
+          : null;
+        this.cb.effects.sniperHeadshot(impactPoint, TEAM_HEX[b.team], direction, b.y);
+      } else if (gib) {
+        this.cb.effects.gib(_v3.set(b.pos.x, b.y, b.pos.z), TEAM_HEX[b.team]);
+      }
       this._onDeath(id, from, gib);
       return true;
     }
@@ -2057,11 +2069,12 @@ export class BotMatch {
     bot.alive = false;
     bot.rig.setDeathContext({
       impact: ctx.impact || null,
-      power: ctx.gib ? 1 : 0.6,
+      power: ctx.gib ? 1 : ctx.sniperHeadshot ? 0.95 : 0.6,
       vel: { x: bot.velX || 0, z: bot.velZ || 0 },
       state: bot.state === 'cover' ? (bot.cover?.low ? 'cover_low' : 'cover_high') : bot.state,
       weapon: ctx.weapon, distance: ctx.distance, damage: ctx.damage,
-      part: ctx.part, gib: !!ctx.gib,
+      part: ctx.part, point: ctx.point, sniperHeadshot: !!ctx.sniperHeadshot,
+      gib: !!ctx.gib,
     });
   }
 }

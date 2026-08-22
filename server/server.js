@@ -13,6 +13,7 @@ import {
 import { ROUND_FINISH_HOLD as DEFAULT_ROUND_FINISH_HOLD } from '../src/game/match-flow.js';
 import { TUNING } from '../src/config/tuning.js';
 import { damageFalloff, firearmDamage, rocketSplashDamage } from '../src/combat/damage.js';
+import { isSniperHeadshotDeath } from '../src/combat/death-reactions.js';
 
 const PORT = process.env.PORT || 8787;
 const HP = TUNING.combat.hp, REGEN_DELAY = TUNING.combat.regenDelay,
@@ -226,31 +227,90 @@ function registerFire(shooter, msg, isBotFire = false) {
     if (len > 0.001 && (dx * fx + dz * fz) / len < Math.cos(62 * Math.PI / 180)) return false;
   }
   const decals = Array.isArray(msg.d) ? msg.d.slice(0, 8).map(vec3).filter(Boolean) : undefined;
-  shooter.lastFireAt = now; shooter.pendingShot = { at: now, wep: weapon, origin: o, remainingDamage: rule.maxDamage, hitIds: new Set() };
+  const shotVec = [pt[0] - o[0], pt[1] - o[1], pt[2] - o[2]];
+  const shotLen = Math.hypot(shotVec[0], shotVec[1], shotVec[2]);
+  const shotDir = shotLen > 0.001
+    ? shotVec.map((v) => v / shotLen)
+    : null;
+  shooter.lastFireAt = now; shooter.pendingShot = {
+    at: now, wep: weapon, origin: o, endpoint: pt, direction: shotDir,
+    length: shotLen, remainingDamage: rule.maxDamage, hitIds: new Set(),
+  };
   shooter.prot = 0;
   broadcastRaw({ t: 'fire', id: shooter.id, o, p: pt, w: weapon, ...(decals ? { d: decals } : {}) }); return true;
 }
 
 const CROUCH_STATES = new Set(['cover_low', 'blind_over', 'blind_low_left', 'blind_low_right']);
+const HEAD_RADIUS = 0.22;
+const SNIPER_HEAD_AUTH_RADIUS = 0.58; // hitbox + margen breve de snapshot/red
+const SNIPER_ENDPOINT_EPSILON = 0.28;
+
+function targetHeadCenter(target) {
+  const crouched = CROUCH_STATES.has(target.st);
+  return [target.x, (target.y || 0) + (crouched ? 0.86 : 1.52), target.z];
+}
+
+function distance3(a, b) {
+  return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+}
+
+// El sniper es un solo rayo sin spread dentro del scope. Su claim de cabeza
+// debe pertenecer al mismo segmento que registró el disparo y ese segmento
+// debe pasar por el volumen real de la cabeza; no basta con enviar una Y alta.
+function sniperRayHitsHead(shot, point, head) {
+  if (!shot?.direction || !shot.endpoint || !Number.isFinite(shot.length)) return false;
+  if (distance3(point, shot.endpoint) > SNIPER_ENDPOINT_EPSILON) return false;
+  const rel = [head[0] - shot.origin[0], head[1] - shot.origin[1], head[2] - shot.origin[2]];
+  const along = rel[0] * shot.direction[0] + rel[1] * shot.direction[1] + rel[2] * shot.direction[2];
+  if (along < 0 || along > shot.length + SNIPER_HEAD_AUTH_RADIUS) return false;
+  const closest = [
+    shot.origin[0] + shot.direction[0] * along,
+    shot.origin[1] + shot.direction[1] * along,
+    shot.origin[2] + shot.direction[2] * along,
+  ];
+  return distance3(closest, head) <= SNIPER_HEAD_AUTH_RADIUS;
+}
 
 // El cliente comunica el punto visual, pero no decide el multiplicador. La Y
 // del impacto permite validar cabeza incluso con interpolación horizontal; el
 // radio amplio en XZ tolera los ~120 ms de snapshots sin regalar headshots por
 // impactos claramente situados en el torso.
-function validatedPart(target, claimedPart, point) {
+function validatedPart(target, claimedPart, point, shot = null) {
   if (claimedPart !== 'head' || !point) return 'body';
   const crouched = CROUCH_STATES.has(target.st);
   const relY = point[1] - (target.y || 0);
   const minY = crouched ? 0.66 : 1.30;
   const maxY = crouched ? 1.16 : 1.82;
   const horizontal = Math.hypot(point[0] - target.x, point[2] - target.z);
-  return relY >= minY && relY <= maxY && horizontal <= 1.25 ? 'head' : 'body';
+  if (relY < minY || relY > maxY || horizontal > 1.25) return 'body';
+  if (shot?.wep === 'sniper') {
+    const head = targetHeadCenter(target);
+    if (distance3(point, head) > SNIPER_HEAD_AUTH_RADIUS ||
+        !sniperRayHitsHead(shot, point, head)) return 'body';
+  }
+  return 'head';
+}
+
+// Nunca retransmitir el punto bruto del cliente fuera del cráneo: mantiene
+// sangre/fragmentos pegados al personaje aun con interpolación de red.
+function validatedDeathPoint(target, part, point) {
+  if (!point || part !== 'head') return point;
+  const head = targetHeadCenter(target);
+  const delta = [point[0] - head[0], point[1] - head[1], point[2] - head[2]];
+  const len = Math.hypot(delta[0], delta[1], delta[2]);
+  if (len < 0.001) return head;
+  const radius = Math.min(HEAD_RADIUS, len);
+  return [
+    head[0] + delta[0] / len * radius,
+    head[1] + delta[1] / len * radius,
+    head[2] + delta[2] / len * radius,
+  ];
 }
 
 function authoritativeDamage(shooter, target, shot, msg, dist) {
   const wep = shot.wep;
   const point = vec3(msg.p);
-  const part = validatedPart(target, msg.part, point);
+  const part = validatedPart(target, msg.part, point, shot);
   const botScale = shooter.bot && wep !== 'bazooka'
     ? TUNING.combat.botDamageScale
     : 1;
@@ -311,8 +371,15 @@ function registerHit(shooter, msg) {
   target.hp = 0; target.alive = false; target.deaths++;
   if (target.id !== shooter.id) shooter.kills++;
   const gib = shot.wep === 'shotgun' && dist <= FIRE_RULES.shotgun.gibRange && !!msg.gib;
-  broadcastRaw({ t: 'death', target: target.id, from: shooter.id, gib: gib ? 1 : 0, w: shot.wep,
+  // El servidor decide la reacción: nunca acepta un flag de headshot/gore
+  // enviado por el cliente. `part` ya fue recalculado por validatedPart y
+  // esta rama solo se alcanza después de confirmar la muerte.
+  const sniperHeadshot = isSniperHeadshotDeath(shot.wep, part);
+  const deathPoint = validatedDeathPoint(target, part, vec3(msg.p));
+  broadcastRaw({ t: 'death', target: target.id, from: shooter.id, gib: gib ? 1 : 0,
+    hs: sniperHeadshot ? 1 : 0, w: shot.wep,
     dist: +dist.toFixed(2), dmg: Math.round(dmg), part,
+    ...(deathPoint ? { p: deathPoint } : {}),
     kn: shooter.name, kt: shooter.team, vn: target.name, vt: target.team });
   dropWeapon(target);
   target.specialWep = null;

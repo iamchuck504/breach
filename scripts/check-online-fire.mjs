@@ -56,16 +56,24 @@ const firePacket = (peer, target) => ({
 });
 const hpOf = (snap, id) => snap.ps.find((p) => p.id === id)?.hp;
 
-let a, b;
+let a, b, c, d;
 try {
   await delay(700);
   a = await connect('AUDIT-A', 'create');
   b = await connect('AUDIT-B', 'join');
+  // Dos peers extra mantienen el lobby 2v2 y dejan una víctima independiente
+  // para validar el remate autoritativo del sniper sin esperar un respawn.
+  c = await connect('AUDIT-C', 'join');
+  d = await connect('AUDIT-D', 'join');
   send(a, { t: 'lobbyStart' });
   const match = await waitFor(a, (m) => m.t === 'matchStart');
   const matchB = await waitFor(b, (m) => m.t === 'matchStart');
+  const matchC = await waitFor(c, (m) => m.t === 'matchStart');
+  const matchD = await waitFor(d, (m) => m.t === 'matchStart');
   a.self = match.players.find((p) => p.id === a.welcome.id);
   b.self = matchB.players.find((p) => p.id === b.welcome.id);
+  c.self = matchC.players.find((p) => p.id === c.welcome.id);
+  d.self = matchD.players.find((p) => p.id === d.welcome.id);
   await waitFor(a, (m) => m.t === 'start');
 
   // El target rompe su protección para aislar la validación del atacante.
@@ -137,14 +145,69 @@ try {
   send(a, { t: 'hit', target: b.welcome.id, dmg: 1, part: 'body', gib: 1,
     pellets: 8, p: [bx, 1.0, bz] });
   const death = await waitFor(a, (m) => m.t === 'death' && m.target === b.welcome.id);
-  if (!death.gib || death.w !== 'shotgun' || death.part !== 'body' ||
+  if (!death.gib || death.hs !== 0 || death.w !== 'shotgun' || death.part !== 'body' ||
       death.dist > 4.2 || death.dmg !== 104) {
     throw new Error('contexto de muerte fuerte incompleto: ' + JSON.stringify(death));
   }
 
-  console.log('ONLINE FIRE OK · autoridad de hit y contexto de muerte fuerte validados');
+  // El power weapon de la ronda se reclama en su pedestal. El servidor debe
+  // validar la cabeza y publicar `hs=1` solo en la muerte letal; el cliente no
+  // puede inventar esta reacción visual.
+  send(a, { t: 's', x: 2.8, z: 0, y: 0, yaw: 0, st: 'idle', w: 'smg', am: 40, ar: 150 });
+  send(a, { t: 'takeSpecial' });
+  const special = await waitFor(a, (m) => m.t === 'specialTaken' && m.id === a.welcome.id);
+  if (special.wep !== 'sniper') throw new Error('round 1 no entregó sniper');
+
+  // Romper la protección del target y dejar transcurrir la cadencia global
+  // desde el disparo de escopeta anterior.
+  send(d, firePacket(d, a));
+  await delay(1550);
+  const dx = d.self.x, dz = d.self.z;
+  send(a, { t: 's', x: dx, z: dz - 4, y: 0, yaw: 0,
+    st: 'idle', w: 'sniper', am: 1, ar: 5 });
+  a.self.x = dx; a.self.z = dz - 4;
+  send(a, { t: 'fire', w: 'sniper', o: [dx, 1.1, dz - 4], p: [dx, 1.52, dz], d: [] });
+  send(a, { t: 'hit', target: d.welcome.id, dmg: 1, part: 'head', gib: 0,
+    p: [dx, 1.52, dz] });
+  const sniperDeath = await waitFor(a,
+    (m) => m.t === 'death' && m.target === d.welcome.id, 1800);
+  if (sniperDeath.hs !== 1 || sniperDeath.gib !== 0 ||
+      sniperDeath.w !== 'sniper' || sniperDeath.part !== 'head' ||
+      sniperDeath.dmg !== 187 || !Array.isArray(sniperDeath.p) ||
+      Math.hypot(sniperDeath.p[0] - dx, sniperDeath.p[1] - 1.52,
+        sniperDeath.p[2] - dz) > 0.23) {
+    throw new Error('headshot letal de sniper no fue autoritativo: ' + JSON.stringify(sniperDeath));
+  }
+
+  // El mismo cliente no puede registrar un rayo al torso y después mover el
+  // claim a la cabeza. Esperamos el respawn de B (muerto por la escopeta),
+  // rompemos su protección y comprobamos que el server lo degrada a body shot.
+  const bRespawn = await waitFor(a,
+    (m) => m.t === 'respawn' && m.id === b.welcome.id, 6500);
+  b.self = { ...b.self, ...bRespawn.spawn };
+  send(b, firePacket(b, a));
+  await delay(80);
+  const rx = b.self.x, rz = b.self.z;
+  send(a, { t: 's', x: rx, z: rz - 4, y: 0, yaw: 0,
+    st: 'idle', w: 'sniper', am: 1, ar: 4 });
+  a.self.x = rx; a.self.z = rz - 4;
+  await delay(80);
+  a.messages.length = 0;
+  send(a, { t: 'fire', w: 'sniper', o: [rx, 1.1, rz - 4], p: [rx, 1.0, rz], d: [] });
+  send(a, { t: 'hit', target: b.welcome.id, dmg: 999, part: 'head', gib: 0,
+    p: [rx, 1.52, rz] });
+  const spoofSnap = await waitFor(a,
+    (m) => m.t === 'snap' && hpOf(m, b.welcome.id) < 100, 1800);
+  if (hpOf(spoofSnap, b.welcome.id) !== 15 ||
+      a.messages.some((m) => m.t === 'death' && m.target === b.welcome.id)) {
+    throw new Error('claim de cabeza desconectado del rayo fue aceptado');
+  }
+
+  console.log('ONLINE FIRE OK · autoridad de hit, gore de escopeta y headshot sniper validados');
 } finally {
   a?.ws.close();
   b?.ws.close();
+  c?.ws.close();
+  d?.ws.close();
   server.kill();
 }
