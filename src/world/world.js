@@ -2436,7 +2436,10 @@ export class World {
     // Pares a 180°: la calle tiene barrios/negocios distintos, pero ambos
     // equipos conservan el mismo número de entradas y la misma lectura.
     const blocks = [
-      [-24, 11.7, 8.4,
+      // Los bloques con dos plantas residenciales necesitan altura completa:
+      // 3.02 m de local + 2.70 m por planta + remate de cubierta. Antes la
+      // cornisa superior quedaba prácticamente encima de las ventanas del 3.º.
+      [-24, 11.7, 9.25,
         ['PHARMACY', 0x9c8173, 'pharmacy'], ['BAKERY', 0x92766c, 'bakery'], 0],
       [-12, 11.7, 7.3,
         ['GARAGE', 0x746967, 'garage'], ['ELECTRONICS', 0x66757b, 'electronics'], 1],
@@ -2444,7 +2447,7 @@ export class World {
         ['HARDWARE', 0x846f67, 'hardware'], ['BARBER SHOP', 0x756b68, 'barber'], 2],
       [12, 11.7, 7.8,
         ['LAUNDRY', 0x776c68, 'laundry'], ['PAPER & INK', 0x7b7567, 'stationery'], 3],
-      [24, 11.7, 8.6,
+      [24, 11.7, 9.35,
         ['MINI MARKET', 0x95796c, 'market'], ['CORNER CAFE', 0x876f66, 'cafe'], 4],
     ];
     for (const [z, span, h, left, right, variant] of blocks) {
