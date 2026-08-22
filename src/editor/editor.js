@@ -102,12 +102,28 @@ export class MapEditor {
   // adjunta su carrocería; el usuario no tiene que borrar ni volver a clonar.
   _upgradeBaseDecor() {
     const previousVersion = this.map?.decorCaptureVersion ?? 0;
-    if (!this.map?.base || previousVersion >= 3) return false;
+    if (!this.map?.base || previousVersion >= 4) return false;
     const template = mapFromSnapshot(this.map.base, this.world.snapshotLayout(this.map.base));
     const isBox = (o) => paletteById(o.p)?.t === 'box';
+    const revisedPhysics = new Set(['urban:streetlight', 'urban:busShelter']);
+    const physicalAssets = new Set(['urban:streetlight', 'urban:fireHydrant', 'urban:busShelter']);
+
+    // v3 tenía una caja en el pivot equivocado del poste y una sola caja
+    // cerrada para la parada. Quitarlas antes de importar la física v4 evita
+    // dejar colliders fantasma en clones que el usuario ya había guardado.
+    if (previousVersion === 3) {
+      const assets = this.map.objects.filter((o) => o.baseDecor && revisedPhysics.has(o.p));
+      const obsoleteLinks = new Set(assets.map((o) => o.link).filter(Boolean));
+      this.map.objects = this.map.objects.filter((o) =>
+        !(isBox(o) && o.link && obsoleteLinks.has(o.link)));
+      for (const asset of assets) delete asset.link;
+    }
+
     const sourceBoxes = template.objects.filter(isBox);
     const targetBoxes = this.map.objects.filter(isBox);
     const sourceDecor = template.objects.filter((o) => o.baseDecor);
+    const physicalLinks = new Set(sourceDecor
+      .filter((o) => physicalAssets.has(o.p)).map((o) => o.link).filter(Boolean));
     const newLinks = new Map();
     const freshLink = (sourceLink) => {
       if (!newLinks.has(sourceLink)) {
@@ -116,11 +132,10 @@ export class MapEditor {
       return newLinks.get(sourceLink);
     };
 
-    // v3 añade colisión física (sin cover) a mobiliario urbano que antes era
-    // atravesable. En clones ya guardados, crear esas cajas y enlazarlas con
-    // el asset existente para que mover/duplicar conserve una sola unidad.
-    for (const source of sourceBoxes.filter((o) => o.cover === false && o.visual === false)) {
-      const exists = targetBoxes.some((o) => o.cover === false && o.visual === false &&
+    // v3/v4 añaden y refinan la física del mobiliario urbano. Una parada usa
+    // tres cajas con cover y un poste/hidrante usa una caja sin cover.
+    for (const source of sourceBoxes.filter((o) => o.link && physicalLinks.has(o.link))) {
+      const exists = targetBoxes.some((o) => o.visual === false &&
         Math.hypot(o.x - source.x, o.z - source.z) < 0.08 &&
         Math.abs((o.w ?? 0) - (source.w ?? 0)) < 0.08 &&
         Math.abs((o.d ?? 0) - (source.d ?? 0)) < 0.08);
@@ -138,9 +153,12 @@ export class MapEditor {
             Math.hypot(o.x - sourceAsset.x, o.z - sourceAsset.z) < 0.15) ?? targetPeers[ordinal];
           if (targetAsset) {
             targetAsset.link = copy.link;
-            copy.x = targetAsset.x;
-            copy.z = targetAsset.z;
             const ratio = (targetAsset.scale ?? 1) / (sourceAsset.scale ?? 1);
+            const angle = ((targetAsset.rot ?? 0) - (sourceAsset.rot ?? 0)) * DEG;
+            const dx = (source.x - sourceAsset.x) * ratio;
+            const dz = (source.z - sourceAsset.z) * ratio;
+            copy.x = +(targetAsset.x + dx * Math.cos(angle) + dz * Math.sin(angle)).toFixed(4);
+            copy.z = +(targetAsset.z - dx * Math.sin(angle) + dz * Math.cos(angle)).toFixed(4);
             copy.w = +(copy.w * ratio).toFixed(4);
             copy.d = +(copy.d * ratio).toFixed(4);
             copy.h = +(copy.h * ratio).toFixed(4);
@@ -156,6 +174,7 @@ export class MapEditor {
     for (const source of sourceDecor) {
       // v1 ya tenía GLBs/vehículos; v2 ya tenía además las pieles de cover.
       // Cada migración agrega únicamente las familias introducidas después.
+      if (previousVersion >= 3) continue;
       if (previousVersion >= 2 && source.p !== 'street:building') continue;
       if (previousVersion === 1 && paletteById(source.p)?.t !== 'baseDecor') continue;
       const copy = JSON.parse(JSON.stringify(source));
@@ -169,13 +188,15 @@ export class MapEditor {
         target.link = copy.link;
         // Si el collider ya se movió en el clon antiguo, recuperar el visual
         // directamente sobre su posición actual, no sobre la original.
-        copy.x = target.x;
-        copy.z = target.z;
+        if (!physicalAssets.has(source.p)) {
+          copy.x = target.x;
+          copy.z = target.z;
+        }
       }
       this.map.objects.push(copy);
     }
     this.map.decorCaptured = true;
-    this.map.decorCaptureVersion = 3;
+    this.map.decorCaptureVersion = 4;
     return true;
   }
 

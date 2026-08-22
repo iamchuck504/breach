@@ -235,6 +235,7 @@ export function mapFromSnapshot(layout, snap, name = null) {
     ...(b.cover === false ? { cover: false } : null),
     ...(b.visual === false ? { visual: false } : null),
     ...(b.surface ? { surface: b.surface } : null),
+    ...(b.decorLink ? { _decorLink: b.decorLink } : null),
   }));
   // La decoración editable se captura separada de las cajas jugables.
   // Los vehículos se enlazan con el collider invisible que comparte centro,
@@ -255,15 +256,22 @@ export function mapFromSnapshot(layout, snap, name = null) {
       ...(d.h ? { h: d.h } : null),
       baseDecor: true,
     };
-    const collider = objects.find((o) => o.visual === false && !o.link &&
-      Math.hypot(o.x - object.x, o.z - object.z) < 0.12);
-    if (collider) {
+    // Algunos GLB no tienen el origen en su base visible (el poste de luz) y
+    // una parada usa tres cajas para formar una U abierta. Enlazar todas las
+    // cajas cercanas permite mover/duplicar el asset y su física como unidad.
+    const linkRadius = p === 'urban:streetlight' ? 1.15
+      : p === 'urban:busShelter' ? 2.05 : 0.12;
+    const colliders = objects.filter((o) => o.visual === false && !o.link &&
+      (d.decorLink ? o._decorLink === d.decorLink
+        : Math.hypot(o.x - object.x, o.z - object.z) < linkRadius));
+    if (colliders.length) {
       const link = 'link-' + Math.random().toString(36).slice(2, 9);
-      collider.link = link;
+      for (const collider of colliders) collider.link = link;
       object.link = link;
     }
     objects.push(object);
   }
+  for (const object of objects) delete object._decorLink;
   for (const team of ['red', 'blue']) {
     for (const s of snap.spawns[team] ?? []) {
       const yaw = s.yaw ?? 0;
@@ -287,7 +295,7 @@ export function mapFromSnapshot(layout, snap, name = null) {
     theme: layout,
     base: layout,     // decoración: el builder original corre intacto
     decorCaptured: true,
-    decorCaptureVersion: 3,
+    decorCaptureVersion: 4,
     fx: snap.fx, fz: snap.fz,
     walls: false,     // el perímetro ya viene capturado como cajas editables
     objects,

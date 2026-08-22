@@ -339,21 +339,34 @@ const solidStreetProps = await page.evaluate(() => {
     'urban:streetlight', 'urban:fireHydrant', 'urban:busShelter',
   ]);
   const assets = ed.map.objects.filter((o) => physicalIds.has(o.p));
-  let linked = 0; let nonCover = 0; let blocked = 0;
+  let linked = 0; let nonCover = 0; let cover = 0; let blocked = 0; let openFronts = 0;
   for (const asset of assets) {
-    const box = ed.map.objects.find((o) => o.link && o.link === asset.link && o.id !== asset.id);
-    if (box) linked++;
-    if (box?.cover === false && box?.visual === false) nonCover++;
-    const p = { x: asset.x, z: asset.z };
-    W.resolveCircle(p, 0.42, 0);
-    if (Math.hypot(p.x - asset.x, p.z - asset.z) > 0.05) blocked++;
+    const boxes = ed.map.objects.filter((o) => o.link && o.link === asset.link && o.id !== asset.id);
+    const expected = asset.p === 'urban:busShelter' ? 3 : 1;
+    if (boxes.length === expected) linked++;
+    nonCover += boxes.filter((o) => o.cover === false && o.visual === false).length;
+    cover += boxes.filter((o) => o.cover !== false && o.visual === false).length;
+    for (const box of boxes) {
+      const p = { x: box.x, z: box.z };
+      W.resolveCircle(p, 0.42, 0);
+      if (Math.hypot(p.x - box.x, p.z - box.z) > 0.05) blocked++;
+    }
+    if (asset.p === 'urban:busShelter') {
+      const side = Math.sign(asset.x);
+      const front = { x: asset.x - side * 0.72, z: asset.z };
+      const before = { ...front };
+      W.resolveCircle(front, 0.32, 0);
+      if (Math.hypot(front.x - before.x, front.z - before.z) < 0.02) openFronts++;
+    }
   }
-  return { assets: assets.length, linked, nonCover, blocked, coverFaces: W.faces.length };
+  return { assets: assets.length, linked, nonCover, cover, blocked, openFronts,
+    coverFaces: W.faces.length };
 });
-check('postes, hidrantes y paradas colisionan sin convertirse en cover',
+check('postes/hidrantes colisionan; paradas son cover en U con frente abierto',
   solidStreetProps.assets === 16 && solidStreetProps.linked === 16 &&
-  solidStreetProps.nonCover === 16 && solidStreetProps.blocked === 16 &&
-  solidStreetProps.coverFaces === 120,
+  solidStreetProps.nonCover === 14 && solidStreetProps.cover === 6 &&
+  solidStreetProps.blocked === 20 && solidStreetProps.openFronts === 2 &&
+  solidStreetProps.coverFaces === 144,
   JSON.stringify(solidStreetProps));
 
 const buildingDuplicate = await page.evaluate(() => {
@@ -428,7 +441,7 @@ const migratedV1Clone = await page.evaluate(() => {
 check('clon v1 agrega las 16 pieles y 10 edificios editables faltantes',
   migratedV1Clone.existingAfter === migratedV1Clone.existingBefore + 10 &&
   migratedV1Clone.procedural === 16 && migratedV1Clone.linkedProcedural === 16 &&
-  migratedV1Clone.version === 3,
+  migratedV1Clone.version === 4,
   JSON.stringify(migratedV1Clone));
 
 const migratedV2Clone = await page.evaluate(() => {
@@ -443,9 +456,11 @@ const migratedV2Clone = await page.evaluate(() => {
   ed.map.decorCaptureVersion = 2;
   ed.rebuild();
   const migratedAssets = ed.map.objects.filter((o) => physicalIds.has(o.p));
-  const linkedPhysical = migratedAssets.filter((asset) => ed.map.objects.some((o) =>
-    o.id !== asset.id && o.link && o.link === asset.link &&
-    o.cover === false && o.visual === false));
+  const linkedPhysical = migratedAssets.filter((asset) => {
+    const boxes = ed.map.objects.filter((o) =>
+      o.id !== asset.id && o.link && o.link === asset.link && o.visual === false);
+    return boxes.length === (asset.p === 'urban:busShelter' ? 3 : 1);
+  });
   return {
     version: ed.map.decorCaptureVersion,
     buildings: ed.map.objects.filter((o) => o.p === 'street:building').length,
@@ -454,9 +469,50 @@ const migratedV2Clone = await page.evaluate(() => {
   };
 });
 check('clon v2 recibe colisión de props y edificios sin recrearlo',
-  migratedV2Clone.version === 3 && migratedV2Clone.buildings === 10 &&
+  migratedV2Clone.version === 4 && migratedV2Clone.buildings === 10 &&
   migratedV2Clone.assets === 16 && migratedV2Clone.linkedPhysical === 16,
   JSON.stringify(migratedV2Clone));
+
+const migratedV3Clone = await page.evaluate(() => {
+  const ed = window.BREACH_EDITOR;
+  ed.cloneLayout('calle');
+  const revisedIds = new Set(['urban:streetlight', 'urban:busShelter']);
+  const assets = ed.map.objects.filter((o) => revisedIds.has(o.p));
+  const keep = new Set();
+  for (const asset of assets) {
+    const boxes = ed.map.objects.filter((o) => o.id !== asset.id && o.link === asset.link);
+    const box = boxes[0];
+    keep.add(box.id);
+    box.x = asset.x; box.z = asset.z; box.cover = false; box.visual = false;
+    if (asset.p === 'urban:streetlight') {
+      box.w = 0.34; box.d = 0.34;
+    } else {
+      box.w = 0.62; box.d = 2.85; box.h = 2.45;
+    }
+  }
+  const revisedLinks = new Set(assets.map((o) => o.link));
+  ed.map.objects = ed.map.objects.filter((o) =>
+    !o.link || !revisedLinks.has(o.link) || revisedIds.has(o.p) || keep.has(o.id));
+  ed.map.decorCaptureVersion = 3;
+  ed.rebuild();
+  const migrated = ed.map.objects.filter((o) => revisedIds.has(o.p));
+  let correct = 0;
+  for (const asset of migrated) {
+    const boxes = ed.map.objects.filter((o) => o.id !== asset.id && o.link === asset.link);
+    if (asset.p === 'urban:streetlight') {
+      if (boxes.length === 1 && Math.abs(Math.abs(boxes[0].x - asset.x) - 0.88) < 0.03) correct++;
+    } else if (boxes.length === 3 && boxes.every((o) => o.cover !== false)) correct++;
+  }
+  return {
+    version: ed.map.decorCaptureVersion,
+    buildings: ed.map.objects.filter((o) => o.p === 'street:building').length,
+    assets: migrated.length, correct,
+  };
+});
+check('clon v3 reemplaza colliders viejos sin duplicar edificios',
+  migratedV3Clone.version === 4 && migratedV3Clone.buildings === 10 &&
+  migratedV3Clone.assets === 14 && migratedV3Clone.correct === 14,
+  JSON.stringify(migratedV3Clone));
 
 // ---------------------------------------------------------------------------
 // 7) PLAYTEST de un clon de Azoteas (helipuerto + especial elevado)

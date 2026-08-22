@@ -1006,7 +1006,7 @@ export class World {
   // Caja física + visual. mirror=true agrega la copia rotada 180° (-x,-z).
   _box(x, z, w, d, h, {
     mirror = true, color = 0x9a958c, top = 0xaeaaa1, cover = true, visual = true,
-    surface = null,
+    surface = null, decorLink = null,
   } = {}) {
     const place = (px, pz) => {
       // CLONADO DE MAPAS: place() es el embudo por el que pasa cada caja de
@@ -1014,7 +1014,7 @@ export class World {
       // caja exacta como datos; _suppressBoxes deja correr el builder solo
       // por su decoración (fachadas, GLBs, helipuerto) sin crear las cajas —
       // las del clon, ya como datos editables, ocupan su lugar.
-      if (this._capture) this._capture.push({ x: px, z: pz, w, d, h, color, top, cover, visual, surface });
+      if (this._capture) this._capture.push({ x: px, z: pz, w, d, h, color, top, cover, visual, surface, decorLink });
       if (this._suppressBoxes) return;
       // variación sutil de tono por caja: rompe la monotonía sin romper la paleta
       const jit = 0.95 + Math.random() * 0.1;
@@ -1845,6 +1845,7 @@ export class World {
 
   _addUrbanAsset(id, x, z, {
     y = 0, scale = 1, rotation = 0, castShadow = true, receiveShadow = true,
+    decorLink = null,
   } = {}) {
     const model = cloneUrbanAsset(id);
     if (!model) return null;
@@ -1867,7 +1868,7 @@ export class World {
       const size = bounds.getSize(new THREE.Vector3());
       this._captureDecor.push({
         kind: 'urban', assetId: id, x, z, y, scale, rotation,
-        w: size.x, d: size.z, h: size.y,
+        w: size.x, d: size.z, h: size.y, decorLink,
       });
     }
     // El builder base conserva el resto de la ambientación del clon, pero
@@ -1933,15 +1934,27 @@ export class World {
     // de cobertura, blindfire ni posiciones atractivas para los bots.
     const solidProp = { mirror: false, visual: false, cover: false, surface: 'metal' };
     for (const z of [-25, -15, -5, 5, 15, 25]) {
-      this._box(-11.72, z, 0.34, 0.34, STREET_SCALE.lamp, solidProp);
-      this._box(11.72, z, 0.34, 0.34, STREET_SCALE.lamp, solidProp);
+      // El origen del GLB está bajo el brazo; la base visible vive 0.88 m
+      // hacia el bordillo. El collider sigue esa base, no el pivot del asset.
+      this._box(-12.60, z, 0.50, 0.50, STREET_SCALE.lamp,
+        { ...solidProp, decorLink: `streetlight:left:${z}` });
+      this._box(12.60, z, 0.50, 0.50, STREET_SCALE.lamp,
+        { ...solidProp, decorLink: `streetlight:right:${z}` });
     }
-    this._box(-12.45, -11, 0.46, 0.46, 0.68, solidProp);
-    this._box(12.45, 11, 0.46, 0.46, 0.68, solidProp);
-    // Las paradas están giradas 90°: una caja fina sigue únicamente el
-    // respaldo/estructura y conserva libre el frente de espera.
-    this._box(14.35, -25.0, 0.62, 2.85, 2.45, solidProp);
-    this._box(-14.35, 25.0, 0.62, 2.85, 2.45, solidProp);
+    this._box(-12.45, -11, 0.46, 0.46, 0.68,
+      { ...solidProp, decorLink: 'hydrant:left' });
+    this._box(12.45, 11, 0.46, 0.46, 0.68,
+      { ...solidProp, decorLink: 'hydrant:right' });
+    // Paradas en U: respaldo y costados son cover alto; el frente que mira a
+    // la calle (donde se ve la banca) queda completamente abierto.
+    const shelterCover = { mirror: false, visual: false, cover: true, surface: 'metal' };
+    for (const [side, z] of [[1, -25.0], [-1, 25.0]]) {
+      const decorLink = `busShelter:${side > 0 ? 'right' : 'left'}`;
+      this._box(side * 14.88, z, 0.20, 3.34, 2.45, { ...shelterCover, decorLink });
+      for (const dz of [-1.67, 1.67]) {
+        this._box(side * 14.43, z + dz, 1.10, 0.18, 2.45, { ...shelterCover, decorLink });
+      }
+    }
 
     this._decorCalle();
   }
@@ -2283,11 +2296,11 @@ export class World {
     this._addStreetBus(0, -22.5, Math.PI / 2, 0);
     this._addStreetBus(0, 22.5, -Math.PI / 2, 1);
     // Dos paradas explican que los autobuses cerraban una ruta urbana real.
-    // Su respaldo tiene colisión simple sin cover; el frente queda accesible.
+    // Respaldo y laterales son cover; el frente de la banca queda accesible.
     this._addUrbanAsset('busShelter', 14.35, -25.0,
-      { scale: 0.84, rotation: Math.PI / 2 });
+      { scale: 0.84, rotation: Math.PI / 2, decorLink: 'busShelter:right' });
     this._addUrbanAsset('busShelter', -14.35, 25.0,
-      { scale: 0.84, rotation: -Math.PI / 2 });
+      { scale: 0.84, rotation: -Math.PI / 2, decorLink: 'busShelter:left' });
     // Vehículos del operativo de emergencia: conservan posición, orientación
     // y collider; colores/insignias distintos explican por qué están allí.
     this._addStreetTruck(-6.5, -1.5, 0, 0x53666b, 0);
@@ -2531,9 +2544,11 @@ export class World {
     // pero su infraestructura permanece completa y legible como una avenida.
     for (const z of [-25, -15, -5, 5, 15, 25]) {
       // Pegados al bordillo y fuera de la huella reducida de los kioscos.
-      if (!this._addUrbanAsset('streetlight', -11.72, z, { scale: 1.21 }))
+      if (!this._addUrbanAsset('streetlight', -11.72, z,
+        { scale: 1.21, decorLink: `streetlight:left:${z}` }))
         this._addUtilityPole(-11.72, z, { lamp: 0xffc27a, arm: 0.3 });
-      if (!this._addUrbanAsset('streetlight', 11.72, z, { scale: 1.21, rotation: Math.PI }))
+      if (!this._addUrbanAsset('streetlight', 11.72, z,
+        { scale: 1.21, rotation: Math.PI, decorLink: `streetlight:right:${z}` }))
         this._addUtilityPole(11.72, z, { lamp: 0xffc27a, arm: -0.3 });
     }
     // Cableado con caída suave entre postes: landmark vertical y profundidad
@@ -2559,8 +2574,8 @@ export class World {
     // permanecen puramente visuales para no ensuciar la navegación.
     const streetMetal = new THREE.MeshStandardMaterial({ color: 0x30383d, metalness: 0.64, roughness: 0.4 });
     const hydrantMat = new THREE.MeshStandardMaterial({ color: 0x8e3e31, metalness: 0.45, roughness: 0.48 });
-    for (const [x, z] of [[-12.45, -11], [12.45, 11]]) {
-      if (this._addUrbanAsset('fireHydrant', x, z, { scale: 0.90 })) continue;
+    for (const [x, z, decorLink] of [[-12.45, -11, 'hydrant:left'], [12.45, 11, 'hydrant:right']]) {
+      if (this._addUrbanAsset('fireHydrant', x, z, { scale: 0.90, decorLink })) continue;
       const h = new THREE.Group(); h.position.set(x, 0, z);
       const body = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.16, 0.48, 9), hydrantMat);
       body.position.y = 0.24; h.add(body);
