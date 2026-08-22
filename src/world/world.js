@@ -13,10 +13,10 @@ const FIELD_X = 15, FIELD_Z = 18; // semiancho / semilargo
 const SOLDIER_HEIGHT = 1.63;
 const STREET_SCALE = Object.freeze({
   soldier: SOLDIER_HEIGHT,
-  door: 2.05,
+  door: 2.32,
   floor: 2.7,
   lamp: 6.2,
-  car: Object.freeze({ width: 1.9, length: 4.35, height: 1.4, wheel: 0.38 }),
+  car: Object.freeze({ width: 2.02, length: 4.58, height: 1.52, wheel: 0.41 }),
   truck: Object.freeze({ width: 2.4, length: 6.8, height: 2.9, wheel: 0.46 }),
   bus: Object.freeze({ width: 2.5, length: 9.0, height: 3.08, wheel: 0.50 }),
 });
@@ -1283,9 +1283,9 @@ export class World {
     };
     const S = STREET_SCALE.car;
     this._addVehicleProfile(group, [
-      [-S.length / 2, 0.20], [-S.length / 2, 0.68], [-1.82, 0.80],
-      [-0.92, 0.84], [-0.42, 1.34], [0.74, 1.34],
-      [1.14, 0.84], [1.84, 0.84], [S.length / 2, 0.74], [S.length / 2, 0.20],
+      [-S.length / 2, 0.22], [-S.length / 2, 0.75], [-S.length * 0.42, 0.91],
+      [-S.length * 0.21, 1.00], [-S.length * 0.10, S.height], [S.length * 0.17, S.height],
+      [S.length * 0.27, 1.00], [S.length * 0.42, 1.00], [S.length / 2, 0.83], [S.length / 2, 0.22],
     ], S.width, bodyMat, 0.045);
     // Los marcos y cristales laterales usan los mismos polígonos base. El
     // marco es una silueta ligeramente mayor y el vidrio una versión inset,
@@ -1299,13 +1299,25 @@ export class World {
     };
     for (const side of [-1, 1]) {
       const skinX = side * (S.width / 2 + 0.050);
-      sidePanel(side, [[-0.87, 0.84], [-0.43, 1.34], [0.08, 1.34], [0.08, 0.84]], frameMat, 0.046);
-      sidePanel(side, [[-0.84, 0.865], [-0.405, 1.315], [0.055, 1.315], [0.055, 0.865]], glassMat, 0.048, 2);
-      sidePanel(side, [[0.09, 0.84], [0.09, 1.34], [0.71, 1.34], [1.08, 0.84]], frameMat, 0.046);
-      sidePanel(side, [[0.115, 0.865], [0.115, 1.315], [0.685, 1.315], [1.055, 0.865]], glassMat, 0.048, 2);
+      sidePanel(side, [
+        [-S.length * 0.20, 1.00], [-S.length * 0.10, S.height],
+        [S.length * 0.018, S.height], [S.length * 0.018, 1.00],
+      ], frameMat, 0.046);
+      sidePanel(side, [
+        [-S.length * 0.193, 1.025], [-S.length * 0.094, S.height - 0.025],
+        [S.length * 0.012, S.height - 0.025], [S.length * 0.012, 1.025],
+      ], glassMat, 0.048, 2);
+      sidePanel(side, [
+        [S.length * 0.020, 1.00], [S.length * 0.020, S.height],
+        [S.length * 0.17, S.height], [S.length * 0.25, 1.00],
+      ], frameMat, 0.046);
+      sidePanel(side, [
+        [S.length * 0.026, 1.025], [S.length * 0.026, S.height - 0.025],
+        [S.length * 0.164, S.height - 0.025], [S.length * 0.243, 1.025],
+      ], glassMat, 0.048, 2);
       // Solo la junta central separa ambas puertas. Es fina y tonal; los
       // contornos exteriores anteriores endurecían la silueta innecesariamente.
-      add(0.010, 0.61, 0.006, skinX, 0.535, 0.085, seamMat);
+      add(0.010, 0.72, 0.006, skinX, 0.64, S.length * 0.019, seamMat);
     }
     // Parabrisas frontal y vidrio trasero. Son superficies trapezoidales
     // completas, no cajas inclinadas: así quedan por fuera de la carrocería y
@@ -1324,46 +1336,48 @@ export class World {
     // vidrio con las mismas pendientes. Así parabrisas y medallón coinciden
     // exactamente con su marco en los cuatro lados.
     endPanel([
-      [-0.84, 0.922, -0.922], [0.84, 0.922, -0.922],
-      [0.80, 1.342, -0.502], [-0.80, 1.342, -0.502],
+      [-S.width * 0.442, 1.035, -S.length * 0.21], [S.width * 0.442, 1.035, -S.length * 0.21],
+      [S.width * 0.42, S.height, -S.length * 0.105], [-S.width * 0.42, S.height, -S.length * 0.105],
     ], frameMat, 1);
     endPanel([
-      [-0.81, 0.942, -0.902], [0.81, 0.942, -0.902],
-      [0.77, 1.322, -0.522], [-0.77, 1.322, -0.522],
+      [-S.width * 0.425, 1.06, -S.length * 0.205], [S.width * 0.425, 1.06, -S.length * 0.205],
+      [S.width * 0.402, S.height - 0.025, -S.length * 0.11], [-S.width * 0.402, S.height - 0.025, -S.length * 0.11],
     ], glassMat, 2);
     endPanel([
-      [-0.80, 1.328, 0.827], [0.80, 1.328, 0.827],
-      [0.84, 0.928, 1.147], [-0.84, 0.928, 1.147],
+      [-S.width * 0.42, S.height, S.length * 0.19], [S.width * 0.42, S.height, S.length * 0.19],
+      [S.width * 0.442, 1.035, S.length * 0.265], [-S.width * 0.442, 1.035, S.length * 0.265],
     ], frameMat, 1);
     endPanel([
-      [-0.77, 1.303, 0.847], [0.77, 1.303, 0.847],
-      [0.81, 0.953, 1.127], [-0.81, 0.953, 1.127],
+      [-S.width * 0.402, S.height - 0.025, S.length * 0.195], [S.width * 0.402, S.height - 0.025, S.length * 0.195],
+      [S.width * 0.425, 1.06, S.length * 0.26], [-S.width * 0.425, 1.06, S.length * 0.26],
     ], glassMat, 2);
     // Distancia entre ejes cercana a un sedán compacto real: alrededor del
     // 59% del largo total, no ruedas pegadas a los parachoques.
-    for (const sx of [-S.width / 2 - 0.015, S.width / 2 + 0.015]) for (const sz of [-1.31, 1.31]) {
+    for (const sx of [-S.width / 2 - 0.015, S.width / 2 + 0.015]) for (const sz of [-S.length * 0.301, S.length * 0.301]) {
       const wheel = new THREE.Mesh(new THREE.CylinderGeometry(S.wheel, S.wheel, 0.17, 16), tireMat);
       wheel.rotation.z = Math.PI / 2; wheel.position.set(sx, S.wheel, sz); group.add(wheel);
-      const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.165, 12), hubMat);
+      const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.165, 12), hubMat);
       hub.rotation.z = Math.PI / 2; hub.position.set(sx * 1.004, S.wheel, sz); group.add(hub);
     }
-    add(S.width + 0.04, 0.12, 0.13, 0, 0.31, -S.length / 2 - 0.02, trimMat);
-    add(S.width + 0.04, 0.12, 0.13, 0, 0.31, S.length / 2 + 0.02, trimMat);
-    add(0.78, 0.15, 0.04, 0, 0.47, -S.length / 2 - 0.09, trimMat); // parrilla
-    for (const sx of [-0.62, 0.62]) {
-      add(0.34, 0.17, 0.030, sx, 0.56, -S.length / 2 - 0.050, trimMat);
-      add(0.28, 0.12, 0.035, sx, 0.56, -S.length / 2 - 0.070, lampMat);
-      add(0.33, 0.18, 0.030, sx, 0.62, S.length / 2 + 0.050, trimMat);
-      add(0.27, 0.13, 0.035, sx, 0.62, S.length / 2 + 0.070, rearLampMat);
+    add(S.width + 0.04, 0.13, 0.14, 0, 0.34, -S.length / 2 - 0.02, trimMat);
+    add(S.width + 0.04, 0.13, 0.14, 0, 0.34, S.length / 2 + 0.02, trimMat);
+    add(0.84, 0.17, 0.04, 0, 0.53, -S.length / 2 - 0.09, trimMat); // parrilla
+    for (const sx of [-S.width * 0.325, S.width * 0.325]) {
+      add(0.36, 0.19, 0.030, sx, 0.64, -S.length / 2 - 0.050, trimMat);
+      add(0.30, 0.14, 0.035, sx, 0.64, -S.length / 2 - 0.070, lampMat);
+      add(0.35, 0.19, 0.030, sx, 0.69, S.length / 2 + 0.050, trimMat);
+      add(0.29, 0.14, 0.035, sx, 0.69, S.length / 2 + 0.070, rearLampMat);
     }
     // Manijas, espejos y líneas de puerta: detalles de reconocimiento que se
     // leen durante gameplay sin subir la densidad del modelo completo.
     for (const side of [-1, 1]) {
-      for (const pz of [-0.10, 0.88]) add(0.028, 0.030, 0.16, side * (S.width / 2 + 0.060), 0.75, pz, trimMat);
+      for (const pz of [-S.length * 0.022, S.length * 0.20]) {
+        add(0.028, 0.030, 0.17, side * (S.width / 2 + 0.060), 0.86, pz, trimMat);
+      }
       // Retrovisor montado en la esquina inferior del pilar A, no flotando a
       // media altura sobre el cristal delantero.
-      add(0.05, 0.07, 0.09, side * (S.width / 2 + 0.070), 0.88, -0.80, trimMat);
-      add(0.14, 0.11, 0.20, side * (S.width / 2 + 0.13), 0.92, -0.84, trimMat);
+      add(0.05, 0.08, 0.10, side * (S.width / 2 + 0.070), 1.01, -S.length * 0.185, trimMat);
+      add(0.15, 0.12, 0.21, side * (S.width / 2 + 0.14), 1.06, -S.length * 0.195, trimMat);
     }
     // La variación de daño permanece pegada a la carrocería: las puertas
     // separadas y los toros de guardafango producían siluetas tipo espina.
@@ -1375,7 +1389,7 @@ export class World {
           alphaTest: 0.08, side: THREE.DoubleSide,
         }),
       );
-      crack.position.set(-0.32, 1.10, -0.615); crack.rotation.x = 0.68; group.add(crack);
+      crack.position.set(-0.34, 1.27, -S.length * 0.14); crack.rotation.x = 0.68; group.add(crack);
     }
     if (variant === 2) add(0.48, 0.012, 0.72, 0.40, S.height + 0.007, 0.30, trimMat);
     this.mapGroup.add(group);
@@ -1514,9 +1528,11 @@ export class World {
       // doble puerta delantera
       for (const p of [-3.66, -2.98]) {
         const door = new THREE.Mesh(new THREE.PlaneGeometry(0.62, STREET_SCALE.door - 0.08), glass);
-        door.position.set(side * (S.width / 2 + 0.105), 1.14, p); door.rotation.y = side * Math.PI / 2; group.add(door);
+        door.position.set(side * (S.width / 2 + 0.105), STREET_SCALE.door / 2, p);
+        door.rotation.y = side * Math.PI / 2; group.add(door);
         const doorFrame = new THREE.Mesh(new THREE.BoxGeometry(0.045, STREET_SCALE.door, 0.055), lower);
-        doorFrame.position.set(side * (S.width / 2 + 0.115), 1.14, p + 0.31); group.add(doorFrame);
+        doorFrame.position.set(side * (S.width / 2 + 0.115), STREET_SCALE.door / 2, p + 0.31);
+        group.add(doorFrame);
       }
       for (const p of [-2.88, 2.82]) {
         const wheel = new THREE.Mesh(new THREE.CylinderGeometry(S.wheel, S.wheel, 0.19, 16), tire);
@@ -1656,9 +1672,11 @@ export class World {
     this._box(14.35, -14, 1.65, 1.65, HIGH, { ...highOpts, visual: false });
 
     // vehículos sobre la avenida (cobertura baja)
-    this._box(-2.5, -16, 1.9, 4.2, LOW, { ...lowOpts, visual: false });
-    this._box(3, -10.5, 1.9, 4.2, LOW, { ...lowOpts, visual: false });
-    this._box(-3, -5.5, 4.2, 1.9, LOW, { ...lowOpts, visual: false }); // auto cruzado
+    const carCoverW = STREET_SCALE.car.width;
+    const carCoverL = STREET_SCALE.car.length - 0.13;
+    this._box(-2.5, -16, carCoverW, carCoverL, LOW, { ...lowOpts, visual: false });
+    this._box(3, -10.5, carCoverW, carCoverL, LOW, { ...lowOpts, visual: false });
+    this._box(-3, -5.5, carCoverL, carCoverW, LOW, { ...lowOpts, visual: false }); // auto cruzado
 
     // barricada del choke central
     this._box(-1.2, -8.7, 3.2, 0.9, MID, { ...midOpts, visual: false });
@@ -1719,11 +1737,11 @@ export class World {
     // sin convertir el centro en una intersección inexistente.
     const ironMat = new THREE.MeshStandardMaterial({ color: 0x252a2c, metalness: 0.64, roughness: 0.58 });
     const manhole = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.62, 0.025, 20), ironMat);
-    manhole.position.set(0.55, 0.035, 0.35); this.mapGroup.add(manhole);
+    manhole.position.set(0, 0.035, 0); this.mapGroup.add(manhole);
     const grooves = new THREE.InstancedMesh(new THREE.BoxGeometry(0.78, 0.018, 0.035), curbMat, 5);
     const crossTransform = new THREE.Object3D();
     for (let i = 0; i < 5; i++) {
-      crossTransform.position.set(0.55, 0.052, 0.15 + i * 0.10);
+      crossTransform.position.set(0, 0.052, -0.20 + i * 0.10);
       crossTransform.rotation.set(0, 0.28, 0); crossTransform.updateMatrix(); grooves.setMatrixAt(i, crossTransform.matrix);
     }
     grooves.instanceMatrix.needsUpdate = true; this.mapGroup.add(grooves);
@@ -1874,40 +1892,48 @@ export class World {
       const storefrontType = variant % 3;
       if (storefrontType === 0) {
         const display = new THREE.Mesh(new THREE.PlaneGeometry(shopW, STREET_SCALE.door - 0.12), glassMat);
-        display.position.set(frontX, 1.12, z - span * 0.10); display.rotation.y = rot; this.mapGroup.add(display);
+        display.position.set(frontX, STREET_SCALE.door / 2, z - span * 0.10);
+        display.rotation.y = rot; this.mapGroup.add(display);
         const kick = new THREE.Mesh(new THREE.BoxGeometry(0.10, 0.34, shopW), doorMat);
         kick.position.set(faceX + toward * 0.10, 0.19, z - span * 0.10); this.mapGroup.add(kick);
         for (const dz of [-shopW * 0.48, 0, shopW * 0.48]) {
           const frame = new THREE.Mesh(new THREE.BoxGeometry(0.11, STREET_SCALE.door + 0.06, 0.08), frameMat);
-          frame.position.set(faceX + toward * 0.10, 1.08, z - span * 0.10 + dz); this.mapGroup.add(frame);
+          frame.position.set(faceX + toward * 0.10, STREET_SCALE.door / 2, z - span * 0.10 + dz);
+          this.mapGroup.add(frame);
         }
       } else {
         const shutterW = storefrontType === 1 ? shopW + 0.42 : shopW;
         const shutter = new THREE.Mesh(new THREE.PlaneGeometry(shutterW, STREET_SCALE.door), shutterMat);
-        shutter.position.set(frontX, 1.10, z - span * 0.10); shutter.rotation.y = rot; this.mapGroup.add(shutter);
+        shutter.position.set(frontX, STREET_SCALE.door / 2, z - span * 0.10);
+        shutter.rotation.y = rot; this.mapGroup.add(shutter);
         const hood = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.28, shutterW + 0.24), frameMat);
-        hood.position.set(faceX + toward * 0.11, 2.21, z - span * 0.10); this.mapGroup.add(hood);
+        hood.position.set(faceX + toward * 0.11, STREET_SCALE.door + 0.16, z - span * 0.10);
+        this.mapGroup.add(hood);
       }
-      const door = new THREE.Mesh(new THREE.PlaneGeometry(0.94, STREET_SCALE.door), storefrontType === 2 ? glassMat : doorMat);
-      door.position.set(frontX + toward * 0.005, 1.10, z + span * 0.31); door.rotation.y = rot; this.mapGroup.add(door);
-      const transom = new THREE.Mesh(new THREE.PlaneGeometry(0.94, 0.28), glassMat);
-      transom.position.set(frontX + toward * 0.008, 2.32, z + span * 0.31); transom.rotation.y = rot; this.mapGroup.add(transom);
+      const entranceW = 1.16;
+      const door = new THREE.Mesh(new THREE.PlaneGeometry(entranceW, STREET_SCALE.door), storefrontType === 2 ? glassMat : doorMat);
+      door.position.set(frontX + toward * 0.005, STREET_SCALE.door / 2, z + span * 0.31);
+      door.rotation.y = rot; this.mapGroup.add(door);
+      const transom = new THREE.Mesh(new THREE.PlaneGeometry(entranceW, 0.30), glassMat);
+      transom.position.set(frontX + toward * 0.008, STREET_SCALE.door + 0.18, z + span * 0.31);
+      transom.rotation.y = rot; this.mapGroup.add(transom);
       const handle = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.24, 0.05), frameMat);
-      handle.position.set(faceX + toward * 0.12, 1.16, z + span * 0.31 + 0.29); this.mapGroup.add(handle);
+      handle.position.set(faceX + toward * 0.12, 1.20, z + span * 0.31 + entranceW * 0.34);
+      this.mapGroup.add(handle);
       for (const pz of [z - span * 0.40, z + span * 0.18, z + span * 0.42]) {
-        const pier = new THREE.Mesh(new THREE.BoxGeometry(0.26, 2.88, 0.30), stoneMat);
-        pier.position.set(faceX + toward * 0.13, 1.44, pz); this.mapGroup.add(pier);
+        const pier = new THREE.Mesh(new THREE.BoxGeometry(0.26, 3.04, 0.30), stoneMat);
+        pier.position.set(faceX + toward * 0.13, 1.52, pz); this.mapGroup.add(pier);
       }
       const awningDepth = storefrontType === 1 ? 0.34 : 0.72;
       const awning = new THREE.Mesh(new THREE.BoxGeometry(awningDepth, 0.13, shopW + 0.34), awningMat);
-      awning.position.set(faceX + toward * (awningDepth * 0.5), 2.56, z - span * 0.10);
+      awning.position.set(faceX + toward * (awningDepth * 0.5), 2.72, z - span * 0.10);
       awning.rotation.z = side * (storefrontType === 1 ? 0.03 : 0.10); this.mapGroup.add(awning);
       const fixture = new THREE.Mesh(
         new THREE.BoxGeometry(0.10, 0.12, Math.min(1.65, shopW * 0.58)),
         new THREE.MeshBasicMaterial({ color: variant % 3 === 0 ? 0xffc47a : 0xcbd9dc }),
       );
-      fixture.position.set(faceX + toward * 0.43, 2.42, z - span * 0.10); this.mapGroup.add(fixture);
-      this._addMapSign(name, faceX + toward * 0.038, 2.82, z - span * 0.10, rot,
+      fixture.position.set(faceX + toward * 0.43, 2.57, z - span * 0.10); this.mapGroup.add(fixture);
+      this._addMapSign(name, faceX + toward * 0.038, 2.95, z - span * 0.10, rot,
         { w: Math.min(3.3, span - 0.7), h: 0.42, bg: variant % 2 ? '#26383b' : '#4b2928', fg: '#ead8b5', border: '#8e765d' });
       // Landmarks geométricos: se reconocen incluso cuando el texto ya no es
       // legible. Quedan montados sobre la fachada, detrás del límite físico.
@@ -2047,13 +2073,12 @@ export class World {
     }
 
     // Kioscos urbanos compactos pero de escala humana: base, mostrador,
-    // abertura de servicio, postes, puerta posterior y techo independiente.
+    // abertura de servicio, postes y techo independiente.
     // La silueta abierta evita que se lean como edificios en miniatura.
     const kioskPanel = new THREE.MeshStandardMaterial({ color: 0x5d6667, metalness: 0.32, roughness: 0.62 });
     const cornerDark = new THREE.MeshStandardMaterial({
       color: 0x4c5558, map: this._tex('shopShutter', 2, 1), metalness: 0.45, roughness: 0.55,
     });
-    const cornerGlass = new THREE.MeshStandardMaterial({ color: 0x10202a, metalness: 0.58, roughness: 0.2 });
     const cornerTrim = new THREE.MeshStandardMaterial({ color: 0x77716a, roughness: 0.78 });
     const paperColors = [0xc65745, 0xd9b44a, 0x4f7891, 0xd6d0bd];
     const addSidewalkKiosk = (x, z, w, d, toward, name, awningColor) => {
@@ -2065,7 +2090,6 @@ export class World {
       const frontZ = z + toward * (d / 2 + 0.026);
       const backZ = z - toward * (d / 2 - 0.055);
       const frontRot = toward > 0 ? 0 : Math.PI;
-      const backRot = frontRot + Math.PI;
       addKioskPart(new THREE.BoxGeometry(w, 0.12, d), cornerTrim, x, 0.06, z);
       addKioskPart(new THREE.BoxGeometry(w - 0.10, 2.30, 0.11), kioskPanel, x, 1.20, backZ);
       for (const side of [-1, 1]) {
@@ -2085,14 +2109,6 @@ export class World {
       addKioskPart(new THREE.BoxGeometry(w + 0.18, 0.18, d + 0.18), cornerTrim, x, 2.62, z);
       addKioskPart(new THREE.BoxGeometry(w - 0.12, 0.34, 0.10), cornerDark,
         x, 2.40, frontZ - toward * 0.015);
-
-      // Entrada de servicio a tamaño humano en la cara posterior.
-      const door = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 1.92), cornerGlass);
-      door.position.set(x, 1.08, backZ - toward * 0.061); door.rotation.y = backRot;
-      this.mapGroup.add(door);
-      const handle = addKioskPart(new THREE.BoxGeometry(0.025, 0.13, 0.05), cornerTrim,
-        x + 0.22, 1.05, backZ - toward * 0.075);
-      handle.rotation.y = frontRot;
 
       this._addMapSign(name, x, 2.40, frontZ + toward * 0.045, frontRot,
         { w: w - 0.22, h: 0.27, bg: '#2a3438', fg: '#ead6ae', border: '#8d6b4f' });
@@ -2139,12 +2155,12 @@ export class World {
     for (const [side, z] of [[-1, -8], [1, 8]]) {
       const wallX = side * (this.fx - 0.10);
       const rot = side < 0 ? Math.PI / 2 : -Math.PI / 2;
-      const door = new THREE.Mesh(new THREE.PlaneGeometry(2.15, 2.36), serviceDoorMat);
-      door.position.set(wallX - side * 0.015, 1.18, z); door.rotation.y = rot; this.mapGroup.add(door);
-      const hood = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.18, 2.42), curbMat);
-      hood.position.set(wallX - side * 0.18, 2.46, z); this.mapGroup.add(hood);
+      const door = new THREE.Mesh(new THREE.PlaneGeometry(2.40, 2.60), serviceDoorMat);
+      door.position.set(wallX - side * 0.015, 1.30, z); door.rotation.y = rot; this.mapGroup.add(door);
+      const hood = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.18, 2.66), curbMat);
+      hood.position.set(wallX - side * 0.18, 2.75, z); this.mapGroup.add(hood);
       const fixture = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.12, 0.42), serviceLamp);
-      fixture.position.set(wallX - side * 0.22, 2.66, z); this.mapGroup.add(fixture);
+      fixture.position.set(wallX - side * 0.22, 2.95, z); this.mapGroup.add(fixture);
       for (const dz of [-1.22, 1.22]) {
         loadingTransform.position.set(side * 14.45, 0.034, z + dz);
         loadingTransform.rotation.set(-Math.PI / 2, 0, Math.PI / 2); loadingTransform.updateMatrix();
