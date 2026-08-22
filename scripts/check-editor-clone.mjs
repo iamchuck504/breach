@@ -178,8 +178,11 @@ const charRef = await page.evaluate(() => {
     filename: out.filename,
   };
 });
-check('charRef usa el Rig real con altura de juego (~1.74)',
-  charRef.rigHeight > 1.55 && charRef.rigHeight < 2.0, `alto=${charRef.rigHeight}`);
+// La cápsula/coronilla sigue marcada a 1.74 m en la regla. El Box3 del Rig
+// incluye ahora el arma refinada a la espalda, que sobresale por encima del
+// casco y lleva la silueta visual completa a ~2.03 m.
+check('charRef usa el Rig real y conserva una silueta visual coherente',
+  charRef.rigHeight > 1.70 && charRef.rigHeight < 2.15, `alto=${charRef.rigHeight}`);
 check('charRef: regla de alturas presente', charRef.rulerMarks >= 11,
   `marcas=${charRef.rulerMarks}`);
 check('charRef se duplica y se oculta con el toggle',

@@ -71,8 +71,10 @@ for (const map of MAPS) {
       : null;
     // caras de cobertura utilizables por la IA (h <= 2.6) y alturas válidas
     const covers = W.faces.filter((f) => f.h <= 2.6).length;
+    // 2.45 m corresponde a los laterales/trasera físicos del refugio de bus:
+    // cover alto con la altura real del asset, no un bloque táctico genérico.
     const badHeights = [...new Set(W.faces.map((f) => +f.h.toFixed(2)))]
-      .filter((h) => ![1.1, 1.9, 3].includes(h));
+      .filter((h) => ![1.1, 1.9, 2.45, 3].includes(h));
     return {
       fx: W.fx, fz: W.fz, spawnInfo, crates, special, covers, badHeights,
       ambience: A._ambienceName, layout: W.layout,
@@ -101,7 +103,7 @@ for (const map of MAPS) {
       JSON.stringify(r.special));
   }
 
-  check(`${map}: solo alturas LOW/MID/HIGH`, r.badHeights.length === 0,
+  check(`${map}: alturas tácticas/estructurales válidas`, r.badHeights.length === 0,
     JSON.stringify(r.badHeights));
   check(`${map}: cobertura suficiente para la IA (>=20 caras)`, r.covers >= 20,
     `caras=${r.covers}`);

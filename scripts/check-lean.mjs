@@ -19,22 +19,31 @@ const browser = await chromium.launch({ executablePath: CHROME, headless: true }
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 page.on('pageerror', (e) => console.log('PAGEERROR:', e.message));
 await page.goto('http://localhost:8795/?nolock=1', { waitUntil: 'networkidle' });
+await page.evaluate(() => { window.BREACH.mapChoice = 'fortaleza'; });
 await page.click('#btn-enter');
 await page.waitForSelector('#splash.off', { state: 'attached' });
 await page.click('#btn-practice');
 await page.waitForTimeout(600);
 
-// frente al escudo de spawn, extremo +x (= orilla IZQUIERDA en pantalla mirando +z)
+// Forzar una orilla alta real del mapa. La entrada a cover ya tiene su propia
+// suite; aquí aislamos el shoulder swap sin depender de coordenadas antiguas.
 await page.evaluate(() => {
-  const P = window.BREACH.player;
-  P.pos.x = 3.1; P.pos.z = -15.6;
-  P.cam.yaw = Math.PI; P.yaw = Math.PI;
+  const P = window.BREACH.player, W = window.BREACH_WORLD;
+  const f = W.faces.find((face) => {
+    const len = Math.hypot(face.b.x - face.a.x, face.b.z - face.a.z);
+    return face.h > 1.1 && face.h <= 2.6 && len > 3;
+  });
+  if (!f) throw new Error('No se encontró una orilla alta de prueba');
+  const tx = f.b.x - f.a.x, tz = f.b.z - f.a.z;
+  const len = Math.hypot(tx, tz), ux = tx / len, uz = tz / len;
+  const u = 0.22;
+  P.cover = f; P.state = 'cover'; P.stateT = 0;
+  P.pos.x = f.a.x + ux * u + f.n.x * 0.38;
+  P.pos.z = f.a.z + uz * u + f.n.z * 0.38;
+  // Cámara derecha = tangente positiva; en el extremo A esto produce lean -1.
+  P.cam.yaw = Math.atan2(-uz, ux); P.yaw = P.cam.yaw;
+  P.vel.x = 0; P.vel.z = 0;
 });
-await page.keyboard.down('w');
-await page.waitForTimeout(200);
-await page.keyboard.press(' ');
-await page.keyboard.up('w');
-await page.waitForTimeout(400);
 await page.mouse.down({ button: 'right' });
 await page.waitForTimeout(700);
 const res = await page.evaluate(() => ({

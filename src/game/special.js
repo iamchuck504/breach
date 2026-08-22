@@ -9,6 +9,23 @@ import { WEAPON_BUILDERS, WEAPON_SCALES } from '../player/rig.js';
 export const SPECIAL_HOLD_TIME = 0.6;
 const TMP_V = new THREE.Vector3();
 const TMP_D = new THREE.Vector3();
+const TMP_BACK = new THREE.Vector3();
+
+function colliderContainsPoint(c, x, y, z) {
+  if (!c || y < -0.1 || y > c.h) return false;
+  if (Number.isFinite(c.minx)) {
+    return x >= c.minx && x <= c.maxx && z >= c.minz && z <= c.maxz;
+  }
+  if (!c.a || !c.b || !c.n || !Number.isFinite(c.half)) return false;
+  const tx = c.b.x - c.a.x, tz = c.b.z - c.a.z;
+  const len = Math.hypot(tx, tz);
+  if (len < 0.001) return false;
+  const ux = tx / len, uz = tz / len;
+  const cx = (c.a.x + c.b.x) * 0.5, cz = (c.a.z + c.b.z) * 0.5;
+  const ox = x - cx, oz = z - cz;
+  return Math.abs(ox * ux + oz * uz) <= len * 0.5 &&
+    Math.abs(ox * c.n.x + oz * c.n.z) <= c.half;
+}
 
 export class SpecialPickup {
   constructor(scene) {
@@ -149,18 +166,30 @@ export class Rockets {
         // separar la explosión de la superficie por la NORMAL del impacto:
         // detonar exactamente sobre el collider auto-ocluía la línea de
         // efecto contra esa misma pared y el splash no dañaba a nadie
-        const n = hit.normal ?? { x: 0, y: 1, z: 0 };
+        let impact = hit;
+        let impactDir = TMP_D;
+        // Un arma larga puede dejar el muzzle mínimamente dentro de una
+        // pared. En ese caso el raycast normal devuelve la cara LEJANA y el
+        // cohete atraviesa el obstáculo antes de explotar. Buscar la salida
+        // en sentido contrario recupera la cara por la que llegó el arma y
+        // conserva tanto el bloqueo físico como el autodaño a quemarropa.
+        if (colliderContainsPoint(hit.collider, r.x, r.y, r.z)) {
+          TMP_BACK.copy(TMP_D).multiplyScalar(-1);
+          const backHit = this.world.raycastHit(TMP_V, TMP_BACK, 8);
+          if (backHit) { impact = backHit; impactDir = TMP_BACK; }
+        }
+        const n = impact.normal ?? { x: 0, y: 1, z: 0 };
         const contact = {
-          x: r.x + TMP_D.x * hit.t,
-          y: r.y + TMP_D.y * hit.t,
-          z: r.z + TMP_D.z * hit.t,
+          x: r.x + impactDir.x * impact.t,
+          y: r.y + impactDir.y * impact.t,
+          z: r.z + impactDir.z * impact.t,
         };
         boom = { x: contact.x + (n.x ?? 0) * 0.3,
           y: contact.y + (n.y ?? 0) * 0.3,
           z: contact.z + (n.z ?? 0) * 0.3 };
         boomInfo = {
           kind: 'world', direct: false, normal: { x: n.x ?? 0, y: n.y ?? 1, z: n.z ?? 0 },
-          surface: hit.surface || 'concrete',
+          surface: impact.surface || 'concrete',
           visualPos: { x: contact.x + (n.x ?? 0) * 0.035,
             y: contact.y + (n.y ?? 0) * 0.035,
             z: contact.z + (n.z ?? 0) * 0.035 },
