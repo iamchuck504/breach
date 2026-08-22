@@ -31,6 +31,23 @@ function extrudedPlate(points, bevel = 0.065) {
   return geometry;
 }
 
+// Prisma definido por el perfil lateral (z/y). Permite que culatas,
+// receptores y cargadores tengan una silueta reconocible sin subir demasiado
+// el conteo de polígonos ni depender de assets externos por arma.
+function extrudedProfile(points, bevel = 0.045) {
+  const shape = new THREE.Shape();
+  shape.moveTo(points[0][0], points[0][1]);
+  for (let i = 1; i < points.length; i++) shape.lineTo(points[i][0], points[i][1]);
+  shape.closePath();
+  const geometry = new THREE.ExtrudeGeometry(shape, {
+    depth: 1, steps: 1, bevelEnabled: true, bevelSegments: 1,
+    bevelSize: bevel, bevelThickness: bevel,
+  });
+  geometry.center();
+  geometry.rotateY(Math.PI / 2);
+  return geometry;
+}
+
 const TEAM_COLORS = { red: 0xd94f3f, blue: 0x4f8de0 };
 // Paleta Vanguard V2: grafito profundo + placas gunmetal. El color de equipo
 // funciona como identificación luminosa, no como una masa de plástico rojo/azul.
@@ -60,12 +77,23 @@ const PAULDRON_GEO = extrudedPlate([
   [0.5, -0.08], [0.42, 0.34], [0.2, 0.5], [-0.2, 0.5],
 ]);
 const LIMB_GEO = extrudedPlate([[-0.38, 0.5], [0.38, 0.5], [0.5, -0.5], [-0.5, -0.5]], 0.05);
+const GUN_RECEIVER_GEO = extrudedProfile([
+  [-0.5, 0.28], [0.33, 0.28], [0.5, 0.08], [0.4, -0.28], [-0.43, -0.28],
+]);
+const GUN_STOCK_GEO = extrudedProfile([
+  [-0.5, 0.28], [0.25, 0.22], [0.5, -0.05], [0.35, -0.34], [-0.48, -0.24],
+]);
+const GUN_MAG_GEO = extrudedProfile([
+  [-0.42, 0.5], [0.42, 0.42], [0.5, -0.44], [-0.24, -0.5], [-0.5, -0.18],
+], 0.035);
 const BALL_GEO = new THREE.SphereGeometry(1, 14, 10);
 const CAPSULE_GEO = new THREE.CapsuleGeometry(0.25, 0.5, 4, 8);
 const CYLINDER_GEO = new THREE.CylinderGeometry(0.5, 0.5, 1, 10);
+const GRENADE_RING_GEO = new THREE.TorusGeometry(0.035, 0.007, 5, 12);
 for (const g of [
   BOX_GEO, ARMOR_GEO, CHEST_GEO, SHIELD_GEO, PAULDRON_GEO, LIMB_GEO,
-  BALL_GEO, CAPSULE_GEO, CYLINDER_GEO,
+  GUN_RECEIVER_GEO, GUN_STOCK_GEO, GUN_MAG_GEO,
+  BALL_GEO, CAPSULE_GEO, CYLINDER_GEO, GRENADE_RING_GEO,
 ]) g.userData.shared = true;
 
 // Seis pasos suaves: conserva el sombreado estilizado, pero recupera el detalle
@@ -146,6 +174,20 @@ function armorBox(w, h, d, color, x = 0, y = 0, z = 0) {
   m.castShadow = true;
   return m;
 }
+function gunBox(w, h, d, color, x = 0, y = 0, z = 0) {
+  const m = new THREE.Mesh(ARMOR_GEO, platedMaterial(color));
+  m.position.set(x, y, z);
+  m.scale.set(w, h, d);
+  m.castShadow = true;
+  return m;
+}
+function gunProfile(geometry, w, h, d, color, x = 0, y = 0, z = 0) {
+  const m = new THREE.Mesh(geometry, platedMaterial(color));
+  m.position.set(x, y, z);
+  m.scale.set(w, h, d);
+  m.castShadow = true;
+  return m;
+}
 function armorPlate(geometry, w, h, d, color, x = 0, y = 0, z = 0) {
   const m = new THREE.Mesh(geometry, platedMaterial(color));
   m.position.set(x, y, z);
@@ -169,6 +211,14 @@ function capsule(w, h, d, color, x = 0, y = 0, z = 0) {
 }
 function tube(r, len, color, x = 0, y = 0, z = 0) {
   const m = new THREE.Mesh(CYLINDER_GEO, toonMaterial(color));
+  m.position.set(x, y, z);
+  m.scale.set(r * 2, len, r * 2);
+  m.rotation.x = Math.PI / 2;
+  m.castShadow = true;
+  return m;
+}
+function gunTube(r, len, color, x = 0, y = 0, z = 0) {
+  const m = new THREE.Mesh(CYLINDER_GEO, platedMaterial(color));
   m.position.set(x, y, z);
   m.scale.set(r * 2, len, r * 2);
   m.rotation.x = Math.PI / 2;
@@ -239,143 +289,175 @@ function mergeDirectMeshes(group) {
   }
 }
 
-// METRALLETA: subfusil compacto — cuerpo corto, riel superior, cargador
-// largo con base de color, bocacha ancha y culata plegable.
+// METRALLETA: PDW compacto con receptor escalonado, guardamanos ventilado,
+// cargador curvo y culata esqueletizada. La silueta queda corta/vertical.
 export function buildSMG(teamColor) {
   const g = new THREE.Group();
-  g.add(armorBox(0.13, 0.17, 0.34, DARK, 0, 0, -0.05));        // receptor robusto
-  g.add(armorBox(0.115, 0.1, 0.24, MID, 0, 0.025, -0.08));     // carcasa gunmetal
-  g.add(box(0.09, 0.045, 0.25, PLATE, 0, 0.11, -0.1));         // riel superior
-  g.add(box(0.14, 0.035, 0.12, METAL, 0, 0.115, -0.13));       // dientes del riel
-  g.add(tube(0.035, 0.24, METAL, 0, 0.025, -0.34));            // cañón cilíndrico
-  g.add(tube(0.058, 0.1, RUBBER, 0, 0.025, -0.49));            // compensador ancho
-  g.add(box(0.075, 0.075, 0.07, MID, 0, 0.105, -0.31));        // mira frontal
-  g.add(glowBox(0.025, 0.025, 0.02, teamColor, 0, 0.14, -0.33));
-  const mag = box(0.085, 0.22, 0.1, MID, 0, -0.18, -0.015);    // cargador inclinado
-  mag.rotation.x = -0.16;
+  g.add(gunProfile(GUN_RECEIVER_GEO, 0.15, 0.19, 0.36, DARK, 0, 0.015, -0.07));
+  g.add(gunBox(0.13, 0.075, 0.31, MID, 0, 0.085, -0.1));
+  g.add(gunBox(0.14, 0.12, 0.23, PLATE, 0, 0.01, -0.31));       // guardamanos
+  for (const x of [-0.073, 0.073]) for (const z of [-0.37, -0.3, -0.23]) {
+    g.add(gunBox(0.012, 0.045, 0.035, RUBBER, x, 0.025, z));    // respiraderos laterales
+  }
+  g.add(gunTube(0.027, 0.17, METAL, 0, 0.025, -0.5));
+  g.add(gunTube(0.052, 0.085, DARK, 0, 0.025, -0.625));
+  g.add(gunBox(0.105, 0.025, 0.34, METAL, 0, 0.145, -0.12));   // riel
+  g.add(gunBox(0.07, 0.065, 0.045, MID, 0, 0.17, -0.34));
+  g.add(glowBox(0.018, 0.022, 0.016, teamColor, 0, 0.205, -0.36));
+  const mag = gunProfile(GUN_MAG_GEO, 0.09, 0.24, 0.12, MID, 0, -0.19, -0.015);
+  mag.rotation.x = -0.18;
   g.add(mag);
-  g.add(box(0.06, 0.13, 0.105, DARK, 0, -0.19, -0.02));        // nervio del cargador
-  g.add(box(0.09, 0.055, 0.105, teamColor, 0, -0.3, 0.015));
-  g.add(glowBox(0.055, 0.018, 0.02, teamColor, 0, -0.3, -0.045));
-  const grip = box(0.07, 0.13, 0.07, RUBBER, 0, -0.105, 0.09);
+  g.add(gunBox(0.095, 0.045, 0.115, RUBBER, 0, -0.315, 0.02));
+  const grip = gunProfile(GUN_MAG_GEO, 0.075, 0.16, 0.085, RUBBER, 0, -0.11, 0.105);
   grip.rotation.x = -0.22;
   g.add(grip);
-  g.add(box(0.045, 0.09, 0.2, PLATE, 0, 0.015, 0.21));         // culata plegable
-  g.add(box(0.1, 0.105, 0.045, teamColor, 0, 0.04, -0.2));     // placa lateral
-  g.add(box(0.055, 0.055, 0.018, DARK, 0, 0.04, -0.228));
-  g.add(glowBox(0.04, 0.015, 0.015, teamColor, 0, 0.04, -0.242));
-  g.userData.muzzle = anchor(g, 0, 0.025, -0.52);
-  g.userData.grip = anchor(g, 0, -0.09, 0.06);
-  // mano izq. al frente del receptor (más cerca): con las poses adelantadas
-  // para librar la coraza Vanguard, en -0.16 el brazo no alcanzaba
-  g.userData.forend = anchor(g, 0, -0.08, -0.1);
-  g.userData.mag = anchor(g, 0, -0.24, -0.03); // base del cargador (recarga)
+  g.add(gunBox(0.075, 0.04, 0.1, DARK, 0, -0.07, 0.015));      // guardamonte
+  for (const x of [-0.045, 0.045]) g.add(gunBox(0.018, 0.025, 0.29, METAL, x, 0.035, 0.25));
+  g.add(gunBox(0.12, 0.16, 0.055, RUBBER, 0, 0.015, 0.41));    // cantonera
+  g.add(gunBox(0.012, 0.11, 0.18, teamColor, 0.081, 0.02, -0.08));
+  g.add(glowBox(0.014, 0.03, 0.09, teamColor, 0.09, 0.02, -0.09));
+  g.userData.muzzle = anchor(g, 0, 0.025, -0.67);
+  g.userData.grip = anchor(g, 0, -0.09, 0.085);
+  g.userData.forend = anchor(g, 0, -0.055, -0.28);
+  g.userData.mag = anchor(g, 0, -0.29, 0.01);
   return g;
 }
 
-// ESCOPETA: pump-action — cañón + tubo de carga y bomba sobredimensionada.
+// ESCOPETA: pump-action pesada con doble línea cañón/tubo, bomba acanalada,
+// receptor de carga visible y culata maciza con cantonera de goma.
 export function buildShotgun(teamColor) {
   const g = new THREE.Group();
-  g.add(armorBox(0.14, 0.16, 0.31, DARK, 0, 0, 0));            // receptor pesado
-  g.add(armorBox(0.12, 0.1, 0.25, MID, 0, 0.025, -0.02));      // carcasa superior
-  g.add(tube(0.034, 0.48, METAL, 0, 0.055, -0.38));            // cañón
-  g.add(tube(0.03, 0.43, DARK, 0, -0.035, -0.35));             // tubo de carga
-  g.add(tube(0.052, 0.09, RUBBER, 0, 0.055, -0.61));           // bocacha reforzada
-  g.add(box(0.125, 0.115, 0.19, COPPER, 0, -0.035, -0.31));    // bomba sobredimensionada
-  g.add(box(0.135, 0.04, 0.11, DARK, 0, -0.035, -0.31));       // banda de agarre
-  const stock = box(0.12, 0.17, 0.25, MID, 0, -0.015, 0.24);
-  stock.rotation.x = -0.12;
+  g.add(gunProfile(GUN_RECEIVER_GEO, 0.16, 0.2, 0.36, DARK, 0, 0.015, 0.02));
+  g.add(gunBox(0.14, 0.08, 0.3, MID, 0, 0.1, -0.015));
+  g.add(gunBox(0.012, 0.065, 0.18, COPPER, 0.088, -0.015, 0)); // puerto de carga
+  g.add(gunTube(0.034, 0.61, METAL, 0, 0.08, -0.48));
+  g.add(gunTube(0.031, 0.55, DARK, 0, -0.015, -0.44));
+  g.add(gunTube(0.053, 0.09, RUBBER, 0, 0.08, -0.815));
+  g.add(gunBox(0.15, 0.125, 0.23, COPPER, 0, -0.02, -0.38));
+  for (const z of [-0.47, -0.425, -0.38, -0.335, -0.29]) {
+    g.add(gunBox(0.158, 0.022, 0.018, RUBBER, 0, -0.02, z));
+  }
+  const stock = gunProfile(GUN_STOCK_GEO, 0.14, 0.2, 0.34, MID, 0, -0.005, 0.34);
+  stock.rotation.x = -0.08;
   g.add(stock);
-  g.add(box(0.105, 0.12, 0.055, teamColor, 0, 0.075, 0.005));  // placa de facción
-  g.add(box(0.06, 0.06, 0.02, DARK, 0, 0.075, -0.03));
-  g.add(glowBox(0.04, 0.016, 0.015, teamColor, 0, 0.075, -0.047));
-  g.add(box(0.14, 0.04, 0.19, PLATE, 0, 0.105, -0.04));        // alza/cubierta superior
-  g.add(glowBox(0.025, 0.025, 0.02, teamColor, 0, 0.135, -0.09));
-  g.userData.muzzle = anchor(g, 0, 0.04, -0.6);
-  g.userData.grip = anchor(g, 0, -0.08, 0.09);
-  g.userData.forend = anchor(g, 0, -0.06, -0.3);              // mano izq. EN la bomba
-  g.userData.mag = anchor(g, 0, -0.1, -0.06);                 // ventana de carga (recarga)
+  g.add(gunBox(0.145, 0.2, 0.055, RUBBER, 0, -0.025, 0.53));
+  const grip = gunProfile(GUN_MAG_GEO, 0.075, 0.145, 0.08, RUBBER, 0, -0.115, 0.105);
+  grip.rotation.x = -0.2;
+  g.add(grip);
+  g.add(gunBox(0.09, 0.025, 0.48, METAL, 0, 0.16, -0.24));    // banda superior
+  g.add(glowBox(0.018, 0.018, 0.018, teamColor, 0, 0.18, -0.68));
+  g.add(gunBox(0.012, 0.1, 0.17, teamColor, 0.088, 0.015, 0.03));
+  g.userData.muzzle = anchor(g, 0, 0.08, -0.86);
+  g.userData.grip = anchor(g, 0, -0.09, 0.09);
+  g.userData.forend = anchor(g, 0, -0.02, -0.39);
+  g.userData.mag = anchor(g, 0.09, -0.04, -0.01);
   return g;
 }
 
-// PISTOLA: compacta, de una mano — corredera robusta, cañón corto y
-// empuñadura inclinada. oneHand: el brazo izquierdo NO la sostiene.
+// PISTOLA: corredera facetada, ventana de expulsión, miras independientes,
+// guardamonte y grip inclinado. Sigue siendo inequívocamente de una mano.
 export function buildPistol(teamColor) {
   const g = new THREE.Group();
-  g.add(armorBox(0.09, 0.11, 0.24, DARK, 0, 0.02, -0.04));    // corredera
-  g.add(box(0.075, 0.05, 0.2, MID, 0, 0.09, -0.05));          // lomo de la corredera
-  g.add(tube(0.026, 0.08, METAL, 0, 0.035, -0.19));           // boca del cañón
-  g.add(box(0.05, 0.035, 0.04, PLATE, 0, 0.125, -0.12));      // mira frontal
-  g.add(glowBox(0.02, 0.02, 0.015, teamColor, 0, 0.09, -0.155));
-  const grip = box(0.068, 0.15, 0.078, RUBBER, 0, -0.075, 0.05);
-  grip.rotation.x = -0.28;
+  g.add(gunProfile(GUN_RECEIVER_GEO, 0.1, 0.115, 0.29, MID, 0, 0.055, -0.07));
+  g.add(gunBox(0.095, 0.045, 0.25, METAL, 0, 0.125, -0.075)); // corredera
+  g.add(gunBox(0.012, 0.042, 0.09, DARK, 0.056, 0.128, -0.035));
+  g.add(gunTube(0.028, 0.055, RUBBER, 0, 0.067, -0.245));
+  g.add(gunBox(0.075, 0.032, 0.03, DARK, 0, 0.17, 0.025));
+  g.add(gunBox(0.045, 0.035, 0.025, DARK, 0, 0.17, -0.19));
+  g.add(glowBox(0.014, 0.014, 0.012, teamColor, 0, 0.19, -0.202));
+  const grip = gunProfile(GUN_MAG_GEO, 0.082, 0.18, 0.1, RUBBER, 0, -0.075, 0.065);
+  grip.rotation.x = -0.25;
   g.add(grip);
-  g.add(box(0.072, 0.05, 0.05, teamColor, 0, -0.005, 0.035)); // placa de facción
-  g.add(box(0.05, 0.045, 0.09, MID, 0, -0.03, -0.075));       // guardamonte
-  g.userData.muzzle = anchor(g, 0, 0.035, -0.24);
-  g.userData.grip = anchor(g, 0, -0.065, 0.035);
-  g.userData.mag = anchor(g, 0, -0.14, 0.06);                 // base del cargador
+  g.add(gunBox(0.086, 0.045, 0.1, DARK, 0, -0.02, -0.055));   // guardamonte
+  g.add(gunBox(0.012, 0.085, 0.11, teamColor, 0.049, -0.07, 0.07));
+  g.add(glowBox(0.012, 0.05, 0.055, teamColor, 0.057, -0.07, 0.065));
+  g.add(gunBox(0.09, 0.028, 0.09, METAL, 0, -0.18, 0.085));   // base cargador
+  g.userData.muzzle = anchor(g, 0, 0.065, -0.28);
+  g.userData.grip = anchor(g, 0, -0.07, 0.055);
+  g.userData.mag = anchor(g, 0, -0.17, 0.085);
   g.userData.oneHand = true;
   return g;
 }
 
-// GRANADA DE HUMO: bote compacto en la mano — cuerpo cilíndrico, tapa con
-// espoleta y banda del color de equipo.
+// GRANADA DE HUMO: canister táctico con dos tapas, nervios, palanca y anilla.
 export function buildGrenade(teamColor) {
   const g = new THREE.Group();
-  g.add(rod(0.05, 0.15, MID, 0, 0, 0));                       // cuerpo del bote
-  g.add(rod(0.052, 0.03, DARK, 0, 0.085, 0));                 // tapa
-  g.add(box(0.028, 0.045, 0.028, PLATE, 0, 0.115, 0));        // espoleta
-  g.add(box(0.05, 0.022, 0.014, METAL, 0.03, 0.1, 0));        // palanca
-  g.add(glowBox(0.052, 0.02, 0.052, teamColor, 0, -0.045, 0));// banda de equipo
-  g.userData.muzzle = anchor(g, 0, 0.1, 0);
+  g.add(new THREE.Mesh(CYLINDER_GEO, platedMaterial(MID)));
+  const body = g.children[0]; body.scale.set(0.115, 0.19, 0.115); body.castShadow = true;
+  g.add(rod(0.061, 0.032, DARK, 0, 0.105, 0));
+  g.add(rod(0.058, 0.025, RUBBER, 0, -0.108, 0));
+  for (const y of [-0.055, 0.015, 0.075]) g.add(rod(0.061, 0.012, METAL, 0, y, 0));
+  g.add(gunBox(0.038, 0.05, 0.038, PLATE, 0, 0.14, 0));
+  const lever = gunBox(0.052, 0.022, 0.095, METAL, 0.032, 0.13, 0.02);
+  lever.rotation.z = -0.12; g.add(lever);
+  const ring = new THREE.Mesh(GRENADE_RING_GEO, platedMaterial(METAL));
+  ring.position.set(-0.052, 0.15, 0); ring.rotation.y = Math.PI / 2; ring.castShadow = true; g.add(ring);
+  g.add(glowTube(0.061, 0.025, teamColor, 0, -0.045, 0));
+  g.userData.muzzle = anchor(g, 0, 0.14, 0);
   g.userData.grip = anchor(g, 0, -0.01, 0.02);
-  g.userData.mag = anchor(g, 0, -0.07, 0);
+  g.userData.mag = anchor(g, 0, -0.1, 0);
   g.userData.oneHand = true;
   g.userData.thrown = true;
   return g;
 }
 
-// FRANCOTIRADOR (especial de mapa): cañón largo, mira telescópica y culata
-// completa. Silueta claramente MÁS larga que cualquier primaria.
+// FRANCOTIRADOR: receptor angular, cañón flotante, freno perforado, óptica
+// completa, bolt handle, cargador y culata con cheek rest.
 export function buildSniper(teamColor) {
   const g = new THREE.Group();
-  g.add(armorBox(0.12, 0.15, 0.4, DARK, 0, 0, 0.02));         // receptor largo
-  g.add(tube(0.028, 0.6, METAL, 0, 0.03, -0.5));              // cañón
-  g.add(tube(0.05, 0.09, RUBBER, 0, 0.03, -0.81));            // freno de boca
-  g.add(tube(0.045, 0.24, DARK, 0, 0.16, -0.04));             // mira telescópica
-  g.add(glowBox(0.03, 0.03, 0.02, teamColor, 0, 0.16, -0.17));// lente frontal
-  g.add(box(0.05, 0.06, 0.05, MID, 0, 0.105, -0.04));         // montura de la mira
-  g.add(box(0.08, 0.16, 0.1, MID, 0, -0.13, 0.02));           // cargador
-  const stock = box(0.1, 0.16, 0.26, MID, 0, -0.02, 0.3);
-  stock.rotation.x = -0.1;
+  g.add(gunProfile(GUN_RECEIVER_GEO, 0.145, 0.19, 0.46, DARK, 0, 0.015, 0));
+  g.add(gunBox(0.12, 0.075, 0.42, MID, 0, 0.105, -0.08));
+  g.add(gunBox(0.13, 0.1, 0.3, PLATE, 0, 0.02, -0.37));
+  g.add(gunTube(0.028, 0.62, METAL, 0, 0.065, -0.66));
+  g.add(gunTube(0.052, 0.13, DARK, 0, 0.065, -1.025));
+  for (const x of [-0.055, 0.055]) for (const z of [-1.06, -1.01, -0.96]) {
+    g.add(gunBox(0.016, 0.035, 0.025, METAL, x, 0.065, z));
+  }
+  g.add(gunTube(0.052, 0.34, DARK, 0, 0.225, -0.065));
+  g.add(gunTube(0.06, 0.065, RUBBER, 0, 0.225, 0.135));
+  g.add(gunTube(0.068, 0.075, MID, 0, 0.225, -0.265));
+  g.add(glowTube(0.047, 0.012, teamColor, 0, 0.225, -0.307));
+  for (const z of [-0.16, 0.045]) g.add(gunBox(0.055, 0.075, 0.04, METAL, 0, 0.16, z));
+  const mag = gunProfile(GUN_MAG_GEO, 0.09, 0.2, 0.12, MID, 0, -0.145, -0.01);
+  mag.rotation.x = -0.1; g.add(mag);
+  const stock = gunProfile(GUN_STOCK_GEO, 0.135, 0.21, 0.4, MID, 0, -0.005, 0.42);
   g.add(stock);
-  g.add(box(0.09, 0.05, 0.1, teamColor, 0, 0.065, 0.12));     // placa de facción
-  g.userData.muzzle = anchor(g, 0, 0.03, -0.85);
+  g.add(gunBox(0.12, 0.085, 0.23, RUBBER, 0, 0.12, 0.38));    // cheek rest
+  g.add(gunBox(0.145, 0.22, 0.055, RUBBER, 0, -0.015, 0.64));
+  g.add(gunTube(0.026, 0.07, METAL, -0.09, 0.065, 0.11));     // bolt handle
+  g.add(ball(0.035, RUBBER, -0.09, 0.065, 0.16));
+  g.add(gunBox(0.012, 0.12, 0.22, teamColor, 0.084, 0.015, 0.03));
+  g.userData.muzzle = anchor(g, 0, 0.065, -1.1);
   g.userData.grip = anchor(g, 0, -0.08, 0.14);
-  g.userData.forend = anchor(g, 0, -0.06, -0.3);
-  g.userData.mag = anchor(g, 0, -0.2, 0.02);
+  g.userData.forend = anchor(g, 0, -0.045, -0.39);
+  g.userData.mag = anchor(g, 0, -0.23, -0.01);
   return g;
 }
 
-// BAZOOKA (especial de mapa): tubo lanzacohetes al hombro con boca
-// acampanada y escape trasero.
+// BAZOOKA: tubo de lanzamiento escalonado con collares, bloque óptico,
+// empuñaduras reales, apoyo de hombro y lectura clara de frente/escape.
 export function buildBazooka(teamColor) {
   const g = new THREE.Group();
-  g.add(tube(0.085, 0.8, DARK, 0, 0.03, -0.08));              // tubo principal
-  g.add(tube(0.102, 0.12, MID, 0, 0.03, -0.46));              // boca acampanada
-  g.add(tube(0.096, 0.1, MID, 0, 0.03, 0.3));                 // escape trasero
-  g.add(box(0.05, 0.1, 0.15, PLATE, 0, 0.17, -0.06));         // mira superior
-  g.add(glowBox(0.028, 0.02, 0.02, teamColor, 0, 0.23, -0.1));
-  const grip = box(0.06, 0.12, 0.07, RUBBER, 0, -0.08, 0.06);
-  grip.rotation.x = -0.2;
-  g.add(grip);
-  g.add(box(0.06, 0.1, 0.07, RUBBER, 0, -0.075, -0.2));       // agarre frontal
-  g.add(box(0.09, 0.05, 0.2, teamColor, 0, 0.135, 0.12));     // banda de facción
-  g.userData.muzzle = anchor(g, 0, 0.03, -0.54);
-  g.userData.grip = anchor(g, 0, -0.06, 0.06);
-  g.userData.forend = anchor(g, 0, -0.06, -0.2);
-  g.userData.mag = anchor(g, 0, -0.04, 0.1);
+  g.add(gunTube(0.09, 0.92, DARK, 0, 0.04, -0.07));
+  g.add(gunTube(0.112, 0.15, MID, 0, 0.04, -0.58));            // campana frontal
+  g.add(gunTube(0.13, 0.055, RUBBER, 0, 0.04, -0.67));
+  g.add(gunTube(0.105, 0.14, MID, 0, 0.04, 0.43));             // escape
+  g.add(gunTube(0.125, 0.05, METAL, 0, 0.04, 0.515));
+  for (const z of [-0.38, -0.16, 0.08, 0.28]) g.add(gunTube(0.098, 0.035, PLATE, 0, 0.04, z));
+  g.add(gunBox(0.12, 0.13, 0.25, PLATE, 0, 0.2, -0.08));      // unidad óptica
+  g.add(gunBox(0.09, 0.065, 0.13, DARK, 0, 0.29, -0.13));
+  g.add(glowBox(0.055, 0.04, 0.018, teamColor, 0, 0.29, -0.205));
+  const grip = gunProfile(GUN_MAG_GEO, 0.075, 0.16, 0.085, RUBBER, 0, -0.095, 0.08);
+  grip.rotation.x = -0.18; g.add(grip);
+  const frontGrip = gunProfile(GUN_MAG_GEO, 0.07, 0.14, 0.075, RUBBER, 0, -0.09, -0.28);
+  frontGrip.rotation.x = -0.08; g.add(frontGrip);
+  g.add(gunBox(0.14, 0.1, 0.17, RUBBER, 0, -0.02, 0.34));     // hombro
+  g.add(gunBox(0.012, 0.13, 0.24, teamColor, 0.105, 0.04, 0.04));
+  for (const z of [-0.01, 0.05, 0.11]) g.add(glowBox(0.012, 0.025, 0.025, teamColor, 0.113, 0.04, z));
+  g.userData.muzzle = anchor(g, 0, 0.04, -0.71);
+  g.userData.grip = anchor(g, 0, -0.075, 0.08);
+  g.userData.forend = anchor(g, 0, -0.075, -0.28);
+  g.userData.mag = anchor(g, 0, -0.05, 0.16);
   return g;
 }
 
@@ -386,8 +468,8 @@ export const WEAPON_BUILDERS = {
   grenade: buildGrenade, sniper: buildSniper, bazooka: buildBazooka,
 };
 export const WEAPON_SCALES = {
-  smg: [1.3, 1.3, 1.35], shotgun: [1.35, 1.35, 1.4], pistol: [1.25, 1.25, 1.25],
-  grenade: [1.2, 1.2, 1.2], sniper: [1.32, 1.32, 1.42], bazooka: [1.32, 1.32, 1.38],
+  smg: [1.24, 1.24, 1.24], shotgun: [1.24, 1.24, 1.24], pistol: [1.22, 1.22, 1.22],
+  grenade: [1.16, 1.16, 1.16], sniper: [1.18, 1.18, 1.18], bazooka: [1.22, 1.22, 1.22],
 };
 
 // temporales del IK

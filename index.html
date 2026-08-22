@@ -113,11 +113,12 @@
   #weapon .weapon-head { display: flex; align-items: center; justify-content: space-between;
     gap: 12px; padding-bottom: 7px; border-bottom: 1px solid var(--hud-line); }
   #weapon .weapon-icon { width: 116px; height: 40px; color: #d8dde1; opacity: .94; flex: 0 0 116px; }
-  #weapon .weapon-icon svg { width: 100%; height: 100%; overflow: visible; }
-  #weapon .weapon-icon svg { display: none; }
-  #weapon[data-weapon="smg"] .icon-smg, #weapon[data-weapon="shotgun"] .icon-shotgun,
-  #weapon[data-weapon="pistol"] .icon-pistol, #weapon[data-weapon="grenade"] .icon-grenade,
-  #weapon[data-weapon="sniper"] .icon-sniper, #weapon[data-weapon="bazooka"] .icon-bazooka { display: block; }
+  .weapon-glyph { width: 100%; height: 100%; overflow: visible; }
+  .weapon-glyph .wi-body { fill: currentColor; }
+  .weapon-glyph .wi-mid { fill: #697580; }
+  .weapon-glyph .wi-dark { fill: #151a1f; }
+  .weapon-glyph .wi-accent { fill: var(--accent); }
+  .weapon-glyph .wi-line { fill: none; stroke: #a7b0b7; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
   #weapon .slots { display: flex; justify-content: flex-end; gap: 5px; margin-top: 9px; }
   #weapon .slots .slot { display: flex; align-items: center; gap: 5px; padding: 3px 7px;
     border: 1px solid var(--hud-line); color: var(--dim); font-size: 9px; letter-spacing: .1em;
@@ -155,6 +156,70 @@
   #wep-bar.reloading .seg.on, #wep-bar.reloading .fill { background: var(--accent); }
   #wep-bar.reloading { animation: relpulse 0.5s infinite; }
   @keyframes relpulse { 50% { opacity: 0.55; } }
+
+  /* Selector de arma: cuatro sectores conectados al D-pad real. Mantiene un
+     solo estado/animación; JS únicamente cambia contenido y reinicia su TTL. */
+  #weapon-wheel { position: absolute; left: 50%; top: 50%; width: clamp(226px, 25vw, 292px);
+    aspect-ratio: 1; transform: translate(-50%,-48%) scale(.92); opacity: 0;
+    pointer-events: none; font-family: var(--mono); z-index: 31;
+    transition: opacity .13s ease-out, transform .16s cubic-bezier(.2,.85,.25,1); }
+  #weapon-wheel::before { content: ""; position: absolute; inset: 13%; border-radius: 50%;
+    background: radial-gradient(circle, rgba(8,11,14,.74) 0 23%, rgba(8,11,14,.2) 24% 31%, transparent 32%),
+      conic-gradient(from 45deg, rgba(255,255,255,.045) 0 24.6%, transparent 24.8% 25.2%,
+      rgba(255,255,255,.045) 25.4% 49.6%, transparent 49.8% 50.2%,
+      rgba(255,255,255,.045) 50.4% 74.6%, transparent 74.8% 75.2%,
+      rgba(255,255,255,.045) 75.4% 99.6%);
+    border: 1px solid rgba(180,192,202,.18); box-shadow: 0 14px 46px rgba(0,0,0,.35); }
+  #weapon-wheel.on { opacity: 1; transform: translate(-50%,-50%) scale(1); }
+  #weapon-wheel.leaving { opacity: 0; transform: translate(-50%,-51%) scale(.97); transition-duration: .22s; }
+  .wheel-sector { --sector-bg: rgba(13,18,23,.84); position: absolute; display: flex;
+    flex-direction: column; align-items: center; justify-content: center; color: #aeb6bc;
+    background: rgba(151,164,174,.26); filter: drop-shadow(0 5px 10px rgba(0,0,0,.22)); }
+  .wheel-sector::before { content: ""; position: absolute; inset: 1px; background: var(--sector-bg);
+    clip-path: inherit; transition: background .1s ease-out; }
+  .wheel-sector.up, .wheel-sector.down { width: 44%; height: 31%; left: 28%;
+    clip-path: polygon(14% 0,86% 0,100% 100%,72% 78%,50% 65%,28% 78%,0 100%); }
+  .wheel-sector.up { top: 3%; }
+  .wheel-sector.down { bottom: 3%; transform: rotate(180deg); }
+  .wheel-sector.left, .wheel-sector.right { width: 31%; height: 44%; top: 28%;
+    clip-path: polygon(0 14%,100% 0,78% 28%,65% 50%,78% 72%,100% 100%,0 86%); }
+  .wheel-sector.left { left: 3%; }
+  .wheel-sector.right { right: 3%; transform: rotate(180deg); }
+  .wheel-sector.down .wheel-content, .wheel-sector.right .wheel-content { transform: rotate(180deg); }
+  .wheel-content { position: relative; z-index: 1; width: 82%; display: flex; flex-direction: column;
+    align-items: center; gap: 1px; }
+  .wheel-sector.up .wheel-content { transform: translateY(-5%); }
+  .wheel-sector.down .wheel-content { transform: rotate(180deg) translateY(-5%); }
+  .wheel-sector.left .wheel-content { transform: translateX(-5%); }
+  .wheel-sector.right .wheel-content { transform: rotate(180deg) translateX(-5%); }
+  .wheel-sector .wheel-icon { width: 82%; height: 30px; }
+  .wheel-sector.left .wheel-icon, .wheel-sector.right .wheel-icon { width: 95%; }
+  .wheel-sector .wheel-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; font-size: 9px; letter-spacing: .09em; color: #d8dde0; }
+  .wheel-sector .wheel-meta { font-size: 8px; letter-spacing: .08em; color: #77838d; }
+  .wheel-sector .wheel-key { position: absolute; z-index: 2; color: #7f8a93; font-size: 8px;
+    letter-spacing: .08em; }
+  .wheel-sector.up .wheel-key { top: 5px; }
+  .wheel-sector.down .wheel-key { top: 5px; transform: rotate(180deg); }
+  .wheel-sector.left .wheel-key { left: 6px; top: 50%; transform: translateY(-50%); }
+  .wheel-sector.right .wheel-key { left: 6px; top: 50%; transform: translateY(-50%) rotate(180deg); }
+  .wheel-sector.selected { color: #fff3e9; background: var(--accent); filter: drop-shadow(0 0 14px rgba(255,122,47,.32)); }
+  .wheel-sector.selected::before { --sector-bg: rgba(78,42,23,.94); }
+  .wheel-sector.selected .wheel-label, .wheel-sector.selected .wheel-key { color: #fff; }
+  .wheel-sector.selected .wheel-meta { color: #ffc49e; }
+  .wheel-sector.dry { opacity: .46; }
+  .wheel-core { position: absolute; left: 50%; top: 50%; width: 17%; aspect-ratio: 1;
+    transform: translate(-50%,-50%) rotate(45deg); border: 1px solid rgba(255,122,47,.72);
+    background: rgba(9,12,15,.95); box-shadow: 0 0 18px rgba(255,122,47,.14); }
+  .wheel-core::before, .wheel-core::after { content: ""; position: absolute; background: var(--accent); opacity: .72; }
+  .wheel-core::before { left: 22%; right: 22%; height: 2px; top: calc(50% - 1px); }
+  .wheel-core::after { top: 22%; bottom: 22%; width: 2px; left: calc(50% - 1px); }
+  #hud.spectating #weapon-wheel { display: none; }
+  @media (max-width: 700px), (max-height: 600px) {
+    #weapon-wheel { width: clamp(205px, 34vw, 250px); }
+    .wheel-sector .wheel-icon { height: 25px; }
+    .wheel-sector .wheel-label { font-size: 8px; }
+  }
 
   #feed { top: 88px; right: 16px; display: flex; flex-direction: column; gap: 5px;
     align-items: flex-end; font-family: var(--mono); font-size: 13px; }
@@ -641,50 +706,32 @@
   <div id="spectator" aria-live="polite"></div>
   <div id="weapon" class="hud-panel" data-weapon="smg">
     <div class="weapon-head">
-      <div class="weapon-icon" aria-hidden="true">
-        <svg class="icon-smg" viewBox="0 0 160 48" fill="none">
-          <path fill="currentColor" d="M5 18h20l9-8h18l5 5h49l9 5h24v9h-29l-9 6H65l-7 11H45l5-14H30l-5-5H5z"/>
-          <path fill="#ff7a2f" d="M66 17h29v4H66zM113 17h18v3h-18z"/>
-          <path stroke="#89939c" stroke-width="2.5" d="M34 18v-6h16M55 32l9 13M72 35l5 11M103 21v12"/>
-          <path fill="#232a31" d="M72 32h16l-2 14H74zM49 31h12l-8 15H42z"/>
-        </svg>
-        <svg class="icon-shotgun" viewBox="0 0 160 48" fill="none">
-          <path fill="currentColor" d="M4 18h27l15-8h19l10 6h76v8H78l-12 8H49l-10 14H24l10-17H4z"/>
-          <path fill="#232a31" d="M52 31h17l9 15H64zM28 28h18L35 46H19z"/>
-          <path fill="#ff7a2f" d="M79 17h34v5H79zM119 17h28v3h-28z"/>
-          <path stroke="#89939c" stroke-width="2.5" d="M46 17l9-5h12M75 24h70M91 25v7M113 24v6"/>
-        </svg>
-        <svg class="icon-pistol" viewBox="0 0 160 48" fill="none">
-          <path fill="currentColor" d="M34 14h96v13H80l-7 17H56l7-17H44l-5-5h-5z"/>
-          <path fill="#ff7a2f" d="M40 14h22v4H40z"/>
-          <path fill="#232a31" d="M60 30h14l-5 14H55z"/>
-          <path stroke="#89939c" stroke-width="2.5" d="M34 21h92M122 14v13"/>
-        </svg>
-        <svg class="icon-grenade" viewBox="0 0 160 48" fill="none">
-          <rect fill="currentColor" x="64" y="12" width="30" height="32" rx="5"/>
-          <rect fill="#232a31" x="68" y="5" width="10" height="9"/>
-          <path fill="#ff7a2f" d="M64 26h30v6H64z"/>
-          <path stroke="#89939c" stroke-width="2.5" d="M80 5h13l5 6"/>
-        </svg>
-        <svg class="icon-sniper" viewBox="0 0 160 48" fill="none">
-          <path fill="currentColor" d="M2 20h34l8-6h22l6 4h86v7h-42l-10 8H86l-8 12H64l7-14H48l-6-5H2z"/>
-          <circle cx="70" cy="9" r="7" stroke="#89939c" stroke-width="2.5"/>
-          <path fill="#ff7a2f" d="M98 18h46v4H98z"/>
-          <path fill="#232a31" d="M84 30h14l-6 14H78z"/>
-        </svg>
-        <svg class="icon-bazooka" viewBox="0 0 160 48" fill="none">
-          <path fill="currentColor" d="M6 16h122v14H6z"/>
-          <path fill="#232a31" d="M128 11h22v24h-22zM60 30h14l-4 14H56zM88 30h12l6 12H92z"/>
-          <path fill="#ff7a2f" d="M14 16h18v14H14z"/>
-          <path stroke="#89939c" stroke-width="2.5" d="M42 11h30M42 11v5"/>
-        </svg>
-      </div>
+      <div class="weapon-icon" id="weapon-icon-current" aria-hidden="true"></div>
       <div><div class="name" id="wep-name" data-i18n="weapon.smg">SUBMACHINE GUN</div><div class="weapon-kicker" data-i18n="hud.activeWeapon">ACTIVE WEAPON</div></div>
     </div>
     <div class="ammo"><span class="mag" id="wep-mag">50</span><span class="res"><span class="res-label" data-i18n="hud.reserve">RESERVE</span><span class="res-value" id="wep-res">150</span></span></div>
     <div id="wep-bar"></div>
     <div class="slots" id="wep-slots"></div>
     <div class="reload" id="wep-msg"></div>
+  </div>
+  <div id="weapon-wheel" aria-hidden="true">
+    <div class="wheel-sector up" data-slot="3">
+      <span class="wheel-key">▲ · 4</span>
+      <div class="wheel-content"><div class="wheel-icon"></div><div class="wheel-label"></div><div class="wheel-meta"></div></div>
+    </div>
+    <div class="wheel-sector left" data-slot="1">
+      <span class="wheel-key">◀ · 2</span>
+      <div class="wheel-content"><div class="wheel-icon"></div><div class="wheel-label"></div><div class="wheel-meta"></div></div>
+    </div>
+    <div class="wheel-sector right" data-slot="0">
+      <span class="wheel-key">▶ · 1</span>
+      <div class="wheel-content"><div class="wheel-icon"></div><div class="wheel-label"></div><div class="wheel-meta"></div></div>
+    </div>
+    <div class="wheel-sector down" data-slot="2">
+      <span class="wheel-key">▼ · 3</span>
+      <div class="wheel-content"><div class="wheel-icon"></div><div class="wheel-label"></div><div class="wheel-meta"></div></div>
+    </div>
+    <div class="wheel-core"></div>
   </div>
   <div id="feed"></div>
   <div id="center-msg"></div>

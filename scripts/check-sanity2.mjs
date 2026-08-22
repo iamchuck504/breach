@@ -46,7 +46,7 @@ await page.evaluate(() => {
     const el = document.getElementById('weapon');
     const vis = [...el.querySelectorAll('.weapon-icon svg')]
       .filter((s) => getComputedStyle(s).display !== 'none')
-      .map((s) => s.getAttribute('class'));
+      .map((s) => s.dataset.icon);
     return {
       data: el.dataset.weapon,
       name: document.getElementById('wep-name').textContent,
@@ -81,7 +81,7 @@ const hudPerWeapon = await page.evaluate(async () => {
 for (const w of ['smg', 'shotgun', 'pistol', 'grenade']) {
   const h = hudPerWeapon[w];
   check(`HUD ${w}: icono único y correcto`,
-    h.icons === 1 && h.icon === `icon-${w}` && h.data === w, JSON.stringify(h));
+    h.icons === 1 && h.icon === w && h.data === w, JSON.stringify(h));
   check(`HUD ${w}: munición sin mezclarse`,
     h.mag === h.realMag && h.res === h.realRes && h.curChip, JSON.stringify(h));
 }
@@ -106,7 +106,7 @@ const takeSniper = await page.evaluate(async () => {
 });
 check('HUD actualiza al recoger la especial',
   takeSniper.cur === 'sniper' && takeSniper.data === 'sniper' &&
-  takeSniper.icon === 'icon-sniper' && takeSniper.icons === 1 &&
+  takeSniper.icon === 'sniper' && takeSniper.icons === 1 &&
   takeSniper.mag === 1 && takeSniper.res === 5, JSON.stringify(takeSniper));
 
 // --- la especial entra en el CICLO (rueda y Q la alcanzan)

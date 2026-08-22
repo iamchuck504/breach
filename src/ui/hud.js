@@ -1,5 +1,6 @@
 import { t, getLanguage } from '../core/i18n.js';
 import { TUNING } from '../config/tuning.js';
+import { weaponIconMarkup } from './weapon-icons.js';
 
 // HUD sobre DOM. Toda retícula se proyecta desde la trayectoria física del
 // cañón: ADS usa el anillo y hip/blind usa #barrel-dot.
@@ -26,6 +27,8 @@ export class HUD {
       sbRed: document.getElementById('sb-red'),
       sbBlue: document.getElementById('sb-blue'),
       weapon: document.getElementById('weapon'),
+      wepIcon: document.getElementById('weapon-icon-current'),
+      wepWheel: document.getElementById('weapon-wheel'),
       wepName: document.getElementById('wep-name'),
       wepMag: document.getElementById('wep-mag'),
       wepRes: document.getElementById('wep-res'),
@@ -39,6 +42,9 @@ export class HUD {
     };
     this._centerT = null;
     this._hintT = null;
+    this._wheelT = null;
+    this._wheelLeaveT = null;
+    this._wheelIntent = null;
   }
 
   _pulse(el, cls) {
@@ -47,7 +53,10 @@ export class HUD {
     el.classList.add(cls);
   }
 
-  show(on) { this.el.hud.classList.toggle('on', on); }
+  show(on) {
+    this.el.hud.classList.toggle('on', on);
+    if (!on) this.hideWeaponWheel(true);
+  }
   showMenu(on) { this.el.menu.classList.toggle('off', !on); }
 
   invalidateLanguage() {
@@ -64,12 +73,73 @@ export class HUD {
     if (this._scoreUnitKey) for (const el of this.el.scoreUnits) el.textContent = t(this._scoreUnitKey);
   }
 
+  _syncWeaponWheel(w, selected = w.selectionTarget ?? w.cur) {
+    if (!this.el.wepWheel) return;
+    const sectors = this.el.wepWheel.querySelectorAll('.wheel-sector');
+    for (const sector of sectors) {
+      const idx = Number(sector.dataset.slot);
+      const weapon = w.slots[idx];
+      const st = w.state[weapon];
+      const def = TUNING.weapons[weapon];
+      if (!weapon || !st || !def) continue;
+      if (sector.dataset.weapon !== weapon) {
+        sector.dataset.weapon = weapon;
+        sector.querySelector('.wheel-icon').innerHTML = weaponIconMarkup(weapon);
+      }
+      sector.querySelector('.wheel-label').textContent = t(`weapon.${weapon}Short`);
+      sector.querySelector('.wheel-meta').textContent = def.thrown
+        ? `×${st.mag}`
+        : def.special
+          ? `×${st.mag + st.reserve}`
+          : `${st.mag}/${st.reserve}`;
+      sector.classList.toggle('selected', weapon === selected);
+      sector.classList.toggle('dry', st.mag <= 0 && st.reserve <= 0);
+    }
+  }
+
+  // Un solo overlay y un solo TTL. Cada nuevo input actualiza el highlight y
+  // reinicia la permanencia, evitando flicker o animaciones superpuestas.
+  weaponWheel(w, target = w.selectionTarget ?? w.cur) {
+    if (!this.el.wepWheel) return;
+    this._wheelIntent = target;
+    this._syncWeaponWheel(w, target);
+    clearTimeout(this._wheelT);
+    clearTimeout(this._wheelLeaveT);
+    this.el.wepWheel.classList.remove('leaving');
+    this.el.wepWheel.classList.add('on');
+    this._wheelT = setTimeout(() => {
+      this.el.wepWheel.classList.remove('on');
+      this.el.wepWheel.classList.add('leaving');
+      this._wheelLeaveT = setTimeout(() => {
+        this.el.wepWheel.classList.remove('leaving');
+        this._wheelIntent = null;
+      }, 230);
+    }, 500);
+  }
+
+  hideWeaponWheel(immediate = false) {
+    if (!this.el.wepWheel) return;
+    clearTimeout(this._wheelT);
+    clearTimeout(this._wheelLeaveT);
+    this._wheelIntent = null;
+    this.el.wepWheel.classList.remove('on');
+    if (immediate) this.el.wepWheel.classList.remove('leaving');
+    else {
+      this.el.wepWheel.classList.add('leaving');
+      this._wheelLeaveT = setTimeout(() => this.el.wepWheel.classList.remove('leaving'), 230);
+    }
+  }
+
   ammo(w) {
     const weaponChanged = this._lastWep !== undefined && this._lastWep !== w.cur;
     const ammoChanged = !weaponChanged && this._lastMag !== undefined && this._lastMag !== w.st.mag;
     if (weaponChanged) this._pulse(this.el.weapon, 'weapon-change');
     if (ammoChanged) this._pulse(this.el.weapon, 'ammo-change');
     this.el.weapon.dataset.weapon = w.cur;
+    if (this.el.wepIcon?.dataset.weapon !== w.cur) {
+      this.el.wepIcon.dataset.weapon = w.cur;
+      this.el.wepIcon.innerHTML = weaponIconMarkup(w.cur, 'weapon-current-glyph');
+    }
     this.el.wepName.textContent = t(w.def.nameKey);
     this.el.wepMag.textContent = w.st.mag;
     this.el.wepRes.textContent = w.st.reserve;
@@ -102,6 +172,7 @@ export class HUD {
     // barra de slots (1-4): nombre corto por arma, el actual resaltado,
     // atenuado si se quedó completamente sin munición
     const sig = w.slots.join(',');
+    const slotChanged = this._slotSig !== undefined && this._slotSig !== sig;
     if (this._slotSig !== sig) {
       this._slotSig = sig;
       this.el.wepSlots.innerHTML = '';
@@ -131,6 +202,10 @@ export class HUD {
       chips[i].classList.toggle('cur', k === w.cur);
       chips[i].classList.toggle('dry', !!st && st.mag <= 0 && st.reserve <= 0);
     }
+    this._syncWeaponWheel(w, this._wheelIntent ?? w.selectionTarget ?? w.cur);
+    // Pickups, drops y reset de loadout cambian slots sin pasar por el input
+    // normal. También merecen feedback, pero la carga inicial no abre el wheel.
+    if (slotChanged) this.weaponWheel(w, w.cur);
 
     // progreso real de la recarga normal
     const rel = w.reloading ? w.reloadProgress : null;

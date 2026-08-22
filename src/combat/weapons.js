@@ -17,6 +17,7 @@ export class Weapons {
     this.swapT = 0;        // tiempo restante del cambio
     this._swapped = false; // ya se intercambió el modelo a mitad del gesto
     this._swapTarget = null;
+    this._queuedTarget = null; // última intención recibida tras el punto de cambio
     this.reloadInterrupted = false; // evento de un frame para audio/animación
     this.reloadInserted = 0; // cartuchos insertados físicamente este frame
     this._reloadInterruptPending = false;
@@ -31,6 +32,7 @@ export class Weapons {
   get st() { return this.state[this.cur]; }
   get reloading() { return this.st.reload > 0; }
   get swapping() { return this.swapT > 0; }
+  get selectionTarget() { return this._queuedTarget ?? this._swapTarget ?? this.cur; }
 
   reset() {
     this.slots = [...DEFAULT_LOADOUT];
@@ -40,6 +42,7 @@ export class Weapons {
     this.swapT = 0;
     this._swapped = false;
     this._swapTarget = null;
+    this._queuedTarget = null;
     this.reloadInterrupted = false;
     this.reloadInserted = 0;
     this._reloadInterruptPending = false;
@@ -52,6 +55,7 @@ export class Weapons {
     this.swapT = 0;
     this._swapped = false;
     this._swapTarget = null;
+    this._queuedTarget = null;
     this._reloadInterruptPending = false;
     for (const k of this.slots) this.state[k].reload = 0;
   }
@@ -86,6 +90,7 @@ export class Weapons {
     this.swapT = 0;
     this._swapped = false;
     this._swapTarget = null;
+    this._queuedTarget = null;
     return removed;
   }
 
@@ -98,23 +103,46 @@ export class Weapons {
     if (mag !== null) this.state[k].mag = mag;
     if (reserve !== null) this.state[k].reserve = reserve;
     if (this.cur === removed) this.cur = k;
+    if (this._swapTarget === removed) this._swapTarget = k;
+    if (this._queuedTarget === removed) this._queuedTarget = k;
     return removed;
   }
 
   // Siguiente slot al ciclar (Q / rueda del mouse)
   cycleTarget(dir = 1) {
-    const i = Math.max(0, this.slots.indexOf(this.cur));
+    const i = Math.max(0, this.slots.indexOf(this.selectionTarget));
     return this.slots[(i + dir + this.slots.length) % this.slots.length];
   }
 
   // target = id de arma (selección directa) o null para ciclar +1
   startSwap(target = null) {
-    if (this.swapT > 0) return false;
     const next = target ?? this.cycleTarget(1);
-    if (!next || next === this.cur || !this.state[next]) return false;
+    if (!next || !this.state[next]) return false;
+
+    // Una sola animación sirve a los inputs rápidos. Antes de que cambie el
+    // modelo se puede redirigir; después se conserva únicamente la intención
+    // más reciente para ejecutarla al recuperar control.
+    if (this.swapT > 0) {
+      if (!this._swapped) {
+        if (next === this._swapTarget) return false;
+        this._swapTarget = next;
+        this._queuedTarget = null;
+        return true;
+      }
+      if (next === this.cur) {
+        const changed = this._queuedTarget !== null;
+        this._queuedTarget = null;
+        return changed;
+      }
+      if (next === this._queuedTarget) return false;
+      this._queuedTarget = next;
+      return true;
+    }
+    if (next === this.cur) return false;
     this.swapT = SWAP_TIME;
     this._swapped = false;
     this._swapTarget = next;
+    this._queuedTarget = null;
     this.st.reload = 0; // cambiar cancela la recarga
     return true;
   }
@@ -165,7 +193,14 @@ export class Weapons {
         if (this._swapTarget && this.state[this._swapTarget]) this.cur = this._swapTarget;
         this._swapTarget = null;
       }
-      if (this.swapT < 0) this.swapT = 0;
+      if (this.swapT <= 0) {
+        this.swapT = 0;
+        const queued = this._queuedTarget;
+        this._queuedTarget = null;
+        this._swapped = false;
+        this._swapTarget = null;
+        if (queued && queued !== this.cur && this.state[queued]) this.startSwap(queued);
+      }
       return false; // sin disparo durante el cambio
     }
 

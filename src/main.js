@@ -3246,20 +3246,26 @@ function simStep(dt) {
     }
   }
   // selección de arma: Q y la rueda CICLAN; 1-4 y el d-pad seleccionan
-  // directo por slot. Un cambio ya en curso ignora inputs nuevos (sin
-  // dobles cambios ni exploits de animación); durante el melee el arma
-  // está ocupada en el golpe.
+  // directo por slot. El cambio conserva una sola animación, pero acepta la
+  // última intención si el jugador corrige rápidamente la selección; durante
+  // melee el arma permanece ocupada en el golpe.
   if (!p.dead && p.state !== 'melee' && G.throwT <= 0) {
     let swapped = false;
+    let swapTarget = null;
     if (input.slotPressed >= 0) {
-      const target = G.weapons.slots[input.slotPressed];
-      swapped = !!target && G.weapons.startSwap(target);
+      swapTarget = G.weapons.slots[input.slotPressed];
+      swapped = !!swapTarget && G.weapons.startSwap(swapTarget);
     } else if (input.cycleDir !== 0) {
-      swapped = G.weapons.startSwap(G.weapons.cycleTarget(Math.sign(input.cycleDir)));
+      swapTarget = G.weapons.cycleTarget(Math.sign(input.cycleDir));
+      swapped = G.weapons.startSwap(swapTarget);
     } else if (input.swapPressed) {
-      swapped = G.weapons.startSwap();
+      swapTarget = G.weapons.cycleTarget(1);
+      swapped = G.weapons.startSwap(swapTarget);
     }
-    if (swapped) audio.reload();
+    if (swapped) {
+      audio.reload();
+      hud.weaponWheel(G.weapons, swapTarget);
+    }
   }
 
   // melee: whoosh al armar el golpe y UNA sola ventana de impacto por gesto
