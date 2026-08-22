@@ -86,6 +86,8 @@ export const PALETTE = [
     metaKey: 'editor.meta.urban', t: 'baseDecor', w: 3.2, d: 0.9, h: BLOCK.MID },
   { id: 'street:coffee', group: 'internal', label: 'CARRITO DE CAFÉ', icon: '▤',
     metaKey: 'editor.meta.urban', t: 'baseDecor', w: 1.3, d: 0.75, h: 2.2 },
+  { id: 'street:building', group: 'internal', label: 'EDIFICIO DE CALLE', icon: '▥',
+    metaKey: 'editor.meta.urban', t: 'baseDecor', w: 4.8, d: 11.7, h: 8.2 },
   // --- herramienta del editor: personaje de REFERENCIA con las dimensiones
   // reales del juego. No colisiona, no aparece en partida y el export lo
   // elimina — es la regla de escala del entorno.
@@ -285,7 +287,7 @@ export function mapFromSnapshot(layout, snap, name = null) {
     theme: layout,
     base: layout,     // decoración: el builder original corre intacto
     decorCaptured: true,
-    decorCaptureVersion: 2,
+    decorCaptureVersion: 3,
     fx: snap.fx, fz: snap.fz,
     walls: false,     // el perímetro ya viene capturado como cajas editables
     objects,

@@ -1928,6 +1928,21 @@ export class World {
     // cobertura de aproximación al centro
     this._box(3.6, -2.2, 2.4, 0.9, LOW, { ...lowOpts, visual: false });
 
+    // Mobiliario físico que NO es cover. Estos volúmenes impiden atravesar
+    // postes, hidrantes y el respaldo de las paradas, pero no generan caras
+    // de cobertura, blindfire ni posiciones atractivas para los bots.
+    const solidProp = { mirror: false, visual: false, cover: false, surface: 'metal' };
+    for (const z of [-25, -15, -5, 5, 15, 25]) {
+      this._box(-11.72, z, 0.34, 0.34, STREET_SCALE.lamp, solidProp);
+      this._box(11.72, z, 0.34, 0.34, STREET_SCALE.lamp, solidProp);
+    }
+    this._box(-12.45, -11, 0.46, 0.46, 0.68, solidProp);
+    this._box(12.45, 11, 0.46, 0.46, 0.68, solidProp);
+    // Las paradas están giradas 90°: una caja fina sigue únicamente el
+    // respaldo/estructura y conserva libre el frente de espera.
+    this._box(14.35, -25.0, 0.62, 2.85, 2.45, solidProp);
+    this._box(-14.35, 25.0, 0.62, 2.85, 2.45, solidProp);
+
     this._decorCalle();
   }
 
@@ -2040,6 +2055,7 @@ export class World {
     // marquesinas y rótulos quedan detrás/sobre el muro y no generan hitboxes
     // falsas dentro de la avenida.
     const addStreetBuilding = (side, z, span, height, name, color, variant = 0) => {
+      const firstPart = this.mapGroup.children.length;
       // El muro físico comienza a ±17.0 y la masa exterior termina en ±16.92.
       // La piel se proyecta 5 cm hacia la calle para que nunca comparta plano
       // con el ladrillo del volumen (la causa del parpadeo anterior).
@@ -2072,9 +2088,10 @@ export class World {
       // Volumen exterior: visible por encima de la fachada, sin afectar juego.
       // El techo usa material liso: evita el patrón de ladrillo horizontal
       // de alta frecuencia que producía moiré al observar el mapa desde arriba.
+      const massX = side * (this.fx + 2.22);
       const mass = new THREE.Mesh(new THREE.BoxGeometry(4.6, height, span),
         [facadeMat, facadeMat, roofMat, roofMat, facadeMat, facadeMat]);
-      mass.position.set(side * (this.fx + 2.22), height / 2, z); mass.castShadow = true; this.mapGroup.add(mass);
+      mass.position.set(massX, height / 2, z); mass.castShadow = true; this.mapGroup.add(mass);
       const face = new THREE.Mesh(new THREE.PlaneGeometry(span - 0.16, height - 0.18), facadeMat);
       face.position.set(faceX, height / 2, z); face.rotation.y = rot; this.mapGroup.add(face);
       const cap = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.18, span + 0.3), stoneMat);
@@ -2221,6 +2238,19 @@ export class World {
       // bajante y cajas eléctricas aportan escala humana sin ocupar suelo.
       const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, height - 0.5, 7), frameMat);
       pipe.position.set(faceX + toward * 0.10, (height - 0.5) / 2, z - span * 0.44); this.mapGroup.add(pipe);
+
+      // El edificio completo pasa a ser una sola unidad editable. Conserva
+      // todas las piezas en coordenadas locales para que duplicar/mover desde
+      // el editor arrastre masa, fachada, rótulo, ventanas y accesorios.
+      const parts = this.mapGroup.children.slice(firstPart);
+      const building = new THREE.Group();
+      building.position.set(massX, 0, z);
+      this.mapGroup.add(building);
+      for (const part of parts) building.attach(part);
+      this._registerBaseDecor(building, 'building', {
+        x: massX, z, rotation: 0, w: 6.3, d: span + 0.5, h: height,
+        name, color, variant,
+      });
     };
     // Pares a 180°: la calle tiene barrios/negocios distintos, pero ambos
     // equipos conservan el mismo número de entradas y la misma lectura.
@@ -2253,7 +2283,7 @@ export class World {
     this._addStreetBus(0, -22.5, Math.PI / 2, 0);
     this._addStreetBus(0, 22.5, -Math.PI / 2, 1);
     // Dos paradas explican que los autobuses cerraban una ruta urbana real.
-    // Son decoración sobre la acera; no añaden collider ni estrechan flancos.
+    // Su respaldo tiene colisión simple sin cover; el frente queda accesible.
     this._addUrbanAsset('busShelter', 14.35, -25.0,
       { scale: 0.84, rotation: Math.PI / 2 });
     this._addUrbanAsset('busShelter', -14.35, 25.0,
@@ -2525,7 +2555,8 @@ export class World {
       }
     }
     // Hidrantes, parquímetros y señales concentran detalle sobre la acera.
-    // No tienen collider: se mantienen pegados detrás del bordillo.
+    // Los hidrantes tienen un collider pequeño sin cover; señales y medidores
+    // permanecen puramente visuales para no ensuciar la navegación.
     const streetMetal = new THREE.MeshStandardMaterial({ color: 0x30383d, metalness: 0.64, roughness: 0.4 });
     const hydrantMat = new THREE.MeshStandardMaterial({ color: 0x8e3e31, metalness: 0.45, roughness: 0.48 });
     for (const [x, z] of [[-12.45, -11], [12.45, 11]]) {

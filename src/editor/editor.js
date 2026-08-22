@@ -101,27 +101,71 @@ export class MapEditor {
   // fueran editables. Conserva la posición actual de cada collider y le
   // adjunta su carrocería; el usuario no tiene que borrar ni volver a clonar.
   _upgradeBaseDecor() {
-    if (!this.map?.base || (this.map.decorCaptureVersion ?? 0) >= 2) return false;
+    const previousVersion = this.map?.decorCaptureVersion ?? 0;
+    if (!this.map?.base || previousVersion >= 3) return false;
     const template = mapFromSnapshot(this.map.base, this.world.snapshotLayout(this.map.base));
     const isBox = (o) => paletteById(o.p)?.t === 'box';
     const sourceBoxes = template.objects.filter(isBox);
     const targetBoxes = this.map.objects.filter(isBox);
-    const hadCapturedDecor = this.map.objects.some((o) => o.baseDecor);
+    const sourceDecor = template.objects.filter((o) => o.baseDecor);
     const newLinks = new Map();
-    for (const source of template.objects.filter((o) => o.baseDecor)) {
-      // La primera versión ya capturaba GLBs y vehículos. En esos clones
-      // solo faltan las pieles procedurales nuevas; no duplicarlas al migrar.
-      if (hadCapturedDecor && paletteById(source.p)?.t !== 'baseDecor') continue;
+    const freshLink = (sourceLink) => {
+      if (!newLinks.has(sourceLink)) {
+        newLinks.set(sourceLink, 'link-' + Math.random().toString(36).slice(2, 9));
+      }
+      return newLinks.get(sourceLink);
+    };
+
+    // v3 añade colisión física (sin cover) a mobiliario urbano que antes era
+    // atravesable. En clones ya guardados, crear esas cajas y enlazarlas con
+    // el asset existente para que mover/duplicar conserve una sola unidad.
+    for (const source of sourceBoxes.filter((o) => o.cover === false && o.visual === false)) {
+      const exists = targetBoxes.some((o) => o.cover === false && o.visual === false &&
+        Math.hypot(o.x - source.x, o.z - source.z) < 0.08 &&
+        Math.abs((o.w ?? 0) - (source.w ?? 0)) < 0.08 &&
+        Math.abs((o.d ?? 0) - (source.d ?? 0)) < 0.08);
+      if (exists) continue;
+      const copy = JSON.parse(JSON.stringify(source));
+      copy.id = 'o' + Math.random().toString(36).slice(2, 9);
+      if (source.link) {
+        copy.link = freshLink(source.link);
+        const sourceAsset = sourceDecor.find((o) => o.link === source.link);
+        if (sourceAsset) {
+          const peers = sourceDecor.filter((o) => o.p === sourceAsset.p);
+          const targetPeers = this.map.objects.filter((o) => o.baseDecor && o.p === sourceAsset.p);
+          const ordinal = peers.indexOf(sourceAsset);
+          const targetAsset = targetPeers.find((o) =>
+            Math.hypot(o.x - sourceAsset.x, o.z - sourceAsset.z) < 0.15) ?? targetPeers[ordinal];
+          if (targetAsset) {
+            targetAsset.link = copy.link;
+            copy.x = targetAsset.x;
+            copy.z = targetAsset.z;
+            const ratio = (targetAsset.scale ?? 1) / (sourceAsset.scale ?? 1);
+            copy.w = +(copy.w * ratio).toFixed(4);
+            copy.d = +(copy.d * ratio).toFixed(4);
+            copy.h = +(copy.h * ratio).toFixed(4);
+            const turns = Math.abs(Math.round(((targetAsset.rot ?? 0) - (sourceAsset.rot ?? 0)) / 90)) % 2;
+            if (turns) [copy.w, copy.d] = [copy.d, copy.w];
+          }
+        }
+      }
+      this.map.objects.push(copy);
+      targetBoxes.push(copy);
+    }
+
+    for (const source of sourceDecor) {
+      // v1 ya tenía GLBs/vehículos; v2 ya tenía además las pieles de cover.
+      // Cada migración agrega únicamente las familias introducidas después.
+      if (previousVersion >= 2 && source.p !== 'street:building') continue;
+      if (previousVersion === 1 && paletteById(source.p)?.t !== 'baseDecor') continue;
       const copy = JSON.parse(JSON.stringify(source));
       copy.id = 'o' + Math.random().toString(36).slice(2, 9);
       if (source.link) {
         const sourceIndex = sourceBoxes.findIndex((o) => o.link === source.link);
-        const target = targetBoxes[sourceIndex];
+        const linked = newLinks.get(source.link);
+        const target = targetBoxes.find((o) => linked && o.link === linked) ?? targetBoxes[sourceIndex];
         if (!target) continue;
-        if (!newLinks.has(source.link)) {
-          newLinks.set(source.link, 'link-' + Math.random().toString(36).slice(2, 9));
-        }
-        copy.link = newLinks.get(source.link);
+        copy.link = freshLink(source.link);
         target.link = copy.link;
         // Si el collider ya se movió en el clon antiguo, recuperar el visual
         // directamente sobre su posición actual, no sobre la original.
@@ -131,7 +175,7 @@ export class MapEditor {
       this.map.objects.push(copy);
     }
     this.map.decorCaptured = true;
-    this.map.decorCaptureVersion = 2;
+    this.map.decorCaptureVersion = 3;
     return true;
   }
 
