@@ -1579,18 +1579,24 @@ export class World {
       // espacio; cuatro paños integrados sustituyen las barras flotantes.
       if (side === doorSide) {
         const doorX = side * (S.width / 2 + 0.106);
-        add(0.050, STREET_SCALE.door, 1.44, doorX, STREET_SCALE.door / 2, -3.34, lower);
-        for (const p of [-3.68, -3.00]) {
+        // El eje delantero está en z=-2.88 y su neumático alcanza z=-3.38.
+        // La puerta queda completamente delante del paso de rueda, con un
+        // pequeño tramo de carrocería entre ambos para evitar la intersección.
+        const doorZ = -3.92;
+        const doorWidth = 0.88;
+        add(0.050, STREET_SCALE.door, doorWidth, doorX, STREET_SCALE.door / 2, doorZ, lower);
+        for (const p of [-4.14, -3.70]) {
           for (const [py, ph] of [[1.72, 0.84], [0.73, 0.60]]) {
-            const pane = new THREE.Mesh(new THREE.PlaneGeometry(0.58, ph), glass);
+            const pane = new THREE.Mesh(new THREE.PlaneGeometry(0.34, ph), glass);
             pane.position.set(side * (S.width / 2 + 0.133), py, p);
             pane.rotation.y = side * Math.PI / 2; pane.renderOrder = 4; group.add(pane);
           }
         }
         add(0.055, STREET_SCALE.door - 0.10, 0.040,
-          side * (S.width / 2 + 0.137), STREET_SCALE.door / 2, -3.34, lower);
+          side * (S.width / 2 + 0.137), STREET_SCALE.door / 2, doorZ, lower);
         for (const py of [0.39, 1.12, 2.17]) {
-          add(0.055, 0.045, 1.36, side * (S.width / 2 + 0.137), py, -3.34, lower);
+          add(0.055, 0.045, doorWidth - 0.08,
+            side * (S.width / 2 + 0.137), py, doorZ, lower);
         }
       }
       for (const p of [-2.88, 2.82]) {
