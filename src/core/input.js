@@ -117,7 +117,10 @@ export class Input {
   // Siempre pointer lock PLANO: el modo raw input (unadjustedMovement) se
   // eliminó por completo — es el camino con el bug de ClipCursor en Windows.
   requestLock() {
-    if (this.lockDisabled) return;
+    // Menús, presentaciones y el editor mantienen suppress=true. Nunca deben
+    // recapturar el cursor al hacer clic en el canvas; el editor procesa ese
+    // mismo evento con sus propios controles de selección/arrastre.
+    if (this.lockDisabled || this.suppress) return;
     try {
       const q = this.canvas.requestPointerLock();
       if (q && q.catch) q.catch(() => {});
