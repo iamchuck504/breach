@@ -1995,7 +1995,7 @@ function bindNet(net) {
         const contact = world.raycastHit(o, remoteDir, remoteLen + 0.08);
         if (contact && Math.abs(contact.t - remoteLen) < 0.12) {
           const point = o.clone().addScaledVector(remoteDir, contact.t);
-          effects.impact(point, contact.normal, contact.surface);
+          effects.impact(point, contact.normal, contact.surface, { origin: o });
           audio.impact(point, contact.surface);
         }
       }
@@ -2873,8 +2873,10 @@ function fireShot() {
     anyPoint = hit.point;
     effects.tracer(muzzle, hit.point, scoped && w.cur === 'sniper');
     if (hit.kind === 'world') {
-      effects.impact(hit.point, hit.normal, hit.surface,
-        scoped && w.cur === 'sniper' ? { emphasized: true } : null);
+      effects.impact(hit.point, hit.normal, hit.surface, {
+        origin,
+        emphasized: scoped && w.cur === 'sniper',
+      });
       audio.impact(hit.point, hit.surface);
       worldImpacts.push(hit.point);
     }

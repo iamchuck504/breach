@@ -325,6 +325,40 @@ check('solo los cristales del SUV reciben el tratamiento negro al precargar',
   suvWindows.length === 2 && suvWindows.every((suv) =>
     suv.darkened > 0 && suv.blackVertices >= suv.darkened), JSON.stringify(suvWindows));
 
+const decalProjection = await page.evaluate(() => {
+  const ed = window.BREACH_EDITOR, W = window.BREACH_WORLD, V = window.THREE.Vector3;
+  ed.cloneLayout('calle');
+  const cast = (name, origin, direction) => {
+    const o = new V(...origin), d = new V(...direction).normalize();
+    const contact = W.raycastHit(o, d, 60);
+    if (!contact) return { name, contact: false };
+    const physical = o.clone().addScaledVector(d, contact.t);
+    const visual = W.projectImpactSurface(o, physical, contact.normal, contact.surface);
+    return {
+      name, contact: true, visual: !!visual,
+      correction: visual ? visual.point.distanceTo(physical) : null,
+      normalLength: visual ? visual.normal.length() : null,
+    };
+  };
+  const rays = [
+    ['building', [0, 1.2, 0], [1, 0, 0]],
+    ['suv', [-2.5, 1.0, -22], [0, 0, -1]],
+    ['bus', [0, 1.2, -31], [0, 0, -1]],
+    ['roadwork', [-1.2, 1.0, -3], [0, 0, -1]],
+  ];
+  const hits = rays.map((ray) => cast(...ray));
+  const started = performance.now();
+  for (let i = 0; i < 32; i++) cast(...rays[i % rays.length]);
+  return { hits, projectionMs: performance.now() - started };
+});
+check('decals se pegan a edificio, SUV, bus y barricada sin alterar colliders',
+  decalProjection.hits.every((hit) => hit.contact && hit.visual &&
+    hit.correction <= 1.5 && Math.abs(hit.normalLength - 1) < 0.001),
+  JSON.stringify(decalProjection));
+check('proyección visual conserva presupuesto para ráfagas/escopeta',
+  decalProjection.projectionMs < 250,
+  `${decalProjection.projectionMs.toFixed(1)}ms / 32 impactos`);
+
 const proceduralMove = await page.evaluate(() => {
   const ed = window.BREACH_EDITOR, W = window.BREACH_WORLD;
   ed.cloneLayout('calle');

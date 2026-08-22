@@ -1784,7 +1784,7 @@ export class BotMatch {
         dmgAcc.set(hit.id, acc);
       } else if (hit.kind === 'world') {
         // Cada pellet deja su marca; Effects limita/presupuesta las partículas.
-        this.cb.effects.impact(hit.point, hit.normal, hit.surface);
+        this.cb.effects.impact(hit.point, hit.normal, hit.surface, { origin: _v1 });
         this.cb.audio.impact(hit.point, hit.surface);
         impactPoints.push(hit.point.clone());
       }

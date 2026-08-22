@@ -290,7 +290,13 @@ export class Effects {
 
   impact(pos, normal = null, surface = 'concrete', options = null) {
     const emphasized = !!options?.emphasized;
-    if (normal) this.decals.add(pos, normal, surface, emphasized ? 1.65 : 1);
+    const projected = normal && options?.origin && this.world?.projectImpactSurface
+      ? this.world.projectImpactSurface(options.origin, pos, normal, surface)
+      : null;
+    const impactPos = projected?.point || pos;
+    const impactNormal = projected?.normal || normal;
+    const impactSurface = projected?.surface || surface;
+    if (impactNormal) this.decals.add(impactPos, impactNormal, impactSurface, emphasized ? 1.65 : 1);
     // Los decals siempre se registran; los puffs se presupuestan para que una
     // escopeta no cree ocho sistemas de partículas en el mismo frame. Un
     // impacto local de sniper scoped siempre conserva un puff único y breve:
@@ -300,12 +306,12 @@ export class Effects {
     const sizeScale = emphasized ? 1.5 : 1;
     const ttlScale = emphasized ? 1.22 : 1;
     let puff;
-    if (surface === 'metal') puff = this._burst(pos, emphasized ? 7 : 4, 0xffb568,
-      4.1, 0.045 * sizeScale, 0.24 * ttlScale, 5, normal);
-    else if (surface === 'stone') puff = this._burst(pos, emphasized ? 8 : 5, 0xb5a58d,
-      2.5, 0.052 * sizeScale, 0.32 * ttlScale, 8, normal);
-    else puff = this._burst(pos, emphasized ? 8 : 5, 0xb8bec0,
-      2.4, 0.05 * sizeScale, 0.3 * ttlScale, 7, normal);
+    if (impactSurface === 'metal') puff = this._burst(impactPos, emphasized ? 7 : 4, 0xffb568,
+      4.1, 0.045 * sizeScale, 0.24 * ttlScale, 5, impactNormal);
+    else if (impactSurface === 'stone') puff = this._burst(impactPos, emphasized ? 8 : 5, 0xb5a58d,
+      2.5, 0.052 * sizeScale, 0.32 * ttlScale, 8, impactNormal);
+    else puff = this._burst(impactPos, emphasized ? 8 : 5, 0xb8bec0,
+      2.4, 0.05 * sizeScale, 0.3 * ttlScale, 7, impactNormal);
     if (emphasized && puff) {
       puff.name = 'sniper-impact-puff';
       puff.renderOrder = 4;

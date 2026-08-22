@@ -42,6 +42,11 @@ const HIT_N = {
   ny: { x: 0, y: -1, z: 0 }, py: { x: 0, y: 1, z: 0 },
   nz: { x: 0, y: 0, z: -1 }, pz: { x: 0, y: 0, z: 1 },
 };
+const IMPACT_RAY = new THREE.Raycaster();
+const IMPACT_DIR = new THREE.Vector3();
+const IMPACT_WORLD = new THREE.Matrix4();
+const IMPACT_INSTANCE = new THREE.Matrix4();
+const IMPACT_NORMAL_MATRIX = new THREE.Matrix3();
 
 export class World {
   constructor(scene, layout = 'foundry') {
@@ -142,6 +147,10 @@ export class World {
     // el tema decide luz/cielo/niebla (un mapa de datos hereda el ambiente
     // completo del mapa en el que se inspira)
     this._applyEnvironment(theme);
+    // El raycast visual de impactos trabaja con matrices estáticas ya
+    // resueltas. La lista de receptores se reconstruye al cambiar de mapa.
+    this.mapGroup.updateWorldMatrix(true, true);
+    this._impactReceivers = null;
   }
 
   // Builder original de cada mapa hecho a mano. También lo corre
@@ -4754,6 +4763,62 @@ export class World {
   }
 
   // ---------- física ----------
+
+  _getImpactReceivers() {
+    if (this._impactReceivers) return this._impactReceivers;
+    const receivers = [];
+    this.mapGroup?.traverse((object) => {
+      if (!object.isMesh || !object.geometry || object.userData?.noBulletDecal) return;
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      const hasVisibleSurface = materials.some((material) => material &&
+        material.visible !== false && material.colorWrite !== false &&
+        material.blending !== THREE.AdditiveBlending &&
+        (!material.transparent || material.opacity >= 0.35));
+      if (hasVisibleSurface) receivers.push(object);
+    });
+    this._impactReceivers = receivers;
+    return receivers;
+  }
+
+  // La colisión de gameplay usa AABBs deliberadamente simples y estables.
+  // Para el decal hacemos un segundo raycast, exclusivamente visual, dentro
+  // de una ventana pequeña alrededor del contacto físico. Así el daño sigue
+  // obedeciendo al collider, pero la marca queda sobre el capó inclinado,
+  // vidrio, bus, fachada o prop real y no flotando sobre la caja invisible.
+  projectImpactSurface(origin, contactPoint, _fallbackNormal, surface = 'concrete') {
+    if (!origin || !contactPoint || !this.mapGroup) return null;
+    IMPACT_DIR.copy(contactPoint).sub(origin);
+    const contactDistance = IMPACT_DIR.length();
+    if (!Number.isFinite(contactDistance) || contactDistance < 0.001) return null;
+    IMPACT_DIR.multiplyScalar(1 / contactDistance);
+
+    IMPACT_RAY.set(origin, IMPACT_DIR);
+    IMPACT_RAY.near = Math.max(0.001, contactDistance - 0.75);
+    IMPACT_RAY.far = contactDistance + 1.50;
+    const intersections = IMPACT_RAY.intersectObjects(this._getImpactReceivers(), false);
+    const hit = intersections.find((candidate) => {
+      let object = candidate.object;
+      while (object && object !== this.mapGroup) {
+        if (!object.visible) return false;
+        object = object.parent;
+      }
+      return true;
+    });
+    if (!hit?.face) return null;
+
+    if (hit.instanceId !== undefined && hit.instanceId !== null && hit.object.isInstancedMesh) {
+      hit.object.getMatrixAt(hit.instanceId, IMPACT_INSTANCE);
+      IMPACT_WORLD.multiplyMatrices(hit.object.matrixWorld, IMPACT_INSTANCE);
+    } else {
+      IMPACT_WORLD.copy(hit.object.matrixWorld);
+    }
+    const normal = hit.face.normal.clone()
+      .applyNormalMatrix(IMPACT_NORMAL_MATRIX.getNormalMatrix(IMPACT_WORLD)).normalize();
+    // Una lámina DoubleSide conserva su normal geométrica original. El decal
+    // siempre debe mirar hacia el origen del disparo.
+    if (normal.dot(IMPACT_DIR) > 0) normal.negate();
+    return { point: hit.point.clone(), normal, surface };
+  }
 
   // Raycast detallado exclusivo para impactos. Además de la distancia devuelve
   // la normal exterior y el material lógico de la superficie. Incluye suelo,

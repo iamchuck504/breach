@@ -68,6 +68,37 @@ shot = resolveGuidedShot(cornerWorld,
 check(shot.kind === 'world' && near(shot.t, 0.7),
   'ADS atravesó una esquina entre el arma y el objetivo de cámara');
 
+// El collider puede ser una caja simple, pero el decal debe caer sobre la
+// piel visual real (fachada/capó inclinado) y omitir halos aditivos.
+const visualWorld = Object.create(World.prototype);
+visualWorld.mapGroup = new THREE.Group();
+const halo = new THREE.Mesh(
+  new THREE.PlaneGeometry(2, 2),
+  new THREE.MeshBasicMaterial({
+    color: 0xffaa55, transparent: true, opacity: 0.9,
+    blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+  }),
+);
+halo.position.set(0, 1, -0.2);
+visualWorld.mapGroup.add(halo);
+const hood = new THREE.Mesh(
+  new THREE.PlaneGeometry(2, 2),
+  new THREE.MeshBasicMaterial({ color: 0x556677, side: THREE.DoubleSide }),
+);
+hood.position.set(0, 1, 0);
+hood.rotation.x = 0.35;
+visualWorld.mapGroup.add(hood);
+visualWorld.mapGroup.updateWorldMatrix(true, true);
+const projected = visualWorld.projectImpactSurface(
+  new THREE.Vector3(0, 1, -5), new THREE.Vector3(0, 1, -0.45),
+  { x: 0, y: 0, z: -1 }, 'metal',
+);
+check(projected && near(projected.point.z, 0, 0.01),
+  `decal no llegó a la piel visual (${projected?.point?.z})`);
+check(projected?.normal.y > 0.2 && projected?.normal.z < -0.8,
+  `decal no respetó la inclinación del capó (${JSON.stringify(projected?.normal)})`);
+check(projected?.surface === 'metal', 'proyección visual perdió el material lógico');
+
 const scene = new THREE.Scene();
 const effects = new Effects(scene);
 for (let i = 0; i < 130; i++) {
