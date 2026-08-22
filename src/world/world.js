@@ -1544,11 +1544,16 @@ export class World {
     for (const side of [-1, 1]) {
       const skinX = side * (S.width / 2 + 0.084);
 
-      // Ventana triangular de cabina y banda de pasajeros continua.
-      sidePanel(side, [
-        [-4.28, 1.32], [-3.52, 1.50], [-3.52, 2.74],
-        [-3.86, 2.88], [-4.12, 2.50],
-      ], glass);
+      // Ventana triangular de cabina y banda de pasajeros continua. En el lado
+      // de servicio, la ventana delantera pertenece a la propia puerta y se
+      // construye más abajo dentro de su marco para evitar el efecto de vidrio
+      // pegado sobre la carrocería.
+      if (side !== serviceSide) {
+        sidePanel(side, [
+          [-4.28, 1.32], [-3.52, 1.50], [-3.52, 2.74],
+          [-3.86, 2.88], [-4.12, 2.50],
+        ], glass);
+      }
       const windows = new THREE.Mesh(new THREE.PlaneGeometry(7.30, 1.02), glass);
       windows.position.set(skinX, 2.24, 0.38);
       windows.rotation.y = side * Math.PI / 2; windows.renderOrder = 4; group.add(windows);
@@ -1564,19 +1569,31 @@ export class World {
       }
       add(0.042, 0.66, 0.72, side * (S.width / 2 + 0.088), 0.96, 3.84, bodyInset);
 
-      // Una puerta de acceso real, solo del lado de servicio y completamente
-      // delante del eje delantero. El panel inferior conserva el color de carrocería.
+      // Puerta de acceso integrada, solo del lado de servicio y completamente
+      // delante del eje delantero. No se monta una placa completa por fuera del
+      // bus: el panel inferior queda al ras, el marco sigue la silueta del morro
+      // y el cristal es un polígono inset contenido dentro de ese marco.
       if (side === serviceSide) {
-        const doorX = side * (S.width / 2 + 0.106);
         const doorZ = -3.91;
-        const doorWidth = 0.78;
-        add(0.050, 2.34, doorWidth, doorX, 1.28, doorZ, bodyInset);
+        const doorWidth = 0.72;
+        add(0.022, 0.84, doorWidth, side * (S.width / 2 + 0.064), 0.75, doorZ, body);
         sidePanel(side, [
-          [-4.26, 1.22], [-3.58, 1.22], [-3.58, 2.50],
-          [-3.84, 2.70], [-4.13, 2.38],
-        ], glass, 0.132, 5);
-        add(0.052, 0.028, doorWidth - 0.08, side * (S.width / 2 + 0.139), 1.14, doorZ, lower);
-        add(0.052, 2.20, 0.025, side * (S.width / 2 + 0.139), 1.31, -3.50, lower);
+          [-4.27, 1.17], [-3.55, 1.17], [-3.55, 2.48],
+          [-3.83, 2.72], [-4.11, 2.40],
+        ], body, 0.066, 4);
+        sidePanel(side, [
+          [-4.19, 1.28], [-3.63, 1.28], [-3.63, 2.43],
+          [-3.84, 2.61], [-4.05, 2.36],
+        ], lower, 0.070, 5);
+        sidePanel(side, [
+          [-4.14, 1.35], [-3.68, 1.35], [-3.68, 2.37],
+          [-3.85, 2.52], [-3.99, 2.31],
+        ], glass, 0.073, 6);
+        // Juntas finas y manija: delimitan la puerta sin convertirla en una
+        // placa negra separada del costado.
+        add(0.018, 1.86, 0.018, side * (S.width / 2 + 0.078), 1.27, -3.54, lower);
+        add(0.018, 0.022, doorWidth - 0.08, side * (S.width / 2 + 0.078), 0.34, doorZ, lower);
+        add(0.036, 0.055, 0.16, side * (S.width / 2 + 0.086), 1.07, -3.62, lower);
       }
 
       for (const pz of [frontWheelZ, rearWheelZ]) {
