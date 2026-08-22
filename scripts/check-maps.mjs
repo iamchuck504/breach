@@ -107,6 +107,8 @@ for (const map of MAPS) {
     JSON.stringify(r.badHeights));
   check(`${map}: cobertura suficiente para la IA (>=20 caras)`, r.covers >= 20,
     `caras=${r.covers}`);
+  if (map === 'calle') check('calle: extensión longitudinal 34×84 activa',
+    r.fx === 17 && r.fz === 42, `fx=${r.fx}, fz=${r.fz}`);
   check(`${map}: ambiente de audio activo`, r.ambience === map, `amb=${r.ambience}`);
 }
 

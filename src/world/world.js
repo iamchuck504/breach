@@ -97,7 +97,7 @@ export class World {
 
     const dims = {
       arena: [11, 13], fortaleza: [21, 26.6], azoteas: [31.5, 40],
-      calle: [17, 30], metro: [16, 26], prision: [22, 30], pueblo: [26, 34],
+      calle: [17, 42], metro: [16, 26], prision: [22, 30], pueblo: [26, 34],
       foundry: [FIELD_X, FIELD_Z],
     };
     if (this.customMap) [this.fx, this.fz] = [this.customMap.fx, this.customMap.fz];
@@ -2062,7 +2062,7 @@ export class World {
     return model;
   }
 
-  // Mapa "Calle Cerrada" (34×60): avenida urbana al atardecer. Ruta central
+  // Mapa "Calle Cerrada" (34×84): avenida urbana al atardecer. Ruta central
   // con vehículos como cobertura, un BUS que rompe la línea de visión larga
   // a cada lado del centro, edificios que forman callejones laterales CQC y
   // barricadas en los chokes. Simetría rotacional; LOW/MID/HIGH estrictos.
@@ -2074,27 +2074,29 @@ export class World {
     const wallOpts = { mirror: false, color: 0x767068, top: 0x8d867d };
 
     // perímetro
-    this._box(0, -this.fz - 0.4, this.fx * 2 + 2, 0.8, HIGH, wallOpts);
-    this._box(0, this.fz + 0.4, this.fx * 2 + 2, 0.8, HIGH, wallOpts);
+    // Los topes longitudinales siguen siendo físicos, pero invisibles: detrás
+    // de ellos la calle y las fachadas continúan como perspectiva no jugable.
+    this._box(0, -this.fz - 0.4, this.fx * 2 + 2, 0.8, HIGH, { ...wallOpts, visual: false });
+    this._box(0, this.fz + 0.4, this.fx * 2 + 2, 0.8, HIGH, { ...wallOpts, visual: false });
     this._box(-this.fx - 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
     this._box(this.fx + 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
 
     // base: un bus atravesado bloquea la avenida. Las salidas laterales se
     // mantienen abiertas, pero el bloqueo ahora tiene una razón urbana clara.
-    this._box(0, -22.5, STREET_SCALE.bus.length, STREET_SCALE.bus.width, HIGH, { ...highOpts, visual: false });
-    this._box(-6.1, -21.4, 2.4, 0.9, LOW, { ...lowOpts, visual: false });
-    this._box(6.1, -21.4, 2.4, 0.9, LOW, { ...lowOpts, visual: false });
+    this._box(0, -34.5, STREET_SCALE.bus.length, STREET_SCALE.bus.width, HIGH, { ...highOpts, visual: false });
+    this._box(-6.1, -33.4, 2.4, 0.9, LOW, { ...lowOpts, visual: false });
+    this._box(6.1, -33.4, 2.4, 0.9, LOW, { ...lowOpts, visual: false });
 
     // Kioscos compactos, pero de altura humana. La huella no cambia y sigue
     // dejando circulación por ambos lados de la acera; HIGH acompaña el techo
     // visual para que no exista geometría atravesable por encima del puesto.
-    this._box(-14.35, -17, 1.75, 1.75, HIGH, { ...highOpts, visual: false });
-    this._box(14.35, -14, 1.65, 1.65, HIGH, { ...highOpts, visual: false });
+    this._box(-14.35, -29, 1.75, 1.75, HIGH, { ...highOpts, visual: false });
+    this._box(14.35, -26, 1.65, 1.65, HIGH, { ...highOpts, visual: false });
 
     // vehículos sobre la avenida (cobertura baja)
     const carCoverW = STREET_SCALE.car.width;
     const carCoverL = STREET_SCALE.car.length - 0.13;
-    this._box(-2.5, -16, carCoverW, carCoverL, LOW, { ...lowOpts, visual: false });
+    this._box(-2.5, -28, carCoverW, carCoverL, LOW, { ...lowOpts, visual: false });
     this._box(3, -10.5, carCoverW, carCoverL, LOW, { ...lowOpts, visual: false });
     this._box(-3, -5.5, carCoverL, carCoverW, LOW, { ...lowOpts, visual: false }); // auto cruzado
 
@@ -2117,7 +2119,7 @@ export class World {
     // postes, hidrantes y el respaldo de las paradas, pero no generan caras
     // de cobertura, blindfire ni posiciones atractivas para los bots.
     const solidProp = { mirror: false, visual: false, cover: false, surface: 'metal' };
-    for (const z of [-25, -15, -5, 5, 15, 25]) {
+    for (const z of [-35, -25, -15, -5, 5, 15, 25, 35]) {
       // El origen del GLB está bajo el brazo; la base visible vive 0.88 m
       // hacia el bordillo. El collider sigue esa base, no el pivot del asset.
       this._box(-12.60, z, 0.50, 0.50, STREET_SCALE.lamp,
@@ -2132,7 +2134,7 @@ export class World {
     // Paradas en U: respaldo y costados son cover alto; el frente que mira a
     // la calle (donde se ve la banca) queda completamente abierto.
     const shelterCover = { mirror: false, visual: false, cover: true, surface: 'metal' };
-    for (const [side, z] of [[1, -25.0], [-1, 25.0]]) {
+    for (const [side, z] of [[1, -37.0], [-1, 37.0]]) {
       const decorLink = `busShelter:${side > 0 ? 'right' : 'left'}`;
       this._box(side * 14.88, z, 0.20, 3.34, 2.45, { ...shelterCover, decorLink });
       for (const dz of [-1.67, 1.67]) {
@@ -2171,10 +2173,11 @@ export class World {
       gutter.rotation.x = -Math.PI / 2; gutter.position.set(x - Math.sign(x) * 0.46, 0.019, 0);
       this.mapGroup.add(gutter);
     }
-    const marks = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.13, 2.2), lineMat, 20);
+    const markCount = Math.floor((this.fz * 2 - 6) / 2.85) + 1;
+    const marks = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.13, 2.2), lineMat, markCount);
     const m4 = new THREE.Matrix4();
-    for (let i = 0; i < 20; i++) {
-      const z = -27 + i * 2.85;
+    for (let i = 0; i < markCount; i++) {
+      const z = -this.fz + 3 + i * 2.85;
       m4.makeRotationX(-Math.PI / 2); m4.setPosition(0, 0.018, z);
       marks.setMatrixAt(i, m4);
     }
@@ -2214,7 +2217,7 @@ export class World {
       opacity: 0.38, depthWrite: false, side: THREE.DoubleSide,
     });
     for (const [x, z, sx, sz, ry] of [
-      [-5.7, -24.2, 2.7, 1.25, 0.2], [5.7, 24.2, 2.7, 1.25, -0.2],
+      [-5.7, -36.2, 2.7, 1.25, 0.2], [5.7, 36.2, 2.7, 1.25, -0.2],
       [4.8, -14.0, 2.0, 0.85, -0.34], [-4.8, 14.0, 2.0, 0.85, 0.34],
       [-0.8, -3.2, 2.8, 0.9, 0.08], [0.8, 3.2, 2.8, 0.9, -0.08],
       [-7.7, 7.8, 1.45, 0.58, 0.22], [7.7, -7.8, 1.45, 0.58, -0.22],
@@ -2231,7 +2234,7 @@ export class World {
     const dm = new THREE.Matrix4();
     for (let i = 0; i < 14; i++) {
       const side = i % 2 ? 1 : -1;
-      const z = -24 + i * 3.65;
+      const z = -this.fz + 6 + i * ((this.fz * 2 - 12) / 13);
       dm.compose(
         new THREE.Vector3(side * (12.15 + (i % 3) * 0.30), 0.034, z),
         new THREE.Quaternion().setFromEuler(new THREE.Euler(0, (i * 1.71) % Math.PI, (i % 4 - 1.5) * 0.05)),
@@ -2436,6 +2439,8 @@ export class World {
     // Pares a 180°: la calle tiene barrios/negocios distintos, pero ambos
     // equipos conservan el mismo número de entradas y la misma lectura.
     const blocks = [
+      [-36, 11.7, 7.3,
+        ['AUTO PARTS', 0x776b66, 'garage'], ['NIGHT DINER', 0x806a62, 'cafe'], 5],
       // Los bloques con dos plantas residenciales necesitan altura completa:
       // 3.02 m de local + 2.70 m por planta + remate de cubierta. Antes la
       // cornisa superior quedaba prácticamente encima de las ventanas del 3.º.
@@ -2451,14 +2456,124 @@ export class World {
         ['LAUNDRY', 0x776c68, 'laundry'], ['PAPER & INK', 0x7b7567, 'stationery'], 3],
       [24, 11.7, 9.35,
         ['MINI MARKET', 0x95796c, 'market'], ['CORNER CAFE', 0x876f66, 'cafe'], 4],
+      [36, 11.7, 7.3,
+        ['BOOKS', 0x746f68, 'stationery'], ['TIRE SHOP', 0x706968, 'garage'], 6],
     ];
     for (const [z, span, h, left, right, variant] of blocks) {
       addStreetBuilding(-1, z, span, h, left[0], left[1], variant, left[2]);
       addStreetBuilding(1, -z, span, h, right[0], right[1], variant, right[2]);
     }
+
+    // Perspectiva exterior: la colisión termina en ±fz, pero asfalto, aceras
+    // y cuatro módulos de fachada continúan en cada dirección. Todo se agrupa
+    // en instancias y se oscurece con la distancia, de modo que la avenida
+    // parece seguir dentro de la ciudad sin ampliar navegación ni coste de IA.
+    const continuationModules = 4;
+    const continuationStep = 12;
+    const continuationLength = continuationModules * continuationStep;
+    const continuationHeights = [7.3, 9.25, 7.3, 9.35];
+    const continuationShades = [0.72, 0.56, 0.40, 0.24];
+    const roadBeyondMat = new THREE.MeshStandardMaterial({
+      color: 0x8b8f91,
+      map: this._tex('asphalt', this.fx * 2 / 3.6, continuationLength / 3.6),
+      roughness: 0.50, metalness: 0.06,
+    });
+    for (const dir of [-1, 1]) {
+      const beyondZ = dir * (this.fz + continuationLength * 0.5);
+      const roadBeyond = new THREE.Mesh(
+        new THREE.PlaneGeometry(this.fx * 2, continuationLength), roadBeyondMat,
+      );
+      roadBeyond.rotation.x = -Math.PI / 2;
+      roadBeyond.position.set(0, -0.002, beyondZ);
+      roadBeyond.receiveShadow = false; this.mapGroup.add(roadBeyond);
+      for (const x of [-14.25, 14.25]) {
+        const walk = new THREE.Mesh(new THREE.PlaneGeometry(5.0, continuationLength), sidewalkMat);
+        walk.rotation.x = -Math.PI / 2; walk.position.set(x, 0.012, beyondZ);
+        walk.receiveShadow = false; this.mapGroup.add(walk);
+      }
+      for (const x of [-11.65, 11.65]) {
+        const curb = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.12, continuationLength), curbMat);
+        curb.position.set(x, 0.06, beyondZ); this.mapGroup.add(curb);
+      }
+    }
+    const beyondMarkCount = continuationModules * 8;
+    const beyondMarks = new THREE.InstancedMesh(
+      new THREE.PlaneGeometry(0.13, 2.2), lineMat, beyondMarkCount,
+    );
+    let beyondMarkIndex = 0;
+    for (const dir of [-1, 1]) for (let i = 0; i < continuationModules * 4; i++) {
+      m4.makeRotationX(-Math.PI / 2);
+      m4.setPosition(0, 0.016, dir * (this.fz + 1.5 + i * 3));
+      beyondMarks.setMatrixAt(beyondMarkIndex++, m4);
+    }
+    beyondMarks.instanceMatrix.needsUpdate = true; this.mapGroup.add(beyondMarks);
+
+    const distantBuildingCount = continuationModules * 4;
+    const distantFacadeMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff, map: this._tex('urbanBrickDark', 2.2, 4.2),
+      roughness: 0.92, metalness: 0.01,
+    });
+    const distantRoofMat = new THREE.MeshStandardMaterial({ color: 0x32383b, roughness: 0.95 });
+    const distantBuildings = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(4.6, 1, 11.7),
+      [distantFacadeMat, distantFacadeMat, distantRoofMat, distantRoofMat, distantFacadeMat, distantFacadeMat],
+      distantBuildingCount,
+    );
+    const distantStorefronts = new THREE.InstancedMesh(
+      new THREE.PlaneGeometry(3.5, 2.42),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide }),
+      distantBuildingCount,
+    );
+    const distantWindowCount = continuationHeights.reduce(
+      (total, h) => total + (h > 8.5 ? 2 : 1) * 3 * 4, 0,
+    );
+    const distantWindows = new THREE.InstancedMesh(
+      new THREE.PlaneGeometry(1.02, 1.42),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide }),
+      distantWindowCount,
+    );
+    const distantTransform = new THREE.Object3D();
+    let distantIndex = 0; let storefrontIndex = 0; let windowIndex = 0;
+    for (const dir of [-1, 1]) for (let depth = 0; depth < continuationModules; depth++) {
+      const h = continuationHeights[depth];
+      const shade = continuationShades[depth];
+      const z = dir * (this.fz + continuationStep * (depth + 0.5));
+      for (const side of [-1, 1]) {
+        distantTransform.position.set(side * (this.fx + 2.22), h * 0.5, z);
+        distantTransform.rotation.set(0, 0, 0);
+        distantTransform.scale.set(1, h, 1); distantTransform.updateMatrix();
+        distantBuildings.setMatrixAt(distantIndex, distantTransform.matrix);
+        distantBuildings.setColorAt(distantIndex++, new THREE.Color(0x786e68).multiplyScalar(shade));
+
+        const faceX = side * (this.fx - 0.13);
+        const rot = side > 0 ? -Math.PI / 2 : Math.PI / 2;
+        distantTransform.position.set(faceX, 1.25, z);
+        distantTransform.rotation.set(0, rot, 0); distantTransform.scale.set(1, 1, 1);
+        distantTransform.updateMatrix(); distantStorefronts.setMatrixAt(storefrontIndex, distantTransform.matrix);
+        distantStorefronts.setColorAt(storefrontIndex++, new THREE.Color(0x11181c).multiplyScalar(shade + 0.10));
+
+        const rows = h > 8.5 ? 2 : 1;
+        for (let row = 0; row < rows; row++) for (const dz of [-3.35, 0, 3.35]) {
+          distantTransform.position.set(faceX, 4.71 + row * STREET_SCALE.floor, z + dz);
+          distantTransform.rotation.set(0, rot, 0); distantTransform.updateMatrix();
+          distantWindows.setMatrixAt(windowIndex, distantTransform.matrix);
+          const windowTone = ((windowIndex + depth) % 7 === 0 ? 0x8a704f : 0x13212a);
+          distantWindows.setColorAt(windowIndex++, new THREE.Color(windowTone).multiplyScalar(shade + 0.12));
+        }
+      }
+    }
+    distantBuildings.instanceMatrix.needsUpdate = true;
+    distantStorefronts.instanceMatrix.needsUpdate = true;
+    distantWindows.instanceMatrix.needsUpdate = true;
+    if (distantBuildings.instanceColor) distantBuildings.instanceColor.needsUpdate = true;
+    if (distantStorefronts.instanceColor) distantStorefronts.instanceColor.needsUpdate = true;
+    if (distantWindows.instanceColor) distantWindows.instanceColor.needsUpdate = true;
+    distantBuildings.castShadow = false; distantBuildings.receiveShadow = false;
+    this.mapGroup.add(distantBuildings, distantStorefronts, distantWindows);
+
     // Autos inutilizados: landmark de vehículo y cover bajo predecible.
     for (const [x, z, rot, color, variant] of [
-      [-2.5, -16, 0, 0x5a6470, 0], [2.5, 16, Math.PI, 0x5a6470, 0],
+      [-2.5, -28, 0, 0x5a6470, 0], [2.5, 28, Math.PI, 0x5a6470, 0],
       [3, -10.5, 0, 0x815e4f, 1], [-3, 10.5, Math.PI, 0x815e4f, 1],
       [-3, -5.5, Math.PI / 2, 0x52696c, 2], [3, 5.5, -Math.PI / 2, 0x52696c, 2],
     ]) {
@@ -2471,13 +2586,13 @@ export class World {
     }
     // Buses atravesados cierran visual y tácticamente el acceso frontal a
     // cada spawn; los callejones laterales siguen siendo los flancos claros.
-    this._addStreetBus(0, -22.5, Math.PI / 2, 0);
-    this._addStreetBus(0, 22.5, -Math.PI / 2, 1);
+    this._addStreetBus(0, -34.5, Math.PI / 2, 0);
+    this._addStreetBus(0, 34.5, -Math.PI / 2, 1);
     // Dos paradas explican que los autobuses cerraban una ruta urbana real.
     // Respaldo y laterales son cover; el frente de la banca queda accesible.
-    this._addUrbanAsset('busShelter', 14.35, -25.0,
+    this._addUrbanAsset('busShelter', 14.35, -37.0,
       { scale: 0.84, rotation: Math.PI / 2, decorLink: 'busShelter:right' });
-    this._addUrbanAsset('busShelter', -14.35, 25.0,
+    this._addUrbanAsset('busShelter', -14.35, 37.0,
       { scale: 0.84, rotation: -Math.PI / 2, decorLink: 'busShelter:left' });
     // Vehículos del operativo de emergencia: conservan posición, orientación
     // y collider; colores/insignias distintos explican por qué están allí.
@@ -2504,7 +2619,7 @@ export class World {
       this._registerBaseDecor(g, 'jersey', { x, z, rotation: rot, w, d, h: BLOCK.LOW });
     };
     for (const [x, z] of [
-      [-6.1, -21.4], [6.1, -21.4], [6.1, 21.4], [-6.1, 21.4],
+      [-6.1, -33.4], [6.1, -33.4], [6.1, 33.4], [-6.1, 33.4],
       [3.6, -2.2], [-3.6, 2.2],
     ]) addJersey(x, z, 2.4, 0.9);
 
@@ -2610,10 +2725,10 @@ export class World {
         x, z, rotation: 0, w, d, h: 2.71,
       });
     };
-    addSidewalkKiosk(-14.35, -17, 1.75, 1.75, 1, 'NEWS', 0x623b34);
-    addSidewalkKiosk(14.35, 17, 1.75, 1.75, -1, 'NEWS', 0x623b34);
-    addSidewalkKiosk(14.35, -14, 1.65, 1.65, 1, 'HOT DOGS', 0xb05f35);
-    addSidewalkKiosk(-14.35, 14, 1.65, 1.65, -1, 'HOT DOGS', 0xb05f35);
+    addSidewalkKiosk(-14.35, -29, 1.75, 1.75, 1, 'NEWS', 0x623b34);
+    addSidewalkKiosk(14.35, 29, 1.75, 1.75, -1, 'NEWS', 0x623b34);
+    addSidewalkKiosk(14.35, -26, 1.65, 1.65, 1, 'HOT DOGS', 0xb05f35);
+    addSidewalkKiosk(-14.35, 26, 1.65, 1.65, -1, 'HOT DOGS', 0xb05f35);
 
     // Los dumpsters pertenecen ahora a pequeños patios de servicio. Puerta,
     // luz y pintura de carga los conectan con el edificio en vez de dejarlos
@@ -2720,7 +2835,7 @@ export class World {
 
     // Postes continuos de extremo a extremo. La calle está cerrada al tráfico,
     // pero su infraestructura permanece completa y legible como una avenida.
-    for (const z of [-25, -15, -5, 5, 15, 25]) {
+    for (const z of [-35, -25, -15, -5, 5, 15, 25, 35]) {
       // Pegados al bordillo y fuera de la huella reducida de los kioscos.
       if (!this._addUrbanAsset('streetlight', -11.72, z,
         { scale: 1.21, decorLink: `streetlight:left:${z}` }))
@@ -2729,11 +2844,41 @@ export class World {
         { scale: 1.21, rotation: Math.PI, decorLink: `streetlight:right:${z}` }))
         this._addUtilityPole(11.72, z, { lamp: 0xffc27a, arm: -0.3 });
     }
+    // Los postes continúan fuera del collider mediante dos instancias simples;
+    // el último grupo pierde contraste junto con los edificios más lejanos.
+    const distantPoleCount = continuationModules * 4;
+    const distantPoleMat = new THREE.MeshLambertMaterial({ color: 0x273139 });
+    const distantLampMat = new THREE.MeshBasicMaterial({ color: 0x8b6d45 });
+    const distantPoles = new THREE.InstancedMesh(
+      new THREE.CylinderGeometry(0.07, 0.09, STREET_SCALE.lamp, 7),
+      distantPoleMat, distantPoleCount,
+    );
+    const distantLampHeads = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(0.28, 0.12, 0.20), distantLampMat, distantPoleCount,
+    );
+    let distantPoleIndex = 0;
+    for (const dir of [-1, 1]) for (let depth = 0; depth < continuationModules; depth++) {
+      const z = dir * (this.fz + 3 + depth * 10);
+      for (const side of [-1, 1]) {
+        distantTransform.position.set(side * 11.83, STREET_SCALE.lamp * 0.5, z);
+        distantTransform.rotation.set(0, 0, 0); distantTransform.scale.set(1, 1, 1);
+        distantTransform.updateMatrix(); distantPoles.setMatrixAt(distantPoleIndex, distantTransform.matrix);
+        distantTransform.position.set(side * 11.48, STREET_SCALE.lamp - 0.30, z);
+        distantTransform.updateMatrix(); distantLampHeads.setMatrixAt(distantPoleIndex, distantTransform.matrix);
+        const poleShade = continuationShades[depth] + 0.18;
+        distantPoles.setColorAt(distantPoleIndex, new THREE.Color(0x46535c).multiplyScalar(poleShade));
+        distantLampHeads.setColorAt(distantPoleIndex++, new THREE.Color(0xb58b54).multiplyScalar(poleShade));
+      }
+    }
+    distantPoles.instanceMatrix.needsUpdate = true; distantLampHeads.instanceMatrix.needsUpdate = true;
+    if (distantPoles.instanceColor) distantPoles.instanceColor.needsUpdate = true;
+    if (distantLampHeads.instanceColor) distantLampHeads.instanceColor.needsUpdate = true;
+    this.mapGroup.add(distantPoles, distantLampHeads);
     // Cableado con caída suave entre postes: landmark vertical y profundidad
     // de calle real. TubeGeometry pequeño, lejos del volumen jugable.
     const cableMat = new THREE.MeshLambertMaterial({ color: 0x151a1e });
     for (const x of [-11.83, 11.83]) {
-      for (let zi = -25; zi < 25; zi += 10) {
+      for (let zi = -75; zi < 75; zi += 10) {
         for (const offset of [-0.10, 0.10]) {
           const cable = new THREE.Mesh(
             new THREE.TubeGeometry(new THREE.CatmullRomCurve3([
@@ -2762,7 +2907,7 @@ export class World {
       const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.065, 0.38, 8), hydrantMat);
       arm.rotation.z = Math.PI / 2; arm.position.y = 0.32; h.add(arm); this.mapGroup.add(h);
     }
-    for (const [x, z, side] of [[-12.55, -2, -1], [12.55, 2, 1], [-12.55, 22, -1], [12.55, -22, 1]]) {
+    for (const [x, z, side] of [[-12.55, -2, -1], [12.55, 2, 1], [-12.55, 34, -1], [12.55, -34, 1]]) {
       const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 2.8, 7), streetMetal);
       pole.position.set(x, 1.4, z); this.mapGroup.add(pole);
       const plate = new THREE.Mesh(
@@ -2772,11 +2917,11 @@ export class World {
       plate.position.set(x + side * 0.04, 2.34, z); plate.rotation.y = side < 0 ? Math.PI / 2 : -Math.PI / 2;
       this.mapGroup.add(plate);
     }
-    // Solo cuatro luces prácticas sin sombras: suficiente para que el asfalto
+    // Seis luces prácticas sin sombras mantienen legibles los módulos nuevos
     // húmedo y los volúmenes de vehículos respondan a la escena sin convertir
     // cada escaparate en un coste de iluminación independiente.
-    for (let i = 0; i < 4; i++) {
-      const z = -18 + i * 12;
+    for (let i = 0; i < 6; i++) {
+      const z = -30 + i * 12;
       const x = i % 2 ? 11.1 : -11.1;
       const light = new THREE.PointLight(i % 2 ? 0xffb36b : 0xffc17d, 4.2, 13, 2);
       light.position.set(x, 2.75, z); light.castShadow = false; this.mapGroup.add(light);

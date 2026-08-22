@@ -19,7 +19,7 @@ export const MAP_RUNTIME = Object.freeze({
     special: Object.freeze({ x: 0, z: 0, y: 1.1 }),
   }),
   calle: Object.freeze({
-    spawnZ: 26.4,
+    spawnZ: 38.4,
     crates: Object.freeze([{ x: -14, z: 0 }, { x: 14, z: 0 }]),
     special: Object.freeze({ x: 0, z: 0, y: 0 }),
   }),
