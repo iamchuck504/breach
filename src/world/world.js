@@ -74,6 +74,7 @@ export class World {
       });
     }
     this.mapGroup = new THREE.Group();
+    this._baseDecorOrdinals = Object.create(null);
     this.scene.add(this.mapGroup);
     this.colliders = []; // {minx,minz,maxx,maxz,h}
     this.segmentColliders = []; // muros rotados delgados {a,b,n,half,h}
@@ -1157,6 +1158,7 @@ export class World {
         this._suppressBoxes = false;
         this._suppressEditableDecor = false;
       }
+      this._applyBaseDecorTransforms(map);
     }
 
     // límites del mapa: perímetro cerrado (mismo patrón que todos los mapas)
@@ -1290,7 +1292,7 @@ export class World {
   // introducir una esquina invisible o una ruta que los bots no conozcan.
   // ---------------------------------------------------------------------
   _addMapSign(text, x, y, z, ry = 0, {
-    w = 2.4, h = 0.5, bg = '#16232d', fg = '#eaf2f0', border = '#6d8b9b',
+    w = 2.4, h = 0.5, bg = '#16232d', fg = '#eaf2f0', border = '#6d8b9b', parent = this.mapGroup,
   } = {}) {
     const cv = document.createElement('canvas');
     cv.width = 512; cv.height = 128;
@@ -1311,8 +1313,45 @@ export class World {
     );
     sign.position.set(x, y, z);
     sign.rotation.y = ry;
-    this.mapGroup.add(sign);
+    parent.add(sign);
     return sign;
+  }
+
+  // Registra una piel procedural que corresponde a un collider editable.
+  // La clave estable (tipo + ordinal) permite reconstruir el builder base y
+  // aplicar después la transformación guardada por el editor.
+  _registerBaseDecor(group, kind, data) {
+    const ordinal = this._baseDecorOrdinals[kind] ?? 0;
+    this._baseDecorOrdinals[kind] = ordinal + 1;
+    const key = `${kind}:${ordinal}`;
+    group.userData.editorDecorKey = key;
+    if (this._captureDecor) this._captureDecor.push({ kind, key, ...data });
+    this.mapGroup.add(group);
+    return group;
+  }
+
+  _applyBaseDecorTransforms(map) {
+    const templates = new Map();
+    for (const child of this.mapGroup.children) {
+      const key = child.userData?.editorDecorKey;
+      if (!key) continue;
+      templates.set(key, child);
+      child.visible = false;
+    }
+    const uses = new Map();
+    for (const o of map.objects) {
+      if (paletteById(o.p)?.t !== 'baseDecor' || !o.decorKey) continue;
+      const template = templates.get(o.decorKey);
+      if (!template) continue;
+      const count = uses.get(o.decorKey) ?? 0;
+      const group = count === 0 ? template : template.clone(true);
+      uses.set(o.decorKey, count + 1);
+      if (count > 0) this.mapGroup.add(group);
+      group.visible = map.decor !== false;
+      group.position.set(o.x, o.y ?? 0, o.z);
+      group.rotation.y = (o.rot ?? 0) * Math.PI / 180;
+      group.scale.setScalar(o.scale ?? 1);
+    }
   }
 
   // Extruye un perfil lateral (z/y) a lo ancho del vehículo. Permite capós,
@@ -2241,7 +2280,7 @@ export class World {
         const stain = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.06, d + 0.012), grimeMat);
         stain.position.set(px, 0.44, 0); stain.rotation.z = 0.55; g.add(stain);
       }
-      this.mapGroup.add(g);
+      this._registerBaseDecor(g, 'jersey', { x, z, rotation: rot, w, d, h: BLOCK.LOW });
     };
     for (const [x, z] of [
       [-6.1, -21.4], [6.1, -21.4], [6.1, 21.4], [-6.1, 21.4],
@@ -2278,7 +2317,9 @@ export class World {
         const reflector = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.12, 0.035), reflectorMat);
         reflector.position.set(px, 0.55, -0.988); bin.add(reflector);
       }
-      this.mapGroup.add(bin);
+      this._registerBaseDecor(bin, 'dumpster', {
+        x, z, rotation: ry, w: 2.5, d: 2.2, h: 1.15,
+      });
     }
 
     // Kioscos urbanos compactos pero de escala humana: base, mostrador,
@@ -2291,36 +2332,38 @@ export class World {
     const cornerTrim = new THREE.MeshStandardMaterial({ color: 0x77716a, roughness: 0.78 });
     const paperColors = [0xc65745, 0xd9b44a, 0x4f7891, 0xd6d0bd];
     const addSidewalkKiosk = (x, z, w, d, toward, name, awningColor) => {
+      const kiosk = new THREE.Group();
+      kiosk.position.set(x, 0, z);
       const addKioskPart = (geometry, material, px, py, pz) => {
         const part = new THREE.Mesh(geometry, material);
         part.position.set(px, py, pz); part.castShadow = true; part.receiveShadow = true;
-        this.mapGroup.add(part); return part;
+        kiosk.add(part); return part;
       };
-      const frontZ = z + toward * (d / 2 + 0.026);
-      const backZ = z - toward * (d / 2 - 0.055);
+      const frontZ = toward * (d / 2 + 0.026);
+      const backZ = -toward * (d / 2 - 0.055);
       const frontRot = toward > 0 ? 0 : Math.PI;
-      addKioskPart(new THREE.BoxGeometry(w, 0.12, d), cornerTrim, x, 0.06, z);
-      addKioskPart(new THREE.BoxGeometry(w - 0.10, 2.30, 0.11), kioskPanel, x, 1.20, backZ);
+      addKioskPart(new THREE.BoxGeometry(w, 0.12, d), cornerTrim, 0, 0.06, 0);
+      addKioskPart(new THREE.BoxGeometry(w - 0.10, 2.30, 0.11), kioskPanel, 0, 1.20, backZ);
       for (const side of [-1, 1]) {
         addKioskPart(new THREE.BoxGeometry(0.10, 2.28, d * 0.58), kioskPanel,
-          x + side * (w / 2 - 0.05), 1.20, z - toward * d * 0.20);
+          side * (w / 2 - 0.05), 1.20, -toward * d * 0.20);
         addKioskPart(new THREE.BoxGeometry(0.11, 2.46, 0.11), cornerTrim,
-          x + side * (w / 2 - 0.055), 1.35, frontZ - toward * 0.055);
+          side * (w / 2 - 0.055), 1.35, frontZ - toward * 0.055);
       }
       addKioskPart(new THREE.BoxGeometry(w - 0.16, 0.78, 0.18), kioskPanel,
-        x, 0.43, frontZ - toward * 0.06);
+        0, 0.43, frontZ - toward * 0.06);
       addKioskPart(new THREE.BoxGeometry(w + 0.04, 0.10, 0.38), cornerTrim,
-        x, 0.87, frontZ + toward * 0.11);
+        0, 0.87, frontZ + toward * 0.11);
       const awning = addKioskPart(new THREE.BoxGeometry(w + 0.12, 0.12, 0.48),
         new THREE.MeshStandardMaterial({ color: awningColor, roughness: 0.74 }),
-        x, 2.18, frontZ + toward * 0.20);
+        0, 2.18, frontZ + toward * 0.20);
       awning.rotation.x = toward * -0.08;
-      addKioskPart(new THREE.BoxGeometry(w + 0.18, 0.18, d + 0.18), cornerTrim, x, 2.62, z);
+      addKioskPart(new THREE.BoxGeometry(w + 0.18, 0.18, d + 0.18), cornerTrim, 0, 2.62, 0);
       addKioskPart(new THREE.BoxGeometry(w - 0.12, 0.34, 0.10), cornerDark,
-        x, 2.40, frontZ - toward * 0.015);
+        0, 2.40, frontZ - toward * 0.015);
 
-      this._addMapSign(name, x, 2.40, frontZ + toward * 0.045, frontRot,
-        { w: w - 0.22, h: 0.27, bg: '#2a3438', fg: '#ead6ae', border: '#8d6b4f' });
+      this._addMapSign(name, 0, 2.40, frontZ + toward * 0.045, frontRot,
+        { w: w - 0.22, h: 0.27, bg: '#2a3438', fg: '#ead6ae', border: '#8d6b4f', parent: kiosk });
 
       // Producto visible sobre el mostrador: revistas o condimentos. Estos
       // detalles pequeños explican el uso sin ampliar la huella del puesto.
@@ -2330,8 +2373,8 @@ export class World {
             new THREE.PlaneGeometry(0.25, 0.32),
             new THREE.MeshBasicMaterial({ color: paperColors[i], side: THREE.DoubleSide }),
           );
-          magazine.position.set(x + (i - 1.5) * 0.29, 0.49, frontZ + toward * 0.101);
-          magazine.rotation.y = frontRot; this.mapGroup.add(magazine);
+          magazine.position.set((i - 1.5) * 0.29, 0.49, frontZ + toward * 0.101);
+          magazine.rotation.y = frontRot; kiosk.add(magazine);
         }
       } else {
         for (const [dx, color] of [[-0.20, 0xc64535], [0, 0xe4bc4f], [0.20, 0x5b8a50]]) {
@@ -2339,9 +2382,12 @@ export class World {
             new THREE.CylinderGeometry(0.035, 0.045, 0.22, 8),
             new THREE.MeshStandardMaterial({ color, roughness: 0.62 }),
           );
-          bottle.position.set(x + dx, 1.03, frontZ - toward * 0.01); this.mapGroup.add(bottle);
+          bottle.position.set(dx, 1.03, frontZ - toward * 0.01); kiosk.add(bottle);
         }
       }
+      this._registerBaseDecor(kiosk, 'kiosk', {
+        x, z, rotation: 0, w, d, h: 2.71,
+      });
     };
     addSidewalkKiosk(-14.35, -17, 1.75, 1.75, 1, 'NEWS', 0x623b34);
     addSidewalkKiosk(14.35, 17, 1.75, 1.75, -1, 'NEWS', 0x623b34);
@@ -2407,7 +2453,9 @@ export class World {
         const beacon = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 0.10, 8), beaconMat);
         beacon.position.set(px, 1.84, 0); group.add(beacon);
       }
-      this.mapGroup.add(group);
+      this._registerBaseDecor(group, 'roadwork', {
+        x, z, rotation: rot, w: 3.2, d: 0.9, h: BLOCK.MID,
+      });
     };
     addRoadwork(-1.2, -8.7, 0); addRoadwork(1.2, 8.7, Math.PI);
     // Carritos de café, no tablas rotuladas: ruedas, mostrador, cafetera,
@@ -2442,12 +2490,12 @@ export class World {
         addCartPart(new THREE.CylinderGeometry(0.045, 0.04, 0.13, 10),
           new THREE.MeshStandardMaterial({ color: 0xe7ddd0, roughness: 0.72 }), px, 1.00, -0.08);
       }
-      this.mapGroup.add(cart);
+      this._addMapSign('COFFEE', 0, 1.91, -0.46, Math.PI,
+        { w: 1.16, h: 0.28, bg: '#3d2920', fg: '#f0d4a1', border: '#a96f45', parent: cart });
+      this._registerBaseDecor(cart, 'coffee', {
+        x, z, rotation: rot, w: 1.30, d: 0.75, h: 2.2,
+      });
     }
-    this._addMapSign('COFFEE', 14.35, 1.91, -8.96, Math.PI,
-      { w: 1.16, h: 0.28, bg: '#3d2920', fg: '#f0d4a1', border: '#a96f45' });
-    this._addMapSign('COFFEE', -14.35, 1.91, 8.96, 0,
-      { w: 1.16, h: 0.28, bg: '#3d2920', fg: '#f0d4a1', border: '#a96f45' });
 
     // Postes continuos de extremo a extremo. La calle está cerrada al tráfico,
     // pero su infraestructura permanece completa y legible como una avenida.

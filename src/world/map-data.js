@@ -76,6 +76,16 @@ export const PALETTE = [
     metaKey: 'editor.meta.urban', t: 'street', assetKind: 'truck', w: 2.4, d: 7, h: 3.0 },
   { id: 'street:bus', group: 'assets', label: 'AUTOBÚS', icon: '▬',
     metaKey: 'editor.meta.urban', t: 'street', assetKind: 'bus', w: 2.65, d: 9, h: 3.25 },
+  { id: 'street:jersey', group: 'internal', label: 'DIVISOR JERSEY', icon: '▰',
+    metaKey: 'editor.meta.urban', t: 'baseDecor', w: 2.4, d: 0.9, h: BLOCK.LOW },
+  { id: 'street:dumpster', group: 'internal', label: 'DUMPSTER', icon: '▣',
+    metaKey: 'editor.meta.urban', t: 'baseDecor', w: 2.5, d: 2.2, h: 1.15 },
+  { id: 'street:kiosk', group: 'internal', label: 'KIOSCO', icon: '▧',
+    metaKey: 'editor.meta.urban', t: 'baseDecor', w: 1.75, d: 1.75, h: 2.71 },
+  { id: 'street:roadwork', group: 'internal', label: 'BARRICADA VIAL', icon: '╳',
+    metaKey: 'editor.meta.urban', t: 'baseDecor', w: 3.2, d: 0.9, h: BLOCK.MID },
+  { id: 'street:coffee', group: 'internal', label: 'CARRITO DE CAFÉ', icon: '▤',
+    metaKey: 'editor.meta.urban', t: 'baseDecor', w: 1.3, d: 0.75, h: 2.2 },
   // --- herramienta del editor: personaje de REFERENCIA con las dimensiones
   // reales del juego. No colisiona, no aparece en partida y el export lo
   // elimina — es la regla de escala del entorno.
@@ -237,6 +247,7 @@ export function mapFromSnapshot(layout, snap, name = null) {
       ...(d.scale && d.scale !== 1 ? { scale: d.scale } : null),
       ...(d.color != null ? { color: d.color } : null),
       ...(d.variant != null ? { variant: d.variant } : null),
+      ...(d.key ? { decorKey: d.key } : null),
       ...(d.w ? { w: d.w } : null),
       ...(d.d ? { d: d.d } : null),
       ...(d.h ? { h: d.h } : null),
@@ -274,6 +285,7 @@ export function mapFromSnapshot(layout, snap, name = null) {
     theme: layout,
     base: layout,     // decoración: el builder original corre intacto
     decorCaptured: true,
+    decorCaptureVersion: 2,
     fx: snap.fx, fz: snap.fz,
     walls: false,     // el perímetro ya viene capturado como cajas editables
     objects,
@@ -347,7 +359,7 @@ export function validateMap(map, world = null) {
     // mapa mientras conserven esa condición de decoración base.
     if (o.baseDecor && !o.link) return true;
     const piece = paletteById(o.p);
-    const fp = piece && (piece.t === 'box' || piece.t === 'prop' || piece.t === 'street')
+    const fp = piece && ['box', 'prop', 'street', 'baseDecor'].includes(piece.t)
       ? footprint(o) : { w: 1.2, d: 1.2 };
     // margen +1.2: los muros perimetrales de un CLON son cajas normales que
     // viven justo fuera de fx/fz (±fx+0.4, medio ancho 0.4/1.0)

@@ -299,11 +299,45 @@ check('mover vehículo clonado desplaza visual + collider, sin copia estática',
   linkedMove.colliderAtNewPosition && !linkedMove.staleVisual,
   JSON.stringify(linkedMove));
 
+const proceduralMove = await page.evaluate(() => {
+  const ed = window.BREACH_EDITOR, W = window.BREACH_WORLD;
+  ed.cloneLayout('calle');
+  const asset = ed.map.objects.find((o) => o.p === 'street:jersey' && o.link);
+  if (!asset) return { found: false };
+  ed.selection = new Set(ed.linkedSelection(asset));
+  const before = { x: asset.x, z: asset.z };
+  window.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'ArrowRight', code: 'ArrowRight', bubbles: true, cancelable: true,
+  }));
+  const moved = ed.map.objects.find((o) => o.id === asset.id);
+  const visible = W.mapGroup.children.find((o) =>
+    o.userData?.editorDecorKey === moved.decorKey && o.visible);
+  const boxIds = new Set(['coverLow', 'coverMid', 'wall', 'pillar', 'platform', 'corner', 'railing']);
+  const linkedBoxes = ed.map.objects.filter((o) =>
+    boxIds.has(o.p) && o.visual === false && o.link);
+  const unlinkedBoxes = ed.map.objects.filter((o) =>
+    boxIds.has(o.p) && o.visual === false && !o.link);
+  return {
+    found: true, selected: ed.selection.size, before,
+    after: { x: moved.x, z: moved.z },
+    visual: visible ? { x: visible.position.x, z: visible.position.z } : null,
+    linkedBoxes: linkedBoxes.length, unlinkedBoxes: unlinkedBoxes.length,
+  };
+});
+check('flecha mueve divisor Jersey visible + collider como una unidad',
+  proceduralMove.found && proceduralMove.selected === 2 &&
+  proceduralMove.after.x === proceduralMove.before.x + 1 &&
+  proceduralMove.visual?.x === proceduralMove.after.x &&
+  proceduralMove.visual?.z === proceduralMove.after.z &&
+  proceduralMove.unlinkedBoxes === 0,
+  JSON.stringify(proceduralMove));
+
 const migratedClone = await page.evaluate(() => {
   const ed = window.BREACH_EDITOR;
   ed.cloneLayout('calle');
   ed.map.objects = ed.map.objects.filter((o) => !o.baseDecor);
   delete ed.map.decorCaptured;
+  delete ed.map.decorCaptureVersion;
   for (const o of ed.map.objects) delete o.link;
   const before = ed.map.objects.length;
   ed.rebuild();
@@ -316,6 +350,34 @@ const migratedClone = await page.evaluate(() => {
 check('clones antiguos se actualizan sin exigir volver a clonarlos',
   migratedClone.after > migratedClone.before && migratedClone.baseDecor > 0 &&
   migratedClone.linkedAssets > 0, JSON.stringify(migratedClone));
+
+const migratedV1Clone = await page.evaluate(() => {
+  const ed = window.BREACH_EDITOR;
+  ed.cloneLayout('calle');
+  const missingLinks = new Set(ed.map.objects
+    .filter((o) => ['street:jersey', 'street:dumpster', 'street:kiosk', 'street:roadwork', 'street:coffee'].includes(o.p))
+    .map((o) => o.link).filter(Boolean));
+  ed.map.objects = ed.map.objects.filter((o) =>
+    !['street:jersey', 'street:dumpster', 'street:kiosk', 'street:roadwork', 'street:coffee'].includes(o.p));
+  for (const o of ed.map.objects) if (missingLinks.has(o.link)) delete o.link;
+  ed.map.decorCaptureVersion = 1;
+  const existingBefore = ed.map.objects.filter((o) => o.baseDecor).length;
+  ed.rebuild();
+  const procedural = ed.map.objects.filter((o) =>
+    ['street:jersey', 'street:dumpster', 'street:kiosk', 'street:roadwork', 'street:coffee'].includes(o.p));
+  const existingAfter = ed.map.objects.filter((o) => o.baseDecor &&
+    !['street:jersey', 'street:dumpster', 'street:kiosk', 'street:roadwork', 'street:coffee'].includes(o.p)).length;
+  return {
+    existingBefore, existingAfter, procedural: procedural.length,
+    linkedProcedural: procedural.filter((o) => o.link).length,
+    version: ed.map.decorCaptureVersion,
+  };
+});
+check('clon de la versión anterior agrega solo las 16 pieles faltantes',
+  migratedV1Clone.existingAfter === migratedV1Clone.existingBefore &&
+  migratedV1Clone.procedural === 16 && migratedV1Clone.linkedProcedural === 16 &&
+  migratedV1Clone.version === 2,
+  JSON.stringify(migratedV1Clone));
 
 // ---------------------------------------------------------------------------
 // 7) PLAYTEST de un clon de Azoteas (helipuerto + especial elevado)

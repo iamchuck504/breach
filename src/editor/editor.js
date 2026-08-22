@@ -101,13 +101,17 @@ export class MapEditor {
   // fueran editables. Conserva la posición actual de cada collider y le
   // adjunta su carrocería; el usuario no tiene que borrar ni volver a clonar.
   _upgradeBaseDecor() {
-    if (!this.map?.base || this.map.decorCaptured) return false;
+    if (!this.map?.base || (this.map.decorCaptureVersion ?? 0) >= 2) return false;
     const template = mapFromSnapshot(this.map.base, this.world.snapshotLayout(this.map.base));
     const isBox = (o) => paletteById(o.p)?.t === 'box';
     const sourceBoxes = template.objects.filter(isBox);
     const targetBoxes = this.map.objects.filter(isBox);
+    const hadCapturedDecor = this.map.objects.some((o) => o.baseDecor);
     const newLinks = new Map();
     for (const source of template.objects.filter((o) => o.baseDecor)) {
+      // La primera versión ya capturaba GLBs y vehículos. En esos clones
+      // solo faltan las pieles procedurales nuevas; no duplicarlas al migrar.
+      if (hadCapturedDecor && paletteById(source.p)?.t !== 'baseDecor') continue;
       const copy = JSON.parse(JSON.stringify(source));
       copy.id = 'o' + Math.random().toString(36).slice(2, 9);
       if (source.link) {
@@ -127,6 +131,7 @@ export class MapEditor {
       this.map.objects.push(copy);
     }
     this.map.decorCaptured = true;
+    this.map.decorCaptureVersion = 2;
     return true;
   }
 
@@ -276,7 +281,7 @@ export class MapEditor {
     if (!sel.length) return;
     this.pushUndo('escalar');
     for (const o of sel) {
-      if (['urban', 'street'].includes(paletteById(o.p)?.t)) {
+      if (['urban', 'street', 'baseDecor'].includes(paletteById(o.p)?.t)) {
         o.scale = Math.max(0.1, Math.min(8, +((o.scale ?? 1) * f).toFixed(2)));
         continue;
       }
@@ -365,7 +370,7 @@ export class MapEditor {
     const piece = paletteById(o.p);
     const marker = piece && (piece.t === 'spawn' || piece.t === 'crate' || piece.t === 'special');
     // el personaje de referencia se pickea por su cápsula real de gameplay
-    const editableAsset = piece?.t === 'urban' || piece?.t === 'street';
+    const editableAsset = ['urban', 'street', 'baseDecor'].includes(piece?.t);
     const assetFootprint = footprint({
       w: (o.w ?? piece?.w ?? 2.2) * (o.scale ?? 1),
       d: (o.d ?? piece?.d ?? 2.2) * (o.scale ?? 1), rot: o.rot ?? 0,
@@ -1000,7 +1005,7 @@ export class MapEditor {
       for (const s of this.drag.start) {
         const o = this.map.objects.find((x) => x.id === s.id);
         if (!o) continue;
-        if (['urban', 'street'].includes(paletteById(o.p)?.t)) {
+        if (['urban', 'street', 'baseDecor'].includes(paletteById(o.p)?.t)) {
           o.scale = Math.max(0.1, Math.min(8, +((s.scale ?? 1) * f).toFixed(2)));
           continue;
         }
