@@ -21,6 +21,8 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 page.on('pageerror', (e) => console.log('PAGEERROR:', e.message));
 const LAYOUT = process.argv[2] || 'fortaleza'; // node scripts/shot-map.mjs [mapa]
 await page.goto('http://localhost:8797/?nolock=1', { waitUntil: 'networkidle' });
+await page.evaluate(() => document.getElementById('btn-enter')?.click());
+await page.waitForSelector('#splash.off', { state: 'attached' });
 await page.evaluate((l) => {
   localStorage.setItem('breach.map', l);
   window.BREACH.mapChoice = l; // G.mapChoice ya se leyó al cargar el módulo
@@ -36,6 +38,13 @@ const shots = LAYOUT === 'azoteas' ? [
   ['spawn', [-5, 2.2, -29.5], [3, 1.6, -39]],
   ['campo', [12, 2.6, -18], [-6, 1.4, 3]],
   ['centro', [10, 3.4, -10], [0, 0.6, 0]],
+] : LAYOUT === 'calle' ? [
+  ['aerea', [0, 44, -40], [0, 0, 2]],
+  ['spawn', [-4, 2.2, -19.5], [2, 1.6, -26]],
+  ['campo', [8, 2.6, -12], [-4, 1.4, 2]],
+  ['fachada-centro', [-10.5, 3.0, -2.5], [-18.5, 3.1, 0]],
+  ['fachada-sur', [-10.5, 3.3, -18], [-18.5, 4.2, -23.8]],
+  ['fachada-norte', [10.5, 3.0, -7], [18.5, 2.8, -11.8]],
 ] : [
   ['aerea', [0, 44, -40], [0, 0, 2]],
   ['spawn', [-4, 2.2, -19.5], [2, 1.6, -26]],

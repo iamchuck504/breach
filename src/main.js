@@ -7,6 +7,7 @@ import { LANGUAGES, t, getLanguage, setLanguage, applyTranslations, onLanguageCh
 import { Input } from './core/input.js';
 import { ShoulderCamera } from './core/camera.js';
 import { World } from './world/world.js';
+import { preloadUrbanAssets } from './world/urban-assets.js';
 import { Rig, RAGDOLL_R } from './player/rig.js';
 import { Controller, PLAYER_R } from './player/controller.js';
 import { RemotePlayer } from './player/remote.js';
@@ -530,7 +531,7 @@ function prepareGame() {
   const audioReady = audio.prepare();
   preparePromise = (async () => {
     await new Promise(requestAnimationFrame); // pintar PREPARANDO antes del trabajo GPU
-    await Promise.all([audioReady, effects.prepare(renderer, camera)]);
+    await Promise.all([audioReady, effects.prepare(renderer, camera), preloadUrbanAssets()]);
     await new Promise(requestAnimationFrame);
   })();
   return preparePromise;

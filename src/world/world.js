@@ -8,6 +8,7 @@ import { MAP_RUNTIME } from '../game/lobby-rules.js';
 import { BLOCK } from './block-heights.js';
 import { getMap, isCustomLayout, cratesOf, specialOf, spawnsOf, footprint, paletteById }
   from './map-data.js';
+import { cloneUrbanAsset } from './urban-assets.js';
 
 const FIELD_X = 15, FIELD_Z = 18; // semiancho / semilargo
 const SOLDIER_HEIGHT = 1.63;
@@ -61,9 +62,10 @@ export class World {
     if (this.mapGroup) {
       this.scene.remove(this.mapGroup);
       this.mapGroup.traverse((o) => {
-        if (o.geometry) o.geometry.dispose();
+        if (o.geometry && !o.geometry.userData.urbanAssetShared) o.geometry.dispose();
         if (o.material) {
           (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => {
+            if (m.userData.urbanAssetShared) return;
             // las texturas del caché se comparten entre mapas: no tocarlas
             if (m.map && !m.map.userData.cached) m.map.dispose();
             m.dispose();
@@ -1696,6 +1698,29 @@ export class World {
     head.position.set(x + arm, height - 0.32, z); this.mapGroup.add(head);
   }
 
+  _addUrbanAsset(id, x, z, {
+    y = 0, scale = 1, rotation = 0, castShadow = true, receiveShadow = true,
+  } = {}) {
+    const model = cloneUrbanAsset(id);
+    if (!model) return null;
+    model.name = `urban-${id}`;
+    // Los assets de Three.js Assets vienen centrados en el origen. Apoyarlos
+    // por su base evita semienterrar fachadas, vehículos y mobiliario.
+    const minY = Number(model.userData.urbanMinY) || 0;
+    model.position.set(x, y - minY * scale, z);
+    model.rotation.y = rotation;
+    model.scale.setScalar(scale);
+    model.userData.urbanAssetId = id;
+    model.traverse((o) => {
+      if (!o.isMesh) return;
+      o.castShadow = castShadow;
+      o.receiveShadow = receiveShadow;
+      o.frustumCulled = true;
+    });
+    this.mapGroup.add(model);
+    return model;
+  }
+
   // Mapa "Calle Cerrada" (34×60): avenida urbana al atardecer. Ruta central
   // con vehículos como cobertura, un BUS que rompe la línea de visión larga
   // a cada lado del centro, edificios que forman callejones laterales CQC y
@@ -2059,11 +2084,24 @@ export class World {
       [-2.5, -16, 0, 0x5a6470, 0], [2.5, 16, Math.PI, 0x5a6470, 0],
       [3, -10.5, 0, 0x815e4f, 1], [-3, 10.5, Math.PI, 0x815e4f, 1],
       [-3, -5.5, Math.PI / 2, 0x52696c, 2], [3, 5.5, -Math.PI / 2, 0x52696c, 2],
-    ]) this._addStreetVehicle(x, z, rot, color, variant);
+    ]) {
+      // El SUV se usa como una variante compacta, no se estira: escala
+      // uniforme 1.35 deja ancho/longitud cerca del collider LOW existente.
+      const assetVehicle = variant === 0
+        ? this._addUrbanAsset('suvMinivan', x, z, { scale: 1.35, rotation: rot })
+        : null;
+      if (!assetVehicle) this._addStreetVehicle(x, z, rot, color, variant);
+    }
     // Buses atravesados cierran visual y tácticamente el acceso frontal a
     // cada spawn; los callejones laterales siguen siendo los flancos claros.
     this._addStreetBus(0, -22.5, Math.PI / 2, 0);
     this._addStreetBus(0, 22.5, -Math.PI / 2, 1);
+    // Dos paradas explican que los autobuses cerraban una ruta urbana real.
+    // Son decoración sobre la acera; no añaden collider ni estrechan flancos.
+    this._addUrbanAsset('busShelter', 14.35, -25.0,
+      { scale: 0.84, rotation: Math.PI / 2 });
+    this._addUrbanAsset('busShelter', -14.35, 25.0,
+      { scale: 0.84, rotation: -Math.PI / 2 });
     // Vehículos del operativo de emergencia: conservan posición, orientación
     // y collider; colores/insignias distintos explican por qué están allí.
     this._addStreetTruck(-6.5, -1.5, 0, 0x53666b, 0);
@@ -2298,8 +2336,10 @@ export class World {
     // pero su infraestructura permanece completa y legible como una avenida.
     for (const z of [-25, -15, -5, 5, 15, 25]) {
       // Pegados al bordillo y fuera de la huella reducida de los kioscos.
-      this._addUtilityPole(-11.72, z, { lamp: 0xffc27a, arm: 0.3 });
-      this._addUtilityPole(11.72, z, { lamp: 0xffc27a, arm: -0.3 });
+      if (!this._addUrbanAsset('streetlight', -11.72, z, { scale: 1.21 }))
+        this._addUtilityPole(-11.72, z, { lamp: 0xffc27a, arm: 0.3 });
+      if (!this._addUrbanAsset('streetlight', 11.72, z, { scale: 1.21, rotation: Math.PI }))
+        this._addUtilityPole(11.72, z, { lamp: 0xffc27a, arm: -0.3 });
     }
     // Cableado con caída suave entre postes: landmark vertical y profundidad
     // de calle real. TubeGeometry pequeño, lejos del volumen jugable.
@@ -2324,6 +2364,7 @@ export class World {
     const streetMetal = new THREE.MeshStandardMaterial({ color: 0x30383d, metalness: 0.64, roughness: 0.4 });
     const hydrantMat = new THREE.MeshStandardMaterial({ color: 0x8e3e31, metalness: 0.45, roughness: 0.48 });
     for (const [x, z] of [[-12.45, -11], [12.45, 11]]) {
+      if (this._addUrbanAsset('fireHydrant', x, z, { scale: 0.90 })) continue;
       const h = new THREE.Group(); h.position.set(x, 0, z);
       const body = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.16, 0.48, 9), hydrantMat);
       body.position.y = 0.24; h.add(body);
@@ -2356,9 +2397,28 @@ export class World {
       );
       glow.position.set(x, 2.72, z); glow.lookAt(0, 2.1, z); this.mapGroup.add(glow);
     }
-    // skyline lejano con ventanas encendidas
+    // Edificios urbanos completos detrás de la muralla jugable. No se usan
+    // como skins (su profundidad produciría clipping en la acera): desde la
+    // calle añaden techos, volúmenes y variedad sin tocar colliders ni rutas.
+    for (const [id, x, z, scale, rotation] of [
+      ['apartmentBlock', -22.2, -22.8, 0.82, Math.PI / 2],
+      ['apartmentBlock', 22.2, 22.8, 0.82, -Math.PI / 2],
+      ['cornerStore', -22.8, 0.5, 0.86, Math.PI / 2],
+      ['cornerStore', 22.8, -0.5, 0.86, -Math.PI / 2],
+      ['shopfrontRow', -22.2, 12.8, 0.88, Math.PI / 2],
+      ['shopfrontRow', 22.2, -12.8, 0.88, -Math.PI / 2],
+    ]) this._addUrbanAsset(id, x, z, { scale, rotation, castShadow: false });
+
+    // Skyline GLB: cuatro siluetas distintas sustituyen los prismas genéricos.
+    // Siguen lejos del espacio jugable, sin collider ni sombras dinámicas.
     const winMat = new THREE.MeshLambertMaterial({ color: 0x4b5563, map: this._tex('windows', 2, 2) });
-    for (const [x, z, w, h] of [[-26, -14, 7, 15], [27, -4, 8, 19], [-25, 12, 6, 12], [24, 20, 7, 16]]) {
+    for (const [id, x, z, w, h, scale, rotation] of [
+      ['glassSkyscraper', -26, -14, 7, 15, 0.72, 0.18],
+      ['glassSupertall', 27, -4, 8, 19, 0.60, -0.32],
+      ['waterfrontTower', -25, 12, 6, 12, 0.68, 0.34],
+      ['glassSkyscraper', 24, 20, 7, 16, 0.62, Math.PI + 0.12],
+    ]) {
+      if (this._addUrbanAsset(id, x, z, { scale, rotation, castShadow: false, receiveShadow: false })) continue;
       const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, 6), winMat);
       b.position.set(x, h / 2 - 0.5, z);
       this.mapGroup.add(b);
