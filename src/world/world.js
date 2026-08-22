@@ -1574,26 +1574,28 @@ export class World {
       // bus: el panel inferior queda al ras, el marco sigue la silueta del morro
       // y el cristal es un polígono inset contenido dentro de ese marco.
       if (side === serviceSide) {
-        const doorZ = -3.91;
-        const doorWidth = 0.72;
-        add(0.022, 0.84, doorWidth, side * (S.width / 2 + 0.064), 0.75, doorZ, body);
+        // 0.92 m de ancho y 2.30 m de alto: dimensiones derivadas del soldado
+        // de 1.63 m, no de la escala visual del propio autobús.
+        const doorZ = -3.80;
+        const doorWidth = 0.92;
+        add(0.022, 0.82, doorWidth, side * (S.width / 2 + 0.064), 0.67, doorZ, body);
         sidePanel(side, [
-          [-4.27, 1.17], [-3.55, 1.17], [-3.55, 2.48],
-          [-3.83, 2.72], [-4.11, 2.40],
+          [-4.28, 0.25], [-3.34, 0.25], [-3.34, 2.50],
+          [-3.80, 2.80], [-4.14, 2.48],
         ], body, 0.066, 4);
         sidePanel(side, [
-          [-4.19, 1.28], [-3.63, 1.28], [-3.63, 2.43],
-          [-3.84, 2.61], [-4.05, 2.36],
+          [-4.23, 0.91], [-3.41, 0.91], [-3.41, 2.45],
+          [-3.80, 2.72], [-4.08, 2.43],
         ], lower, 0.070, 5);
         sidePanel(side, [
-          [-4.14, 1.35], [-3.68, 1.35], [-3.68, 2.37],
-          [-3.85, 2.52], [-3.99, 2.31],
+          [-4.15, 1.01], [-3.49, 1.01], [-3.49, 2.37],
+          [-3.80, 2.59], [-4.00, 2.36],
         ], glass, 0.073, 6);
         // Juntas finas y manija: delimitan la puerta sin convertirla en una
         // placa negra separada del costado.
-        add(0.018, 1.86, 0.018, side * (S.width / 2 + 0.078), 1.27, -3.54, lower);
-        add(0.018, 0.022, doorWidth - 0.08, side * (S.width / 2 + 0.078), 0.34, doorZ, lower);
-        add(0.036, 0.055, 0.16, side * (S.width / 2 + 0.086), 1.07, -3.62, lower);
+        add(0.018, 2.24, 0.018, side * (S.width / 2 + 0.078), 1.37, -3.33, lower);
+        add(0.018, 0.022, doorWidth - 0.08, side * (S.width / 2 + 0.078), 0.25, doorZ, lower);
+        add(0.036, 0.055, 0.16, side * (S.width / 2 + 0.086), 0.83, -3.43, lower);
       }
 
       for (const pz of [frontWheelZ, rearWheelZ]) {
