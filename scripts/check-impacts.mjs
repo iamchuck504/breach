@@ -76,6 +76,8 @@ for (let i = 0; i < 130; i++) {
 check(effects.decals.activeCount === 96, `pool excedió el máximo (${effects.decals.activeCount})`);
 check(scene.children.filter((o) => o.name === 'impact-decals').length === 1,
   'los decals no comparten un único InstancedMesh');
+check(effects.decals.mesh.material.side === THREE.DoubleSide,
+  'los decals desaparecen al mirar un perfil biselado desde atrás/ángulo rasante');
 effects.update(30);
 check(effects.decals.activeCount === 0, 'los decals no expiraron tras su fade');
 

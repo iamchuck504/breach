@@ -302,6 +302,29 @@ check('mover vehículo clonado desplaza visual + collider, sin copia estática',
   linkedMove.colliderAtNewPosition && !linkedMove.staleVisual,
   JSON.stringify(linkedMove));
 
+const suvWindows = await page.evaluate(() => {
+  const ed = window.BREACH_EDITOR, W = window.BREACH_WORLD;
+  ed.cloneLayout('calle');
+  const roots = [];
+  W.mapGroup.traverse((o) => {
+    if (o.userData?.urbanAssetId !== 'suvMinivan') return;
+    let blackVertices = 0;
+    o.traverse((part) => {
+      if (!part.isMesh) return;
+      const color = part.geometry.getAttribute('color');
+      if (!color) return;
+      for (let i = 0; i < color.count; i++) {
+        if (color.getX(i) + color.getY(i) + color.getZ(i) < 0.025) blackVertices++;
+      }
+    });
+    roots.push({ darkened: o.userData.suvDarkWindowVertices ?? 0, blackVertices });
+  });
+  return roots;
+});
+check('solo los cristales del SUV reciben el tratamiento negro al precargar',
+  suvWindows.length === 2 && suvWindows.every((suv) =>
+    suv.darkened > 0 && suv.blackVertices >= suv.darkened), JSON.stringify(suvWindows));
+
 const proceduralMove = await page.evaluate(() => {
   const ed = window.BREACH_EDITOR, W = window.BREACH_WORLD;
   ed.cloneLayout('calle');
@@ -372,7 +395,8 @@ check('postes/hidrantes colisionan; paradas son cover en U con frente abierto',
   solidStreetProps.assets === 20 && solidStreetProps.linked === 20 &&
   solidStreetProps.nonCover === 18 && solidStreetProps.cover === 6 &&
   solidStreetProps.blocked === 24 && solidStreetProps.openFronts === 2 &&
-  solidStreetProps.coverFaces === 144,
+  // Cuatro sedanes adicionales aportan 16 caras de cover simétricas.
+  solidStreetProps.coverFaces === 160,
   JSON.stringify(solidStreetProps));
 
 const buildingDuplicate = await page.evaluate(() => {

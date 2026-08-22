@@ -18,6 +18,45 @@ const URBAN_ASSETS = Object.freeze({
 const cache = new Map();
 let preloadPromise = null;
 
+// El SUV viene como un único mesh Draco con un solo material y colores por
+// vértice, por lo que no existe un material "glass" que podamos sustituir.
+// Oscurecemos únicamente los vértices azulados que viven en el volumen de la
+// cabina (laterales, parabrisas y vidrio trasero) una sola vez al precargarlo.
+// La carrocería, llantas, luces y cromados conservan sus colores originales.
+function darkenSuvWindows(scene) {
+  let changed = 0;
+  scene.traverse((mesh) => {
+    if (!mesh.isMesh) return;
+    const position = mesh.geometry.getAttribute('position');
+    const sourceColor = mesh.geometry.getAttribute('color');
+    if (!position || !sourceColor) return;
+
+    const geometry = mesh.geometry.clone();
+    const color = geometry.getAttribute('color');
+    let meshChanged = 0;
+    for (let i = 0; i < position.count; i++) {
+      const x = position.getX(i), y = position.getY(i), z = position.getZ(i);
+      const inCabinHeight = y > 0.69 && y < 1.23;
+      const sideWindow = Math.abs(x) > 0.51 && Math.abs(x) < 0.70 &&
+        z > -1.42 && z < 0.73;
+      const endWindow = Math.abs(x) < 0.58 && (z > 0.50 || z < -1.20);
+      const r = color.getX(i), g = color.getY(i), b = color.getZ(i);
+      const blueGlass = b > g + 0.014 && g > r + 0.009;
+      if (!inCabinHeight || (!sideWindow && !endWindow) || !blueGlass) continue;
+      color.setXYZ(i, 0.004, 0.006, 0.008);
+      meshChanged++;
+      changed++;
+    }
+    if (!meshChanged) {
+      geometry.dispose();
+      return;
+    }
+    color.needsUpdate = true;
+    mesh.geometry = geometry;
+  });
+  scene.userData.suvDarkWindowVertices = changed;
+}
+
 function markShared(scene, id) {
   scene.name = `urban-${id}`;
   scene.updateWorldMatrix(true, true);
@@ -45,6 +84,7 @@ export function preloadUrbanAssets() {
 
   preloadPromise = Promise.allSettled(Object.entries(URBAN_ASSETS).map(async ([id, file]) => {
     const gltf = await loader.loadAsync(`${base}assets/calle/${file}`);
+    if (id === 'suvMinivan') darkenSuvWindows(gltf.scene);
     markShared(gltf.scene, id);
     cache.set(id, gltf.scene);
     return id;

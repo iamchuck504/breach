@@ -2099,6 +2099,10 @@ export class World {
     const carCoverW = STREET_SCALE.car.width;
     const carCoverL = STREET_SCALE.car.length - 0.13;
     this._box(-2.5, -28, carCoverW, carCoverL, LOW, { ...lowOpts, visual: false });
+    // Dos autos adicionales por lado de la calle. Los pares rotacionales
+    // conservan exactamente la misma oportunidad de avance para ambos equipos.
+    this._box(6.5, -21, carCoverW, carCoverL, LOW, { ...lowOpts, visual: false });
+    this._box(-6.5, -16, carCoverW, carCoverL, LOW, { ...lowOpts, visual: false });
     this._box(3, -10.5, carCoverW, carCoverL, LOW, { ...lowOpts, visual: false });
     this._box(-3, -5.5, carCoverL, carCoverW, LOW, { ...lowOpts, visual: false }); // auto cruzado
 
@@ -2561,6 +2565,8 @@ export class World {
     // Autos inutilizados: landmark de vehículo y cover bajo predecible.
     for (const [x, z, rot, color, variant] of [
       [-2.5, -28, 0, 0x5a6470, 0], [2.5, 28, Math.PI, 0x5a6470, 0],
+      [6.5, -21, 0, 0x6b6259, 1], [-6.5, 21, Math.PI, 0x6b6259, 1],
+      [-6.5, -16, 0, 0x59686b, 2], [6.5, 16, Math.PI, 0x59686b, 2],
       [3, -10.5, 0, 0x815e4f, 1], [-3, 10.5, Math.PI, 0x815e4f, 1],
       [-3, -5.5, Math.PI / 2, 0x52696c, 2], [3, 5.5, -Math.PI / 2, 0x52696c, 2],
     ]) {
@@ -2761,8 +2767,11 @@ export class World {
     const addRoadwork = (x, z, rot) => {
       const group = new THREE.Group(); group.position.set(x, 0, z); group.rotation.y = rot;
       this._addVehicleProfile(group, [
-        [-0.43, 0.10], [-0.43, 1.36], [-0.28, 1.76],
-        [0.28, 1.76], [0.43, 1.36], [0.43, 0.10],
+        // El perfil queda justo dentro del collider (±0.45). Así el decal,
+        // que nace 1.2 cm fuera de la cara física, nunca queda enterrado en
+        // el bisel visual al observarlo desde un ángulo lateral.
+        [-0.41, 0.10], [-0.41, 1.36], [-0.28, 1.76],
+        [0.28, 1.76], [0.41, 1.36], [0.41, 0.10],
       ], 3.02, barrierMat, 0.035);
       for (const face of [-1, 1]) {
         for (const px of [-0.92, -0.30, 0.32, 0.94]) {

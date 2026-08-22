@@ -49,6 +49,10 @@ class ImpactDecalPool {
       transparent: true,
       depthWrite: false,
       depthTest: true,
+      // Los impactos pueden quedar sobre perfiles biselados muy finos. Al
+      // dibujar ambas caras siguen obedeciendo al depth buffer, pero no
+      // desaparecen al mirar la superficie desde un ángulo rasante.
+      side: THREE.DoubleSide,
       polygonOffset: true,
       polygonOffsetFactor: -3,
       polygonOffsetUnits: -3,
