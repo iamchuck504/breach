@@ -1322,9 +1322,11 @@ export class World {
     // Parabrisas frontal y vidrio trasero. Son superficies trapezoidales
     // completas, no cajas inclinadas: así quedan por fuera de la carrocería y
     // se leen correctamente desde los extremos del auto.
-    const endPanel = (pts, mat, order = 2) => {
+    const endPanel = (pts, mat, order = 2, zOffset = 0) => {
       const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.Float32BufferAttribute(pts.flat(), 3));
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(
+        pts.flatMap(([px, py, pz]) => [px, py, pz + zOffset]), 3,
+      ));
       geo.setIndex([0, 1, 2, 0, 2, 3]);
       geo.computeVertexNormals();
       const panel = new THREE.Mesh(geo, mat);
@@ -1333,24 +1335,26 @@ export class World {
       return panel;
     };
     // Cada extremo usa un trapecio negro exterior y otro trapecio inset de
-    // vidrio con las mismas pendientes. Así parabrisas y medallón coinciden
-    // exactamente con su marco en los cuatro lados.
+    // vidrio con las mismas pendientes. Ambos se separan físicamente de la
+    // carrocería: el bevel del perfil podía taparlos desde los extremos aunque
+    // el material siguiera existiendo, haciendo parecer que el auto no tenía
+    // parabrisas ni medallón.
     endPanel([
       [-S.width * 0.442, 1.035, -S.length * 0.21], [S.width * 0.442, 1.035, -S.length * 0.21],
       [S.width * 0.42, S.height, -S.length * 0.105], [-S.width * 0.42, S.height, -S.length * 0.105],
-    ], frameMat, 1);
+    ], frameMat, 3, -0.032);
     endPanel([
       [-S.width * 0.425, 1.06, -S.length * 0.205], [S.width * 0.425, 1.06, -S.length * 0.205],
       [S.width * 0.402, S.height - 0.025, -S.length * 0.11], [-S.width * 0.402, S.height - 0.025, -S.length * 0.11],
-    ], glassMat, 2);
+    ], glassMat, 4, -0.046);
     endPanel([
       [-S.width * 0.42, S.height, S.length * 0.19], [S.width * 0.42, S.height, S.length * 0.19],
       [S.width * 0.442, 1.035, S.length * 0.265], [-S.width * 0.442, 1.035, S.length * 0.265],
-    ], frameMat, 1);
+    ], frameMat, 3, 0.032);
     endPanel([
       [-S.width * 0.402, S.height - 0.025, S.length * 0.195], [S.width * 0.402, S.height - 0.025, S.length * 0.195],
       [S.width * 0.425, 1.06, S.length * 0.26], [-S.width * 0.425, 1.06, S.length * 0.26],
-    ], glassMat, 2);
+    ], glassMat, 4, 0.046);
     // Distancia entre ejes cercana a un sedán compacto real: alrededor del
     // 59% del largo total, no ruedas pegadas a los parachoques.
     for (const sx of [-S.width / 2 - 0.015, S.width / 2 + 0.015]) for (const sz of [-S.length * 0.301, S.length * 0.301]) {
