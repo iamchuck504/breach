@@ -2200,16 +2200,9 @@ export class World {
       fixture.position.set(faceX + toward * 0.43, 2.57, z - span * 0.10); this.mapGroup.add(fixture);
       this._addMapSign(name, faceX + toward * 0.038, 2.95, z - span * 0.10, rot,
         { w: Math.min(3.3, span - 0.7), h: 0.42, bg: variant % 2 ? '#26383b' : '#4b2928', fg: '#ead8b5', border: '#8e765d' });
-      // Landmarks geométricos: se reconocen incluso cuando el texto ya no es
-      // legible. Quedan montados sobre la fachada, detrás del límite físico.
-      if (name === 'PHARMACY') {
-        const crossMat = new THREE.MeshBasicMaterial({ color: 0x62d09a });
-        const crossZ = z + span * 0.31;
-        const vertical = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.84, 0.22), crossMat);
-        vertical.position.set(faceX + toward * 0.13, 3.86, crossZ); this.mapGroup.add(vertical);
-        const horizontal = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.22, 0.82), crossMat);
-        horizontal.position.set(faceX + toward * 0.14, 3.86, crossZ); this.mapGroup.add(horizontal);
-      } else if (name === 'GARAGE') {
+      // Landmarks geométricos discretos que siguen funcionando cuando el
+      // texto deja de ser legible. La farmacia conserva solo su rótulo.
+      if (name === 'GARAGE') {
         const hazard = new THREE.MeshBasicMaterial({ map: this._tex('hazard', 2, 1), color: 0xc59652 });
         const sill = new THREE.Mesh(new THREE.PlaneGeometry(2.9, 0.22), hazard);
         sill.position.set(faceX + toward * 0.06, 0.18, z - span * 0.10); sill.rotation.y = rot; this.mapGroup.add(sill);
@@ -2602,11 +2595,6 @@ export class World {
       const x = i % 2 ? 11.1 : -11.1;
       const light = new THREE.PointLight(i % 2 ? 0xffb36b : 0xffc17d, 4.2, 13, 2);
       light.position.set(x, 2.75, z); light.castShadow = false; this.mapGroup.add(light);
-      const glow = new THREE.Mesh(
-        new THREE.PlaneGeometry(1.45, 1.45),
-        new THREE.MeshBasicMaterial({ map: this._tex('glow'), color: 0xffb56f, transparent: true, opacity: 0.25, depthWrite: false }),
-      );
-      glow.position.set(x, 2.72, z); glow.lookAt(0, 2.1, z); this.mapGroup.add(glow);
     }
     // Edificios urbanos completos detrás de la muralla jugable. No se usan
     // como skins (su profundidad produciría clipping en la acera): desde la
