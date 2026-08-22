@@ -1691,6 +1691,12 @@ function returnToEditor() {
 }
 
 btnEditor?.addEventListener('click', () => openEditor());
+// `?editor=1` (solo DEV): entrar directo al editor sin pasar por el menú —
+// lo usa el acceso directo del escritorio. Microtask: el módulo ya terminó
+// de inicializar todo (hud, input, loop) cuando corre.
+if (editorLocalOnly && new URLSearchParams(location.search).has('editor')) {
+  Promise.resolve().then(() => openEditor());
+}
 
 function startPractice({ fullscreen = true } = {}) {
   dismissSplash();

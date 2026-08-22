@@ -111,7 +111,10 @@ la geometría jugable rota en pasos de 90° (intercambia ancho/fondo). Los
 props decorativos sí giran libremente porque no colisionan.
 
 El editor completo es **solo DEV** (`import.meta.env.DEV` + import dinámico):
-Vite lo elimina del build de producción.
+Vite lo elimina del build de producción. Atajos: `http://localhost:5200/?editor=1`
+entra directo al editor sin pasar por el menú, y `scripts/editor.ps1` arranca
+el dev server si hace falta y abre el navegador ahí (es lo que usa el acceso
+directo "BREACH Editor" del escritorio).
 
 ## Validación (headless, sin abrir ventana)
 
