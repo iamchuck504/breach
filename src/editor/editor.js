@@ -242,6 +242,19 @@ export class MapEditor {
     this.rebuild();
   }
 
+  // Movimiento discreto de teclado. A diferencia del drag, conserva el
+  // offset actual respecto a la cuadrícula: una pieza en X=-2.5 avanza a
+  // -1.5 con un paso de 1, sin saltar primero a un entero.
+  nudgeSelection(dx, dz) {
+    const sel = this.selected();
+    if (!sel.length) return;
+    for (const o of sel) {
+      o.x = +(o.x + dx).toFixed(4);
+      o.z = +(o.z + dz).toFixed(4);
+    }
+    this.rebuild();
+  }
+
   rotateSelection(deg) {
     const sel = this.selected();
     if (!sel.length) return;
@@ -861,6 +874,19 @@ export class MapEditor {
       if (e.ctrlKey && k === 's') { e.preventDefault(); this.save(); return; }
       if (k === 'delete' || k === 'backspace') { this.deleteSelection(); return; }
       if (k === 'escape') { this.selection.clear(); this.refreshOverlay(); return; }
+      const arrows = {
+        arrowleft: [-1, 0], arrowright: [1, 0],
+        arrowup: [0, -1], arrowdown: [0, 1],
+      };
+      if (arrows[k] && this.selection.size) {
+        e.preventDefault();
+        // Mantener la tecla repite el movimiento, pero todo el gesto se
+        // revierte con un solo Ctrl+Z. Shift permite recorrer 5 pasos.
+        if (!e.repeat) this.pushUndo('mover con flechas');
+        const step = (this.snapPos || 0.25) * (e.shiftKey ? 5 : 1);
+        this.nudgeSelection(arrows[k][0] * step, arrows[k][1] * step);
+        return;
+      }
       if (k === 'q') this.setTool('select');
       if (k === 'w') { /* también movimiento de cámara */ }
       if (k === 'g') { this.showGrid = !this.showGrid; this._refreshGrid(); this.onChange?.(); }

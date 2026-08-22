@@ -156,6 +156,36 @@ check('duplicar y borrar selección', tools.dup === tools.before + 1 && tools.af
   JSON.stringify(tools));
 check('el movimiento respeta el snap', tools.snapped === true, JSON.stringify(tools));
 
+const arrowMove = await page.evaluate(() => {
+  const ed = window.BREACH_EDITOR;
+  const o = ed.map.objects.find((x) => x.p === 'coverLow');
+  ed.selection = new Set([o.id]);
+  ed.snapPos = 1;
+  const before = { x: o.x, z: o.z, undo: ed.undoStack.length };
+  const press = (key, repeat = false, shiftKey = false, target = window) => target.dispatchEvent(
+    new KeyboardEvent('keydown', { key, code: key, repeat, shiftKey, bubbles: true, cancelable: true }),
+  );
+  press('ArrowRight');
+  press('ArrowRight', true);
+  press('ArrowUp');
+  const after = { x: o.x, z: o.z, undo: ed.undoStack.length };
+  const input = document.createElement('input');
+  document.body.append(input);
+  press('ArrowRight', false, false, input);
+  const ignoredInInput = o.x === after.x && o.z === after.z;
+  input.remove();
+  ed.undo(); ed.undo();
+  const restoredObject = ed.map.objects.find((x) => x.id === o.id);
+  const restored = restoredObject.x === before.x && restoredObject.z === before.z;
+  return { before, after, ignoredInInput, restored };
+});
+check('flechas mueven la selección y respetan repetición/undo',
+  arrowMove.after.x === arrowMove.before.x + 2 &&
+  arrowMove.after.z === arrowMove.before.z - 1 &&
+  arrowMove.after.undo === arrowMove.before.undo + 2 &&
+  arrowMove.ignoredInInput && arrowMove.restored,
+  JSON.stringify(arrowMove));
+
 // 7) rotación de geometría jugable: pasos de 90° que intercambian W/D
 const rot = await page.evaluate(() => {
   const ed = window.BREACH_EDITOR;

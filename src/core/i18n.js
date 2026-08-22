@@ -419,7 +419,7 @@ for (const [code, values] of Object.entries(EDITOR_PACKS)) {
 // reciben inglés en lugar de heredar los antiguos textos españoles hardcodeados.
 const EDITOR_RUNTIME_EN = {
   'editor.hint1': 'WASD move · E/C up-down · RIGHT CLICK look · WHEEL zoom',
-  'editor.hint2': 'ALT+CLICK place · CLICK select · SHIFT+CLICK multi · CTRL+D duplicate',
+  'editor.hint2': 'ALT+CLICK place · CLICK select · ARROWS move · SHIFT+ARROWS fast',
   'editor.hint3': 'R rotate · DELETE remove · CTRL+Z undo · T top view',
   'editor.unsavedNew': 'There are unsaved changes. Create a new map?',
   'editor.unsavedOpen': 'There are unsaved changes. Open another map?',
@@ -479,7 +479,7 @@ const EDITOR_RUNTIME_EN = {
 for (const dict of [en, es, pt, fr, ja, it, zh]) Object.assign(dict, EDITOR_RUNTIME_EN);
 Object.assign(es, {
   'editor.hint1': 'WASD mover · E/C subir-bajar · CLIC DER. mirar · RUEDA zoom',
-  'editor.hint2': 'ALT+CLIC colocar · CLIC seleccionar · SHIFT+CLIC multi · CTRL+D duplicar',
+  'editor.hint2': 'ALT+CLIC colocar · CLIC seleccionar · FLECHAS mover · SHIFT+FLECHAS rápido',
   'editor.hint3': 'R rotar · SUPR borrar · CTRL+Z deshacer · T vista superior',
   'editor.unsavedNew': 'Hay cambios sin guardar. ¿Crear un mapa nuevo?',
   'editor.unsavedOpen': 'Hay cambios sin guardar. ¿Abrir otro mapa?',
