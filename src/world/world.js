@@ -1474,175 +1474,148 @@ export class World {
   }
 
   _addStreetBus(x, z, rot = 0, variant = 0) {
+    const bodyColor = variant ? 0x7f4638 : 0xa45c43;
     const body = new THREE.MeshStandardMaterial({
-      color: 0x98523b, map: this._tex('vehicleWear', 3.2, 1), metalness: 0.38, roughness: 0.52,
+      color: bodyColor, map: this._tex('vehicleWear', 3.2, 1), metalness: 0.36, roughness: 0.50,
     });
-    const lower = new THREE.MeshStandardMaterial({ color: 0x30383e, metalness: 0.52, roughness: 0.42 });
+    const bodyInset = new THREE.MeshStandardMaterial({
+      color: variant ? 0x6d3d34 : 0x8d4f3e, metalness: 0.38, roughness: 0.54,
+    });
+    const lower = new THREE.MeshStandardMaterial({ color: 0x242a2f, metalness: 0.50, roughness: 0.44 });
     const glass = new THREE.MeshStandardMaterial({
-      color: 0x132832, metalness: 0.48, roughness: 0.18,
-      emissive: 0x03080b, emissiveIntensity: 0.20, side: THREE.DoubleSide,
+      color: 0x0d2029, metalness: 0.50, roughness: 0.16,
+      emissive: 0x02070a, emissiveIntensity: 0.22, side: THREE.DoubleSide,
       polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3,
     });
-    const tire = new THREE.MeshStandardMaterial({ color: 0x101214, roughness: 0.9 });
-    const hubMat = new THREE.MeshStandardMaterial({ color: 0x697177, metalness: 0.62, roughness: 0.36 });
-    const trim = new THREE.MeshStandardMaterial({ color: variant ? 0xb77748 : 0xc49a5a, metalness: 0.52, roughness: 0.36 });
-    const emergency = new THREE.MeshBasicMaterial({ color: variant ? 0xe04c37 : 0xe5a349 });
-    const lamp = new THREE.MeshBasicMaterial({ color: 0xffd3a0 });
-    const rearLampMat = new THREE.MeshBasicMaterial({ color: 0xb72f24 });
+    const tire = new THREE.MeshStandardMaterial({ color: 0x050607, roughness: 0.94 });
+    const hubMat = new THREE.MeshStandardMaterial({ color: 0x737b80, metalness: 0.68, roughness: 0.32 });
+    const trim = new THREE.MeshStandardMaterial({ color: variant ? 0xc1784c : 0xd0a05e, metalness: 0.50, roughness: 0.36 });
+    const lamp = new THREE.MeshBasicMaterial({ color: 0xffd7a5 });
+    const rearLamp = new THREE.MeshBasicMaterial({ color: 0xc53228 });
     const group = new THREE.Group(); group.position.set(x, 0, z); group.rotation.y = rot;
     const add = (w, h, d, px, py, pz, mat, rx = 0, rz = 0) => {
-      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-      m.position.set(px, py, pz); m.rotation.x = rx; m.rotation.z = rz; m.castShadow = true; m.receiveShadow = true;
-      group.add(m); return m;
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+      mesh.position.set(px, py, pz); mesh.rotation.x = rx; mesh.rotation.z = rz;
+      mesh.castShadow = true; mesh.receiveShadow = true; group.add(mesh); return mesh;
     };
     const S = STREET_SCALE.bus;
-    const endPanel = (pts, mat, order = 2) => {
+    const panel = (pts, mat, order = 2) => {
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.Float32BufferAttribute(pts.flat(), 3));
-      geo.setIndex([0, 1, 2, 0, 2, 3]);
-      geo.computeVertexNormals();
-      const panel = new THREE.Mesh(geo, mat);
-      panel.renderOrder = order;
-      group.add(panel);
-      return panel;
+      const indices = [];
+      for (let i = 1; i < pts.length - 1; i++) indices.push(0, i, i + 1);
+      geo.setIndex(indices); geo.computeVertexNormals();
+      const mesh = new THREE.Mesh(geo, mat); mesh.renderOrder = order;
+      mesh.castShadow = true; mesh.receiveShadow = true; group.add(mesh); return mesh;
     };
-    this._addVehicleProfile(group, [
-      [-S.length / 2, 0.18], [-S.length / 2, 2.72], [-4.28, S.height],
-      [4.25, S.height], [S.length / 2, 2.76], [S.length / 2, 0.18],
-    ], S.width, body, 0.05);
-    add(S.width + 0.025, 0.82, S.length - 0.10, 0, 0.58, 0, lower);
-    add(S.width + 0.10, 0.14, S.length - 0.30, 0, S.height + 0.02, 0, lower);
-    // Parabrisas real a escala humana: marco trapezoidal y dos paños de
-    // vidrio por delante de la carrocería. La antigua banda negra de 82 cm
-    // quedaba enterrada en el bevel y no se leía como una ventana.
-    endPanel([
-      [-S.width * 0.46, 1.50, -S.length / 2 - 0.056],
-      [S.width * 0.46, 1.50, -S.length / 2 - 0.056],
-      [S.width * 0.43, 2.65, -S.length / 2 - 0.056],
-      [-S.width * 0.43, 2.65, -S.length / 2 - 0.056],
-    ], lower, 3);
-    endPanel([
-      [-S.width * 0.425, 1.59, -S.length / 2 - 0.070],
-      [S.width * 0.425, 1.59, -S.length / 2 - 0.070],
-      [S.width * 0.395, 2.57, -S.length / 2 - 0.070],
-      [-S.width * 0.395, 2.57, -S.length / 2 - 0.070],
-    ], glass, 4);
-    add(0.055, 1.00, 0.035, 0, 2.08, -S.length / 2 - 0.086, lower);
-    add(1.54, 0.24, 0.052, 0, 2.82, -S.length / 2 - 0.07, lower);
-    add(1.54, 0.27, 0.052, 0, 0.78, -S.length / 2 - 0.08, lower);
-    for (const sx of [-0.78, 0.78]) add(0.34, 0.21, 0.055, sx, 0.83, -S.length / 2 - 0.09, lamp);
-    // La cara posterior también necesita lectura propia: desde los spawns es
-    // uno de los primeros volúmenes que ve el jugador. Evita el aspecto de
-    // bloque liso y mantiene una escala creíble incluso a corta distancia.
-    endPanel([
-      [-S.width * 0.45, 1.55, S.length / 2 + 0.056],
-      [S.width * 0.45, 1.55, S.length / 2 + 0.056],
-      [S.width * 0.42, 2.64, S.length / 2 + 0.056],
-      [-S.width * 0.42, 2.64, S.length / 2 + 0.056],
-    ], lower, 3);
-    endPanel([
-      [-S.width * 0.415, 1.64, S.length / 2 + 0.070],
-      [S.width * 0.415, 1.64, S.length / 2 + 0.070],
-      [S.width * 0.385, 2.56, S.length / 2 + 0.070],
-      [-S.width * 0.385, 2.56, S.length / 2 + 0.070],
-    ], glass, 4);
-    add(1.52, 0.22, 0.052, 0, 2.82, S.length / 2 + 0.07, lower);
-    add(1.36, 0.34, 0.052, 0, 0.72, S.length / 2 + 0.055, lower);
-    for (const sx of [-0.82, 0.82]) {
-      add(0.27, 0.38, 0.058, sx, 0.88, S.length / 2 + 0.07, rearLampMat);
-      add(0.22, 0.09, 0.06, sx, 0.52, S.length / 2 + 0.075, lamp);
-    }
-    for (const y of [0.58, 0.72, 0.86]) {
-      add(0.88, 0.035, 0.06, 0, y, S.length / 2 + 0.085, trim);
-    }
-    const doorSide = 1;
-    for (const side of [-1, 1]) {
-      const sideX = side * (S.width / 2 + 0.085);
-      // Banda acristalada continua: los cristales individuales anteriores
-      // quedaban enterrados por el bisel de la carrocería y desde el spawn el
-      // autobús se leía como una caja lisa. La banda y sus montantes quedan
-      // claramente por fuera de la piel, como en un bus urbano real.
-      const windowLength = side === doorSide ? 6.70 : S.length - 0.52;
-      const windowCenter = side === doorSide ? 0.86 : 0;
-      const windowBand = new THREE.Mesh(new THREE.PlaneGeometry(windowLength, 0.92), glass);
-      windowBand.position.set(sideX, 2.16, windowCenter);
-      windowBand.rotation.y = side * Math.PI / 2; group.add(windowBand);
-      const firstFrame = side === doorSide ? -2.48 : -3.84;
-      for (let p = firstFrame; p <= 3.92; p += 1.12) {
-        const frame = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.92, 0.055), lower);
-        frame.position.set(side * (S.width / 2 + 0.098), 2.16, p); group.add(frame);
-      }
-      const band = new THREE.Mesh(new THREE.PlaneGeometry(S.length - 0.42, 0.11), trim);
-      band.position.set(side * (S.width / 2 + 0.10), 1.48, 0); band.rotation.y = side * Math.PI / 2; group.add(band);
-      // Una sola puerta de pasajeros, en el costado de servicio. El recorte
-      // de la banda acristalada evita que puerta y ventanas ocupen el mismo
-      // espacio; cuatro paños integrados sustituyen las barras flotantes.
-      if (side === doorSide) {
-        const doorX = side * (S.width / 2 + 0.106);
-        // El eje delantero está en z=-2.88 y su neumático alcanza z=-3.38.
-        // La puerta queda completamente delante del paso de rueda, con un
-        // pequeño tramo de carrocería entre ambos para evitar la intersección.
-        const doorZ = -3.92;
-        const doorWidth = 0.88;
-        add(0.050, STREET_SCALE.door, doorWidth, doorX, STREET_SCALE.door / 2, doorZ, lower);
-        for (const p of [-4.14, -3.70]) {
-          for (const [py, ph] of [[1.72, 0.84], [0.73, 0.60]]) {
-            const pane = new THREE.Mesh(new THREE.PlaneGeometry(0.34, ph), glass);
-            pane.position.set(side * (S.width / 2 + 0.133), py, p);
-            pane.rotation.y = side * Math.PI / 2; pane.renderOrder = 4; group.add(pane);
-          }
-        }
-        add(0.055, STREET_SCALE.door - 0.10, 0.040,
-          side * (S.width / 2 + 0.137), STREET_SCALE.door / 2, doorZ, lower);
-        for (const py of [0.39, 1.12, 2.17]) {
-          add(0.055, 0.045, doorWidth - 0.08,
-            side * (S.width / 2 + 0.137), py, doorZ, lower);
-        }
-      }
-      for (const p of [-2.88, 2.82]) {
-        const wheel = new THREE.Mesh(new THREE.CylinderGeometry(S.wheel, S.wheel, 0.19, 16), tire);
-        wheel.rotation.z = Math.PI / 2; wheel.position.set(side * (S.width / 2 + 0.04), S.wheel, p); group.add(wheel);
-        const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.23, 0.23, 0.20, 14), hubMat);
-        hub.rotation.z = Math.PI / 2;
-        hub.position.set(side * (S.width / 2 + 0.055), S.wheel, p); group.add(hub);
-      }
-      for (let p = -2.18; p <= 2.20; p += 1.10) {
-        const seam = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.86, 0.035), lower);
-        seam.position.set(side * (S.width / 2 + 0.108), 0.94, p); group.add(seam);
-      }
-      const routePanel = new THREE.Mesh(new THREE.PlaneGeometry(1.28, 0.25), lower);
-      routePanel.position.set(side * (S.width / 2 + 0.112), 2.67, -2.72);
-      routePanel.rotation.y = side * Math.PI / 2; group.add(routePanel);
-    }
-    // unidad de techo y parachoques venden escala de vehículo de servicio
-    add(1.38, 0.24, 1.20, 0, S.height + 0.18, 0.82, lower);
-    for (const p of [-1.35, 1.85]) add(1.10, 0.12, 0.78, 0, S.height + 0.12, p, lower);
-    add(S.width + 0.10, 0.17, 0.17, 0, 0.35, -S.length / 2 - 0.12, lower);
-    add(S.width + 0.10, 0.17, 0.17, 0, 0.35, S.length / 2 + 0.12, lower);
-    // espejos, limpiaparabrisas y cristal roto en un extremo
-    for (const sx of [-S.width / 2 - 0.12, S.width / 2 + 0.12]) {
-      add(0.32, 0.05, 0.05, sx, 1.78, -S.length / 2 + 0.08, lower);
-      add(0.11, 0.26, 0.17, sx * 1.02, 1.80, -S.length / 2 + 0.05, glass);
-    }
-    for (const sx of [-0.46, 0.46]) add(0.035, 0.46, 0.035, sx, 2.02, -S.length / 2 - 0.07, lower, 0, sx > 0 ? 0.48 : -0.48);
-    const cracked = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.56, 0.56),
-      new THREE.MeshBasicMaterial({ map: this._tex('crack'), color: 0xb9cad0, transparent: true, alphaTest: 0.08 }),
+    const sidePanel = (side, pts, mat, offset = 0.078, order = 3) => panel(
+      pts.map(([pz, py]) => [side * (S.width / 2 + offset), py, pz]), mat, order,
     );
-    cracked.position.set(0.48, 2.20, -S.length / 2 - 0.052); group.add(cracked);
+
+    // Coach/tour bus: frente inclinado, techo continuo y trasera suavemente
+    // recortada. La huella sigue siendo exactamente la del collider existente.
+    this._addVehicleProfile(group, [
+      [-4.50, 0.22], [-4.50, 1.16], [-4.39, 1.70], [-4.16, 2.54],
+      [-3.86, 2.94], [-3.55, S.height], [3.94, S.height],
+      [4.28, 2.98], [4.50, 2.70], [4.50, 0.22],
+    ], S.width, body, 0.055);
+
+    // El parabrisas ocupa la cara frontal completa y acompaña su inclinación.
+    // Una lámina con espesor evita que la piel extruida oculte el vidrio por
+    // diferencias mínimas de profundidad en GPU integradas.
+    add(2.12, 1.54, 0.060, 0, 1.94, -4.47, glass, 0.27);
+    add(0.050, 1.56, 0.038, 0, 1.94, -4.31, lower, 0.27);
+    add(1.46, 0.20, 0.055, 0, 0.67, -4.55, lower);
+    for (const sx of [-0.76, 0.76]) add(0.34, 0.16, 0.058, sx, 0.77, -4.57, lamp);
+    add(1.18, 0.12, 0.060, 0, 0.43, -4.59, lower);
+
+    // Luneta posterior alta, fascia limpia y pilotos verticales como la referencia.
+    add(2.02, 0.84, 0.060, 0, 2.28, 4.535, glass);
+    add(1.20, 0.20, 0.055, 0, 0.70, 4.55, bodyInset);
+    for (const sx of [-1.02, 1.02]) {
+      add(0.16, 0.54, 0.060, sx, 0.91, 4.56, rearLamp);
+      add(0.13, 0.10, 0.062, sx, 0.55, 4.57, lamp);
+    }
+
+    const serviceSide = 1;
+    const frontWheelZ = -2.70;
+    const rearWheelZ = 2.92;
+    const wheelR = 0.58;
+    for (const side of [-1, 1]) {
+      const skinX = side * (S.width / 2 + 0.084);
+
+      // Ventana triangular de cabina y banda de pasajeros continua.
+      sidePanel(side, [
+        [-4.28, 1.32], [-3.52, 1.50], [-3.52, 2.74],
+        [-3.86, 2.88], [-4.12, 2.50],
+      ], glass);
+      const windows = new THREE.Mesh(new THREE.PlaneGeometry(7.30, 1.02), glass);
+      windows.position.set(skinX, 2.24, 0.38);
+      windows.rotation.y = side * Math.PI / 2; windows.renderOrder = 4; group.add(windows);
+      for (const pz of [-3.27, -2.16, -1.05, 0.06, 1.17, 2.28, 3.39, 4.03]) {
+        add(0.040, 1.02, 0.038, side * (S.width / 2 + 0.098), 2.24, pz, lower);
+      }
+      add(0.045, 0.085, 7.55, side * (S.width / 2 + 0.101), 1.67, 0.28, trim);
+
+      // Bodegas de equipaje entre los ejes: paneles anchos y bajos, no barras.
+      for (const pz of [-1.72, -0.54, 0.64, 1.82]) {
+        add(0.042, 0.73, 1.08, side * (S.width / 2 + 0.088), 1.00, pz, bodyInset);
+        add(0.046, 0.025, 1.02, side * (S.width / 2 + 0.103), 0.66, pz, lower);
+      }
+      add(0.042, 0.66, 0.72, side * (S.width / 2 + 0.088), 0.96, 3.84, bodyInset);
+
+      // Una puerta de acceso real, solo del lado de servicio y completamente
+      // delante del eje delantero. El panel inferior conserva el color de carrocería.
+      if (side === serviceSide) {
+        const doorX = side * (S.width / 2 + 0.106);
+        const doorZ = -3.91;
+        const doorWidth = 0.78;
+        add(0.050, 2.34, doorWidth, doorX, 1.28, doorZ, bodyInset);
+        sidePanel(side, [
+          [-4.26, 1.22], [-3.58, 1.22], [-3.58, 2.50],
+          [-3.84, 2.70], [-4.13, 2.38],
+        ], glass, 0.132, 5);
+        add(0.052, 0.028, doorWidth - 0.08, side * (S.width / 2 + 0.139), 1.14, doorZ, lower);
+        add(0.052, 2.20, 0.025, side * (S.width / 2 + 0.139), 1.31, -3.50, lower);
+      }
+
+      for (const pz of [frontWheelZ, rearWheelZ]) {
+        const wheel = new THREE.Mesh(new THREE.CylinderGeometry(wheelR, wheelR, 0.23, 20), tire);
+        wheel.rotation.z = Math.PI / 2;
+        wheel.position.set(side * (S.width / 2 + 0.075), wheelR, pz); group.add(wheel);
+        const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.30, 0.30, 0.25, 18), hubMat);
+        hub.rotation.z = Math.PI / 2;
+        hub.position.set(side * (S.width / 2 + 0.092), wheelR, pz); group.add(hub);
+        const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.27, 14), lower);
+        cap.rotation.z = Math.PI / 2;
+        cap.position.set(side * (S.width / 2 + 0.106), wheelR, pz); group.add(cap);
+      }
+    }
+
+    // Rocker, parachoques y climatización completan la lectura de coach.
+    add(S.width + 0.04, 0.16, S.length - 0.26, 0, 0.30, 0, lower);
+    add(S.width + 0.08, 0.18, 0.16, 0, 0.31, -4.56, lower);
+    add(S.width + 0.08, 0.18, 0.16, 0, 0.31, 4.56, lower);
+    add(1.30, 0.18, 1.04, 0, S.height + 0.15, 0.70, lower);
+    add(0.88, 0.10, 0.70, 0, S.height + 0.10, -1.35, lower);
+
+    // Espejos altos de coach; los brazos quedan fuera del parabrisas.
+    for (const sx of [-S.width / 2 - 0.14, S.width / 2 + 0.14]) {
+      add(0.32, 0.035, 0.035, sx, 2.64, -4.03, lower);
+      add(0.12, 0.34, 0.16, sx * 1.01, 2.48, -4.04, lower);
+    }
+    for (const sx of [-0.43, 0.43]) {
+      add(0.030, 0.52, 0.030, sx, 1.84, -4.54, lower, 0.25, sx > 0 ? 0.45 : -0.45);
+    }
     if (variant) {
-      // Panel de servicio abierto y balizas apagadas: daño localizado dentro
-      // del volumen del bus, sin modificar el corredor que deja su collider.
-      add(S.width - 0.56, 0.07, 1.08, 0, S.height + 0.12, 1.78, lower, 0.08);
-      for (const sx of [-0.48, 0.48]) {
-        const beacon = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.09, 0.10, 8), emergency);
-        beacon.position.set(sx, S.height + 0.18, -3.26); group.add(beacon);
-      }
-      for (const side of [-1, 1]) {
-        for (const pz of [-1.45, -0.55, 0.35]) {
-          add(0.045, 0.16, 0.52, side * (S.width / 2 + 0.113), 1.06, pz, emergency, 0, 0.52);
-        }
-      }
+      const cracked = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.52, 0.52),
+        new THREE.MeshBasicMaterial({
+          map: this._tex('crack'), color: 0xb9cad0, transparent: true,
+          alphaTest: 0.08, side: THREE.DoubleSide,
+        }),
+      );
+      cracked.position.set(0.48, 2.14, -4.43); cracked.rotation.x = 0.27; group.add(cracked);
     }
     this.mapGroup.add(group);
   }
