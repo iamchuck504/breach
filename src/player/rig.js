@@ -10,7 +10,7 @@
 import * as THREE from 'three';
 import { TUNING } from '../config/tuning.js';
 import { coverAimPose, coverBlindPose } from '../combat/cover-fire.js';
-import { isSniperHeadshotDeath } from '../combat/death-reactions.js';
+import { isSniperHeadshotDeath, rocketDeathLevel } from '../combat/death-reactions.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
@@ -785,6 +785,25 @@ export class Rig {
   }
 
   _applyContextualDamage(ctx, impactSide) {
+    const explosiveLevel = rocketDeathLevel(ctx);
+    if (explosiveLevel >= 2) {
+      // Destrucción total: la física del ragdoll sigue existiendo para
+      // mantener estado/cámara, pero la silueta corporal la reemplazan los
+      // restos físicos del efecto. El arma caída vive en su pickup separado.
+      this._hideDeathPart(this.torso);
+      this._hideDeathPart(this.legL.hip);
+      this._hideDeathPart(this.legR.hip);
+      this._hideDeathPart(this.holsterMount);
+      return;
+    }
+    if (explosiveLevel === 1) {
+      // Splash letal cercano: daño parcial ligado al lado de la onda, no la
+      // misma destrucción total reservada al impacto directo.
+      const blastFromLeft = impactSide >= 0;
+      this._hideDeathPart(blastFromLeft ? this.armL.shoulder : this.armR.shoulder);
+      this._hideDeathPart(blastFromLeft ? this.legR.knee : this.legL.knee);
+      return;
+    }
     // El sniper solo entrega este contexto cuando el impacto de cabeza ya fue
     // confirmado como letal (localmente o por el servidor). Ocultar el grupo
     // completo conserva exactamente la misma hitbox/esqueleto del ragdoll,
@@ -914,7 +933,7 @@ export class Rig {
       axis, angTarget,
       tilt: (imp ? side * 0.3 : rnd(-0.3, 0.3)) + rnd(-0.08, 0.08),
       spin: evading ? rnd(-0.9, 0.9) : imp ? -side * rnd(0.25, 0.5) : rnd(-0.4, 0.4),
-      severe: !!ctx.gib || isSniperHeadshotDeath(ctx),
+      severe: !!ctx.gib || isSniperHeadshotDeath(ctx) || rocketDeathLevel(ctx) > 0,
       pose: [
         rnd(-0.08, 0.16), rnd(-0.22, 0.22), rnd(0.34, 0.66), rnd(-0.58, 0.58),
         rnd(0.08, 0.42), rnd(0.82, 1.18), rnd(0.12, 0.4),

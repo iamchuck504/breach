@@ -17,7 +17,9 @@ import { ROUND_FINISH_HOLD } from './match-flow.js';
 import { Rig, RAGDOLL_R } from '../player/rig.js';
 import { resolveShot, applySpread, applyPelletPattern } from '../combat/ballistics.js';
 import { damageFalloff } from '../combat/damage.js';
-import { deathImpactPoint, isSniperHeadshotDeath } from '../combat/death-reactions.js';
+import {
+  deathImpactPoint, isSniperHeadshotDeath, rocketDeathLevel,
+} from '../combat/death-reactions.js';
 import { t } from '../core/i18n.js';
 
 const ROUND_TIME = 300;      // 5 minutos
@@ -1845,16 +1847,39 @@ export class BotMatch {
       b.commitMove = false; // vuelve a evaluar: ya no sigue corriendo ciego
       b.decisionT = 0;
     }
+    if (b.hp > 0 && hitCtx?.weapon === 'bazooka') {
+      const raw = hitCtx.explosionPoint;
+      const blast = Array.isArray(raw)
+        ? { x: raw[0], z: raw[2] }
+        : raw;
+      if (blast && Number.isFinite(blast.x) && Number.isFinite(blast.z)) {
+        const dx = b.pos.x - blast.x, dz = b.pos.z - blast.z;
+        const len = Math.max(0.08, Math.hypot(dx, dz));
+        const push = Math.max(0.09, Math.min(0.34, (+dmg || 0) / 260));
+        b.pos.x += dx / len * push;
+        b.pos.z += dz / len * push;
+        this.world.resolveCircle(b.pos, 0.38, b.y);
+        const side = (dx * Math.cos(b.yaw) + dz * -Math.sin(b.yaw)) / len;
+        b.rig.hitReact(side, Math.min(1.2, 0.45 + (+dmg || 0) / 85), 'explosion');
+        b.commitMove = false;
+        b.decisionT = 0;
+      }
+    }
     if (!silent) this.cb.effects.blood(_v3.set(b.pos.x, b.y + 1, b.pos.z), TEAM_HEX[b.team]);
     if (b.hp <= 0) {
       b.alive = false;
       const sniperHeadshot = isSniperHeadshotDeath(hitCtx);
+      const explosiveLevel = rocketDeathLevel(hitCtx);
       const impactPoint = deathImpactPoint(hitCtx, { x: b.pos.x, y: b.y, z: b.pos.z });
+      const blast = hitCtx?.explosionPoint;
+      const deathImpact = blast && Number.isFinite(blast.x)
+        ? { x: b.pos.x - blast.x, z: b.pos.z - blast.z }
+        : att ? { x: b.pos.x - att.x, z: b.pos.z - att.z } : null;
       // contexto físico del ragdoll: de dónde vino el tiro final, con qué
       // fuerza (daño del golpe), y el momentum/estado que llevaba el bot
       b.rig.setDeathContext({
-        impact: att ? { x: b.pos.x - att.x, z: b.pos.z - att.z } : null,
-        power: Math.min(1, dmg / 55) + (gib ? 0.35 : 0),
+        impact: deathImpact,
+        power: explosiveLevel ? 1 : Math.min(1, dmg / 55) + (gib ? 0.35 : 0),
         vel: { x: b.velX ?? 0, z: b.velZ ?? 0 },
         state: b.state === 'cover' ? (b.cover?.low ? 'cover_low' : 'cover_high') : b.state,
         weapon: hitCtx?.weapon,
@@ -1863,6 +1888,8 @@ export class BotMatch {
         part: hitCtx?.part,
         point: impactPoint,
         sniperHeadshot,
+        rocketDeathLevel: explosiveLevel,
+        explosionPoint: hitCtx?.explosionPoint,
         gib: !!gib,
       });
       if (sniperHeadshot) {
@@ -1870,6 +1897,10 @@ export class BotMatch {
           ? { x: b.pos.x - att.x, y: 0.1, z: b.pos.z - att.z }
           : null;
         this.cb.effects.sniperHeadshot(impactPoint, TEAM_HEX[b.team], direction, b.y);
+      } else if (explosiveLevel) {
+        this.cb.effects.rocketDeath(
+          { x: b.pos.x, y: b.y, z: b.pos.z }, TEAM_HEX[b.team],
+          explosiveLevel, deathImpact, b.y);
       } else if (gib) {
         this.cb.effects.gib(_v3.set(b.pos.x, b.y, b.pos.z), TEAM_HEX[b.team]);
       }
@@ -2069,11 +2100,13 @@ export class BotMatch {
     bot.alive = false;
     bot.rig.setDeathContext({
       impact: ctx.impact || null,
-      power: ctx.gib ? 1 : ctx.sniperHeadshot ? 0.95 : 0.6,
+      power: ctx.gib || ctx.rocketDeathLevel ? 1 : ctx.sniperHeadshot ? 0.95 : 0.6,
       vel: { x: bot.velX || 0, z: bot.velZ || 0 },
       state: bot.state === 'cover' ? (bot.cover?.low ? 'cover_low' : 'cover_high') : bot.state,
       weapon: ctx.weapon, distance: ctx.distance, damage: ctx.damage,
       part: ctx.part, point: ctx.point, sniperHeadshot: !!ctx.sniperHeadshot,
+      rocketDeathLevel: Math.max(0, Math.min(2, Math.round(ctx.rocketDeathLevel || 0))),
+      explosionPoint: ctx.explosionPoint,
       gib: !!ctx.gib,
     });
   }

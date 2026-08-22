@@ -105,7 +105,7 @@ class ImpactDecalPool {
     this._matrix = new THREE.Matrix4();
   }
 
-  add(point, normal, surface = 'concrete') {
+  add(point, normal, surface = 'concrete', sizeScale = 1) {
     if (!point || !normal) return;
     this._normal.set(normal.x, normal.y, normal.z);
     if (this._normal.lengthSq() < 0.5) return;
@@ -117,7 +117,8 @@ class ImpactDecalPool {
     this.slots[i] = { age: 0, ttl: DECAL_LIFE + Math.random() * 4 };
 
     const base = surface === 'metal' ? 0.115 : surface === 'stone' ? 0.155 : 0.14;
-    const size = base * (0.82 + Math.random() * 0.36);
+    const scale = Math.max(0.5, Math.min(5, Number(sizeScale) || 1));
+    const size = base * (0.82 + Math.random() * 0.36) * scale;
     this._pos.copy(point).addScaledVector(this._normal, 0.008);
     this._quat.setFromUnitVectors(PLUS_Z, this._normal);
     this._spin.setFromAxisAngle(PLUS_Z, Math.random() * Math.PI * 2);
@@ -170,8 +171,9 @@ class ImpactDecalPool {
 }
 
 export class Effects {
-  constructor(scene) {
+  constructor(scene, world = null) {
     this.scene = scene;
+    this.world = world;
     this.items = []; // {obj, life, ttl, tick(item, dt)}
     this._tracerMat = new THREE.MeshBasicMaterial({ color: 0xffd9a0, transparent: true });
     this._tracerGeo = new THREE.BoxGeometry(1, 1, 1);
@@ -181,6 +183,8 @@ export class Effects {
       new THREE.SphereGeometry(0.14, 8, 6),
     ];
     this._gibGeo = new THREE.BoxGeometry(1, 1, 1);
+    this._blastSphereGeo = new THREE.SphereGeometry(1, 14, 10);
+    this._blastRingGeo = new THREE.RingGeometry(0.48, 1, 32);
     this._gibMats = new Map();
     this.decals = new ImpactDecalPool(scene);
     this._impactBurstBudget = 4;
@@ -190,11 +194,18 @@ export class Effects {
     this._muzzleLightT = 0;
     this._muzzleLightPeak = 0;
     scene.add(this._muzzleLight);
+    // Luz independiente: una explosión no roba el flash de un arma que se
+    // dispare durante el mismo frame y nunca crea/destruye luces dinámicas.
+    this._blastLight = new THREE.PointLight(0xff8a3d, 0, 13, 2);
+    this._blastLightT = 0;
+    this._blastLightPeak = 0;
+    scene.add(this._blastLight);
     this._tracerPool = makePool(scene, 32,
       () => new THREE.Mesh(this._tracerGeo, this._tracerMat));
     this._flashPools = this._flashGeo.map((geo) => makePool(scene, 16,
       () => new THREE.Mesh(geo, this._flashMat)));
-    for (const r of [this._tracerMat, this._tracerGeo, this._flashMat, ...this._flashGeo, this._gibGeo]) {
+    for (const r of [this._tracerMat, this._tracerGeo, this._flashMat, ...this._flashGeo,
+      this._gibGeo, this._blastSphereGeo, this._blastRingGeo]) {
       r.userData.shared = true;
     }
   }
@@ -279,6 +290,160 @@ export class Effects {
     else this._burst(pos, 5, 0xb8bec0, 2.4, 0.05, 0.3, 7, normal);
   }
   blood(pos, teamColor) { this._burst(pos, 10, teamColor, 2.6, 0.07, 0.4); }
+
+  // Explosión ambiental de bazooka. El daño sigue completamente separado:
+  // este método solo presenta flash, bola de fuego, onda, humo y scorch mark.
+  rocketExplosion(pos, info = {}) {
+    const origin = new THREE.Vector3(pos.x, pos.y, pos.z);
+    const direct = !!info.direct;
+    const floorY = Number.isFinite(info.floorY) ? info.floorY : 0;
+    const surface = info.surface || 'concrete';
+    const normal = info.normal && Number.isFinite(info.normal.x)
+      ? new THREE.Vector3(info.normal.x, info.normal.y, info.normal.z).normalize()
+      : new THREE.Vector3(0, 1, 0);
+
+    this._blastLight.position.copy(origin);
+    this._blastLightPeak = direct ? 62 : 48;
+    this._blastLight.intensity = this._blastLightPeak;
+    this._blastLightT = direct ? 0.18 : 0.15;
+
+    const fireMat = new THREE.MeshBasicMaterial({
+      color: direct ? 0xff6a2e : 0xff8c3d, transparent: true,
+      opacity: 0.96, depthWrite: false, blending: THREE.AdditiveBlending,
+    });
+    const fire = new THREE.Mesh(this._blastSphereGeo, fireMat);
+    fire.position.copy(origin);
+    fire.scale.setScalar(0.18);
+    fire.renderOrder = 7;
+    this._add(fire, direct ? 0.38 : 0.32, (it) => {
+      const k = Math.min(1, it.life / it.ttl);
+      const radius = (direct ? 2.35 : 1.9) * (1 - Math.pow(1 - k, 2));
+      it.obj.scale.setScalar(Math.max(0.18, radius));
+      it.obj.material.opacity = Math.pow(1 - k, 1.7) * 0.96;
+    });
+
+    const shockMat = new THREE.MeshBasicMaterial({
+      color: 0xffe0b2, transparent: true, opacity: 0.42,
+      depthWrite: false, side: THREE.BackSide, blending: THREE.AdditiveBlending,
+    });
+    const shock = new THREE.Mesh(this._blastSphereGeo, shockMat);
+    shock.position.copy(origin);
+    shock.scale.setScalar(0.35);
+    shock.renderOrder = 6;
+    this._add(shock, 0.46, (it) => {
+      const k = Math.min(1, it.life / it.ttl);
+      it.obj.scale.setScalar(0.35 + k * (direct ? 4.6 : 3.9));
+      it.obj.material.opacity = (1 - k) * (1 - k) * 0.42;
+    });
+
+    // Onda pegada a la superficie y marca persistente. No se crea sobre un
+    // impacto directo de carne, donde la lectura debe venir del cuerpo.
+    if (!direct && info.normal) {
+      const ringMat = new THREE.MeshBasicMaterial({
+        color: 0xffbd72, transparent: true, opacity: 0.68,
+        depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+      });
+      const ring = new THREE.Mesh(this._blastRingGeo, ringMat);
+      ring.position.copy(origin).addScaledVector(normal, 0.035);
+      ring.quaternion.setFromUnitVectors(PLUS_Z, normal);
+      ring.scale.setScalar(0.25);
+      ring.renderOrder = 8;
+      this._add(ring, 0.42, (it) => {
+        const k = Math.min(1, it.life / it.ttl);
+        it.obj.scale.setScalar(0.25 + k * 3.25);
+        it.obj.material.opacity = (1 - k) * 0.68;
+      });
+      this.decals.add(origin, normal, surface, 4.2);
+    }
+
+    const debrisColor = surface === 'metal' ? 0xffb568
+      : surface === 'stone' ? 0xb7a58c : 0xa89c8b;
+    this._burst(origin, direct ? 22 : 16, 0xff9a45, direct ? 7.2 : 6.2,
+      0.055, 0.62, 12, normal, floorY);
+    this._burst(origin, direct ? 18 : 13, debrisColor, direct ? 5.8 : 4.8,
+      0.075, 0.85, 14, normal, floorY);
+    this._burst(origin, direct ? 24 : 18, 0x34383c, direct ? 3.5 : 2.9,
+      direct ? 0.2 : 0.17, 1.35, -0.7, normal, floorY);
+    if (direct) this._burst(origin, 15, 0x7a2028, 5.6, 0.1, 0.72, 11, normal, floorY);
+  }
+
+  // Restos de una muerte por bazooka. Los fragmentos tienen suelo local y
+  // chocan con paredes; desaparecen pronto para no acumular física ni drawcalls.
+  rocketDeath(pos, teamColor, level = 2, direction = null, floorY = 0) {
+    const total = level >= 2;
+    const count = total ? 26 : 14;
+    const origin = new THREE.Vector3(pos.x, (pos.y ?? floorY) + 0.9, pos.z);
+    let dir = null;
+    if (direction && Number.isFinite(direction.x) && Number.isFinite(direction.z)) {
+      dir = new THREE.Vector3(direction.x, direction.y ?? 0.12, direction.z);
+      if (dir.lengthSq() > 0.001) dir.normalize(); else dir = null;
+    }
+    this._burst(origin, total ? 28 : 17, 0x741d25, total ? 6.8 : 5.0,
+      total ? 0.105 : 0.085, total ? 0.95 : 0.72, 12, dir, floorY);
+    this._burst(origin, total ? 16 : 10, teamColor, total ? 6.1 : 4.6,
+      0.075, 0.78, 13, dir, floorY);
+
+    const colors = [teamColor, 0x292d33, 0x555c65, 0x7a2028];
+    for (let i = 0; i < count; i++) {
+      const c = colors[i % colors.length];
+      let mat = this._gibMats.get(c);
+      if (!mat) {
+        mat = new THREE.MeshLambertMaterial({ color: c });
+        mat.userData.shared = true;
+        this._gibMats.set(c, mat);
+      }
+      const chunk = new THREE.Mesh(this._gibGeo, mat);
+      const size = (total ? 0.075 : 0.065) + Math.random() * (total ? 0.14 : 0.1);
+      const long = i % 5 === 0 ? 1.85 : 0.8 + Math.random() * 0.55;
+      chunk.scale.set(size * long, size * (0.65 + Math.random()), size * (0.7 + Math.random() * 0.8));
+      const baseScale = chunk.scale.clone();
+      chunk.position.copy(origin).add(new THREE.Vector3(
+        (Math.random() - 0.5) * 0.38,
+        (Math.random() - 0.5) * 0.42,
+        (Math.random() - 0.5) * 0.38,
+      ));
+      chunk.castShadow = true;
+      const vel = new THREE.Vector3(
+        (Math.random() - 0.5) * (total ? 7.2 : 5.2),
+        1.8 + Math.random() * (total ? 5.8 : 4.1),
+        (Math.random() - 0.5) * (total ? 7.2 : 5.2),
+      );
+      if (dir) vel.addScaledVector(dir, total ? 2.2 + Math.random() * 2 : 1.3 + Math.random());
+      const rot = new THREE.Vector3(Math.random() * 10, Math.random() * 10, Math.random() * 10);
+      this._add(chunk, total ? 1.8 : 1.45, (it, dt) => {
+        vel.y -= 16 * dt;
+        const step = vel.clone().multiplyScalar(dt);
+        const len = step.length();
+        let collided = false;
+        if (this.world && len > 0.001) {
+          const hit = this.world.raycastHit(it.obj.position, step.clone().multiplyScalar(1 / len), len + 0.035);
+          if (hit && hit.t <= len + 0.035) {
+            const n = hit.normal ?? { x: 0, y: 1, z: 0 };
+            it.obj.position.addScaledVector(step.normalize(), Math.max(0, hit.t - 0.025));
+            const dot = vel.x * n.x + vel.y * n.y + vel.z * n.z;
+            if (dot < 0) vel.addScaledVector(n, -1.35 * dot);
+            vel.multiplyScalar(0.48);
+            collided = true;
+          }
+        }
+        if (!collided) it.obj.position.add(step);
+        const localFloor = this.world?.groundHeight
+          ? this.world.groundHeight({ x: it.obj.position.x, z: it.obj.position.z }, 0.04, it.obj.position.y)
+          : floorY;
+        const floor = Math.max(floorY, Number.isFinite(localFloor) ? localFloor : floorY) + 0.04;
+        if (it.obj.position.y < floor) {
+          it.obj.position.y = floor;
+          vel.y *= -0.2; vel.x *= 0.62; vel.z *= 0.62;
+        }
+        it.obj.rotation.x += rot.x * dt;
+        it.obj.rotation.y += rot.y * dt;
+        if (it.life > it.ttl * 0.72) {
+          const fade = Math.max(0.02, 1 - (it.life - it.ttl * 0.72) / (it.ttl * 0.28));
+          it.obj.scale.copy(baseScale).multiplyScalar(fade);
+        }
+      });
+    }
+  }
   // Remate exclusivo del sniper a la cabeza: sangre concentrada a la altura
   // real del impacto + fragmentos pequeños de casco. Es deliberadamente más
   // localizado que gib(), que representa daño destructivo de cuerpo completo.
@@ -378,6 +543,11 @@ export class Effects {
       this._muzzleLightT = Math.max(0, this._muzzleLightT - dt);
       this._muzzleLight.intensity = this._muzzleLightPeak * (this._muzzleLightT / 0.055);
     } else this._muzzleLight.intensity = 0;
+    if (this._blastLightT > 0) {
+      this._blastLightT = Math.max(0, this._blastLightT - dt);
+      this._blastLight.intensity = this._blastLightPeak
+        * Math.min(1, this._blastLightT / 0.18);
+    } else this._blastLight.intensity = 0;
     this._impactBurstBudget = Math.min(4, this._impactBurstBudget + dt * 10);
     this.decals.update(dt);
     for (let i = this.items.length - 1; i >= 0; i--) {
@@ -411,6 +581,8 @@ export class Effects {
     this.impact(q, n, 'metal');
     this.blood(p, 0xd94f3f);
     this.sniperHeadshot(q, 0x4f8de0, n);
+    this.rocketExplosion(q, { normal: n, surface: 'concrete', floorY: -1000 });
+    this.rocketDeath(q, 0xd94f3f, 2, n, -1000);
     this.meleeImpact(q, 0x4f8de0, n);
     this.dust(q);
     if (renderer.compileAsync) await renderer.compileAsync(this.scene, camera);

@@ -526,11 +526,19 @@ export class Audio {
   }
   // explosión del cohete: impacto grave con escombros
   explosion(options = null) {
-    const out = this._eventOutput(0.95, options, 'gunshot', this.combatBus || this.master);
+    const direct = !!options?.direct;
+    const out = this._eventOutput(direct ? 1.08 : 0.96, options,
+      'gunshot', this.combatBus || this.master);
     if (!out) return;
-    this._noiseShot(1.0, 0.5, 700, 90, 1.6, out);
-    this._noiseShot(0.45, 0.22, 2400, 600, 1.1, out);
-    this._tone('sine', 70, 32, 0.7, 0.5, out);
+    // El primer transiente da lectura inmediata; la cola grave conserva peso
+    // a distancia y el crack extra distingue el impacto directo en un cuerpo.
+    this._noiseShot(direct ? 1.18 : 1.02, direct ? 0.56 : 0.5,
+      direct ? 880 : 700, 82, direct ? 1.9 : 1.6, out);
+    this._noiseShot(direct ? 0.62 : 0.46, direct ? 0.28 : 0.22,
+      direct ? 3100 : 2400, 560, 1.2, out);
+    this._tone('sine', direct ? 78 : 70, 30, direct ? 0.82 : 0.7,
+      direct ? 0.62 : 0.5, out);
+    if (direct) this._tone('square', 240, 68, 0.12, 0.11, out);
   }
   // rebote metálico del bote de humo contra el suelo/paredes
   nadeBounce(options = null) {

@@ -15,7 +15,9 @@ import { Dummies } from './player/practice.js';
 import { Weapons } from './combat/weapons.js';
 import { resolveShot, resolveGuidedShot, applySpread, applyPelletPattern } from './combat/ballistics.js';
 import { damageFalloff, rocketSplashDamage } from './combat/damage.js';
-import { deathImpactPoint, isSniperHeadshotDeath } from './combat/death-reactions.js';
+import {
+  deathImpactPoint, isSniperHeadshotDeath, rocketDeathLevel,
+} from './combat/death-reactions.js';
 import { muzzleHasClearance, segmentsHaveClearance } from './combat/cover-fire.js';
 import { requiredFireBuffer } from './combat/fire-control.js';
 import { Effects } from './fx/effects.js';
@@ -62,7 +64,7 @@ const camera = new THREE.PerspectiveCamera(TUNING.cam.fovNormal, 1, 0.1, 200);
 // Antes de una partida, Azotea funciona como backdrop 3D deliberado del menú.
 // Al jugar, setLayout reutiliza este mismo World con el mapa elegido.
 const world = new World(scene, 'azoteas');
-const effects = new Effects(scene);
+const effects = new Effects(scene, world);
 const audio = new Audio();
 const smoke = new SmokeSystem(scene, world, audio);
 const specials = new SpecialPickup(scene);
@@ -1429,6 +1431,41 @@ function grantSpawnProtection() {
   hud.hint(t('msg.spawnProtection'), 2200);
 }
 
+function rocketDeathFx(victimPos, team, ctx, floorY = 0) {
+  const level = rocketDeathLevel(ctx);
+  if (!level || !victimPos) return 0;
+  const raw = ctx?.explosionPoint;
+  const ep = Array.isArray(raw)
+    ? { x: raw[0], y: raw[1], z: raw[2] }
+    : raw;
+  const direction = ep && Number.isFinite(ep.x) && Number.isFinite(ep.z)
+    ? { x: victimPos.x - ep.x, y: 0.16, z: victimPos.z - ep.z }
+    : ctx?.impact || null;
+  effects.rocketDeath(victimPos, TEAM_HEX[team], level, direction, floorY);
+  return level;
+}
+
+// Reacción física corta para una explosión NO letal. La distancia real ya
+// determinó el daño; aquí solo traducimos ese daño a lectura corporal sin
+// convertir la bazooka en una fuente de launch/exploits de movimiento.
+function applyRocketImpact(position, y, yaw, rig, ctx, damage, radius = PLAYER_R) {
+  if (!position || ctx?.weapon !== 'bazooka') return false;
+  const raw = ctx.explosionPoint;
+  const ep = Array.isArray(raw)
+    ? { x: raw[0], y: raw[1], z: raw[2] }
+    : raw;
+  if (!ep || !Number.isFinite(ep.x) || !Number.isFinite(ep.z)) return false;
+  const dx = position.x - ep.x, dz = position.z - ep.z;
+  const len = Math.max(0.08, Math.hypot(dx, dz));
+  const strength = Math.max(0.09, Math.min(0.34, (+damage || 0) / 260));
+  position.x += (dx / len) * strength;
+  position.z += (dz / len) * strength;
+  world.resolveCircle(position, radius, y);
+  const side = (dx * Math.cos(yaw || 0) + dz * -Math.sin(yaw || 0)) / len;
+  rig?.hitReact(side, Math.min(1.2, 0.45 + (+damage || 0) / 85), 'explosion');
+  return true;
+}
+
 function damagePlayerLocal(dmg, fromName, shooter, hitCtx = null) {
   if (!G.selfAlive) return false;
   if (G.spawnProt > 0) return false; // protegido: sin daño
@@ -1448,10 +1485,15 @@ function damagePlayerLocal(dmg, fromName, shooter, hitCtx = null) {
   audio.hurt();
   shoulderCam.addShake(0.35);
   input.pad.rumble(120, 0.4, 0.6);
+  if (G.selfHp > 0 && hitCtx?.weapon === 'bazooka') {
+    applyRocketImpact(G.player.pos, G.player.y, G.player.yaw, G.rig,
+      hitCtx, dmg);
+  }
   if (G.selfHp <= 0) {
     G.selfHp = 0;
     G.selfAlive = false;
     const sniperHeadshot = isSniperHeadshotDeath(hitCtx);
+    const explosiveLevel = rocketDeathLevel(hitCtx);
     const impactPoint = deathImpactPoint(hitCtx, {
       x: G.player.pos.x, y: G.player.y, z: G.player.pos.z,
     });
@@ -1474,10 +1516,15 @@ function damagePlayerLocal(dmg, fromName, shooter, hitCtx = null) {
       part: hitCtx?.part,
       point: impactPoint,
       sniperHeadshot,
+      rocketDeathLevel: explosiveLevel,
+      explosionPoint: hitCtx?.explosionPoint,
       gib: !!hitCtx?.gib,
     });
     if (sniperHeadshot) {
       effects.sniperHeadshot(impactPoint, TEAM_HEX[G.team], impact, G.player.y);
+    } else if (explosiveLevel) {
+      rocketDeathFx({ x: G.player.pos.x, y: G.player.y, z: G.player.pos.z },
+        G.team, { ...hitCtx, rocketDeathLevel: explosiveLevel, impact }, G.player.y);
     }
     G.player.kill();
     enterSpectator();
@@ -1960,7 +2007,42 @@ function bindNet(net) {
     if (r) r.firing = 0.45;
   });
   net.on('hitConfirm', (m) => {
-    if (!alive() || m.w !== 'melee' || !Array.isArray(m.p) || m.p.length !== 3) return;
+    if (!alive()) return;
+    if (m.w === 'bazooka') {
+      if (!Array.isArray(m.ep) || m.ep.length !== 3) return;
+      const victimSelf = m.target === net.id;
+      const victimRemote = victimSelf ? null : G.remotes.get(m.target);
+      const victimBot = G.onlineBots?.botById(m.target);
+      const victimPos = victimSelf ? G.player?.pos
+        : victimRemote ? victimRemote
+        : victimBot?.pos;
+      const victimYaw = victimSelf ? G.player?.yaw
+        : victimRemote ? victimRemote.yaw
+        : victimBot?.yaw;
+      const victimRig = victimSelf ? G.rig : (victimRemote?.rig || victimBot?.rig);
+      if (!victimPos) return;
+      const ctx = { weapon: 'bazooka', explosionPoint: m.ep };
+      // Solo el dueño de una entidad modifica su posición. Los demás clientes
+      // reproducen la reacción del torso y dejan la posición a su snapshot.
+      if (victimSelf || victimBot) {
+        const y = victimSelf ? G.player.y : victimBot.y;
+        applyRocketImpact(victimPos, y, victimYaw, victimRig, ctx, +m.dmg || 0,
+          victimSelf ? PLAYER_R : 0.38);
+        if (victimBot) {
+          victimBot.commitMove = false;
+          victimBot.decisionT = 0;
+        }
+      } else {
+        const dx = victimPos.x - m.ep[0], dz = victimPos.z - m.ep[2];
+        const len = Math.max(0.08, Math.hypot(dx, dz));
+        const side = (dx * Math.cos(victimYaw || 0)
+          + dz * -Math.sin(victimYaw || 0)) / len;
+        victimRig?.hitReact(side,
+          Math.min(1.2, 0.45 + (+m.dmg || 0) / 85), 'explosion');
+      }
+      return;
+    }
+    if (m.w !== 'melee' || !Array.isArray(m.p) || m.p.length !== 3) return;
     const point = new THREE.Vector3(+m.p[0] || 0, +m.p[1] || 0, +m.p[2] || 0);
     const victimSelf = m.target === net.id;
     const victimRemote = victimSelf ? null : G.remotes.get(m.target);
@@ -2037,6 +2119,11 @@ function bindNet(net) {
     // `hs` solo lo produce el servidor después de validar arma, zona y
     // letalidad. El cliente nunca predice/desmiembra un headshot online.
     const sniperHeadshot = !!m.hs && isSniperHeadshotDeath(m.w, m.part);
+    // `ex` también es autoritativo: el cliente solo presenta el nivel que el
+    // servidor derivó de arma, distancia real a la explosión y daño letal.
+    const explosiveLevel = rocketDeathLevel({
+      weapon: m.w, rocketDeathLevel: m.w === 'bazooka' ? m.ex : 0,
+    });
     const killer = m.from === net.id
       ? { x: G.player.pos.x, z: G.player.pos.z }
       : (() => {
@@ -2045,7 +2132,13 @@ function bindNet(net) {
       })();
     const deathCtx = {
       weapon: m.w, distance: m.dist, damage: m.dmg, part: m.part,
-      point: m.p, sniperHeadshot, gib: !!m.gib,
+      point: m.p, sniperHeadshot, rocketDeathLevel: explosiveLevel,
+      explosionPoint: m.ep, gib: !!m.gib,
+    };
+    const deathImpactFor = (pos) => {
+      const ep = Array.isArray(m.ep) ? { x: m.ep[0], z: m.ep[2] } : null;
+      if (explosiveLevel && ep) return { x: pos.x - ep.x, z: pos.z - ep.z };
+      return killer ? { x: pos.x - killer.x, z: pos.z - killer.z } : null;
     };
     // sin víctima conocida y no soy yo: solo killfeed (el fallback anterior
     // reventaba la sangre encima del jugador local)
@@ -2054,9 +2147,11 @@ function bindNet(net) {
         ? { x: victim.x, y: victim.y || 0, z: victim.z }
         : { x: G.player.pos.x, y: G.player.y || 0, z: G.player.pos.z };
       const vteam = victim ? victim.team : G.team;
-      const impact = killer ? { x: pos.x - killer.x, z: pos.z - killer.z } : null;
+      const impact = deathImpactFor(pos);
       if (sniperHeadshot) {
         effects.sniperHeadshot(deathImpactPoint(deathCtx, pos), TEAM_HEX[vteam], impact, pos.y);
+      } else if (explosiveLevel) {
+        rocketDeathFx(pos, vteam, { ...deathCtx, impact }, pos.y);
       } else if (m.gib) effects.gib(new THREE.Vector3(pos.x, pos.y, pos.z), TEAM_HEX[vteam]);
       else effects.blood(new THREE.Vector3(pos.x, 1, pos.z), TEAM_HEX[vteam]);
     }
@@ -2067,11 +2162,12 @@ function bindNet(net) {
         ...deathCtx,
       });
       const hostedPos = { x: hostedVictim.pos.x, y: hostedVictim.y || 0, z: hostedVictim.pos.z };
-      const hostedImpact = attacker
-        ? { x: hostedPos.x - attacker.x, z: hostedPos.z - attacker.z }
-        : null;
+      const hostedImpact = deathImpactFor(hostedPos);
       if (sniperHeadshot) {
         effects.sniperHeadshot(deathImpactPoint(deathCtx, hostedPos), TEAM_HEX[hostedVictim.team], hostedImpact, hostedPos.y);
+      } else if (explosiveLevel) {
+        rocketDeathFx(hostedPos, hostedVictim.team,
+          { ...deathCtx, impact: hostedImpact }, hostedPos.y);
       } else if (m.gib) effects.gib(new THREE.Vector3(hostedPos.x, hostedPos.y, hostedPos.z), TEAM_HEX[hostedVictim.team]);
       else effects.blood(new THREE.Vector3(hostedVictim.pos.x, hostedVictim.y + 1, hostedVictim.pos.z), TEAM_HEX[hostedVictim.team]);
     }
@@ -2092,8 +2188,8 @@ function bindNet(net) {
         rv = { x: (s2.x - s1.x) / dt2, z: (s2.z - s1.z) / dt2 };
       }
       victim.rig.setDeathContext({
-        impact: killer ? { x: victim.x - killer.x, z: victim.z - killer.z } : null,
-        power: m.gib || m.w === 'melee' ? 1 : sniperHeadshot ? 0.95 : 0.6,
+        impact: deathImpactFor(victim),
+        power: m.gib || m.w === 'melee' || explosiveLevel ? 1 : sniperHeadshot ? 0.95 : 0.6,
         vel: rv,
         state: victim.st,
         ...deathCtx,
@@ -2103,8 +2199,8 @@ function bindNet(net) {
       G.selfAlive = false;
       G.weapons.cancelActions();
       G.rig.setDeathContext({
-        impact: killer ? { x: G.player.pos.x - killer.x, z: G.player.pos.z - killer.z } : null,
-        power: m.gib || m.w === 'melee' ? 1 : sniperHeadshot ? 0.95 : 0.6,
+        impact: deathImpactFor(G.player.pos),
+        power: m.gib || m.w === 'melee' || explosiveLevel ? 1 : sniperHeadshot ? 0.95 : 0.6,
         vel: { x: G.player.vel.x, z: G.player.vel.z },
         state: G.player.animState(),
         ...deathCtx,
@@ -2406,21 +2502,42 @@ function spawnSpecialForRound() {
 
 // Explosión del cohete: splash con caída por distancia, línea de efecto (no
 // atraviesa paredes) y AUTODAÑO — dispararla cerca es un riesgo real.
-function explodeRocket(pos, mine = true, owner = null) {
+function explodeRocket(pos, mine = true, owner = null, boomInfo = null) {
   const d = TUNING.weapons.bazooka;
   const R = d.splashRadius;
   _v1.set(pos.x, pos.y, pos.z);
-  effects.muzzleFlash(_v1, true);
-  effects.dust(_v1);
-  audio.explosion({ position: _v1 });
+  const visualPos = boomInfo?.visualPos || pos;
+  _v3.set(visualPos.x, visualPos.y, visualPos.z);
+  const blastFloor = world.groundHeight(
+    { x: visualPos.x, z: visualPos.z }, 0.08, visualPos.y);
+  effects.rocketExplosion(_v3, {
+    direct: !!boomInfo?.direct,
+    normal: boomInfo?.normal,
+    surface: boomInfo?.surface,
+    floorY: blastFloor,
+  });
+  audio.explosion({ position: _v3, direct: !!boomInfo?.direct });
   if (G.player) {
-    const pd = Math.hypot(G.player.pos.x - pos.x, G.player.pos.z - pos.z);
-    shoulderCam.addShake(Math.max(0, 1.6 - pd * 0.12));
+    const pd = Math.hypot(G.player.pos.x - pos.x, (G.player.y + 1) - pos.y,
+      G.player.pos.z - pos.z);
+    const feedback = Math.max(0, 2.15 - pd * 0.18);
+    shoulderCam.addShake(feedback);
+    if (feedback > 0.18) input.pad.rumble(
+      Math.round(80 + Math.min(180, feedback * 75)),
+      Math.min(0.72, 0.28 + feedback * 0.16),
+      Math.min(1, 0.45 + feedback * 0.22));
   }
   // el cohete de OTRO jugador solo se ve y se oye: su daño lo reclama su
   // dueño contra el servidor (si no, cada cliente aplicaría el splash)
   if (!G.mode || !mine) return;
   const splash = (dist) => rocketSplashDamage(d, dist);
+  const deathContext = (targetId, dist, dmg) => {
+    const direct = !!boomInfo?.direct && boomInfo?.targetId === targetId;
+    return {
+      weapon: 'bazooka', distance: dist, damage: dmg, part: 'body',
+      direct, explosionPoint: { x: pos.x, y: pos.y, z: pos.z }, gib: false,
+    };
+  };
   const onlineSplash = [];
 
   // En online, los bots pertenecen al host pero el disparo sigue siendo del
@@ -2468,8 +2585,8 @@ function explodeRocket(pos, mine = true, owner = null) {
       const dist = Math.hypot(b.pos.x - pos.x, by - pos.y, b.pos.z - pos.z);
       if (dist > R || !losOK(b.pos.x, by, b.pos.z)) continue;
       const dmg = splash(dist);
-      G.botMatch.damageBot(b.id, dmg, owner.id, dist < 1.6, false,
-        { weapon: 'bazooka', distance: dist, damage: dmg, part: 'body', gib: dist < 1.6 });
+      const ctx = deathContext(b.id, dist, dmg);
+      G.botMatch.damageBot(b.id, dmg, owner.id, false, false, ctx);
     }
     // al jugador solo si es del bando contrario
     const p = G.player;
@@ -2479,7 +2596,7 @@ function explodeRocket(pos, mine = true, owner = null) {
       if (sd < R && losOK(p.pos.x, sy, p.pos.z)) {
         const dmg = splash(sd);
         const died = damagePlayerLocal(dmg, owner.name ?? 'BOT', { x: pos.x, z: pos.z },
-          { weapon: 'bazooka', distance: sd, damage: dmg, part: 'body', gib: false });
+          deathContext('player', sd, dmg));
         if (died) G.botMatch._onDeath('player', owner.id, false);
       }
     }
@@ -2491,7 +2608,7 @@ function explodeRocket(pos, mine = true, owner = null) {
       if (sd < R && losOK(self.pos.x, sy, self.pos.z)) {
         const dmg = splash(sd) * 0.7;
         G.botMatch.damageBot(self.id, dmg, self.id, false, true,
-          { weapon: 'bazooka', distance: sd, damage: dmg, part: 'body', gib: false });
+          deathContext(self.id, sd, dmg));
       }
     }
     return;
@@ -2507,14 +2624,16 @@ function explodeRocket(pos, mine = true, owner = null) {
     const dist = Math.hypot(tg.x - pos.x, ty - pos.y, tg.z - pos.z);
     if (dist > R || !losClear(tg.x, ty, tg.z)) continue;
     const dmg = splash(dist);
-    const ctx = { weapon: 'bazooka', distance: dist, damage: dmg, part: 'body', gib: dist < 1.6 };
+    const ctx = deathContext(tg.id, dist, dmg);
     if (G.mode === 'practice' && G.dummies) {
       effects.blood(_v3.set(tg.x, ty, tg.z), TEAM_HEX.blue);
       const killed = G.dummies.damage(tg.id, dmg, (dd) => {
         dd.rig.setDeathContext({
           impact: { x: dd.x - pos.x, z: dd.z - pos.z },
-          power: Math.min(1, dmg / 55), vel: { x: 0, z: 0 }, state: 'run', ...ctx,
+          power: Math.min(1, dmg / 55), vel: { x: 0, z: 0 }, state: 'run',
+          rocketDeathLevel: rocketDeathLevel(ctx), ...ctx,
         });
+        rocketDeathFx({ x: dd.x, y: 0, z: dd.z }, 'blue', ctx, 0);
         G.scores.red++;
         hud.score(G.scores.red, G.scores.blue);
         hud.kill(G.name, 'red', dd.name, 'blue');
@@ -2523,7 +2642,7 @@ function explodeRocket(pos, mine = true, owner = null) {
       hud.hitmarker();
       if (!killed) audio.hit();
     } else if (G.mode === 'bots' && G.botMatch) {
-      const killed = G.botMatch.damageBot(tg.id, dmg, 'player', ctx.gib, false, ctx);
+      const killed = G.botMatch.damageBot(tg.id, dmg, 'player', false, false, ctx);
       if (killed !== null) { hud.hitmarker(); if (!killed) audio.hit(); }
     } else if (G.net) {
       const r = G.remotes.get(tg.id);
@@ -2556,7 +2675,7 @@ function explodeRocket(pos, mine = true, owner = null) {
     if (sd < R && losClear(p.pos.x, sy, p.pos.z)) {
       const dmg = splash(sd) * 0.7;
       const died = damagePlayerLocal(dmg, G.name, { x: pos.x, z: pos.z },
-        { weapon: 'bazooka', distance: sd, damage: dmg, part: 'body', gib: false });
+        deathContext('player', sd, dmg));
       // el suicidio también consume vida y agenda respawn (sin esto el
       // jugador quedaba espectando para siempre)
       if (died && G.botMatch) G.botMatch.playerSelfDeath();

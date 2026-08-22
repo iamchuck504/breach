@@ -78,29 +78,42 @@ export class Rockets {
     this.world = world;
     this.audio = audio;
     this.list = [];
+    // Recursos compartidos: antes cada disparo creaba geometrías/materiales
+    // GPU que nunca se liberaban. Los grupos siguen siendo únicos, pero sus
+    // recursos visuales se reutilizan durante toda la partida.
+    this._bodyGeo = new THREE.CylinderGeometry(0.06, 0.06, 0.42, 8);
+    this._tipGeo = new THREE.ConeGeometry(0.07, 0.14, 8);
+    this._glowGeo = new THREE.SphereGeometry(0.09, 6, 5);
+    this._trailGeo = new THREE.ConeGeometry(0.085, 0.58, 8, 1, true);
+    this._bodyMat = new THREE.MeshStandardMaterial({
+      color: 0x555d64, roughness: 0.7, flatShading: true,
+    });
+    this._tipMat = new THREE.MeshBasicMaterial({ color: 0xffb057 });
+    this._glowMat = new THREE.MeshBasicMaterial({ color: 0xffd9a0 });
+    this._trailMat = new THREE.MeshBasicMaterial({
+      color: 0xff8a35, transparent: true, opacity: 0.58,
+      depthWrite: false, blending: THREE.AdditiveBlending,
+    });
   }
 
   _buildMesh() {
     const g = new THREE.Group();
-    const body = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.06, 0.06, 0.42, 8),
-      new THREE.MeshStandardMaterial({ color: 0x555d64, roughness: 0.7, flatShading: true }),
-    );
+    const body = new THREE.Mesh(this._bodyGeo, this._bodyMat);
     body.rotation.x = Math.PI / 2;
     g.add(body);
-    const tip = new THREE.Mesh(
-      new THREE.ConeGeometry(0.07, 0.14, 8),
-      new THREE.MeshBasicMaterial({ color: 0xffb057 }),
-    );
+    const tip = new THREE.Mesh(this._tipGeo, this._tipMat);
     tip.rotation.x = -Math.PI / 2;
     tip.position.z = -0.26;
     g.add(tip);
-    const glow = new THREE.Mesh(
-      new THREE.SphereGeometry(0.09, 6, 5),
-      new THREE.MeshBasicMaterial({ color: 0xffd9a0 }),
-    );
+    const glow = new THREE.Mesh(this._glowGeo, this._glowMat);
     glow.position.z = 0.26;
     g.add(glow);
+    // Silueta/cola visible durante el vuelo sin crear partículas por frame.
+    const trail = new THREE.Mesh(this._trailGeo, this._trailMat);
+    trail.rotation.x = Math.PI / 2;
+    trail.position.z = 0.53;
+    trail.renderOrder = 5;
+    g.add(trail);
     return g;
   }
 
@@ -131,15 +144,27 @@ export class Rockets {
       TMP_D.set(r.vx, r.vy, r.vz).normalize();
       const hit = this.world.raycastHit(TMP_V, TMP_D, step + 0.12);
       let boom = null;
+      let boomInfo = null;
       if (hit) {
         // separar la explosión de la superficie por la NORMAL del impacto:
         // detonar exactamente sobre el collider auto-ocluía la línea de
         // efecto contra esa misma pared y el splash no dañaba a nadie
         const n = hit.normal ?? { x: 0, y: 1, z: 0 };
-        boom = {
-          x: r.x + TMP_D.x * hit.t + (n.x ?? 0) * 0.3,
-          y: r.y + TMP_D.y * hit.t + (n.y ?? 0) * 0.3,
-          z: r.z + TMP_D.z * hit.t + (n.z ?? 0) * 0.3,
+        const contact = {
+          x: r.x + TMP_D.x * hit.t,
+          y: r.y + TMP_D.y * hit.t,
+          z: r.z + TMP_D.z * hit.t,
+        };
+        boom = { x: contact.x + (n.x ?? 0) * 0.3,
+          y: contact.y + (n.y ?? 0) * 0.3,
+          z: contact.z + (n.z ?? 0) * 0.3 };
+        boomInfo = {
+          kind: 'world', direct: false, normal: { x: n.x ?? 0, y: n.y ?? 1, z: n.z ?? 0 },
+          surface: hit.surface || 'concrete',
+          visualPos: { x: contact.x + (n.x ?? 0) * 0.035,
+            y: contact.y + (n.y ?? 0) * 0.035,
+            z: contact.z + (n.z ?? 0) * 0.035 },
+          direction: { x: TMP_D.x, y: TMP_D.y, z: TMP_D.z },
         };
       } else {
         r.x += r.vx * dt; r.y += r.vy * dt; r.z += r.vz * dt;
@@ -151,15 +176,28 @@ export class Rockets {
           const dx = tg.x - r.x, dy = (tg.y ?? 0) + 0.9 - r.y, dz = tg.z - r.z;
           if (dx * dx + dy * dy + dz * dz < 0.7 * 0.7) {
             boom = { x: r.x, y: r.y, z: r.z };
+            boomInfo = {
+              kind: 'direct', direct: true, targetId: tg.id,
+              surface: 'flesh', normal: { x: -TMP_D.x, y: -TMP_D.y, z: -TMP_D.z },
+              visualPos: { x: r.x, y: r.y, z: r.z },
+              direction: { x: TMP_D.x, y: TMP_D.y, z: TMP_D.z },
+            };
             break;
           }
         }
-        if (!boom && (r.t >= r.maxT || r.y < -0.5)) boom = { x: r.x, y: r.y, z: r.z };
+        if (!boom && (r.t >= r.maxT || r.y < -0.5)) {
+          boom = { x: r.x, y: r.y, z: r.z };
+          boomInfo = {
+            kind: 'air', direct: false, surface: 'concrete',
+            normal: { x: 0, y: 1, z: 0 }, visualPos: { ...boom },
+            direction: { x: TMP_D.x, y: TMP_D.y, z: TMP_D.z },
+          };
+        }
       }
       if (boom) {
         this.scene.remove(r.mesh);
         this.list.splice(i, 1);
-        onExplode(boom, r.mine, r.owner);
+        onExplode(boom, r.mine, r.owner, boomInfo);
       } else {
         r.mesh.position.set(r.x, r.y, r.z);
       }

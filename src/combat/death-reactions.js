@@ -15,6 +15,30 @@ export function isSniperHeadshotDeath(ctxOrWeapon, part = null) {
   return matchesImpact;
 }
 
+// Clasificación compartida de una muerte explosiva. Solo se consulta una vez
+// confirmado que el daño fue letal: un splash no letal nunca desmiembra.
+// 2 = destrucción total, 1 = desmembramiento severo, 0 = muerte normal.
+export function rocketDeathLevel(ctxOrWeapon, distance = null, damage = null,
+  direct = false) {
+  if (typeof ctxOrWeapon === 'string') {
+    if (ctxOrWeapon !== 'bazooka') return 0;
+    const dist = Number(distance);
+    const dmg = Number(damage);
+    if (direct || (Number.isFinite(dist) && dist <= 1.25 && dmg >= 80)) return 2;
+    if (Number.isFinite(dist) && dist <= 2.4 && dmg >= 60) return 1;
+    return 0;
+  }
+  const ctx = ctxOrWeapon || {};
+  if (ctx.weapon !== 'bazooka') return 0;
+  // Multiplayer entrega un nivel explícito calculado por el servidor. Un 0
+  // explícito gana sobre cualquier dato cliente/legado.
+  if (Object.prototype.hasOwnProperty.call(ctx, 'rocketDeathLevel')) {
+    const level = Math.round(Number(ctx.rocketDeathLevel) || 0);
+    return Math.max(0, Math.min(2, level));
+  }
+  return rocketDeathLevel(ctx.weapon, ctx.distance, ctx.damage, !!ctx.direct);
+}
+
 // El punto de impacto viaja por red como [x,y,z], mientras que las rutas
 // locales conservan Vector3/objetos. Normalizar aquí evita ramas visuales
 // distintas entre práctica, bots y multiplayer.

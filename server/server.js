@@ -13,7 +13,7 @@ import {
 import { ROUND_FINISH_HOLD as DEFAULT_ROUND_FINISH_HOLD } from '../src/game/match-flow.js';
 import { TUNING } from '../src/config/tuning.js';
 import { damageFalloff, firearmDamage, rocketSplashDamage } from '../src/combat/damage.js';
-import { isSniperHeadshotDeath } from '../src/combat/death-reactions.js';
+import { isSniperHeadshotDeath, rocketDeathLevel } from '../src/combat/death-reactions.js';
 
 const PORT = process.env.PORT || 8787;
 const HP = TUNING.combat.hp, REGEN_DELAY = TUNING.combat.regenDelay,
@@ -367,7 +367,17 @@ function registerHit(shooter, msg) {
     broadcastRaw({ t: 'hitConfirm', target: target.id, from: shooter.id,
       w: 'melee', dmg: Math.round(dmg), p });
   }
-  if (target.hp > 0) return;
+  if (target.hp > 0) {
+    // La posición de la explosión viene del pendingShot validado, no del
+    // cliente que reclama el daño. Así host y clientes reproducen la misma
+    // reacción no letal sin permitir que el tirador invente el empuje.
+    if (shot.wep === 'bazooka') {
+      const p = vec3(msg.p) || [target.x, (target.y || 0) + 1, target.z];
+      broadcastRaw({ t: 'hitConfirm', target: target.id, from: shooter.id,
+        w: 'bazooka', dmg: Math.round(dmg), p, ep: shot.origin });
+    }
+    return;
+  }
   target.hp = 0; target.alive = false; target.deaths++;
   if (target.id !== shooter.id) shooter.kills++;
   const gib = shot.wep === 'shotgun' && dist <= FIRE_RULES.shotgun.gibRange && !!msg.gib;
@@ -375,11 +385,13 @@ function registerHit(shooter, msg) {
   // enviado por el cliente. `part` ya fue recalculado por validatedPart y
   // esta rama solo se alcanza después de confirmar la muerte.
   const sniperHeadshot = isSniperHeadshotDeath(shot.wep, part);
+  const explosiveLevel = rocketDeathLevel(shot.wep, dist, dmg, dist <= 0.82);
   const deathPoint = validatedDeathPoint(target, part, vec3(msg.p));
   broadcastRaw({ t: 'death', target: target.id, from: shooter.id, gib: gib ? 1 : 0,
-    hs: sniperHeadshot ? 1 : 0, w: shot.wep,
+    hs: sniperHeadshot ? 1 : 0, ex: explosiveLevel, w: shot.wep,
     dist: +dist.toFixed(2), dmg: Math.round(dmg), part,
     ...(deathPoint ? { p: deathPoint } : {}),
+    ...(shot.wep === 'bazooka' ? { ep: shot.origin } : {}),
     kn: shooter.name, kt: shooter.team, vn: target.name, vt: target.team });
   dropWeapon(target);
   target.specialWep = null;
