@@ -2029,7 +2029,7 @@ export class World {
 
   _addUrbanAsset(id, x, z, {
     y = 0, scale = 1, rotation = 0, castShadow = true, receiveShadow = true,
-    decorLink = null,
+    decorLink = null, capture = true,
   } = {}) {
     const model = cloneUrbanAsset(id);
     if (!model) return null;
@@ -2047,7 +2047,7 @@ export class World {
       o.receiveShadow = receiveShadow;
       o.frustumCulled = true;
     });
-    if (this._captureDecor) {
+    if (this._captureDecor && capture) {
       const bounds = new THREE.Box3().setFromObject(model);
       const size = bounds.getSize(new THREE.Vector3());
       this._captureDecor.push({
@@ -2057,7 +2057,9 @@ export class World {
     }
     // El builder base conserva el resto de la ambientación del clon, pero
     // estos assets se recrean desde datos para que sean realmente editables.
-    if (this._suppressEditableDecor) return model;
+    // Perspectiva puramente visual (capture:false) debe seguir apareciendo al
+    // reconstruir un clon, aunque no se convierta en una pieza editable.
+    if (this._suppressEditableDecor && capture) return model;
     this.mapGroup.add(model);
     return model;
   }
@@ -2254,6 +2256,25 @@ export class World {
     // calle flanqueada por edificios reales. Volúmenes exteriores, ventanas,
     // marquesinas y rótulos quedan detrás/sobre el muro y no generan hitboxes
     // falsas dentro de la avenida.
+    // La continuidad exterior reutiliza edificios reales de esta misma calle.
+    // Al clonarlos solo se reduce su luz/color con la distancia; no se cambia
+    // su geometría, fachada, ventanas, rótulo ni lenguaje visual.
+    const dimStreetObject = (object, shade) => {
+      if (!object || shade >= 0.999) return object;
+      object.traverse((part) => {
+        if (!part.isMesh) return;
+        const sourceMaterials = Array.isArray(part.material) ? part.material : [part.material];
+        const materials = sourceMaterials.map((source) => {
+          const material = source.clone();
+          if (material.color) material.color.multiplyScalar(shade);
+          if (material.emissive) material.emissive.multiplyScalar(shade);
+          return material;
+        });
+        part.material = Array.isArray(part.material) ? materials : materials[0];
+      });
+      return object;
+    };
+    const streetBuildings = [];
     const addStreetBuilding = (side, z, span, height, name, color, variant = 0, signStyle = 'market') => {
       const firstPart = this.mapGroup.children.length;
       // El muro físico comienza a ±17.0 y la masa exterior termina en ±16.92.
@@ -2431,16 +2452,21 @@ export class World {
       building.position.set(massX, 0, z);
       this.mapGroup.add(building);
       for (const part of parts) building.attach(part);
+      building.userData.streetBuilding = { side, z, span, height, name, color, variant, signStyle };
       this._registerBaseDecor(building, 'building', {
         x: massX, z, rotation: 0, w: 6.3, d: span + 0.5, h: height,
         name, color, variant,
       });
+      streetBuildings.push(building);
+      return building;
     };
     // Pares a 180°: la calle tiene barrios/negocios distintos, pero ambos
     // equipos conservan el mismo número de entradas y la misma lectura.
     const blocks = [
-      [-36, 11.7, 7.3,
-        ['AUTO PARTS', 0x776b66, 'garage'], ['NIGHT DINER', 0x806a62, 'cafe'], 5],
+      // Los módulos añadidos en los extremos son repeticiones exactas de las
+      // fachadas vecinas; no introducen otra familia de edificios.
+      [-36, 11.7, 9.25,
+        ['PHARMACY', 0x9c8173, 'pharmacy'], ['BAKERY', 0x92766c, 'bakery'], 0],
       // Los bloques con dos plantas residenciales necesitan altura completa:
       // 3.02 m de local + 2.70 m por planta + remate de cubierta. Antes la
       // cornisa superior quedaba prácticamente encima de las ventanas del 3.º.
@@ -2456,8 +2482,8 @@ export class World {
         ['LAUNDRY', 0x776c68, 'laundry'], ['PAPER & INK', 0x7b7567, 'stationery'], 3],
       [24, 11.7, 9.35,
         ['MINI MARKET', 0x95796c, 'market'], ['CORNER CAFE', 0x876f66, 'cafe'], 4],
-      [36, 11.7, 7.3,
-        ['BOOKS', 0x746f68, 'stationery'], ['TIRE SHOP', 0x706968, 'garage'], 6],
+      [36, 11.7, 9.35,
+        ['MINI MARKET', 0x95796c, 'market'], ['CORNER CAFE', 0x876f66, 'cafe'], 4],
     ];
     for (const [z, span, h, left, right, variant] of blocks) {
       addStreetBuilding(-1, z, span, h, left[0], left[1], variant, left[2]);
@@ -2471,7 +2497,6 @@ export class World {
     const continuationModules = 4;
     const continuationStep = 12;
     const continuationLength = continuationModules * continuationStep;
-    const continuationHeights = [7.3, 9.25, 7.3, 9.35];
     const continuationShades = [0.72, 0.56, 0.40, 0.24];
     const roadBeyondMat = new THREE.MeshStandardMaterial({
       color: 0x8b8f91,
@@ -2508,68 +2533,30 @@ export class World {
     }
     beyondMarks.instanceMatrix.needsUpdate = true; this.mapGroup.add(beyondMarks);
 
-    const distantBuildingCount = continuationModules * 4;
-    const distantFacadeMat = new THREE.MeshStandardMaterial({
-      color: 0xffffff, map: this._tex('urbanBrickDark', 2.2, 4.2),
-      roughness: 0.92, metalness: 0.01,
-    });
-    const distantRoofMat = new THREE.MeshStandardMaterial({ color: 0x32383b, roughness: 0.95 });
-    const distantBuildings = new THREE.InstancedMesh(
-      new THREE.BoxGeometry(4.6, 1, 11.7),
-      [distantFacadeMat, distantFacadeMat, distantRoofMat, distantRoofMat, distantFacadeMat, distantFacadeMat],
-      distantBuildingCount,
-    );
-    const distantStorefronts = new THREE.InstancedMesh(
-      new THREE.PlaneGeometry(3.5, 2.42),
-      new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide }),
-      distantBuildingCount,
-    );
-    const distantWindowCount = continuationHeights.reduce(
-      (total, h) => total + (h > 8.5 ? 2 : 1) * 3 * 4, 0,
-    );
-    const distantWindows = new THREE.InstancedMesh(
-      new THREE.PlaneGeometry(1.02, 1.42),
-      new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide }),
-      distantWindowCount,
-    );
-    const distantTransform = new THREE.Object3D();
-    let distantIndex = 0; let storefrontIndex = 0; let windowIndex = 0;
-    for (const dir of [-1, 1]) for (let depth = 0; depth < continuationModules; depth++) {
-      const h = continuationHeights[depth];
-      const shade = continuationShades[depth];
-      const z = dir * (this.fz + continuationStep * (depth + 0.5));
+    // No se inventa una versión simplificada para el fondo: cada módulo es un
+    // clon real de uno de los edificios ya presentes en la fila. Esto mantiene
+    // exactamente las mismas ventanas, cornisas, persianas, toldos y rótulos.
+    for (const dir of [-1, 1]) {
       for (const side of [-1, 1]) {
-        distantTransform.position.set(side * (this.fx + 2.22), h * 0.5, z);
-        distantTransform.rotation.set(0, 0, 0);
-        distantTransform.scale.set(1, h, 1); distantTransform.updateMatrix();
-        distantBuildings.setMatrixAt(distantIndex, distantTransform.matrix);
-        distantBuildings.setColorAt(distantIndex++, new THREE.Color(0x786e68).multiplyScalar(shade));
-
-        const faceX = side * (this.fx - 0.13);
-        const rot = side > 0 ? -Math.PI / 2 : Math.PI / 2;
-        distantTransform.position.set(faceX, 1.25, z);
-        distantTransform.rotation.set(0, rot, 0); distantTransform.scale.set(1, 1, 1);
-        distantTransform.updateMatrix(); distantStorefronts.setMatrixAt(storefrontIndex, distantTransform.matrix);
-        distantStorefronts.setColorAt(storefrontIndex++, new THREE.Color(0x11181c).multiplyScalar(shade + 0.10));
-
-        const rows = h > 8.5 ? 2 : 1;
-        for (let row = 0; row < rows; row++) for (const dz of [-3.35, 0, 3.35]) {
-          distantTransform.position.set(faceX, 4.71 + row * STREET_SCALE.floor, z + dz);
-          distantTransform.rotation.set(0, rot, 0); distantTransform.updateMatrix();
-          distantWindows.setMatrixAt(windowIndex, distantTransform.matrix);
-          const windowTone = ((windowIndex + depth) % 7 === 0 ? 0x8a704f : 0x13212a);
-          distantWindows.setColorAt(windowIndex++, new THREE.Color(windowTone).multiplyScalar(shade + 0.12));
+        const sources = streetBuildings
+          .filter((building) => building.userData.streetBuilding.side === side)
+          .sort((a, b) => (dir > 0 ? b.position.z - a.position.z : a.position.z - b.position.z));
+        for (let depth = 0; depth < continuationModules; depth++) {
+          const source = sources[depth % sources.length];
+          const clone = source.clone(true);
+          clone.name = `street-building-continuation:${side}:${dir}:${depth}`;
+          clone.position.z = dir * (this.fz + continuationStep * (depth + 0.5));
+          clone.userData = { streetContinuation: true, source: source.userData.streetBuilding.name };
+          clone.traverse((part) => {
+            if (!part.isMesh) return;
+            part.castShadow = false;
+            part.receiveShadow = false;
+          });
+          dimStreetObject(clone, continuationShades[depth]);
+          this.mapGroup.add(clone);
         }
       }
     }
-    distantBuildings.instanceMatrix.needsUpdate = true;
-    distantStorefronts.instanceMatrix.needsUpdate = true;
-    distantWindows.instanceMatrix.needsUpdate = true;
-    if (distantBuildings.instanceColor) distantBuildings.instanceColor.needsUpdate = true;
-    if (distantStorefronts.instanceColor) distantStorefronts.instanceColor.needsUpdate = true;
-    if (distantWindows.instanceColor) distantWindows.instanceColor.needsUpdate = true;
-    distantBuildings.castShadow = false; distantBuildings.receiveShadow = false;
-    this.mapGroup.add(distantBuildings, distantStorefronts, distantWindows);
 
     // Autos inutilizados: landmark de vehículo y cover bajo predecible.
     for (const [x, z, rot, color, variant] of [
@@ -2844,36 +2831,26 @@ export class World {
         { scale: 1.21, rotation: Math.PI, decorLink: `streetlight:right:${z}` }))
         this._addUtilityPole(11.72, z, { lamp: 0xffc27a, arm: -0.3 });
     }
-    // Los postes continúan fuera del collider mediante dos instancias simples;
-    // el último grupo pierde contraste junto con los edificios más lejanos.
-    const distantPoleCount = continuationModules * 4;
-    const distantPoleMat = new THREE.MeshLambertMaterial({ color: 0x273139 });
-    const distantLampMat = new THREE.MeshBasicMaterial({ color: 0x8b6d45 });
-    const distantPoles = new THREE.InstancedMesh(
-      new THREE.CylinderGeometry(0.07, 0.09, STREET_SCALE.lamp, 7),
-      distantPoleMat, distantPoleCount,
-    );
-    const distantLampHeads = new THREE.InstancedMesh(
-      new THREE.BoxGeometry(0.28, 0.12, 0.20), distantLampMat, distantPoleCount,
-    );
-    let distantPoleIndex = 0;
+    // La infraestructura exterior usa el mismo asset GLB streetlight que la
+    // zona jugable. Solo pierde contraste por distancia y nunca crea collider.
     for (const dir of [-1, 1]) for (let depth = 0; depth < continuationModules; depth++) {
       const z = dir * (this.fz + 3 + depth * 10);
       for (const side of [-1, 1]) {
-        distantTransform.position.set(side * 11.83, STREET_SCALE.lamp * 0.5, z);
-        distantTransform.rotation.set(0, 0, 0); distantTransform.scale.set(1, 1, 1);
-        distantTransform.updateMatrix(); distantPoles.setMatrixAt(distantPoleIndex, distantTransform.matrix);
-        distantTransform.position.set(side * 11.48, STREET_SCALE.lamp - 0.30, z);
-        distantTransform.updateMatrix(); distantLampHeads.setMatrixAt(distantPoleIndex, distantTransform.matrix);
-        const poleShade = continuationShades[depth] + 0.18;
-        distantPoles.setColorAt(distantPoleIndex, new THREE.Color(0x46535c).multiplyScalar(poleShade));
-        distantLampHeads.setColorAt(distantPoleIndex++, new THREE.Color(0xb58b54).multiplyScalar(poleShade));
+        const pole = this._addUrbanAsset('streetlight', side * 11.72, z, {
+          scale: 1.21,
+          rotation: side > 0 ? Math.PI : 0,
+          castShadow: false,
+          receiveShadow: false,
+          capture: false,
+        });
+        if (pole) dimStreetObject(pole, Math.min(0.90, continuationShades[depth] + 0.18));
+        else this._addUtilityPole(side * 11.72, z, {
+          color: new THREE.Color(0x39414a).multiplyScalar(continuationShades[depth]).getHex(),
+          lamp: new THREE.Color(0xffc27a).multiplyScalar(continuationShades[depth]).getHex(),
+          arm: side > 0 ? -0.3 : 0.3,
+        });
       }
     }
-    distantPoles.instanceMatrix.needsUpdate = true; distantLampHeads.instanceMatrix.needsUpdate = true;
-    if (distantPoles.instanceColor) distantPoles.instanceColor.needsUpdate = true;
-    if (distantLampHeads.instanceColor) distantLampHeads.instanceColor.needsUpdate = true;
-    this.mapGroup.add(distantPoles, distantLampHeads);
     // Cableado con caída suave entre postes: landmark vertical y profundidad
     // de calle real. TubeGeometry pequeño, lejos del volumen jugable.
     const cableMat = new THREE.MeshLambertMaterial({ color: 0x151a1e });

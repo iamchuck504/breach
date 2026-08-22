@@ -75,9 +75,35 @@ for (const map of MAPS) {
     // cover alto con la altura real del asset, no un bloque táctico genérico.
     const badHeights = [...new Set(W.faces.map((f) => +f.h.toFixed(2)))]
       .filter((h) => ![1.1, 1.9, 2.45, 3].includes(h));
+    const activeStreetBuildings = W.mapGroup.children
+      .filter((o) => o.userData?.streetBuilding);
+    const continuationBuildings = W.mapGroup.children
+      .filter((o) => o.userData?.streetContinuation);
+    const meshSignature = (root) => {
+      const pieces = [];
+      root?.traverse((o) => {
+        if (o.isMesh) pieces.push(`${o.geometry?.type}:${Array.isArray(o.material) ? o.material.length : 1}`);
+      });
+      return pieces.sort().join('|');
+    };
+    const continuationMatches = continuationBuildings.every((clone) => {
+      const source = activeStreetBuildings.find((building) =>
+        building.userData.streetBuilding.name === clone.userData.source);
+      return !!source && meshSignature(source) === meshSignature(clone);
+    });
+    const streetlights = W.mapGroup.children.filter((o) => o.name === 'urban-streetlight').length;
     return {
       fx: W.fx, fz: W.fz, spawnInfo, crates, special, covers, badHeights,
       ambience: A._ambienceName, layout: W.layout,
+      streetReuse: {
+        active: activeStreetBuildings.length,
+        continuation: continuationBuildings.length,
+        continuationMatches,
+        streetlights,
+        inventedNames: activeStreetBuildings
+          .map((o) => o.userData.streetBuilding.name)
+          .filter((name) => ['AUTO PARTS', 'NIGHT DINER', 'BOOKS', 'TIRE SHOP'].includes(name)),
+      },
     };
   }, map);
 
@@ -107,8 +133,15 @@ for (const map of MAPS) {
     JSON.stringify(r.badHeights));
   check(`${map}: cobertura suficiente para la IA (>=20 caras)`, r.covers >= 20,
     `caras=${r.covers}`);
-  if (map === 'calle') check('calle: extensión longitudinal 34×84 activa',
-    r.fx === 17 && r.fz === 42, `fx=${r.fx}, fz=${r.fz}`);
+  if (map === 'calle') {
+    check('calle: extensión longitudinal 34×84 activa',
+      r.fx === 17 && r.fz === 42, `fx=${r.fx}, fz=${r.fz}`);
+    check('calle: continuidad reutiliza edificios y postes existentes',
+      r.streetReuse.active === 14 && r.streetReuse.continuation === 16 &&
+      r.streetReuse.continuationMatches && r.streetReuse.streetlights === 32 &&
+      r.streetReuse.inventedNames.length === 0,
+      JSON.stringify(r.streetReuse));
+  }
   check(`${map}: ambiente de audio activo`, r.ambience === map, `amb=${r.ambience}`);
 }
 
