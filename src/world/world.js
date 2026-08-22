@@ -1317,6 +1317,121 @@ export class World {
     return sign;
   }
 
+  // Rótulos propios de Calle Cerrada. Conservan una paleta nocturna común,
+  // pero cada rubro cambia forma, jerarquía, acento e iconografía. El marco
+  // tiene profundidad real y el frente siempre mira hacia la calle, por lo que
+  // el texto no puede aparecer espejado ni confundirse con una textura plana.
+  _addStreetShopSign(text, style, x, y, z, ry = 0, {
+    w = 3.2, h = 0.56, parent = this.mapGroup,
+  } = {}) {
+    const themes = {
+      pharmacy:   { bg: '#173f40', edge: '#77b9aa', fg: '#f3e7cb', accent: '#e5ad60', shape: 'round' },
+      bakery:     { bg: '#5c302d', edge: '#d19a6c', fg: '#f4dfbc', accent: '#e7bc7b', shape: 'arch' },
+      garage:     { bg: '#20262a', edge: '#c56f3d', fg: '#f0d7ae', accent: '#dd7740', shape: 'cut' },
+      electronics:{ bg: '#152d3b', edge: '#65a9bd', fg: '#d9edf0', accent: '#69c8d9', shape: 'tech' },
+      hardware:   { bg: '#43372e', edge: '#a68a66', fg: '#eee0c8', accent: '#d09a57', shape: 'plate' },
+      barber:     { bg: '#26343d', edge: '#c6d0ce', fg: '#f2e9d7', accent: '#bc594d', shape: 'stripe' },
+      laundry:    { bg: '#21414b', edge: '#74aeb8', fg: '#e1eff0', accent: '#8fc9d2', shape: 'bubble' },
+      stationery: { bg: '#3d493b', edge: '#b6a66f', fg: '#f0e6c6', accent: '#d4bd72', shape: 'paper' },
+      market:     { bg: '#59342d', edge: '#c88c63', fg: '#f2ddbb', accent: '#e2a55f', shape: 'awning' },
+      cafe:       { bg: '#3d2c27', edge: '#b78d68', fg: '#f1dfc6', accent: '#d3a16d', shape: 'cafe' },
+    };
+    const t = themes[style] ?? themes.market;
+    const cv = document.createElement('canvas');
+    cv.width = 768; cv.height = 192;
+    const g = cv.getContext('2d');
+    const roundedRect = (px, py, pw, ph, r) => {
+      g.beginPath();
+      g.moveTo(px + r, py); g.lineTo(px + pw - r, py); g.quadraticCurveTo(px + pw, py, px + pw, py + r);
+      g.lineTo(px + pw, py + ph - r); g.quadraticCurveTo(px + pw, py + ph, px + pw - r, py + ph);
+      g.lineTo(px + r, py + ph); g.quadraticCurveTo(px, py + ph, px, py + ph - r);
+      g.lineTo(px, py + r); g.quadraticCurveTo(px, py, px + r, py); g.closePath();
+    };
+
+    g.clearRect(0, 0, cv.width, cv.height);
+    if (t.shape === 'cut') {
+      g.beginPath(); g.moveTo(34, 14); g.lineTo(734, 14); g.lineTo(754, 34);
+      g.lineTo(734, 178); g.lineTo(34, 178); g.lineTo(14, 158); g.lineTo(14, 34); g.closePath();
+    } else if (t.shape === 'arch') {
+      g.beginPath(); g.moveTo(18, 176); g.lineTo(18, 62); g.quadraticCurveTo(18, 14, 70, 14);
+      g.lineTo(698, 14); g.quadraticCurveTo(750, 14, 750, 62); g.lineTo(750, 176); g.closePath();
+    } else {
+      roundedRect(14, 14, 740, 164, t.shape === 'round' || t.shape === 'bubble' || t.shape === 'cafe' ? 30 : 12);
+    }
+    g.fillStyle = t.bg; g.fill();
+    g.strokeStyle = t.edge; g.lineWidth = 8; g.stroke();
+
+    // Detalles gráficos simples pero reconocibles a distancia.
+    g.fillStyle = t.accent; g.strokeStyle = t.accent; g.lineWidth = 7;
+    if (t.shape === 'bubble') {
+      for (const [cx, cy, r] of [[66, 92, 25], [103, 61, 13], [112, 116, 17]]) {
+        g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.stroke();
+      }
+    } else if (t.shape === 'tech') {
+      g.beginPath(); g.moveTo(38, 55); g.lineTo(92, 55); g.lineTo(112, 76); g.lineTo(112, 126);
+      g.moveTo(38, 137); g.lineTo(76, 137); g.lineTo(96, 117); g.stroke();
+      for (const [cx, cy] of [[38, 55], [38, 137], [112, 76], [96, 117]]) {
+        g.beginPath(); g.arc(cx, cy, 7, 0, Math.PI * 2); g.fill();
+      }
+    } else if (t.shape === 'plate') {
+      for (const [cx, cy] of [[42, 42], [726, 42], [42, 150], [726, 150]]) {
+        g.beginPath(); g.arc(cx, cy, 8, 0, Math.PI * 2); g.fill();
+      }
+    } else if (t.shape === 'stripe') {
+      g.save(); roundedRect(24, 24, 96, 144, 12); g.clip();
+      let stripeIndex = 0;
+      for (let i = -80; i < 180; i += 42, stripeIndex++) {
+        g.fillStyle = stripeIndex % 2 ? '#d9ded9' : t.accent;
+        g.beginPath(); g.moveTo(18, i); g.lineTo(58, i); g.lineTo(126, i + 68); g.lineTo(86, i + 68); g.closePath(); g.fill();
+      }
+      g.restore();
+    } else if (t.shape === 'paper') {
+      g.fillRect(38, 44, 72, 106); g.fillStyle = t.bg;
+      for (const py of [70, 94, 118]) g.fillRect(53, py, 42, 5);
+    } else if (t.shape === 'awning') {
+      for (let i = 0; i < 7; i++) g.fillRect(28 + i * 31, 22, 18, 30);
+    } else if (t.shape === 'cafe') {
+      g.strokeRect(40, 67, 64, 58); g.beginPath(); g.arc(108, 92, 18, -Math.PI / 2, Math.PI / 2); g.stroke();
+      for (const sx of [55, 76, 97]) { g.beginPath(); g.moveTo(sx, 54); g.quadraticCurveTo(sx - 8, 38, sx, 28); g.stroke(); }
+    } else if (t.shape === 'round') {
+      roundedRect(38, 65, 78, 58, 29); g.stroke(); g.beginPath(); g.moveTo(77, 67); g.lineTo(77, 121); g.stroke();
+    } else if (t.shape === 'arch') {
+      g.beginPath(); g.moveTo(40, 142); g.quadraticCurveTo(78, 58, 116, 142); g.stroke();
+      g.beginPath(); g.moveTo(53, 142); g.quadraticCurveTo(78, 88, 103, 142); g.stroke();
+    } else {
+      for (const px of [38, 66, 94]) g.fillRect(px, 42, 15, 108);
+    }
+
+    const hasIcon = ['bubble', 'tech', 'stripe', 'paper', 'cafe', 'round', 'arch'].includes(t.shape);
+    const textLeft = hasIcon ? 146 : 52;
+    const textRight = 728;
+    let fontSize = 64;
+    do {
+      g.font = `700 ${fontSize}px "Arial Narrow", "Roboto Condensed", sans-serif`;
+      if (g.measureText(text).width <= textRight - textLeft) break;
+      fontSize -= 2;
+    } while (fontSize > 38);
+    g.fillStyle = t.fg; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(text, (textLeft + textRight) / 2, 100);
+    g.fillStyle = t.accent; g.fillRect(textLeft, 143, textRight - textLeft, 5);
+
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
+    const group = new THREE.Group(); group.position.set(x, y, z); group.rotation.y = ry;
+    const backing = new THREE.Mesh(
+      new THREE.BoxGeometry(w + 0.10, h + 0.10, 0.08),
+      new THREE.MeshStandardMaterial({ color: 0x202529, metalness: 0.55, roughness: 0.42 }),
+    );
+    backing.castShadow = true; group.add(backing);
+    const sign = new THREE.Mesh(
+      new THREE.PlaneGeometry(w, h),
+      new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.FrontSide, fog: false }),
+    );
+    sign.position.z = 0.046; sign.renderOrder = 5; group.add(sign);
+    parent.add(group);
+    return group;
+  }
+
   // Registra una piel procedural que corresponde a un collider editable.
   // La clave estable (tipo + ordinal) permite reconstruir el builder base y
   // aplicar después la transformación guardada por el editor.
@@ -2136,7 +2251,7 @@ export class World {
     // calle flanqueada por edificios reales. Volúmenes exteriores, ventanas,
     // marquesinas y rótulos quedan detrás/sobre el muro y no generan hitboxes
     // falsas dentro de la avenida.
-    const addStreetBuilding = (side, z, span, height, name, color, variant = 0) => {
+    const addStreetBuilding = (side, z, span, height, name, color, variant = 0, signStyle = 'market') => {
       const firstPart = this.mapGroup.children.length;
       // El muro físico comienza a ±17.0 y la masa exterior termina en ±16.92.
       // La piel se proyecta 5 cm hacia la calle para que nunca comparta plano
@@ -2161,8 +2276,13 @@ export class World {
         color: variant % 2 ? 0x4b5557 : 0x58514b, map: this._tex('shopShutter', 1.5, 1),
         metalness: 0.48, roughness: 0.54,
       });
+      const awningColors = {
+        pharmacy: 0x31564f, bakery: 0x704039, garage: 0x4b4f50, electronics: 0x25495a,
+        hardware: 0x5b4938, barber: 0x445158, laundry: 0x345b65, stationery: 0x53604b,
+        market: 0x75453a, cafe: 0x594138,
+      };
       const awningMat = new THREE.MeshStandardMaterial({
-        color: variant % 2 ? 0x6b3931 : 0x304f52, roughness: 0.72,
+        color: awningColors[signStyle] ?? (variant % 2 ? 0x6b3931 : 0x304f52), roughness: 0.72,
       });
       const doorMat = new THREE.MeshStandardMaterial({
         color: variant % 2 ? 0x384248 : 0x514238, metalness: 0.34, roughness: 0.62,
@@ -2186,23 +2306,27 @@ export class World {
       }
       const floors = Math.max(1, Math.floor((height - 3.0) / STREET_SCALE.floor));
       const bays = Math.max(2, Math.floor(span / 2.35));
+      const upperFloorBase = 3.02;
+      const windowH = 1.46;
       for (let row = 0; row < floors; row++) {
-        const y = 4.0 + row * STREET_SCALE.floor;
+        // Cada ventana se centra en su planta real: 4.37 m en el segundo piso
+        // y 7.07 m en el tercero. Antes arrancaban 37 cm demasiado abajo.
+        const y = upperFloorBase + STREET_SCALE.floor * (row + 0.5);
         if (y > height - 0.82) continue;
         for (let col = 0; col < bays; col++) {
           const zi = z - span * 0.39 + col * (span * 0.78 / Math.max(1, bays - 1));
-          const win = new THREE.Mesh(new THREE.PlaneGeometry(1.02, 1.28), ((row + col + variant) % 5 === 0) ? litGlassMat : glassMat);
+          const win = new THREE.Mesh(new THREE.PlaneGeometry(1.06, windowH), ((row + col + variant) % 5 === 0) ? litGlassMat : glassMat);
           win.position.set(faceX + toward * 0.026, y, zi); win.rotation.y = rot; this.mapGroup.add(win);
           // cuatro piezas de marco y un alféizar proyectado
-          for (const yy of [-0.68, 0.68]) {
+          for (const yy of [-0.775, 0.775]) {
             const bar = new THREE.Mesh(new THREE.BoxGeometry(0.10, 0.085, 1.18), frameMat);
             bar.position.set(faceX + toward * 0.07, y + yy, zi); this.mapGroup.add(bar);
           }
           for (const zz of [-0.57, 0.57]) {
-            const bar = new THREE.Mesh(new THREE.BoxGeometry(0.10, 1.40, 0.085), frameMat);
+            const bar = new THREE.Mesh(new THREE.BoxGeometry(0.10, 1.59, 0.085), frameMat);
             bar.position.set(faceX + toward * 0.07, y, zi + zz); this.mapGroup.add(bar);
           }
-          const mullion = new THREE.Mesh(new THREE.BoxGeometry(0.105, 1.34, 0.045), frameMat);
+          const mullion = new THREE.Mesh(new THREE.BoxGeometry(0.105, 1.50, 0.045), frameMat);
           mullion.position.set(faceX + toward * 0.08, y, zi); this.mapGroup.add(mullion);
           if ((row + col + variant) % 3 === 0) {
             const sash = new THREE.Mesh(new THREE.BoxGeometry(0.105, 0.06, 1.05), frameMat);
@@ -2267,48 +2391,28 @@ export class World {
         new THREE.MeshBasicMaterial({ color: variant % 3 === 0 ? 0xffc47a : 0xcbd9dc }),
       );
       fixture.position.set(faceX + toward * 0.43, 2.57, z - span * 0.10); this.mapGroup.add(fixture);
-      this._addMapSign(name, faceX + toward * 0.038, 2.95, z - span * 0.10, rot,
-        { w: Math.min(3.3, span - 0.7), h: 0.42, bg: variant % 2 ? '#26383b' : '#4b2928', fg: '#ead8b5', border: '#8e765d' });
+      // El rótulo vive delante de la cornisa y por encima del toldo: ninguna
+      // pieza de fachada puede recortarlo desde los ángulos normales de juego.
+      this._addStreetShopSign(name, signStyle, faceX + toward * 0.23, 3.23, z - span * 0.10, rot,
+        { w: Math.min(3.45, span - 0.66), h: 0.56 });
       // Landmarks geométricos discretos que siguen funcionando cuando el
       // texto deja de ser legible. La farmacia conserva solo su rótulo.
-      if (name === 'GARAGE') {
+      if (signStyle === 'garage') {
         const hazard = new THREE.MeshBasicMaterial({ map: this._tex('hazard', 2, 1), color: 0xc59652 });
         const sill = new THREE.Mesh(new THREE.PlaneGeometry(2.9, 0.22), hazard);
         sill.position.set(faceX + toward * 0.06, 0.18, z - span * 0.10); sill.rotation.y = rot; this.mapGroup.add(sill);
-      } else if (name === 'LAUNDRY') {
+      } else if (signStyle === 'laundry') {
         const laundryGlow = new THREE.MeshBasicMaterial({ color: 0x76a9b7 });
         for (const dz of [-0.72, 0, 0.72]) {
           const drum = new THREE.Mesh(new THREE.TorusGeometry(0.23, 0.055, 8, 18), laundryGlow);
           drum.position.set(faceX + toward * 0.12, 1.18, z - span * 0.10 + dz);
           drum.rotation.y = rot; this.mapGroup.add(drum);
         }
-      } else if (name === 'MARKET') {
+      } else if (signStyle === 'market') {
         const crateBand = new THREE.MeshBasicMaterial({ color: 0x9f6e42 });
         const loadingMark = new THREE.Mesh(new THREE.PlaneGeometry(2.55, 0.16), crateBand);
         loadingMark.position.set(faceX + toward * 0.065, 0.34, z - span * 0.08);
         loadingMark.rotation.y = rot; this.mapGroup.add(loadingMark);
-      }
-      // Escalera de incendio alternada: geometría liviana y siempre dentro
-      // del muro perimetral, por lo que no interfiere con cámara ni disparos.
-      if (variant % 2 === 0) {
-        const metal = frameMat;
-        const fireZ = z + span * 0.28;
-        for (const y of [4.82, 7.52]) {
-          if (y > height - 0.6) continue;
-          const deck = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.08, 2.10), metal);
-          deck.position.set(faceX + toward * 0.34, y, fireZ); this.mapGroup.add(deck);
-          for (const dz of [-0.98, 0.98]) {
-            const rail = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.75, 0.055), metal);
-            rail.position.set(faceX + toward * 0.62, y + 0.40, fireZ + dz); this.mapGroup.add(rail);
-          }
-          const topRail = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.055, 2.04), metal);
-          topRail.position.set(faceX + toward * 0.62, y + 0.76, fireZ); this.mapGroup.add(topRail);
-        }
-        for (let i = 0; i < 13; i++) {
-          const rung = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.68), metal);
-          rung.position.set(faceX + toward * 0.63, 4.92 + i * 0.20, fireZ - 0.82 + i * 0.13);
-          this.mapGroup.add(rung);
-        }
       }
       // bajante y cajas eléctricas aportan escala humana sin ocupar suelo.
       const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, height - 0.5, 7), frameMat);
@@ -2330,15 +2434,20 @@ export class World {
     // Pares a 180°: la calle tiene barrios/negocios distintos, pero ambos
     // equipos conservan el mismo número de entradas y la misma lectura.
     const blocks = [
-      [-24, 11.7, 8.4, 'PHARMACY', 0x9c8173, 0],
-      [-12, 11.7, 7.3, 'GARAGE', 0x746967, 1],
-      [0, 10.8, 8.1, 'HARDWARE', 0x846f67, 2],
-      [12, 11.7, 7.8, 'LAUNDRY', 0x776c68, 3],
-      [24, 11.7, 8.6, 'MARKET', 0x95796c, 4],
+      [-24, 11.7, 8.4,
+        ['PHARMACY', 0x9c8173, 'pharmacy'], ['BAKERY', 0x92766c, 'bakery'], 0],
+      [-12, 11.7, 7.3,
+        ['GARAGE', 0x746967, 'garage'], ['ELECTRONICS', 0x66757b, 'electronics'], 1],
+      [0, 10.8, 8.1,
+        ['HARDWARE', 0x846f67, 'hardware'], ['BARBER SHOP', 0x756b68, 'barber'], 2],
+      [12, 11.7, 7.8,
+        ['LAUNDRY', 0x776c68, 'laundry'], ['PAPER & INK', 0x7b7567, 'stationery'], 3],
+      [24, 11.7, 8.6,
+        ['MINI MARKET', 0x95796c, 'market'], ['CORNER CAFE', 0x876f66, 'cafe'], 4],
     ];
-    for (const [z, span, h, name, color, variant] of blocks) {
-      addStreetBuilding(-1, z, span, h, name, color, variant);
-      addStreetBuilding(1, -z, span, h, name, color, variant);
+    for (const [z, span, h, left, right, variant] of blocks) {
+      addStreetBuilding(-1, z, span, h, left[0], left[1], variant, left[2]);
+      addStreetBuilding(1, -z, span, h, right[0], right[1], variant, right[2]);
     }
     // Autos inutilizados: landmark de vehículo y cover bajo predecible.
     for (const [x, z, rot, color, variant] of [
