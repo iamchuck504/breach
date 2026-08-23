@@ -10,6 +10,10 @@ export class Input {
     this.keys = new Set();
     this.pad = new PadInput();
     this.mouseDX = 0; this.mouseDY = 0;
+    // El cursor virtual del menú y la cámara reciben los mismos eventos de
+    // pointer-lock, pero nunca deben consumir el mismo delta al cambiar de
+    // contexto. Este guard absorbe el frame de transición/re-lock.
+    this._lookGuardFrames = 0;
     this._mouseFire = false; this._mouseAim = false;
     this.firePressed = false;
     this.evadePressed = false;
@@ -72,11 +76,13 @@ export class Input {
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     document.addEventListener('pointerlockchange', () => {
       this.locked = document.pointerLockElement === canvas;
+      // Chromium puede entregar un último movementX/Y del cursor anterior o
+      // del warp de recaptura. Ignorarlo evita saltos de cámara al pausar.
+      this.discardLookDelta(1);
       if (!this.locked) {
         this._mouseFire = false; this._mouseAim = false;
         this.keys.clear();
         this.consumeEdges();               // sin edges fantasma al des-lockear
-        this.mouseDX = 0; this.mouseDY = 0; // sin delta acumulado al re-lockear
       }
     });
     // MEDIDO en la máquina de Chuck (scripts/diag-clip.mjs): la salida
@@ -234,7 +240,19 @@ export class Input {
   }
 
   // Deltas de ratón: consumir una vez por frame de render
+  discardLookDelta(guardFrames = 1) {
+    this.mouseDX = 0;
+    this.mouseDY = 0;
+    this._lookGuardFrames = Math.max(this._lookGuardFrames, guardFrames);
+  }
+
+  // La UI conserva los deltas crudos para su cursor virtual. Gameplay usa
+  // estos getters, que silencian solamente el frame de transición.
+  get lookDX() { return this._lookGuardFrames > 0 ? 0 : this.mouseDX; }
+  get lookDY() { return this._lookGuardFrames > 0 ? 0 : this.mouseDY; }
+
   endFrame() {
     this.mouseDX = 0; this.mouseDY = 0;
+    if (this._lookGuardFrames > 0) this._lookGuardFrames--;
   }
 }

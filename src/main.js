@@ -592,6 +592,9 @@ function openMenu() {
 }
 function closeMenu() {
   if (!G.mode) return; // sin partida no hay a dónde volver
+  // El cursor virtual puede acumular movementX/Y entre su último RAF y el
+  // click/Esc que reanuda. Ese movimiento pertenece a la UI, no a la cámara.
+  input.discardLookDelta(1);
   hud.showMenu(false);
   showControls(false);
   cancelRebind();
@@ -3461,7 +3464,9 @@ function frame(now) {
     shoulderCam.setScoped(sniperScopeActive());
     if (!menuOpen) {
       const spectatorLocked = G.spectator.active;
-      if (!spectatorLocked && (input.locked || input.lockDisabled)) shoulderCam.applyMouse(input.mouseDX, input.mouseDY, input.invertY);
+      if (!spectatorLocked && (input.locked || input.lockDisabled)) {
+        shoulderCam.applyMouse(input.lookDX, input.lookDY, input.invertY);
+      }
       if (!spectatorLocked && input.pad.connected) shoulderCam.applyStick(input.pad.camX, input.pad.camY, dt, input.invertYPad);
       // keeper: jugando sin lock (cooldown de Esc, despausa con gamepad,
       // lock post-await) → reintentar captura periódicamente
