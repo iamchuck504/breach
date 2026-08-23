@@ -1,6 +1,6 @@
-// Regresión visual/funcional: cámara, rig, contactos y objetivos nunca pueden
-// escribir offsets sobre la retícula. El indicador representa la intención
-// central de cámara para todas las armas y la balística conserva origen físico.
+// Regresión visual/funcional: ADS y hip libre permanecen estables en la
+// intención de cámara. Blindfire tiene su contrato específico en
+// check-blindfire: proyectar la trayectoria física desde el muzzle.
 import { chromium } from 'playwright-core';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -97,7 +97,7 @@ try {
   if (!result.visible) throw new Error('la retícula no estaba visible');
   if (result.errorPx > 0.75) {
     console.error('RETICLE DEBUG', JSON.stringify(result));
-    throw new Error(`retícula hip/blind se desplazó ${result.errorPx.toFixed(1)} px del centro`);
+    throw new Error(`retícula de hip fire se desplazó ${result.errorPx.toFixed(1)} px del centro`);
   }
 
   // ADS obstruido: la cámara alcanza un punto lejano, pero una pared ficticia

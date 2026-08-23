@@ -374,10 +374,10 @@ export class HUD {
     this.el.hitmarker.classList.add('pop');
   }
 
-  // La posición pertenece únicamente a la intención de cámara. Recoil, sway,
-  // pose del arma y contactos físicos pueden mover el mundo/cañón, pero nunca
-  // escriben offsets sobre la retícula. Hip/blind reutilizan barrelXY solo para
-  // elegir el centro estable que main calcula para el viewport actual.
+  // ADS pertenece a la intención óptica estable. En hip fire, barrelXY es el
+  // centro del viewport; en blindfire es la proyección de la trayectoria
+  // física prevista desde el muzzle. HUD solo dibuja la coordenada resuelta y
+  // nunca inventa offsets por arma, pose o lado de cover.
   reticle(aiming, barrelXY, aimInfo = null) {
     this.el.crosshair.classList.toggle('aim', aiming);
     if (aiming && aimInfo) {

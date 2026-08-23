@@ -2451,6 +2451,34 @@ function currentFireDirection(muzzle, maxRange = 80) {
   return _v3.copy(guide.point).sub(muzzle).normalize();
 }
 
+// Proyecta la trayectoria CENTRAL que saldría físicamente del muzzle en este
+// frame. Blindfire no puede usar el centro óptico de la cámara: al sacar el
+// arma por un costado o por encima del cover, el origen lateral/vertical hace
+// que un contacto cercano aparezca desplazado en pantalla. La misma pareja
+// origin+dir que usa fireShot() resuelve aquí el contacto previsto; no hay
+// offsets por arma/pose ni estado acumulado que pueda introducir jitter.
+function blindfireReticleXY() {
+  const p = G.player, def = G.weapons?.def;
+  if (!p || p.aim || p.state !== 'cover' || !p.blindMode || !def || def.thrown) return null;
+
+  G.rig.root.updateWorldMatrix(true, true);
+  const muzzle = G.rig.muzzleWorld(_v1);
+  const dir = hipDir();
+  const hit = resolveShot(world, currentTargets(), muzzle, dir, def.range, null);
+
+  // shoulderCam ya actualizó posición/rotación este frame, pero renderer aún
+  // no corrió. Actualizar matrices evita proyectar con la cámara anterior.
+  camera.updateMatrixWorld(true);
+  const viewPoint = _v3.copy(hit.point).applyMatrix4(camera.matrixWorldInverse);
+  if (!Number.isFinite(viewPoint.z) || viewPoint.z >= -0.001) return null;
+  const ndc = _v2.copy(hit.point).project(camera);
+  if (!Number.isFinite(ndc.x) || !Number.isFinite(ndc.y)) return null;
+  return {
+    x: (ndc.x * 0.5 + 0.5) * innerWidth,
+    y: (-ndc.y * 0.5 + 0.5) * innerHeight,
+  };
+}
+
 function coverFireClear() {
   const p = G.player;
   if (!p || p.state !== 'cover' || !p.cover) return true;
@@ -3017,11 +3045,18 @@ function updateReticle() {
     return;
   }
 
-  // Hip/blindfire conservan dispersión y origen físico en el cañón, pero el
-  // indicador comunica la misma dirección central de cámara que usa hipDir().
-  // Mantenerlo fijo evita que bobbing, cover pose o recoil del rig lo muevan.
+  // Hip fire libre conserva la intención central de cámara. Blindfire es la
+  // excepción: su retícula se proyecta desde la trayectoria física del muzzle
+  // para que izquierda, derecha y por encima de cover indiquen el contacto
+  // real. Si la trayectoria no se puede proyectar, ocultarla es más honesto
+  // que mostrar una mira central falsa.
   hud.sniperScope(false);
-  hud.reticle(false, { x: innerWidth * 0.5, y: innerHeight * 0.5 });
+  const blindfire = p.state === 'cover' && !!p.blindMode;
+  const shotXY = blindfire ? blindfireReticleXY() : {
+    x: innerWidth * 0.5,
+    y: innerHeight * 0.5,
+  };
+  hud.reticle(false, shotXY);
 }
 
 // ---------- loop principal ----------

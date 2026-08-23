@@ -23,8 +23,8 @@ try {
   await page.evaluate(() => document.getElementById('btn-practice').click());
   await page.waitForTimeout(1300);
 
-  async function scenario(type, side = 0, pitch = 0) {
-    const setup = await page.evaluate(({ type, side, pitch }) => {
+  async function scenario(type, side = 0, pitch = 0, weapon = 'smg') {
+    const setup = await page.evaluate(({ type, side, pitch, weapon }) => {
       const G = window.BREACH, W = window.BREACH_WORLD, I = window.BREACH_INPUT;
       if (type === 'railing' && W.layout !== 'azoteas') W.setLayout('azoteas');
       const candidates = W.faces.filter((f) => {
@@ -62,15 +62,23 @@ try {
       G.player.yaw = Math.atan2(-f.n.x, -f.n.z);
       G.player.cam.yaw = Math.atan2(-(dx / dl), -(dz / dl));
       G.player.cam.pitch = pitch;
-      G.weapons.cur = 'smg';
-      G.weapons.state.smg.mag = 50;
-      G.weapons.state.smg.cd = 0;
-      G.weapons.state.smg.reload = 0;
+      // Aislar geometría/retícula: ningún dummy puede interceptar la línea y
+      // convertir una prueba de mundo en una prueba de hitbox móvil.
+      for (const d of G.dummies?.list ?? []) {
+        d.alive = false;
+        d.respawnT = 9999;
+      }
+      G.weapons.reset();
+      if (weapon === 'sniper' || weapon === 'bazooka') G.weapons.giveSpecial(weapon);
+      else G.weapons.cur = weapon;
+      G.weapons.st.mag = G.weapons.def.mag;
+      G.weapons.st.cd = 0;
+      G.weapons.st.reload = 0;
       I._mouseAim = false;
       I._mouseFire = false;
       I.firePressed = false;
-      return { len, faceKind: f.kind, y: G.player.y };
-    }, { type, side, pitch });
+      return { len, faceKind: f.kind, y: G.player.y, initialMag: G.weapons.st.mag };
+    }, { type, side, pitch, weapon });
     if (setup.error) throw new Error(setup.error);
     await page.waitForTimeout(120);
     await page.evaluate(() => {
@@ -78,12 +86,37 @@ try {
       window.BREACH_INPUT.firePressed = true;
     });
     await page.waitForTimeout(620);
-    const result = await page.evaluate(() => ({
-      mag: window.BREACH.weapons.state.smg.mag,
-      anim: window.BREACH.player.animState(),
-      mode: window.BREACH.player.blindMode,
-      exposure: window.BREACH.player.blindPoseExposure,
-    }));
+    const result = await page.evaluate(() => {
+      const G = window.BREACH, W = window.BREACH_WORLD;
+      G.rig.root.updateWorldMatrix(true, true);
+      const muzzle = G.rig.muzzleWorld(new window.THREE.Vector3()).clone();
+      const ray = G.player.cam.aimRay();
+      const contact = W.raycastHit(muzzle, ray.dir, G.weapons.def.range);
+      const t = contact?.t ?? W.raycast(muzzle, ray.dir, G.weapons.def.range) ??
+        G.weapons.def.range;
+      const point = muzzle.clone().addScaledVector(ray.dir, t);
+      window.BREACH_CAM.updateMatrixWorld(true);
+      const projected = point.project(window.BREACH_CAM);
+      const expected = {
+        x: (projected.x * 0.5 + 0.5) * innerWidth,
+        y: (-projected.y * 0.5 + 0.5) * innerHeight,
+      };
+      const dot = document.getElementById('barrel-dot');
+      const rect = dot.getBoundingClientRect();
+      const actual = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      return {
+        weapon: G.weapons.cur,
+        mag: G.weapons.st.mag,
+        initialMag: G.weapons.def.mag,
+        anim: G.player.animState(),
+        mode: G.player.blindMode,
+        exposure: G.player.blindPoseExposure,
+        reticleVisible: dot.classList.contains('on'),
+        reticleError: Math.hypot(expected.x - actual.x, expected.y - actual.y),
+        centerOffset: Math.hypot(expected.x - innerWidth * 0.5, expected.y - innerHeight * 0.5),
+        hitDistance: t,
+      };
+    });
     await page.evaluate(() => { window.BREACH_INPUT._mouseFire = false; });
     await page.waitForTimeout(90);
     return result;
@@ -98,6 +131,10 @@ try {
     highRight: await scenario('high', 1),
     railDown: await scenario('railing', 0, -0.28),
   };
+  const weaponResults = {};
+  for (const weapon of ['pistol', 'smg', 'shotgun', 'sniper', 'bazooka']) {
+    weaponResults[weapon] = await scenario('low', 0, -0.08, weapon);
+  }
   await scenario('low');
   await page.evaluate(() => {
     const G = window.BREACH, I = window.BREACH_INPUT;
@@ -121,7 +158,20 @@ try {
   await page.evaluate(() => { window.BREACH_INPUT._mouseFire = false; });
   const fail = [];
   for (const key of ['lowOver', 'lowLeft', 'lowRight', 'highLeft', 'highRight', 'railDown']) {
-    if (results[key].mag >= 50) fail.push(`${key} no disparó (${JSON.stringify(results[key])})`);
+    if (results[key].mag >= results[key].initialMag) {
+      fail.push(`${key} no disparó (${JSON.stringify(results[key])})`);
+    }
+    if (!results[key].reticleVisible || results[key].reticleError > 1.25) {
+      fail.push(`${key} retícula no coincide con trayectoria (${JSON.stringify(results[key])})`);
+    }
+  }
+  for (const [weapon, result] of Object.entries(weaponResults)) {
+    if (result.mag >= result.initialMag) {
+      fail.push(`${weapon} no disparó en blindfire (${JSON.stringify(result)})`);
+    }
+    if (!result.reticleVisible || result.reticleError > 1.25) {
+      fail.push(`${weapon} retícula blindfire incorrecta (${JSON.stringify(result)})`);
+    }
   }
   if (results.highCenter.mag !== 50 || results.highCenter.mode !== null) {
     fail.push(`highCenter atravesó pared/consumió munición (${JSON.stringify(results.highCenter)})`);
@@ -134,7 +184,7 @@ try {
   }
   if (pageErrors.length) fail.push(...pageErrors.map((e) => `page: ${e}`));
   if (fail.length) throw new Error(fail.join(' | '));
-  console.log('BLINDFIRE OK · over · low/high L/R · barandal descendente · ADS↔blind · bloqueo alto central');
+  console.log('BLINDFIRE OK · over · low/high L/R · barandal descendente · 5 armas · ADS↔blind · bloqueo alto central');
 } finally {
   await browser?.close();
   server.kill();
