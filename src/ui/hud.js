@@ -374,10 +374,10 @@ export class HUD {
     this.el.hitmarker.classList.add('pop');
   }
 
-  // ADS pertenece a la intención óptica estable. En hip fire, barrelXY es el
-  // centro del viewport; en blindfire es la proyección de la trayectoria
-  // física prevista desde el muzzle. HUD solo dibuja la coordenada resuelta y
-  // nunca inventa offsets por arma, pose o lado de cover.
+  // ADS pertenece a la intención óptica estable. Sin ADS, barrelXY siempre es
+  // la proyección de la trayectoria física prevista desde el muzzle, tanto en
+  // hip fire como en blindfire. HUD solo dibuja la coordenada resuelta y nunca
+  // inventa offsets por arma, pose o lado de cover.
   reticle(aiming, barrelXY, aimInfo = null) {
     this.el.crosshair.classList.toggle('aim', aiming);
     if (aiming && aimInfo) {

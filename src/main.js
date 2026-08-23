@@ -2452,19 +2452,22 @@ function currentFireDirection(muzzle, maxRange = 80) {
 }
 
 // Proyecta la trayectoria CENTRAL que saldría físicamente del muzzle en este
-// frame. Blindfire no puede usar el centro óptico de la cámara: al sacar el
-// arma por un costado o por encima del cover, el origen lateral/vertical hace
-// que un contacto cercano aparezca desplazado en pantalla. La misma pareja
-// origin+dir que usa fireShot() resuelve aquí el contacto previsto; no hay
-// offsets por arma/pose ni estado acumulado que pueda introducir jitter.
-function blindfireReticleXY() {
+// frame para TODO disparo sin ADS. No se limita al flag transitorio blindMode:
+// hip fire junto a una pared y la entrada/salida de la pose de blindfire tienen
+// exactamente el mismo problema de paralaje. La misma pareja origin+dir que
+// usa fireShot() resuelve aquí el contacto previsto; no existen offsets fijos.
+function barrelReticleXY() {
   const p = G.player, def = G.weapons?.def;
-  if (!p || p.aim || p.state !== 'cover' || !p.blindMode || !def || def.thrown) return null;
+  if (!p || p.aim || !def) return null;
 
   G.rig.root.updateWorldMatrix(true, true);
   const muzzle = G.rig.muzzleWorld(_v1);
   const dir = hipDir();
-  const hit = resolveShot(world, currentTargets(), muzzle, dir, def.range, null);
+  // Las granadas no usan hitscan, pero mientras se prepara el lanzamiento el
+  // indicador conserva una referencia frontal útil en vez de colapsar al
+  // propio muzzle (range=0).
+  const range = def.range > 0 ? def.range : 60;
+  const hit = resolveShot(world, currentTargets(), muzzle, dir, range, null);
 
   // shoulderCam ya actualizó posición/rotación este frame, pero renderer aún
   // no corrió. Actualizar matrices evita proyectar con la cámara anterior.
@@ -3045,18 +3048,12 @@ function updateReticle() {
     return;
   }
 
-  // Hip fire libre conserva la intención central de cámara. Blindfire es la
-  // excepción: su retícula se proyecta desde la trayectoria física del muzzle
-  // para que izquierda, derecha y por encima de cover indiquen el contacto
-  // real. Si la trayectoria no se puede proyectar, ocultarla es más honesto
-  // que mostrar una mira central falsa.
+  // Todo disparo sin ADS vuelve a seguir la trayectoria física del muzzle,
+  // como hacía el sistema antes de la regresión. Esto cubre blindfire lateral,
+  // superior y también hip fire pegado a geometría aunque el flag interno de
+  // cover todavía no se haya activado o ya esté terminando su recovery.
   hud.sniperScope(false);
-  const blindfire = p.state === 'cover' && !!p.blindMode;
-  const shotXY = blindfire ? blindfireReticleXY() : {
-    x: innerWidth * 0.5,
-    y: innerHeight * 0.5,
-  };
-  hud.reticle(false, shotXY);
+  hud.reticle(false, barrelReticleXY());
 }
 
 // ---------- loop principal ----------

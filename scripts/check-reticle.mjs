@@ -1,6 +1,6 @@
-// Regresión visual/funcional: ADS y hip libre permanecen estables en la
-// intención de cámara. Blindfire tiene su contrato específico en
-// check-blindfire: proyectar la trayectoria física desde el muzzle.
+// Regresión visual/funcional: ADS permanece estable en la intención de cámara;
+// todo tiro sin ADS proyecta la trayectoria física desde el muzzle. Blindfire
+// contextual amplía este contrato en check-blindfire.
 import { chromium } from 'playwright-core';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -72,32 +72,45 @@ try {
     window.BREACH_WORLD.raycastHit = window.__oldRaycastHit;
     const point = window.__reticleImpact;
     if (!point) return { error: 'el disparo no impactó geometría' };
-    const expected = { x: innerWidth * 0.5, y: innerHeight * 0.5 };
     const dot = document.getElementById('barrel-dot');
     const actual = { x: parseFloat(dot.style.left), y: parseFloat(dot.style.top) };
-    const rr = window.__rays[60];
+    const rr = window.__rays[80] ?? window.__rays[60];
     const reticlePoint = rr
       ? new window.THREE.Vector3(...rr.origin).addScaledVector(
         new window.THREE.Vector3(...rr.dir), rr.t ?? 60).project(window.BREACH_CAM)
       : null;
+    const projectedReticleRay = reticlePoint ? {
+      x: (reticlePoint.x * 0.5 + 0.5) * innerWidth,
+      y: (-reticlePoint.y * 0.5 + 0.5) * innerHeight,
+    } : null;
     return {
-      expected, actual,
-      errorPx: Math.hypot(expected.x - actual.x, expected.y - actual.y),
+      expected: projectedReticleRay, actual,
+      errorPx: projectedReticleRay
+        ? Math.hypot(projectedReticleRay.x - actual.x, projectedReticleRay.y - actual.y)
+        : Infinity,
+      centerOffset: projectedReticleRay
+        ? Math.hypot(projectedReticleRay.x - innerWidth * 0.5,
+          projectedReticleRay.y - innerHeight * 0.5)
+        : 0,
       visible: dot.classList.contains('on'),
       rays: window.__rays,
-      projectedReticleRay: reticlePoint ? {
-        x: (reticlePoint.x * 0.5 + 0.5) * innerWidth,
-        y: (-reticlePoint.y * 0.5 + 0.5) * innerHeight,
-      } : null,
+      projectedReticleRay,
     };
   });
 
   if (pageErrors.length) throw new Error(`errores de página: ${pageErrors.join(' | ')}`);
   if (result.error) throw new Error(result.error);
   if (!result.visible) throw new Error('la retícula no estaba visible');
+  // El escenario pega cerca y genera paralaje visible. Si este control no se
+  // separa del centro, la prueba dejaría pasar exactamente la regresión de la
+  // captura: retícula central y marcas agrupadas a un costado.
+  if (result.centerOffset < 4) {
+    console.error('RETICLE PARALLAX DEBUG', JSON.stringify(result));
+    throw new Error('el escenario no produjo el paralaje necesario para validar la retícula');
+  }
   if (result.errorPx > 0.75) {
     console.error('RETICLE DEBUG', JSON.stringify(result));
-    throw new Error(`retícula de hip fire se desplazó ${result.errorPx.toFixed(1)} px del centro`);
+    throw new Error(`retícula sin ADS se separó ${result.errorPx.toFixed(1)} px de la trayectoria física`);
   }
 
   // ADS obstruido: la cámara alcanza un punto lejano, pero una pared ficticia
@@ -190,7 +203,7 @@ try {
     console.error('RETICLE STABILITY DEBUG', JSON.stringify(stability));
     throw new Error(`retícula inestable: ${unstable.map((v) => v.weapon).join(', ')}`);
   }
-  console.log(`RETICLE OK · hip ${result.errorPx.toFixed(2)} px · ADS obstruido ${ads.centerError.toFixed(2)} px · 5 armas estables`);
+  console.log(`RETICLE OK · barrel ${result.errorPx.toFixed(2)} px · paralaje ${result.centerOffset.toFixed(1)} px · ADS obstruido ${ads.centerError.toFixed(2)} px · 5 armas estables`);
 } finally {
   await browser?.close();
   server.kill();
