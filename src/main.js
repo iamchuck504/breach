@@ -2874,11 +2874,15 @@ function fireShot() {
     effects.tracer(muzzle, hit.point, scoped && w.cur === 'sniper');
     if (hit.kind === 'world') {
       effects.impact(hit.point, hit.normal, hit.surface, {
-        origin,
+        origin: hit.visualOrigin ?? origin,
         emphasized: scoped && w.cur === 'sniper',
       });
       audio.impact(hit.point, hit.surface);
-      worldImpacts.push(hit.point);
+      // Para el cliente local, la marca sigue la misma línea óptica que la
+      // retícula. En red enviamos también el contacto físico original para que
+      // los demás clientes puedan validarlo sin compartir referencias internas
+      // de colliders.
+      worldImpacts.push(hit.physicalPoint ?? hit.point);
     }
     if (hit.kind === 'player') {
       let dmg = def.dmg * damageFalloff(def, hit.t);

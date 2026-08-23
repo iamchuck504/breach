@@ -43,13 +43,16 @@ export function rayCapsule(o, d, x, z, y0, y1, r) {
 // r0.4, cabeza y1.52 r0.22. AGACHADO (cover bajo): cuerpo 0.26..0.6, cabeza
 // 0.86 (tope 1.08 < bloque LOW 1.1) — sin esto, el personaje visualmente
 // agachado conservaba la cabeza-hitbox de pie flotando sobre el bloque.
-// Devuelve {kind:'world'|'player'|'none', t, point, id, part, normal, surface}.
+// Devuelve {kind:'world'|'player'|'none', t, point, id, part, normal, surface, collider}.
 // normal/surface solo existen para geometría estática válida: nunca personajes.
 export function resolveShot(world, targets, origin, dir, maxRange, excludeId = null) {
   const contact = world.raycastHit?.(origin, dir, maxRange) ?? null;
   let bestT = contact?.t ?? world.raycast(origin, dir, maxRange);
   let hit = bestT !== null
-    ? { kind: 'world', t: bestT, normal: contact?.normal, surface: contact?.surface || 'concrete' }
+    ? {
+        kind: 'world', t: bestT, normal: contact?.normal,
+        surface: contact?.surface || 'concrete', collider: contact?.collider ?? null,
+      }
     : { kind: 'none', t: maxRange };
   bestT = hit.t;
 
@@ -89,8 +92,31 @@ export function resolveGuidedShot(world, targets, cameraOrigin, ballisticOrigin,
   const len = dir.length();
   if (len <= 0.001) return guide;
   dir.multiplyScalar(1 / len);
-  return resolveShot(world, targets, ballisticOrigin, dir,
+  const physical = resolveShot(world, targets, ballisticOrigin, dir,
     Math.min(maxRange, len + 0.05), excludeId);
+
+  // Una cámara de hombro y el cañón observan un objeto cercano desde ángulos
+  // distintos. Con colliders AABB gruesos (vehículos, barricadas, edificios),
+  // el rayo del cañón puede entrar antes por otra cara DE LA MISMA caja y hacer
+  // que el impacto quede lejos de la retícula, aunque no exista una cobertura
+  // adicional entre ambos. En ese único caso reconciliamos al contacto elegido
+  // por la cámara. Un collider diferente sigue ganando siempre: las esquinas y
+  // coberturas reales continúan bloqueando el disparo.
+  const sameWorldCollider = guide.kind === 'world' && physical.kind === 'world' &&
+    guide.collider != null && guide.collider === physical.collider;
+  if (sameWorldCollider) {
+    return {
+      ...guide,
+      t: ballisticOrigin.distanceTo(guide.point),
+      point: guide.point.clone(),
+      // El decal local se proyecta con la misma línea óptica que prometió la
+      // retícula. El contacto físico se conserva aparte para validación visual
+      // remota, donde no existe una identidad compartida de colliders.
+      visualOrigin: cameraOrigin.clone(),
+      physicalPoint: physical.point.clone(),
+    };
+  }
+  return physical;
 }
 
 // Aplica dispersión cónica (grados) a una dirección

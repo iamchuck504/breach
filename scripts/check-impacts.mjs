@@ -68,6 +68,50 @@ shot = resolveGuidedShot(cornerWorld,
 check(shot.kind === 'world' && near(shot.t, 0.7),
   'ADS atravesó una esquina entre el arma y el objetivo de cámara');
 
+// ADS cerca de un vehículo: cámara y cañón pueden entrar por caras distintas
+// de su AABB. Si ambas trayectorias encontraron el mismo collider, la marca
+// debe conservar el punto prometido por la retícula y no saltar a otra cara.
+const vehicleCollider = {
+  minx: -1, maxx: 1, minz: -6, maxz: -2, h: 2, surface: 'metal',
+};
+const vehicleWorld = Object.create(World.prototype);
+vehicleWorld.fx = 20; vehicleWorld.fz = 20; vehicleWorld.layout = 'calle';
+vehicleWorld.surfaceZones = [];
+vehicleWorld.segmentColliders = [];
+vehicleWorld.colliders = [vehicleCollider];
+const cameraOrigin = new THREE.Vector3(-3, 1, 0);
+const muzzleOrigin = new THREE.Vector3(2, 1, 0);
+const cameraDir = new THREE.Vector3(2, 0, -4).normalize();
+const cameraGuide = resolveShot(vehicleWorld, [], cameraOrigin, cameraDir, 30);
+shot = resolveGuidedShot(vehicleWorld, [], cameraOrigin, muzzleOrigin, cameraDir, 30);
+check(cameraGuide.collider === vehicleCollider && shot.collider === vehicleCollider,
+  'ballistics perdió la identidad del collider durante la reconciliación ADS');
+check(shot.point.distanceTo(cameraGuide.point) < 0.001,
+  `ADS impactó otra cara del mismo vehículo (${shot.point.toArray().join(', ')})`);
+check(shot.visualOrigin?.distanceTo(cameraOrigin) < 0.001,
+  'el decal reconciliado no conserva la línea óptica de la retícula');
+check(shot.physicalPoint && shot.physicalPoint.distanceTo(cameraGuide.point) > 0.5,
+  'la reconciliación perdió el contacto físico usado para validación remota');
+
+// Si el cañón encuentra OTRO objeto en el camino, no se permite reconciliar:
+// esa cobertura cercana debe seguir bloqueando aunque la cámara vea el fondo.
+const farCollider = {
+  minx: -1, maxx: 1, minz: -8, maxz: -6, h: 2, surface: 'stone',
+};
+const nearBlocker = {
+  minx: 0.8, maxx: 1.5, minz: -3, maxz: -2, h: 2, surface: 'metal',
+};
+const blockedWorld = Object.create(World.prototype);
+blockedWorld.fx = 20; blockedWorld.fz = 20; blockedWorld.layout = 'calle';
+blockedWorld.surfaceZones = [];
+blockedWorld.segmentColliders = [];
+blockedWorld.colliders = [farCollider, nearBlocker];
+shot = resolveGuidedShot(blockedWorld, [],
+  new THREE.Vector3(0, 1, 0), new THREE.Vector3(2, 1, 0),
+  new THREE.Vector3(0, 0, -1), 30);
+check(shot.kind === 'world' && shot.collider === nearBlocker,
+  'ADS atravesó un collider distinto situado entre el cañón y la retícula');
+
 // El collider puede ser una caja simple, pero el decal debe caer sobre la
 // piel visual real (fachada/capó inclinado) y omitir halos aditivos.
 const visualWorld = Object.create(World.prototype);
