@@ -23,12 +23,27 @@ export class ShoulderCamera {
   }
 
   applyMouse(dx, dy, invertY) {
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return;
     // escala por FOV: al apuntar (FOV cerrado) la sensibilidad baja proporcionalmente,
     // Sensibilidad de apuntado derivada del zoom real.
     const zoomScale = this._scoped ? TUNING.cam.zoomSens : 1;
     const s = TUNING.cam.sens * DEG * (this.fov / TUNING.cam.fovNormal) * zoomScale;
-    this.yaw -= dx * s;
-    this.pitch += (invertY ? dy : -dy) * s;
+    let yawStep = -dx * s;
+    let pitchStep = (invertY ? dy : -dy) * s;
+    // Un hitch o warp tardío de pointer-lock puede acumular miles de píxeles
+    // en un solo RAF. Limitar el vector angular de ESE frame evita un flip de
+    // cámara sin suavizar ni ralentizar el input normal (15°/frame sigue siendo
+    // una velocidad muy alta incluso a 30 fps). El exceso se descarta: nunca
+    // se encola para producir saltos en frames posteriores.
+    const maxStep = (TUNING.cam.maxMouseStepDeg ?? 15) * DEG;
+    const stepLen = Math.hypot(yawStep, pitchStep);
+    if (stepLen > maxStep && stepLen > 0) {
+      const scale = maxStep / stepLen;
+      yawStep *= scale;
+      pitchStep *= scale;
+    }
+    this.yaw += yawStep;
+    this.pitch += pitchStep;
     const c = TUNING.cam;
     this.pitch = Math.max(c.pitchMin * DEG, Math.min(c.pitchMax * DEG, this.pitch));
   }

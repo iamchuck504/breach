@@ -14,6 +14,11 @@ export class Input {
     // pointer-lock, pero nunca deben consumir el mismo delta al cambiar de
     // contexto. Este guard absorbe el frame de transición/re-lock.
     this._lookGuardFrames = 0;
+    // Chromium/Windows puede entregar el warp de recaptura varios frames
+    // después del pointerlockchange. El primer movimiento posterior a una
+    // transición se consume por evento, no por tiempo, para que un outlier
+    // tardío nunca llegue a la cámara.
+    this._discardNextLookMotion = false;
     this._mouseFire = false; this._mouseAim = false;
     this.firePressed = false;
     this.evadePressed = false;
@@ -59,8 +64,15 @@ export class Input {
     });
     window.addEventListener('mousemove', (e) => {
       if (!this.locked && !this.lockDisabled) return;
-      this.mouseDX += e.movementX;
-      this.mouseDY += e.movementY;
+      const dx = Number.isFinite(e.movementX) ? e.movementX : 0;
+      const dy = Number.isFinite(e.movementY) ? e.movementY : 0;
+      if (dx === 0 && dy === 0) return;
+      if (this._discardNextLookMotion) {
+        this._discardNextLookMotion = false;
+        return;
+      }
+      this.mouseDX += dx;
+      this.mouseDY += dy;
     });
     // Rueda del mouse = ciclar arma. Acumula deltas (trackpads reportan pasos
     // chicos) y emite un edge por muesca; el scroll del menú no pasa por aquí
@@ -240,10 +252,11 @@ export class Input {
   }
 
   // Deltas de ratón: consumir una vez por frame de render
-  discardLookDelta(guardFrames = 1) {
+  discardLookDelta(guardFrames = 1, discardNextMotion = true) {
     this.mouseDX = 0;
     this.mouseDY = 0;
     this._lookGuardFrames = Math.max(this._lookGuardFrames, guardFrames);
+    if (discardNextMotion) this._discardNextLookMotion = true;
   }
 
   // La UI conserva los deltas crudos para su cursor virtual. Gameplay usa

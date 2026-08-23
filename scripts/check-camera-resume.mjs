@@ -26,6 +26,15 @@ try {
     const G = window.BREACH;
     const input = window.BREACH_INPUT;
     const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const raf = () => new Promise((resolve) => requestAnimationFrame(resolve));
+    const moveMouse = (movementX, movementY) => {
+      const event = new MouseEvent('mousemove');
+      Object.defineProperties(event, {
+        movementX: { value: movementX },
+        movementY: { value: movementY },
+      });
+      window.dispatchEvent(event);
+    };
     G.player.cam.yaw = 0.42;
     G.player.cam.pitch = -0.12;
     G.player.yaw = 0.42;
@@ -39,23 +48,38 @@ try {
     await wait(35);
     const afterResume = { yaw: G.player.cam.yaw, pitch: G.player.cam.pitch };
 
-    // Simular un movement tardío producido por la recaptura después de que el
-    // cambio de pointer-lock ya armó el guard.
+    // El warp puede llegar DESPUÉS del frame protegido. Antes el test lo
+    // inyectaba mientras el guard seguía activo y daba un falso positivo.
     input.discardLookDelta(1);
+    await raf();
+    await raf();
     const beforeRelock = { yaw: G.player.cam.yaw, pitch: G.player.cam.pitch };
-    input.mouseDX = -3600;
-    input.mouseDY = 3600;
-    await wait(35);
+    moveMouse(-3600, 3600);
+    await raf();
     const afterRelock = { yaw: G.player.cam.yaw, pitch: G.player.cam.pitch };
 
-    // El filtro dura un solo frame: el movimiento real siguiente sí responde.
+    // El movimiento real siguiente sí responde: no dejamos muerto el mouse.
     const beforeRealMove = { yaw: G.player.cam.yaw, pitch: G.player.cam.pitch };
-    input.mouseDX = 12;
-    input.mouseDY = 8;
-    await wait(35);
+    moveMouse(12, 8);
+    await raf();
     const afterRealMove = { yaw: G.player.cam.yaw, pitch: G.player.cam.pitch };
+
+    // Un outlier durante gameplay vivo tampoco puede voltear la cámara. Este
+    // caso cubre deltas acumulados por hitch aunque ya se consumió el guard.
+    const beforeOutlier = { yaw: G.player.cam.yaw, pitch: G.player.cam.pitch };
+    moveMouse(1200, -1600);
+    await raf();
+    const afterOutlier = { yaw: G.player.cam.yaw, pitch: G.player.cam.pitch };
+
+    // Datos corruptos/no finitos nunca deben contaminar yaw/pitch.
+    const beforeInvalid = { yaw: G.player.cam.yaw, pitch: G.player.cam.pitch };
+    input.mouseDX = Infinity;
+    input.mouseDY = NaN;
+    await raf();
+    const afterInvalid = { yaw: G.player.cam.yaw, pitch: G.player.cam.pitch };
     return { beforeResume, afterResume, beforeRelock, afterRelock,
-      beforeRealMove, afterRealMove, guard: input._lookGuardFrames };
+      beforeRealMove, afterRealMove, beforeOutlier, afterOutlier,
+      beforeInvalid, afterInvalid, guard: input._lookGuardFrames };
   });
 
   const angleDelta = (a, b) => Math.abs(a - b);
@@ -65,11 +89,23 @@ try {
     angleDelta(result.beforeRelock.pitch, result.afterRelock.pitch));
   const realMove = Math.max(angleDelta(result.beforeRealMove.yaw, result.afterRealMove.yaw),
     angleDelta(result.beforeRealMove.pitch, result.afterRealMove.pitch));
+  const outlierStep = Math.hypot(
+    result.afterOutlier.yaw - result.beforeOutlier.yaw,
+    result.afterOutlier.pitch - result.beforeOutlier.pitch,
+  );
+  const invalidStep = Math.max(angleDelta(result.beforeInvalid.yaw, result.afterInvalid.yaw),
+    angleDelta(result.beforeInvalid.pitch, result.afterInvalid.pitch));
+  const maxStep = 15 * Math.PI / 180;
   if (pageErrors.length) throw new Error(`errores de página: ${pageErrors.join(' | ')}`);
   if (resumeJump > 0.0001) throw new Error(`delta del menú saltó la cámara (${resumeJump})`);
   if (relockJump > 0.0001) throw new Error(`delta tardío de re-lock saltó la cámara (${relockJump})`);
   if (realMove < 0.001) throw new Error('el guard bloqueó también movimiento real posterior');
-  console.log(`CAMERA RESUME OK · menú ${resumeJump.toFixed(5)} · re-lock ${relockJump.toFixed(5)} · input real ${realMove.toFixed(5)}`);
+  if (outlierStep > maxStep + 0.0001) throw new Error(`outlier giró demasiado la cámara (${outlierStep})`);
+  if (invalidStep > 0.0001 || !Number.isFinite(result.afterInvalid.yaw) || !Number.isFinite(result.afterInvalid.pitch)) {
+    throw new Error('delta no finito contaminó la cámara');
+  }
+  console.log(`CAMERA INPUT OK · menú ${resumeJump.toFixed(5)} · re-lock ${relockJump.toFixed(5)} · ` +
+    `input real ${realMove.toFixed(5)} · outlier ${outlierStep.toFixed(5)} · inválido ${invalidStep.toFixed(5)}`);
 } finally {
   await browser?.close();
   server.kill();

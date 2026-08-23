@@ -65,6 +65,7 @@ export const TUNING = {
   },
   cam: {
     sens: 0.045,          // sensibilidad ratón (deg por pixel; ~360° en 20cm a 1000dpi)
+    maxMouseStepDeg: 15,  // techo por frame contra deltas tardíos/acumulados de pointer-lock
     padSens: 170,         // sensibilidad stick derecho (deg por segundo a full)
     zoomSens: 0.75,       // multiplicador adicional dentro del scope del sniper
     pitchMin: -62, pitchMax: 55,
