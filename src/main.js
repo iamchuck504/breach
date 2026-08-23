@@ -2973,7 +2973,7 @@ function fireShot() {
   }
 }
 
-// ---------- retícula de cañón (shoot from the barrel) ----------
+// ---------- retícula estable de intención de cámara ----------
 function updateReticle() {
   const p = G.player;
   const scoped = sniperScopeActive();
@@ -2982,16 +2982,12 @@ function updateReticle() {
     p.state !== 'melee';
   if (!canShow) { hud.reticle(false, null); hud.sniperScope(false); return; }
 
-  // shoulderCam.update cambia position/rotation antes de llegar aquí, pero
-  // renderer.render actualiza matrices DESPUÉS. Proyectar sin esto usaba la
-  // cámara del frame anterior, muy visible durante un giro rápido.
-  camera.updateMatrixWorld();
-
   if (p.aim) {
-    // ADS: la cámara define la intención, pero el anillo se coloca sobre el
-    // primer punto que la trayectoria física DESDE EL MUZZLE puede alcanzar.
-    // Así una caja/esquina entre arma y objetivo desplaza la retícula al
-    // obstáculo en lugar de mantener una promesa falsa en el centro.
+    // ADS: el anillo representa exclusivamente la intención óptica de la
+    // cámara. La trayectoria sigue naciendo físicamente en el muzzle y una
+    // esquina todavía puede bloquearla, pero ese contacto no puede arrastrar
+    // la retícula: superficies, enemigos y animaciones cambiaban el punto de
+    // entrada del raycast cada frame y producían el salto visto en gameplay.
     const def = G.weapons.def;
     const ringPx = Math.tan(def.spreadAim * Math.PI / 180) /
       Math.tan(camera.fov * Math.PI / 360) * (innerHeight / 2);
@@ -3006,37 +3002,19 @@ function updateReticle() {
       return;
     }
     const guideT = staticHitDistance(ray.origin, ray.dir, 200);
-    G.rig.root.updateWorldMatrix(true, true);
-    const muzzle = G.rig.muzzleWorld(_v1);
-    const hit = def.projectile
-      // Los cohetes conservan la dirección paralela a cámara que usa fireShot.
-      ? resolveShot(world, currentTargets(), muzzle, ray.dir, def.range, null)
-      : resolveGuidedShot(world, currentTargets(), ray.origin, muzzle,
-        ray.dir, def.range, null);
-    _v3.copy(hit.point).project(camera);
-    if (_v3.z > 1) { hud.reticle(false, null); hud.sniperScope(false); return; }
-    const tx = (_v3.x * 0.5 + 0.5) * innerWidth;
-    const ty = (-_v3.y * 0.5 + 0.5) * innerHeight;
     hud.sniperScope(false);
-    hud.reticle(true, { x: tx, y: ty }, {
+    hud.reticle(true, null, {
       r: Math.min(190, ringPx),
       inRange: guideT <= def.range,
     });
     return;
   }
 
-  // Hip/blind: proyectar el MISMO rayo central que usa fireShot. Sin smoothing:
-  // al girar rápido, una retícula atrasada también comunica un impacto falso.
-  const dir = hipDir();
+  // Hip/blindfire conservan dispersión y origen físico en el cañón, pero el
+  // indicador comunica la misma dirección central de cámara que usa hipDir().
+  // Mantenerlo fijo evita que bobbing, cover pose o recoil del rig lo muevan.
   hud.sniperScope(false);
-  G.rig.root.updateWorldMatrix(true, true);
-  const origin = G.rig.muzzleWorld(_v1);
-  const t = staticHitDistance(origin, dir, 60);
-  _v3.copy(origin).addScaledVector(dir, t).project(camera);
-  if (_v3.z > 1) { hud.reticle(false, null); hud.sniperScope(false); return; }
-  const tx = (_v3.x * 0.5 + 0.5) * innerWidth;
-  const ty = (-_v3.y * 0.5 + 0.5) * innerHeight;
-  hud.reticle(false, { x: tx, y: ty });
+  hud.reticle(false, { x: innerWidth * 0.5, y: innerHeight * 0.5 });
 }
 
 // ---------- loop principal ----------

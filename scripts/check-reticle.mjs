@@ -1,5 +1,6 @@
-// Regresión visual/funcional: después de un giro brusco, un disparo central
-// sin spread debe proyectarse exactamente debajo de la retícula hipfire.
+// Regresión visual/funcional: cámara, rig, contactos y objetivos nunca pueden
+// escribir offsets sobre la retícula. El indicador representa la intención
+// central de cámara para todas las armas y la balística conserva origen físico.
 import { chromium } from 'playwright-core';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -71,11 +72,7 @@ try {
     window.BREACH_WORLD.raycastHit = window.__oldRaycastHit;
     const point = window.__reticleImpact;
     if (!point) return { error: 'el disparo no impactó geometría' };
-    const projected = point.clone().project(window.BREACH_CAM);
-    const expected = {
-      x: (projected.x * 0.5 + 0.5) * innerWidth,
-      y: (-projected.y * 0.5 + 0.5) * innerHeight,
-    };
+    const expected = { x: innerWidth * 0.5, y: innerHeight * 0.5 };
     const dot = document.getElementById('barrel-dot');
     const actual = { x: parseFloat(dot.style.left), y: parseFloat(dot.style.top) };
     const rr = window.__rays[60];
@@ -98,14 +95,14 @@ try {
   if (pageErrors.length) throw new Error(`errores de página: ${pageErrors.join(' | ')}`);
   if (result.error) throw new Error(result.error);
   if (!result.visible) throw new Error('la retícula no estaba visible');
-  if (result.errorPx > 4) {
+  if (result.errorPx > 0.75) {
     console.error('RETICLE DEBUG', JSON.stringify(result));
-    throw new Error(`retícula separada ${result.errorPx.toFixed(1)} px del impacto central`);
+    throw new Error(`retícula hip/blind se desplazó ${result.errorPx.toFixed(1)} px del centro`);
   }
 
   // ADS obstruido: la cámara alcanza un punto lejano, pero una pared ficticia
-  // queda inmediatamente delante del muzzle. El anillo debe desplazarse al
-  // impacto físico y no quedarse fijo en el centro de la pantalla.
+  // queda inmediatamente delante del muzzle. La pared todavía bloquea la
+  // balística, pero no puede arrastrar el anillo fuera del centro.
   const ads = await page.evaluate(async () => {
     const G = window.BREACH;
     const W = window.BREACH_WORLD;
@@ -121,14 +118,12 @@ try {
     const cameraOrigin = G.player.cam.aimRay().origin.clone();
     const oldRaycastHit = W.raycastHit.bind(W);
     const oldRaycast = W.raycast.bind(W);
-    let expected = null;
     W.raycastHit = (origin, dir, maxDist) => {
       if (origin.distanceTo(cameraOrigin) < 0.08) {
         return { t: Math.min(24, maxDist), normal: { x: 0, y: 0, z: 1 }, surface: 'stone' };
       }
       if (origin.distanceTo(muzzle) < 0.12) {
         const t = Math.min(0.55, maxDist);
-        expected = origin.clone().addScaledVector(dir, t);
         return { t, normal: { x: 0, y: 0, z: 1 }, surface: 'stone' };
       }
       return oldRaycastHit(origin, dir, maxDist);
@@ -137,28 +132,65 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 70));
 
     const ring = document.getElementById('crosshair');
-    const projected = expected?.clone().project(window.BREACH_CAM);
-    const expectedXY = projected ? {
-      x: (projected.x * 0.5 + 0.5) * innerWidth,
-      y: (-projected.y * 0.5 + 0.5) * innerHeight,
-    } : null;
-    const actual = { x: parseFloat(ring.style.left), y: parseFloat(ring.style.top) };
+    const rect = ring.getBoundingClientRect();
+    const actual = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
     W.raycastHit = oldRaycastHit;
     W.raycast = oldRaycast;
     I._mouseAim = false;
     return {
       visible: ring.classList.contains('aim'),
-      expected: expectedXY,
       actual,
-      errorPx: expectedXY ? Math.hypot(expectedXY.x - actual.x, expectedXY.y - actual.y) : Infinity,
-      movedFromCenter: Math.hypot(actual.x - innerWidth * 0.5, actual.y - innerHeight * 0.5),
+      centerError: Math.hypot(actual.x - innerWidth * 0.5, actual.y - innerHeight * 0.5),
     };
   });
-  if (!ads.visible || !ads.expected || ads.errorPx > 4 || ads.movedFromCenter < 8) {
+  if (!ads.visible || ads.centerError > 0.75) {
     console.error('ADS RETICLE DEBUG', JSON.stringify(ads));
-    throw new Error('la retícula ADS no siguió el impacto físico bloqueado desde el muzzle');
+    throw new Error('una obstrucción física desplazó la retícula ADS');
   }
-  console.log(`RETICLE OK · hip ${result.errorPx.toFixed(2)} px · ADS obstruido ${ads.errorPx.toFixed(2)} px`);
+
+  // Todas las armas comparten el mismo contrato. Dejamos cámara/stick quietos
+  // mientras rig, objetivos y FOV continúan actualizándose; la desviación debe
+  // permanecer subpíxel y el sniper usa su cruz óptica equivalente.
+  const stability = await page.evaluate(async () => {
+    const G = window.BREACH, I = window.BREACH_INPUT;
+    const weapons = ['pistol', 'smg', 'shotgun', 'bazooka', 'sniper'];
+    const out = [];
+    I._mouseAim = true;
+    for (const weapon of weapons) {
+      if ((weapon === 'bazooka' || weapon === 'sniper') && !G.weapons.hasWeapon(weapon)) {
+        G.weapons.giveSpecial(weapon);
+      } else {
+        G.weapons.cur = weapon;
+      }
+      G.weapons.swapT = 0;
+      await new Promise((resolve) => setTimeout(resolve, 220));
+      const scoped = weapon === 'sniper';
+      const el = document.getElementById(scoped ? 'scope-reticle' : 'crosshair');
+      const points = [];
+      for (let frame = 0; frame < 18; frame++) {
+        await new Promise((resolve) => setTimeout(resolve, 16));
+        const r = el.getBoundingClientRect();
+        points.push({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+      }
+      const maxCenterError = Math.max(...points.map((p) =>
+        Math.hypot(p.x - innerWidth * 0.5, p.y - innerHeight * 0.5)));
+      const maxDrift = Math.max(...points.map((p) =>
+        Math.hypot(p.x - points[0].x, p.y - points[0].y)));
+      out.push({ weapon, maxCenterError, maxDrift,
+        visible: scoped
+          ? document.getElementById('sniper-scope').classList.contains('on')
+          : el.classList.contains('aim') });
+    }
+    I._mouseAim = false;
+    return out;
+  });
+  const unstable = stability.filter((item) => !item.visible ||
+    item.maxCenterError > 0.75 || item.maxDrift > 0.25);
+  if (unstable.length) {
+    console.error('RETICLE STABILITY DEBUG', JSON.stringify(stability));
+    throw new Error(`retícula inestable: ${unstable.map((v) => v.weapon).join(', ')}`);
+  }
+  console.log(`RETICLE OK · hip ${result.errorPx.toFixed(2)} px · ADS obstruido ${ads.centerError.toFixed(2)} px · 5 armas estables`);
 } finally {
   await browser?.close();
   server.kill();

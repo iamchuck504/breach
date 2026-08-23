@@ -374,19 +374,18 @@ export class HUD {
     this.el.hitmarker.classList.add('pop');
   }
 
-  // aiming: anillo dimensionado por el spread/rango del arma.
-  // hip/blind: punto proyectado del cañón.
+  // La posición pertenece únicamente a la intención de cámara. Recoil, sway,
+  // pose del arma y contactos físicos pueden mover el mundo/cañón, pero nunca
+  // escriben offsets sobre la retícula. Hip/blind reutilizan barrelXY solo para
+  // elegir el centro estable que main calcula para el viewport actual.
   reticle(aiming, barrelXY, aimInfo = null) {
     this.el.crosshair.classList.toggle('aim', aiming);
     if (aiming && aimInfo) {
       this.el.crossRing.setAttribute('r', Math.max(5, aimInfo.r).toFixed(1));
       // fuera del rango efectivo del arma: el anillo se atenúa
       this.el.crossRing.setAttribute('stroke-opacity', aimInfo.inRange ? '0.9' : '0.28');
-      // En ADS la cámara elige el objetivo, pero el proyectil nace en el
-      // muzzle. Si una esquina bloquea esa segunda línea, el anillo debe
-      // señalar el impacto real en vez de prometer el centro de pantalla.
-      this.el.crosshair.style.left = (barrelXY?.x ?? innerWidth * 0.5) + 'px';
-      this.el.crosshair.style.top = (barrelXY?.y ?? innerHeight * 0.5) + 'px';
+      this.el.crosshair.style.left = '50%';
+      this.el.crosshair.style.top = '50%';
     }
     if (!aiming && barrelXY) {
       this.el.barrel.classList.add('on');
