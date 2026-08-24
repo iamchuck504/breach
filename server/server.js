@@ -14,12 +14,14 @@ import { ROUND_FINISH_HOLD as DEFAULT_ROUND_FINISH_HOLD } from '../src/game/matc
 import { TUNING } from '../src/config/tuning.js';
 import { damageFalloff, firearmDamage, rocketSplashDamage } from '../src/combat/damage.js';
 import { isSniperHeadshotDeath, rocketDeathLevel } from '../src/combat/death-reactions.js';
+import { makeSmokeProjectile, stepSmokeProjectile } from '../src/game/smoke-physics.js';
 import {
   MAX_WS_PAYLOAD, MessageRateGuard, acceptMovement, consumeShotAmmo,
   createAmmoBudget, grantWeaponAmmo, refillNormalAmmo, resetMovementGuard,
 } from './guards.js';
 import {
   clipMapEndpoint, mapLineBlocked, mapSurfaceContact, projectileMapContact,
+  serverMapPhysics,
 } from './map-geometry.js';
 
 const PORT = process.env.PORT || 8787;
@@ -62,6 +64,9 @@ const ROCKET_RELAY_INTERVAL = FIRE_RULES.bazooka.interval * .82;
 const ROCKET_SPEED = WD.bazooka.projSpeed;
 const ROCKET_FUSE_RADIUS = 0.7;
 const ROCKET_SURFACE_OFFSET = 0.28;
+const SMOKE_PHYSICS_STEP = 1 / 60;
+const SMOKE_FUSE = Number(process.env.SMOKE_FUSE ?? WD.grenade.fuse);
+const SMOKE_TIME = Number(process.env.SMOKE_TIME ?? WD.grenade.smokeTime);
 const VALID_STATES = new Set(['idle', 'run', 'roadie', 'dive', 'slide', 'cover_low',
   'cover_high', 'blind_over', 'blind_low_left', 'blind_low_right',
   'blind_high_left', 'blind_high_right', 'jump', 'flip', 'mantle', 'melee', 'dead']);
@@ -105,8 +110,10 @@ const server = http.createServer((req, res) => {
 });
 
 const wss = new WebSocketServer({ server, maxPayload: MAX_WS_PAYLOAD });
-const players = new Map(), bots = new Map(), drops = new Map(), activeRockets = new Map();
-let nextId = 1, nextBotId = 1, nextDropId = 1, nextRocketId = 1, hostId = null;
+const players = new Map(), bots = new Map(), drops = new Map();
+const activeRockets = new Map(), activeNades = new Map(), activeSmokes = new Map();
+let nextId = 1, nextBotId = 1, nextDropId = 1;
+let nextRocketId = 1, nextNadeId = 1, hostId = null;
 let settings = { ...DEFAULT_LOBBY_SETTINGS }, phase = 'empty', phaseTimer = null, startAt = 0, round = 0;
 let wins = { red: 0, blue: 0 }, pools = { red: 0, blue: 0 };
 
@@ -193,12 +200,19 @@ function clearActiveRockets(notify = true) {
   activeRockets.clear();
   if (notify && players.size) broadcastRaw({ t: 'rocketClear' });
 }
+function clearActiveSmoke(notify = true) {
+  if (!activeNades.size && !activeSmokes.size) return;
+  activeNades.clear();
+  activeSmokes.clear();
+  if (notify && players.size) broadcastRaw({ t: 'smokeClear' });
+}
 function resetWorld() {
-  drops.clear(); clearActiveRockets();
+  drops.clear(); clearActiveRockets(); clearActiveSmoke();
   for (const c of CRATES) { c.up = true; c.t = 0; }
 }
 function resetRoom() {
-  clearTimer(); players.clear(); bots.clear(); drops.clear(); activeRockets.clear(); hostId = null;
+  clearTimer(); players.clear(); bots.clear(); drops.clear(); activeRockets.clear();
+  activeNades.clear(); activeSmokes.clear(); hostId = null;
   settings = { ...DEFAULT_LOBBY_SETTINGS }; phase = 'empty'; startAt = 0; round = 0;
   wins = { red: 0, blue: 0 }; pools = { red: 0, blue: 0 }; resetWorld();
 }
@@ -240,9 +254,19 @@ function relayNade(sourceWs, shooter, msg) {
   const verticalOrigin = Math.abs(o[1] - ((shooter.y || 0) + 1.1));
   const speed = Math.hypot(v[0], v[1], v[2]);
   if (horizontalOrigin > 2.5 || verticalOrigin > 3 || speed < 0.5 || speed > 18) return false;
+  const nid = `n${nextNadeId++}`;
+  const cid = typeof msg.cid === 'string' && /^[a-zA-Z0-9:_-]{1,40}$/.test(msg.cid)
+    ? msg.cid : null;
   shooter.lastNadeAt = now;
   shooter.nades--;
-  broadcastRawExcept(sourceWs, { t: 'nade', id: shooter.id, o, v });
+  activeNades.set(nid, makeSmokeProjectile(
+    { x: o[0], y: o[1], z: o[2] },
+    { x: v[0], y: v[1], z: v[2] },
+    { nid, shooterId: shooter.id, lastTick: now },
+  ));
+  const packet = { t: 'nade', nid, id: shooter.id, o, v };
+  broadcastRawExcept(sourceWs, packet);
+  send(sourceWs, { t: 'nadeAck', nid, id: shooter.id, cid, o, v });
   return true;
 }
 
@@ -326,6 +350,7 @@ function holdRoundResult(winner) {
   clearTimer();
   phase = 'round-finish';
   clearActiveRockets();
+  clearActiveSmoke();
   // El servidor deja de aceptar combate inmediatamente, pero pospone el
   // anuncio para que todos los clientes vean completa la reacción final.
   phaseTimer = setTimeout(() => finishRound(winner), Math.max(0, ROUND_FINISH_HOLD) * 1000);
@@ -669,6 +694,41 @@ function tickRockets(now) {
   }
 }
 
+function activateNade(nade, now) {
+  if (!activeNades.delete(nade.nid)) return;
+  const point = [nade.x, nade.y, nade.z].map((n) => +n.toFixed(4));
+  activeSmokes.set(nade.nid, {
+    nid: nade.nid,
+    shooterId: nade.shooterId,
+    point,
+    expiresAt: now + SMOKE_TIME,
+  });
+  broadcastRaw({
+    t: 'smokeStart', nid: nade.nid, id: nade.shooterId,
+    p: point, duration: SMOKE_TIME,
+  });
+}
+
+function tickSmoke(now) {
+  const physics = serverMapPhysics(settings.map);
+  for (const nade of [...activeNades.values()]) {
+    let remaining = Math.min(0.15, Math.max(0, now - nade.lastTick));
+    while (remaining > 1e-7 && nade.t < SMOKE_FUSE) {
+      const dt = Math.min(SMOKE_PHYSICS_STEP, remaining,
+        SMOKE_FUSE - nade.t);
+      stepSmokeProjectile(nade, dt, physics);
+      remaining -= dt;
+    }
+    nade.lastTick = now;
+    if (nade.t >= SMOKE_FUSE - 1e-6) activateNade(nade, now);
+  }
+  for (const smoke of [...activeSmokes.values()]) {
+    if (now < smoke.expiresAt) continue;
+    activeSmokes.delete(smoke.nid);
+    broadcastRaw({ t: 'smokeEnd', nid: smoke.nid });
+  }
+}
+
 wss.on('connection', (ws) => {
   let me = null;
   const rateGuard = new MessageRateGuard(nowSec());
@@ -791,7 +851,10 @@ wss.on('connection', (ws) => {
       return;
     }
     if (msg.t === 'nade') {
-      relayNade(ws, eventShooter(me, msg), msg);
+      if (!relayNade(ws, eventShooter(me, msg), msg)) {
+        const cid = typeof msg.cid === 'string' ? msg.cid.slice(0, 40) : null;
+        send(ws, { t: 'nadeReject', cid });
+      }
       return;
     }
     if (msg.t === 'hit') { registerHit(me, msg); return; }
@@ -839,7 +902,7 @@ wss.on('connection', (ws) => {
 
 setInterval(() => {
   const now = nowSec();
-  if (phase === 'playing') tickRockets(now);
+  if (phase === 'playing') { tickRockets(now); tickSmoke(now); }
   if (phase === 'playing') for (const p of allSlots()) {
     if (p.alive && p.hp < HP && now - p.lastDamage > REGEN_DELAY) p.hp = Math.min(HP, p.hp + REGEN_RATE / TICK_HZ);
     if (!p.alive && p.respawnAt > 0 && now >= p.respawnAt) {

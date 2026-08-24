@@ -1068,6 +1068,7 @@ export class BotMatch {
     this.specialSeeker = { red: null, blue: null }; // un solo bot por equipo va al pedestal
     this.tacticalClaims = new Map(); // destinos/ángulos reservados por bot
     this._rocketSeq = 0;
+    this._nadeSeq = 0;
 
     if (!this.external) this.stats.set('player', {
       name: cb.playerName, team: this.playerTeam, kills: 0, deaths: 0,
@@ -1664,8 +1665,10 @@ export class BotMatch {
     bot.nadeCd = 12 + Math.random() * 8;
     const origin = { x: bot.pos.x + nx * 0.5, y: bot.y + 1.2, z: bot.pos.z + nz * 0.5 };
     const velocity = { x: nx * speed, y: TUNING.weapons.grenade.throwUp * 0.8, z: nz * speed };
-    smoke.throwNade(origin, velocity);
-    this.cb.botNade?.(bot, origin, velocity);
+    const cid = this.external ? `nb:${bot.id}:${++this._nadeSeq}` : null;
+    smoke.throwNade(origin, velocity,
+      cid ? { id: cid, authoritative: true } : undefined);
+    this.cb.botNade?.(bot, origin, velocity, cid);
     return true;
   }
 

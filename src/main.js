@@ -120,6 +120,7 @@ const G = {
   specialRound: 0,     // ronda cuyo arma especial ya fue colocada
   specialClaimT: 0,    // anti-spam del reclamo online del pedestal
   rocketSeq: 0,        // correlación entre predicción local y cohete autoritativo
+  smokeSeq: 0,         // correlación entre bote predicho y humo autoritativo
   mode: null,          // null | 'practice' | 'online'
   rig: null,           // rig local
   player: null,        // controller local
@@ -1850,9 +1851,10 @@ function setupOnlineBots(roster) {
     botFire: (bot, origin, point, wep, impacts) => G.net?.botFire(bot.id, origin, point, wep, impacts),
     botHit: (bot, targetId, dmg, part, gib, point, meta) =>
       G.net?.botHit(bot.id, targetId, dmg, part, gib, point, meta),
-    botNade: (bot, origin, velocity) => G.net?.send({
+    botNade: (bot, origin, velocity, cid) => G.net?.send({
       t: 'nade', bot: bot.id,
       o: [origin.x, origin.y, origin.z], v: [velocity.x, velocity.y, velocity.z],
+      ...(cid ? { cid } : {}),
     }),
     botRocket: (bot, origin, dir, cid) => G.net?.send({
       t: 'rocket', bot: bot.id,
@@ -2151,16 +2153,41 @@ function bindNet(net) {
     input.pad.rumble(80, 0.4, 0.6);
   });
   net.on('nade', (m) => {
-    if (!alive() || m.id === net.id) return;
+    if (G.mode !== 'online' || m.id === net.id) return;
     const okVec = (v) => Array.isArray(v) && v.length === 3 && v.every((n) => typeof n === 'number' && isFinite(n));
-    if (!okVec(m.o) || !okVec(m.v)) return;
-    // cada cliente simula el mismo proyectil desde el mismo estado inicial:
-    // la física es determinista y la nube cae en el mismo lugar para todos
+    if (!okVec(m.o) || !okVec(m.v) || typeof m.nid !== 'string') return;
+    // El vuelo remoto es visual; solo smokeStart puede crear la nube real.
     smoke.throwNade(
       { x: m.o[0], y: m.o[1], z: m.o[2] },
       { x: m.v[0], y: m.v[1], z: m.v[2] },
+      { id: m.nid, authoritative: true },
     );
   });
+  net.on('nadeAck', (m) => {
+    const okVec = (v) => Array.isArray(v) && v.length === 3 &&
+      v.every((n) => typeof n === 'number' && isFinite(n));
+    if (typeof m.nid !== 'string') return;
+    if (typeof m.cid === 'string' && smoke.bindId(m.cid, m.nid)) return;
+    if (!okVec(m.o) || !okVec(m.v)) return;
+    smoke.throwNade(
+      { x: m.o[0], y: m.o[1], z: m.o[2] },
+      { x: m.v[0], y: m.v[1], z: m.v[2] },
+      { id: m.nid, authoritative: true },
+    );
+  });
+  net.on('nadeReject', (m) => {
+    if (typeof m.cid === 'string') smoke.remove(m.cid);
+  });
+  net.on('smokeStart', (m) => {
+    const okVec = (v) => Array.isArray(v) && v.length === 3 &&
+      v.every((n) => typeof n === 'number' && isFinite(n));
+    if (typeof m.nid !== 'string' || !okVec(m.p)) return;
+    smoke.activate(m.nid, { x: m.p[0], y: m.p[1], z: m.p[2] });
+  });
+  net.on('smokeEnd', (m) => {
+    if (typeof m.nid === 'string') smoke.remove(m.nid);
+  });
+  net.on('smokeClear', () => smoke.clear());
   net.on('death', (m) => {
     if (!alive() || !G.player) return;
     const isSelf = m.target === net.id;
@@ -2779,11 +2806,15 @@ function throwSmoke() {
     y: dir.y * d.throwSpeed + d.throwUp,
     z: dir.z * d.throwSpeed,
   };
-  smoke.throwNade(o, v);
+  const cid = G.mode === 'online' ? `p:${G.net?.id || 'local'}:${++G.smokeSeq}` : null;
+  smoke.throwNade(o, v, cid ? { id: cid, authoritative: true } : undefined);
   audio.whoosh();
   input.pad.rumble(45, 0.25, 0.35);
   G.rig.kick(0.5);
-  G.net?.send({ t: 'nade', o: [o.x, o.y, o.z], v: [v.x, v.y, v.z] });
+  G.net?.send({
+    t: 'nade', o: [o.x, o.y, o.z], v: [v.x, v.y, v.z],
+    ...(cid ? { cid } : {}),
+  });
   // sin botes restantes: cambiar solo a la primaria (nunca quedarse
   // apuntando con la mano vacía)
   if (G.weapons.st.mag <= 0) G.weapons.startSwap(G.weapons.primary);

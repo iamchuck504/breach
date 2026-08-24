@@ -3,10 +3,9 @@
 // Los bots consultan blocksSegment() desde su chequeo de línea de visión.
 import * as THREE from 'three';
 import { TUNING } from '../config/tuning.js';
+import { makeSmokeProjectile, stepSmokeProjectile } from './smoke-physics.js';
 
-const GRAVITY = 14;
 const PUFFS = 18;
-const TMP_P = { x: 0, z: 0 };
 const TMP_V = new THREE.Vector3();
 
 // Textura procedural pequeña: borde erosionado + densidad interior irregular.
@@ -69,15 +68,18 @@ export class SmokeSystem {
     });
   }
 
-  throwNade(o, v) {
+  throwNade(o, v, options = {}) {
     const mesh = new THREE.Mesh(this._nadeGeo, this._nadeMat);
     mesh.castShadow = true;
     mesh.position.set(o.x, o.y, o.z);
     this.scene.add(mesh);
-    this.projs.push({
-      mesh, x: o.x, y: o.y, z: o.z, vx: v.x, vy: v.y, vz: v.z, t: 0,
+    this.projs.push(makeSmokeProjectile(o, v, {
+      mesh,
+      id: options.id ?? null,
+      authoritative: !!options.authoritative,
       lastBounce: 0,
-    });
+    }));
+    return options.id ?? null;
   }
 
   update(dt) {
@@ -85,32 +87,7 @@ export class SmokeSystem {
 
     for (let i = this.projs.length - 1; i >= 0; i--) {
       const p = this.projs[i];
-      p.t += dt;
-      p.vy -= GRAVITY * dt;
-      const nx = p.x + p.vx * dt, ny = p.y + p.vy * dt, nz = p.z + p.vz * dt;
-      // pared: resolver como círculo chico y reflejar la componente corregida
-      TMP_P.x = nx; TMP_P.z = nz;
-      this.world.resolveCircle(TMP_P, 0.12, Math.max(0, ny));
-      let bounced = false;
-      if (Math.abs(TMP_P.x - nx) > 1e-6) { p.vx = -p.vx * 0.45; bounced = true; }
-      if (Math.abs(TMP_P.z - nz) > 1e-6) { p.vz = -p.vz * 0.45; bounced = true; }
-      p.x = TMP_P.x; p.z = TMP_P.z;
-      // suelo real debajo (bloques incluidos)
-      const gy = this.world.groundHeight({ x: p.x, z: p.z }, 0.12, Math.max(p.y, ny));
-      p.y = ny;
-      if (p.y <= gy + 0.08 && p.vy <= 0) {
-        p.y = gy + 0.08;
-        if (Math.abs(p.vy) > 1.7) {
-          p.vy = -p.vy * 0.42;
-          p.vx *= 0.62; p.vz *= 0.62;
-          bounced = true;
-        } else {
-          // rodando: fricción hasta asentarse
-          p.vy = 0;
-          const fr = Math.exp(-5 * dt);
-          p.vx *= fr; p.vz *= fr;
-        }
-      }
+      const bounced = stepSmokeProjectile(p, dt, this.world);
       if (bounced && p.t - p.lastBounce > 0.09) {
         p.lastBounce = p.t;
         this.audio.nadeBounce({ position: TMP_V.set(p.x, p.y, p.z) });
@@ -119,9 +96,15 @@ export class SmokeSystem {
       p.mesh.rotation.x += dt * 9;
       p.mesh.rotation.z += dt * 6.5;
       if (p.t >= d.fuse) {
-        this._pop(p, d);
-        this.scene.remove(p.mesh);
-        this.projs.splice(i, 1);
+        if (p.authoritative) {
+          // La predicción online nunca inventa una nube. Al alcanzar el fuse
+          // conserva el bote asentado hasta recibir smokeStart del servidor.
+          p.vx = 0; p.vy = 0; p.vz = 0;
+        } else {
+          this._pop(p, d);
+          this.scene.remove(p.mesh);
+          this.projs.splice(i, 1);
+        }
       }
     }
 
@@ -162,7 +145,7 @@ export class SmokeSystem {
     }
   }
 
-  _pop(p, d) {
+  _pop(p, d, id = null) {
     this.audio.smokePop({ position: TMP_V.set(p.x, p.y, p.z) });
     const group = new THREE.Group();
     group.position.set(p.x, p.y, p.z);
@@ -204,7 +187,45 @@ export class SmokeSystem {
     }
     this.scene.add(group);
     // el centro visual de la nube queda a media altura de un personaje
-    this.clouds.push({ group, puffs, materials, x: p.x, y: p.y + 1.0, z: p.z, t: 0, r: 0 });
+    this.clouds.push({ id, group, puffs, materials,
+      x: p.x, y: p.y + 1.0, z: p.z, t: 0, r: 0 });
+  }
+
+  bindId(clientId, serverId) {
+    const projectile = this.projs.find((p) => p.id === clientId);
+    if (!projectile) return false;
+    projectile.id = serverId;
+    projectile.authoritative = true;
+    return true;
+  }
+
+  remove(id) {
+    const pi = this.projs.findIndex((p) => p.id === id);
+    if (pi >= 0) {
+      this.scene.remove(this.projs[pi].mesh);
+      this.projs.splice(pi, 1);
+      return true;
+    }
+    const ci = this.clouds.findIndex((c) => c.id === id);
+    if (ci < 0) return false;
+    this._removeCloud(ci);
+    return true;
+  }
+
+  activate(id, point) {
+    if (!id || !point || this.clouds.some((c) => c.id === id)) return false;
+    this.remove(id);
+    const d = TUNING.weapons.grenade;
+    this._pop({ x: point.x, y: point.y, z: point.z }, d, id);
+    return true;
+  }
+
+  _removeCloud(index) {
+    const c = this.clouds[index];
+    if (!c) return;
+    this.scene.remove(c.group);
+    for (const mat of c.materials) mat.dispose();
+    this.clouds.splice(index, 1);
   }
 
   // ¿El segmento a→b cruza el núcleo denso de alguna nube activa? Usado por

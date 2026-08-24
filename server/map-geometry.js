@@ -17,6 +17,92 @@ function geometry(layout) {
   return cache.get(layout);
 }
 
+// Adaptador físico liviano para proyectiles balísticos del servidor. Replica
+// las dos operaciones de World que usa el bote de humo sin cargar Three.js ni
+// la escena visual completa.
+export function serverMapPhysics(layout) {
+  const g = geometry(layout);
+  return {
+    groundHeight(p, r = 0, y = 0) {
+      let height = 0;
+      const zone = g.helipad;
+      if (zone) {
+        const ax = Math.abs(p.x), az = Math.abs(p.z);
+        if (ax <= zone.edge && az <= zone.edge && ax + az <= zone.diagonal) {
+          height = zone.height;
+        }
+        if (ax - r <= zone.rampHalfWidth && az > zone.edge &&
+            az <= zone.edge + zone.rampLength) {
+          height = Math.max(height,
+            zone.height * (1 - (az - zone.edge) / zone.rampLength));
+        }
+      }
+      const margin = r * 0.5;
+      for (const box of g.boxes) {
+        if (box.h > y + 0.25) continue;
+        if (p.x + margin < box.minx || p.x - margin > box.maxx ||
+            p.z + margin < box.minz || p.z - margin > box.maxz) continue;
+        if (box.h > height) height = box.h;
+      }
+      return height;
+    },
+
+    resolveCircle(p, r, y = 0) {
+      for (let iter = 0; iter < 3; iter++) {
+        let moved = false;
+        for (const box of g.boxes) {
+          if (y >= box.h - 0.05) continue;
+          const cx = Math.max(box.minx, Math.min(box.maxx, p.x));
+          const cz = Math.max(box.minz, Math.min(box.maxz, p.z));
+          let dx = p.x - cx, dz = p.z - cz;
+          const distance2 = dx * dx + dz * dz;
+          if (distance2 > r * r) continue;
+          if (distance2 > 1e-9) {
+            const distance = Math.sqrt(distance2);
+            p.x = cx + dx / distance * r;
+            p.z = cz + dz / distance * r;
+          } else {
+            const left = p.x - box.minx, right = box.maxx - p.x;
+            const top = p.z - box.minz, bottom = box.maxz - p.z;
+            const nearest = Math.min(left, right, top, bottom);
+            if (nearest === left) p.x = box.minx - r;
+            else if (nearest === right) p.x = box.maxx + r;
+            else if (nearest === top) p.z = box.minz - r;
+            else p.z = box.maxz + r;
+          }
+          moved = true;
+        }
+        for (const segment of g.segments) {
+          if (y >= segment.h - 0.05) continue;
+          const tx = segment.b.x - segment.a.x;
+          const tz = segment.b.z - segment.a.z;
+          const len2 = tx * tx + tz * tz;
+          const u = Math.max(0, Math.min(1,
+            ((p.x - segment.a.x) * tx + (p.z - segment.a.z) * tz) / len2));
+          const cx = segment.a.x + tx * u, cz = segment.a.z + tz * u;
+          let dx = p.x - cx, dz = p.z - cz;
+          const radius = r + segment.half;
+          const distance2 = dx * dx + dz * dz;
+          if (distance2 >= radius * radius) continue;
+          if (distance2 > 1e-9) {
+            const distance = Math.sqrt(distance2);
+            dx /= distance; dz /= distance;
+          } else {
+            const signed = (p.x - segment.a.x) * segment.n.x +
+              (p.z - segment.a.z) * segment.n.z;
+            const side = signed >= 0 ? 1 : -1;
+            dx = segment.n.x * side; dz = segment.n.z * side;
+          }
+          p.x = cx + dx * radius;
+          p.z = cz + dz * radius;
+          moved = true;
+        }
+        if (!moved) break;
+      }
+    },
+  };
+}
+
 function pointInsideBox(box, point) {
   return point.x >= box.minx && point.x <= box.maxx &&
     point.z >= box.minz && point.z <= box.maxz &&
