@@ -18,6 +18,7 @@ import {
   MAX_WS_PAYLOAD, MessageRateGuard, acceptMovement, consumeShotAmmo,
   createAmmoBudget, grantWeaponAmmo, refillNormalAmmo, resetMovementGuard,
 } from './guards.js';
+import { clipMapEndpoint, mapLineBlocked, mapSurfaceContact } from './map-geometry.js';
 
 const PORT = process.env.PORT || 8787;
 const HP = TUNING.combat.hp, REGEN_DELAY = TUNING.combat.regenDelay,
@@ -59,6 +60,9 @@ const ROCKET_RELAY_INTERVAL = FIRE_RULES.bazooka.interval * .82;
 const VALID_STATES = new Set(['idle', 'run', 'roadie', 'dive', 'slide', 'cover_low',
   'cover_high', 'blind_over', 'blind_low_left', 'blind_low_right',
   'blind_high_left', 'blind_high_right', 'jump', 'flip', 'mantle', 'melee', 'dead']);
+const CROUCH_STATES = new Set(['cover_low', 'blind_over', 'blind_low_left', 'blind_low_right']);
+const POSE_HISTORY_TIME = 0.75;
+const CLAIM_POSITION_TOLERANCE = 0.82;
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.join(dirname, '..', 'dist');
@@ -102,6 +106,33 @@ let settings = { ...DEFAULT_LOBBY_SETTINGS }, phase = 'empty', phaseTimer = null
 let wins = { red: 0, blue: 0 }, pools = { red: 0, blue: 0 };
 
 const nowSec = () => Date.now() / 1000;
+function resetPoseHistory(entity, now = nowSec()) {
+  entity.poseHistory = [{ at: now, x: entity.x || 0, y: entity.y || 0,
+    z: entity.z || 0, st: entity.st || 'idle' }];
+}
+function recordPose(entity, now = nowSec()) {
+  entity.poseHistory ||= [];
+  entity.poseHistory.push({ at: now, x: entity.x || 0, y: entity.y || 0,
+    z: entity.z || 0, st: entity.st || 'idle' });
+  while (entity.poseHistory.length > 2 && entity.poseHistory[0].at < now - POSE_HISTORY_TIME) {
+    entity.poseHistory.shift();
+  }
+}
+function poseForClaim(target, point, now) {
+  if (!point) return null;
+  const candidates = (target.poseHistory || []).filter((pose) => pose.at >= now - POSE_HISTORY_TIME);
+  candidates.push({ at: now, x: target.x || 0, y: target.y || 0,
+    z: target.z || 0, st: target.st || 'idle' });
+  let best = null, bestDistance = Infinity;
+  for (const pose of candidates) {
+    const relY = point[1] - pose.y;
+    const crouched = CROUCH_STATES.has(pose.st);
+    if (relY < 0.12 || relY > (crouched ? 1.18 : 1.88)) continue;
+    const distance = Math.hypot(point[0] - pose.x, point[2] - pose.z);
+    if (distance < bestDistance) { bestDistance = distance; best = pose; }
+  }
+  return bestDistance <= CLAIM_POSITION_TOLERANCE ? best : null;
+}
 const send = (ws, obj) => { if (ws?.readyState === 1) ws.send(JSON.stringify(obj)); };
 function sendRaw(ws, data) { if (ws?.readyState === 1) ws.send(data); }
 function broadcastRaw(obj) { const data = JSON.stringify(obj); for (const p of players.values()) sendRaw(p.ws, data); }
@@ -178,6 +209,7 @@ function freshCombatState(p, spawn) {
     lastDamage: 0, respawnAt: 0, prot: startAt + SPAWN_PROT,
     lastFireAt: -Infinity, pendingShot: null });
   resetMovementGuard(p, nowSec());
+  resetPoseHistory(p);
 }
 
 function eventShooter(me, msg) {
@@ -308,28 +340,36 @@ function registerFire(shooter, msg, isBotFire = false) {
     if (len > 0.001 && (dx * fx + dz * fz) / len < Math.cos(62 * Math.PI / 180)) return false;
   }
   if (!consumeShotAmmo(shooter, weapon)) return false;
-  const decals = Array.isArray(msg.d) ? msg.d.slice(0, 8).map(vec3).filter(Boolean) : undefined;
-  const shotVec = [pt[0] - o[0], pt[1] - o[1], pt[2] - o[2]];
+  const endpoint = proj ? pt : clipMapEndpoint(settings.map, o, pt);
+  // Solo retransmitir impactos que realmente coincidan con la primera
+  // superficie física de ese rayo. Evita decals suspendidos o pintados a
+  // través del mapa por un cliente modificado.
+  const decals = Array.isArray(msg.d) ? msg.d.slice(0, 8).map(vec3).filter((point) => {
+    if (!point) return false;
+    const contact = mapSurfaceContact(settings.map, o, point);
+    return contact !== null && distance3(contact, point) <= 0.35;
+  }) : undefined;
+  const shotVec = [endpoint[0] - o[0], endpoint[1] - o[1], endpoint[2] - o[2]];
   const shotLen = Math.hypot(shotVec[0], shotVec[1], shotVec[2]);
   const shotDir = shotLen > 0.001
     ? shotVec.map((v) => v / shotLen)
     : null;
   shooter.lastFireAt = now; shooter.pendingShot = {
-    at: now, wep: weapon, origin: o, endpoint: pt, direction: shotDir,
+    at: now, wep: weapon, origin: o, endpoint, direction: shotDir,
     length: shotLen, remainingDamage: rule.maxDamage, hitIds: new Set(),
   };
   shooter.prot = 0;
-  broadcastRaw({ t: 'fire', id: shooter.id, o, p: pt, w: weapon, ...(decals ? { d: decals } : {}) }); return true;
+  broadcastRaw({ t: 'fire', id: shooter.id, o, p: endpoint, w: weapon,
+    ...(decals?.length ? { d: decals } : {}) }); return true;
 }
 
-const CROUCH_STATES = new Set(['cover_low', 'blind_over', 'blind_low_left', 'blind_low_right']);
 const HEAD_RADIUS = 0.22;
 const SNIPER_HEAD_AUTH_RADIUS = 0.58; // hitbox + margen breve de snapshot/red
 const SNIPER_ENDPOINT_EPSILON = 0.28;
 
-function targetHeadCenter(target) {
-  const crouched = CROUCH_STATES.has(target.st);
-  return [target.x, (target.y || 0) + (crouched ? 0.86 : 1.52), target.z];
+function targetHeadCenter(target, pose = target) {
+  const crouched = CROUCH_STATES.has(pose.st);
+  return [pose.x, (pose.y || 0) + (crouched ? 0.86 : 1.52), pose.z];
 }
 
 function distance3(a, b) {
@@ -357,16 +397,16 @@ function sniperRayHitsHead(shot, point, head) {
 // del impacto permite validar cabeza incluso con interpolación horizontal; el
 // radio amplio en XZ tolera los ~120 ms de snapshots sin regalar headshots por
 // impactos claramente situados en el torso.
-function validatedPart(target, claimedPart, point, shot = null) {
+function validatedPart(target, claimedPart, point, shot = null, pose = target) {
   if (claimedPart !== 'head' || !point) return 'body';
-  const crouched = CROUCH_STATES.has(target.st);
-  const relY = point[1] - (target.y || 0);
+  const crouched = CROUCH_STATES.has(pose.st);
+  const relY = point[1] - (pose.y || 0);
   const minY = crouched ? 0.66 : 1.30;
   const maxY = crouched ? 1.16 : 1.82;
-  const horizontal = Math.hypot(point[0] - target.x, point[2] - target.z);
+  const horizontal = Math.hypot(point[0] - pose.x, point[2] - pose.z);
   if (relY < minY || relY > maxY || horizontal > 1.25) return 'body';
   if (shot?.wep === 'sniper') {
-    const head = targetHeadCenter(target);
+    const head = targetHeadCenter(target, pose);
     if (distance3(point, head) > SNIPER_HEAD_AUTH_RADIUS ||
         !sniperRayHitsHead(shot, point, head)) return 'body';
   }
@@ -389,10 +429,10 @@ function validatedDeathPoint(target, part, point) {
   ];
 }
 
-function authoritativeDamage(shooter, target, shot, msg, dist) {
+function authoritativeDamage(shooter, target, shot, msg, dist, pose) {
   const wep = shot.wep;
   const point = vec3(msg.p);
-  const part = validatedPart(target, msg.part, point, shot);
+  const part = validatedPart(target, msg.part, point, shot, pose);
   const botScale = shooter.bot && wep !== 'bazooka'
     ? TUNING.combat.botDamageScale
     : 1;
@@ -425,6 +465,21 @@ function authoritativeDamage(shooter, target, shot, msg, dist) {
   return { dmg: firearmDamage(def, dist, part, pellets, botScale), part };
 }
 
+function claimMatchesShot(shot, point) {
+  if (shot.wep === 'bazooka') return true; // el origen ES la explosión
+  if (!shot.direction) return false;
+  const dx = point[0] - shot.origin[0], dy = point[1] - shot.origin[1];
+  const dz = point[2] - shot.origin[2], len = Math.hypot(dx, dy, dz);
+  if (len < 0.001) return shot.wep === 'melee';
+  const dot = (dx * shot.direction[0] + dy * shot.direction[1] +
+    dz * shot.direction[2]) / len;
+  // Un fire de escopeta registra el último pellet, mientras el claim agrupa
+  // todos; sus dos extremos pueden separarse hasta ~16°. Armas de un solo
+  // proyectil mantienen un cono mucho más estrecho.
+  const degrees = shot.wep === 'shotgun' ? 20 : shot.wep === 'melee' ? 18 : 9;
+  return dot >= Math.cos(degrees * Math.PI / 180);
+}
+
 function registerHit(shooter, msg) {
   const target = players.get(msg.target) || bots.get(msg.target);
   const shot = shooter?.pendingShot, rule = shot ? FIRE_RULES[shot.wep] : null, now = nowSec();
@@ -432,15 +487,19 @@ function registerHit(shooter, msg) {
   const selfRocket = target.id === shooter.id && shot?.wep === 'bazooka';
   if (target.team === shooter.team && !selfRocket) return;
   if (!shot || !rule || now - shot.at > HIT_WINDOW || shot.hitIds.has(target.id)) return;
-  const dist = Math.hypot(target.x - shot.origin[0], (target.y || 0) + 1 - shot.origin[1], target.z - shot.origin[2]);
+  const point = vec3(msg.p); if (!point) return;
+  const pose = poseForClaim(target, point, now); if (!pose) return;
+  if (!claimMatchesShot(shot, point) ||
+      mapLineBlocked(settings.map, shot.origin, point, shot.wep === 'melee' ? 0.24 : 0.18)) return;
+  const dist = distance3(shot.origin, point);
   const hitTolerance = shot.wep === 'melee' ? 0.28 : 2;
   if (dist > (rule.hitRange ?? rule.range) + hitTolerance) return;
   if (shot.wep === 'melee') {
-    const dx = target.x - shooter.x, dz = target.z - shooter.z, len = Math.hypot(dx, dz);
+    const dx = pose.x - shooter.x, dz = pose.z - shooter.z, len = Math.hypot(dx, dz);
     const fx = -Math.sin(shooter.yaw || 0), fz = -Math.cos(shooter.yaw || 0);
     if (len > 0.001 && (dx * fx + dz * fz) / len < Math.cos(58 * Math.PI / 180)) return;
   }
-  const authoritative = authoritativeDamage(shooter, target, shot, msg, dist);
+  const authoritative = authoritativeDamage(shooter, target, shot, msg, dist, pose);
   const dmg = Math.min(authoritative.dmg, shot.remainingDamage); if (dmg <= 0) return;
   const part = authoritative.part;
   shot.hitIds.add(target.id); shot.remainingDamage -= dmg; target.hp -= dmg; target.lastDamage = now;
@@ -558,7 +617,8 @@ wss.on('connection', (ws) => {
       if (phase !== 'playing' || !me.alive) { me.st = 'idle'; me.aim = 0; me.sp = 0; return; }
       if (![msg.x, msg.y, msg.z, msg.yaw].every((v) => typeof v === 'number' && Number.isFinite(v))) return;
       const next = { x: clamp(msg.x, -60, 60), z: clamp(msg.z, -60, 60), y: clamp(msg.y, 0, 20) };
-      if (!acceptMovement(me, next, nowSec(), ALLOW_TEST_TELEPORTS)) {
+      const stateNow = nowSec();
+      if (!acceptMovement(me, next, stateNow, ALLOW_TEST_TELEPORTS)) {
         send(ws, { t: 'correction', x: me.x, y: me.y || 0, z: me.z, reason: 'movement' });
         return;
       }
@@ -569,7 +629,7 @@ wss.on('connection', (ws) => {
       me.w = SPECIAL_WEAPONS.has(requestedWep) && me.specialWep !== requestedWep ? 'smg' : requestedWep;
       const def = WD[me.w] || WD.smg;
       me.am = clamp(msg.am, 0, def.mag || 0); me.ar = clamp(msg.ar, 0, def.reserve || 0);
-      me.sp = clamp(msg.sp, 0, 1); return;
+      me.sp = clamp(msg.sp, 0, 1); recordPose(me, stateNow); return;
     }
     if (msg.t === 'botState') {
       if (!isHost(me) || phase !== 'playing' || !Array.isArray(msg.bots)) return;
@@ -584,7 +644,7 @@ wss.on('connection', (ws) => {
         b.aim = s.aim ? 1 : 0; b.p = clamp(s.p, -1.6, 1.6);
         const requestedWep = clampWep(s.w);
         b.w = SPECIAL_WEAPONS.has(requestedWep) && b.specialWep !== requestedWep ? 'smg' : requestedWep;
-        b.sp = clamp(s.sp, 0, 1);
+        b.sp = clamp(s.sp, 0, 1); recordPose(b, stateNow);
       } return;
     }
     if (msg.t === 'fire') { registerFire(me, msg); return; }
@@ -657,6 +717,7 @@ setInterval(() => {
       p.lastNadeAt = -Infinity; p.lastRocketAt = -Infinity;
       const spawn = pickSpawn(p.team); Object.assign(p, { x: spawn.x, z: spawn.z, y: 0, yaw: spawn.yaw });
       resetMovementGuard(p, now);
+      resetPoseHistory(p, now);
       broadcastRaw({ t: 'respawn', id: p.id, spawn });
     }
   }

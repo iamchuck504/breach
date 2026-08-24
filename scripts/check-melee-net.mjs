@@ -61,21 +61,21 @@ try {
   await waitFor(a, (m) => m.t === 'start');
   a.messages.length = 0; b.messages.length = 0;
   // El target rompe su protección de spawn para aislar la autoridad melee.
-  state(b, 0, 0, Math.PI);
+  state(b, 3, 0, Math.PI);
   await delay(80);
-  send(b, { t: 'fire', w: 'smg', o: [0, 1.1, 0], p: [0, 1.1, 6], d: [] });
+  send(b, { t: 'fire', w: 'smg', o: [3, 1.1, 0], p: [3, 1.1, 6], d: [] });
   await delay(100);
 
   // Demasiado lejos: ni el fire queda pendiente ni el hit aplica.
-  state(a, 0, 3.2, 0); state(b, 0, 0, Math.PI); await delay(140);
-  strike(a, b, 0, 3.2, 0, 0);
+  state(a, 3, 3.2, 0); state(b, 3, 0, Math.PI); await delay(140);
+  strike(a, b, 3, 3.2, 3, 0);
   await delay(160);
   const farHp = await hp(a, b.id);
   if (farHp !== 100) throw new Error(`melee lejano aceptado: hp=${farHp}`);
 
   // En rango pero detrás del atacante: el cono del servidor lo rechaza.
-  state(a, 0, 0, 0); state(b, 0, 1.2, Math.PI); await delay(140);
-  strike(a, b, 0, 0, 0, 1.2);
+  state(a, 3, 0, 0); state(b, 3, 1.2, Math.PI); await delay(140);
+  strike(a, b, 3, 0, 3, 1.2);
   await delay(160);
   const backHp = await hp(a, b.id);
   if (backHp !== 100) throw new Error(`melee trasero aceptado: hp=${backHp}`);
@@ -83,8 +83,8 @@ try {
   // Frente y en rango: daño autoritativo + evento de reacción.
   await delay(420);
   a.messages.length = 0; b.messages.length = 0;
-  state(a, 0, 1.2, 0); state(b, 0, 0, Math.PI); await delay(140);
-  strike(a, b, 0, 1.2, 0, 0);
+  state(a, 3, 1.2, 0); state(b, 3, 0, Math.PI); await delay(140);
+  strike(a, b, 3, 1.2, 3, 0);
   const confirm = await waitFor(b, (m) => m.t === 'hitConfirm' && m.target === b.id);
   const validHp = await hp(a, b.id);
   if (validHp !== 40 || confirm.w !== 'melee' || confirm.dmg !== 60) {
@@ -92,8 +92,8 @@ try {
   }
 
   // Repetir el claim o atacar dentro del intervalo no duplica daño.
-  send(a, { t: 'hit', target: b.id, dmg: 60, part: 'body', gib: 0, p: [0, 1.02, 0] });
-  strike(a, b, 0, 1.2, 0, 0);
+  send(a, { t: 'hit', target: b.id, dmg: 60, part: 'body', gib: 0, p: [3, 1.02, 0] });
+  strike(a, b, 3, 1.2, 3, 0);
   await delay(160);
   const spamHp = await hp(a, b.id);
   if (spamHp !== 40) throw new Error(`spam melee aplicó daño: hp=${spamHp}`);

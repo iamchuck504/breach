@@ -9,6 +9,7 @@ import { BLOCK } from './block-heights.js';
 import { getMap, isCustomLayout, cratesOf, specialOf, spawnsOf, footprint, paletteById }
   from './map-data.js';
 import { cloneUrbanAsset } from './urban-assets.js';
+import { HELIPAD, collisionBoxesFor, helipadSegments } from './collision-layouts.js';
 
 const FIELD_X = 15, FIELD_Z = 18; // semiancho / semilargo
 const SOLDIER_HEIGHT = 1.63;
@@ -28,15 +29,12 @@ const STREET_SCALE = Object.freeze({
 //   HIGH (3.0): inalcanzable incluso saltando; muros y estructuras
 // Ninguna pieza de mapa puede usar otra altura.
 export { BLOCK };
-const HELIPAD_RADIUS = 6.2;
-const HELIPAD = {
-  height: BLOCK.LOW,
-  radius: HELIPAD_RADIUS,
-  edge: HELIPAD_RADIUS * Math.cos(Math.PI / 8),
-  diagonal: HELIPAD_RADIUS * (Math.cos(Math.PI / 8) + Math.sin(Math.PI / 8)),
-  rampLength: 5,
-  rampHalfWidth: 1.55,
-};
+function buildSharedCollision(world, layout, styles) {
+  for (const box of collisionBoxesFor(layout)) {
+    const { x, z, w, d, h, style, ...options } = box;
+    world._box(x, z, w, d, h, { ...(styles[style] || {}), ...options });
+  }
+}
 const HIT_N = {
   nx: { x: -1, y: 0, z: 0 }, px: { x: 1, y: 0, z: 0 },
   ny: { x: 0, y: -1, z: 0 }, py: { x: 0, y: 1, z: 0 },
@@ -2084,78 +2082,12 @@ export class World {
     const highOpts = { color: 0x8b857c, top: 0xa39d92 };  // edificios
     const wallOpts = { mirror: false, color: 0x767068, top: 0x8d867d };
 
-    // perímetro
-    // Los topes longitudinales siguen siendo físicos, pero invisibles: detrás
-    // de ellos la calle y las fachadas continúan como perspectiva no jugable.
-    this._box(0, -this.fz - 0.4, this.fx * 2 + 2, 0.8, HIGH, { ...wallOpts, visual: false });
-    this._box(0, this.fz + 0.4, this.fx * 2 + 2, 0.8, HIGH, { ...wallOpts, visual: false });
-    this._box(-this.fx - 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
-    this._box(this.fx + 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
-
-    // base: un bus atravesado bloquea la avenida. Las salidas laterales se
-    // mantienen abiertas, pero el bloqueo ahora tiene una razón urbana clara.
-    this._box(0, -34.5, STREET_SCALE.bus.length, STREET_SCALE.bus.width, HIGH, { ...highOpts, visual: false });
-    this._box(-6.1, -33.4, 2.4, 0.9, LOW, { ...lowOpts, visual: false });
-    this._box(6.1, -33.4, 2.4, 0.9, LOW, { ...lowOpts, visual: false });
-
-    // Kioscos compactos, pero de altura humana. La huella no cambia y sigue
-    // dejando circulación por ambos lados de la acera; HIGH acompaña el techo
-    // visual para que no exista geometría atravesable por encima del puesto.
-    this._box(-14.35, -29, 1.75, 1.75, HIGH, { ...highOpts, visual: false });
-    this._box(14.35, -26, 1.65, 1.65, HIGH, { ...highOpts, visual: false });
-
-    // vehículos sobre la avenida (cobertura baja)
-    const carCoverW = STREET_SCALE.car.width;
-    const carCoverL = STREET_SCALE.car.length - 0.13;
-    this._box(-2.5, -28, carCoverW, carCoverL, LOW, { ...lowOpts, visual: false });
-    // Dos autos adicionales por lado de la calle. Los pares rotacionales
-    // conservan exactamente la misma oportunidad de avance para ambos equipos.
-    this._box(6.5, -21, carCoverW, carCoverL, LOW, { ...lowOpts, visual: false });
-    this._box(-6.5, -16, carCoverW, carCoverL, LOW, { ...lowOpts, visual: false });
-    this._box(3, -10.5, carCoverW, carCoverL, LOW, { ...lowOpts, visual: false });
-    this._box(-3, -5.5, carCoverL, carCoverW, LOW, { ...lowOpts, visual: false }); // auto cruzado
-
-    // barricada del choke central
-    this._box(-1.2, -8.7, 3.2, 0.9, MID, { ...midOpts, visual: false });
-
-    // camión de reparto: gran bloqueador de visión a un lado del centro
-    // (el espejo crea el segundo). El tráfico abandonado guía los flancos.
-    this._box(-6.5, -1.5, 2.4, 7, HIGH, { ...highOpts, visual: false });
-
-    // Los dumpsters grandes pertenecen a patios de servicio laterales. El
-    // carrito de café conserva solo una base LOW: toldo y postes son decorado.
-    this._box(-15.15, -8, 2.5, 2.2, LOW, { ...lowOpts, visual: false });
-    this._box(14.35, -8.5, 1.30, 0.75, LOW, { ...lowOpts, visual: false });
-
-    // cobertura de aproximación al centro
-    this._box(3.6, -2.2, 2.4, 0.9, LOW, { ...lowOpts, visual: false });
-
-    // Mobiliario físico que NO es cover. Estos volúmenes impiden atravesar
-    // postes, hidrantes y el respaldo de las paradas, pero no generan caras
-    // de cobertura, blindfire ni posiciones atractivas para los bots.
     const solidProp = { mirror: false, visual: false, cover: false, surface: 'metal' };
-    for (const z of [-35, -25, -15, -5, 5, 15, 25, 35]) {
-      // El origen del GLB está bajo el brazo; la base visible vive 0.88 m
-      // hacia el bordillo. El collider sigue esa base, no el pivot del asset.
-      this._box(-12.60, z, 0.50, 0.50, STREET_SCALE.lamp,
-        { ...solidProp, decorLink: `streetlight:left:${z}` });
-      this._box(12.60, z, 0.50, 0.50, STREET_SCALE.lamp,
-        { ...solidProp, decorLink: `streetlight:right:${z}` });
-    }
-    this._box(-12.45, -11, 0.46, 0.46, 0.68,
-      { ...solidProp, decorLink: 'hydrant:left' });
-    this._box(12.45, 11, 0.46, 0.46, 0.68,
-      { ...solidProp, decorLink: 'hydrant:right' });
-    // Paradas en U: respaldo y costados son cover alto; el frente que mira a
-    // la calle (donde se ve la banca) queda completamente abierto.
     const shelterCover = { mirror: false, visual: false, cover: true, surface: 'metal' };
-    for (const [side, z] of [[1, -37.0], [-1, 37.0]]) {
-      const decorLink = `busShelter:${side > 0 ? 'right' : 'left'}`;
-      this._box(side * 14.88, z, 0.20, 3.34, 2.45, { ...shelterCover, decorLink });
-      for (const dz of [-1.67, 1.67]) {
-        this._box(side * 14.43, z + dz, 1.10, 0.18, 2.45, { ...shelterCover, decorLink });
-      }
-    }
+    buildSharedCollision(this, 'calle', {
+      low: lowOpts, mid: midOpts, high: highOpts, wall: wallOpts,
+      solid: solidProp, shelter: shelterCover,
+    });
 
     this._decorCalle();
   }
@@ -3393,47 +3325,11 @@ export class World {
     const highOpts = { color: 0x817970, top: 0xa69b89 };
     const wallOpts = { mirror: false, color: 0x787168, top: 0x9a907f };
 
-    // perímetro
-    this._box(0, -this.fz - 0.4, this.fx * 2 + 2, 0.8, HIGH, wallOpts);
-    this._box(0, this.fz + 0.4, this.fx * 2 + 2, 0.8, HIGH, wallOpts);
-    this._box(-this.fx - 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
-    this._box(this.fx + 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
-
-    // --- base (lado rojo; el espejo crea el azul)
-    // escudo a 2m del spawn (en -22.8 quedaba a 0.6m: nacías mirando pared)
-    this._box(0, -20.9, 8, 1, HIGH, highOpts);             // escudo de spawn
-    this._box(-6, -20.2, 2.6, 0.9, LOW, lowOpts);          // salidas flanqueadas
-    this._box(6, -20.2, 2.6, 0.9, LOW, lowOpts);
-    this._box(-8.5, -16, 5, 1, MID, midOpts);              // muro mediano de base
-    this._box(5.5, -17, 3, 3, LOW, lowOpts);               // plataforma saltable
-
-    // --- cuartos laterales (corredores CQC)
-    this._box(-14.5, -12, 1, 6.5, HIGH, highOpts);
-    this._box(-17.5, -8.5, 1.8, 0.9, LOW, lowOpts);
-    // forma en L
-    this._box(11.5, -12.5, 1, 5, HIGH, highOpts);
-    this._box(9.5, -10.5, 3, 1, HIGH, highOpts);
-
-    // --- cadena central de bloques bajos (ruta de wallbounce)
-    this._box(-2, -11, 2.6, 0.9, LOW, lowOpts);
-    this._box(2.5, -8.5, 2.6, 0.9, LOW, lowOpts);
-    this._box(-1.5, -6, 2.6, 0.9, LOW, lowOpts);
-
-    // --- pilares de flanco
-    this._box(7, -6, 1.2, 1.2, HIGH, highOpts);
-    this._box(-11, -5, 1.2, 1.2, HIGH, highOpts);
-
-    // --- carriles laterales
-    this._box(-19, -3.5, 1.6, 0.9, LOW, lowOpts);
-    this._box(18.5, -6, 0.9, 2.4, LOW, lowOpts);
-
-    // --- media cancha: muro mediano + plataforma saltable
-    this._box(5, -2.5, 3.2, 0.9, MID, midOpts);
-    this._box(-8.5, -1.5, 2.4, 2.4, LOW, lowOpts);
-
-    // --- centro (auto-simétrico): gran pilar + flancos bajos
-    this._box(0, 0, 1.8, 1.8, HIGH, { ...highOpts, mirror: false, top: 0xffb075 });
-    this._box(-5.5, 0.6, 0.9, 2.4, LOW, lowOpts);
+    // Todas las huellas viven en collision-layouts.js: cliente y servidor
+    // online consumen exactamente la misma geometría.
+    buildSharedCollision(this, 'fortaleza', {
+      low: lowOpts, mid: midOpts, high: highOpts, wall: wallOpts,
+    });
 
     this._decorFortaleza();
   }
@@ -3896,53 +3792,18 @@ export class World {
     const glassOpts = { color: 0x38677c, top: 0x67b6d0, surface: 'metal' }; // marco de claraboya
     const wallOpts = { mirror: false, color: 0x59636f, top: 0x7e8994, surface: 'concrete' };
 
-    // perímetro: parapetos / fachadas de los edificios vecinos
-    this._box(0, -this.fz - 0.4, this.fx * 2 + 2, 0.8, HIGH, wallOpts);
-    this._box(0, this.fz + 0.4, this.fx * 2 + 2, 0.8, HIGH, wallOpts);
-    this._box(-this.fx - 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
-    this._box(this.fx + 0.4, 0, 0.8, this.fz * 2 + 2, HIGH, wallOpts);
+    buildSharedCollision(this, 'azoteas', {
+      ac: acOpts, vent: ventOpts, hut: hutOpts, glass: glassOpts, wall: wallOpts,
+    });
 
-    // --- salida de base: dos anclas distintas en vez de A/C gemelos
-    this._box(0, -31.35, 8, 1.2, HIGH, hutOpts);           // caseta de acceso / escudo
-    this._box(-8.2, -27.7, 4, 2.2, LOW, acOpts);           // estación HVAC de ruta técnica
-    this._box(11.5, -22.8, 3.8, 3.8, LOW, glassOpts);      // claraboya: cruce expuesto
-    this._box(-12.2, -22.1, 5.6, 1.1, MID, hutOpts);       // mamparo: corta la LOS central
-
-    // --- esquinas y anillo exterior: dos instalaciones reconocibles sustituyen
-    // cinco cajas aisladas. Conservan circulación posterior y dos contraángulos.
-    this._box(-26.3, -31.5, 6, 4, LOW, acOpts);            // planta HVAC de esquina
-    this._box(26, -31.5, 5.5, 2.6, MID, hutOpts);          // subestación eléctrica
-    this._box(-27, -23.5, 1.4, 5, LOW, ventOpts);          // ducto de planta a tanque
-    this._box(27, -23.2, 4, 1.4, LOW, ventOpts);           // manifold de subestación
-
-    // --- ruta técnica oeste: giros cerrados y posiciones de escopeta
-    this._box(-20.25, -15.75, 2.8, 2.8, HIGH, hutOpts);    // elevador + tanque landmark
-    this._box(-25, -6.8, 2.4, 6.2, MID, hutOpts);          // bases simétricas: grúa / generador
-    // Núcleo alto idéntico en ambas instalaciones. La silueta superior cambia,
-    // pero colisión, cover y rutas conservan simetría rotacional exacta.
-    this._box(-25, -6.8, 1.7, 1.7, HIGH, { ...hutOpts, visual: false });
+    // Landmarks y skins se conservan aparte: solo sus huellas físicas forman
+    // parte del manifiesto compartido.
     this._azoteasLandmarks = {
       crane: { x: -25, z: -6.8 }, generator: { x: 25, z: 6.8 },
     };
-
-    // --- aproximación central: una estación grande y un único bounce final
-    this._box(-2, -15.6, 5.5, 2.5, LOW, acOpts);           // estación HVAC central
-    // El panel solar reemplaza este cover, incluida su copia a 180°. Solo
-    // cambia la lectura visual: huella, altura, caras y balance son los mismos.
-    this._box(-4, -9.5, 3.6, 1.4, LOW, { ...acOpts, visual: false });
     this._solarCoverSpots = [
       { x: -4, z: -9.5, ry: 0 }, { x: 4, z: 9.5, ry: Math.PI },
     ];
-
-    // --- ruta rápida este: corredor de sprint con dos cortes de visión
-    this._box(18, -14, 1.1, 5.2, HIGH, hutOpts);           // cuarto técnico / duelo CQC
-    this._box(25.2, -17.2, 1.1, 3, LOW, ventOpts);         // opción exterior de riesgo
-    this._box(27.2, -7.2, 3, 1.1, LOW, ventOpts);          // pausa antes de media cancha
-
-    // --- anillo del helipuerto: dos anclas distintas por mitad. Sus huellas
-    // quedan fuera del pad de 12.75 m y dejan el centro totalmente abierto.
-    this._box(9.6, -4.3, 4.2, 1.1, MID, hutOpts);          // posición fuerte, flanqueable
-    this._box(-9.3, -5.2, 3, 2.6, LOW, acOpts);            // apoyo flexible de corto alcance
 
     // --- CENTRO: helipuerto DESPEJADO (regla de Chuck) — cero obstáculos ni
     // decoración dentro del pad; el cover vive en el anillo de media cancha
@@ -3951,45 +3812,24 @@ export class World {
     // norte/sur dejan un hueco central para las rampas; los otros seis lados
     // son continuos. El collider llega hasta la parte superior de la baranda,
     // pero su altura táctica sigue siendo LOW medida desde la plataforma.
-    const verts = Array.from({ length: 8 }, (_, i) => {
-      const a = Math.PI / 8 + i * Math.PI / 4;
-      return { x: Math.sin(a) * HELIPAD.radius, z: Math.cos(a) * HELIPAD.radius };
-    });
     this._helipadSegments = [];
-    const addSide = (a, b) => {
-      const tx = b.x - a.x, tz = b.z - a.z;
-      const len = Math.hypot(tx, tz);
-      if (len < 0.05) return;
-      const n = { x: -tz / len, z: tx / len }; // vértices en sentido horario
-      const wall = { a, b, n, half: 0.08, h: HELIPAD.height + LOW, coverH: LOW, surface: 'metal' };
+    for (const segment of helipadSegments()) {
+      const wall = { ...segment, coverH: LOW, surface: 'metal' };
       this._helipadSegments.push(wall);
       this.segmentColliders.push(wall);
       for (const side of [1, -1]) {
-        const sn = { x: n.x * side, z: n.z * side };
+        const sn = { x: wall.n.x * side, z: wall.n.z * side };
         const off = wall.half * side;
         this.faces.push({
           n: sn,
-          a: { x: a.x + n.x * off, z: a.z + n.z * off },
-          b: { x: b.x + n.x * off, z: b.z + n.z * off },
+          a: { x: wall.a.x + wall.n.x * off, z: wall.a.z + wall.n.z * off },
+          b: { x: wall.b.x + wall.n.x * off, z: wall.b.z + wall.n.z * off },
           h: wall.coverH,
           baseY: HELIPAD.height,
           topY: wall.h,
           kind: 'railing',
           collider: wall,
         });
-      }
-    };
-    for (let i = 0; i < verts.length; i++) {
-      const a = verts[i], b = verts[(i + 1) % verts.length];
-      const rampSide = Math.abs(a.z - b.z) < 0.01 && Math.abs(a.z) > HELIPAD.edge - 0.05;
-      if (!rampSide) { addSide(a, b); continue; }
-      const z = a.z;
-      if (a.x < b.x) {
-        addSide(a, { x: -HELIPAD.rampHalfWidth, z });
-        addSide({ x: HELIPAD.rampHalfWidth, z }, b);
-      } else {
-        addSide(a, { x: HELIPAD.rampHalfWidth, z });
-        addSide({ x: -HELIPAD.rampHalfWidth, z }, b);
       }
     }
 

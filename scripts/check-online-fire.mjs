@@ -77,11 +77,15 @@ try {
   d.self = matchD.players.find((p) => p.id === d.welcome.id);
   await waitFor(a, (m) => m.t === 'start');
 
+  // Carril libre real al oeste del pilar central. Las pruebas anteriores se
+  // colocaban detrás del escudo de spawn y dependían de atravesar ese muro.
+  const bx = 3, bz = -2;
+  send(b, { t: 's', x: bx, z: bz, y: 0, yaw: Math.PI, st: 'idle', w: 'smg', am: 50, ar: 150 });
+  b.self.x = bx; b.self.z = bz;
   // El target rompe su protección para aislar la validación del atacante.
   send(b, firePacket(b, a));
   await delay(80);
 
-  const bx = b.self.x, bz = b.self.z;
   send(a, { t: 's', x: bx, z: bz - 4, y: 0, yaw: 0, st: 'idle', w: 'smg', am: 50, ar: 150 });
   a.self.x = bx; a.self.z = bz - 4;
   await delay(100);
@@ -122,18 +126,19 @@ try {
   snap = await waitFor(a, (m) => m.t === 'snap');
   if (hpOf(snap, b.welcome.id) !== 74) throw new Error('claim duplicado aplicó daño');
 
-  // A 80 m la SMG cae a 8 dmg, aunque el cliente intente reclamar 120.
-  send(a, { t: 's', x: -40, z: 0, y: 0, yaw: -Math.PI / 2,
+  // Sightline real de 48 m dentro de Fortaleza. Antes el test salía 19 m
+  // fuera del mapa y cruzaba ambos muros perimetrales.
+  send(a, { t: 's', x: -16, z: 24, y: 0, yaw: 0,
     st: 'idle', w: 'smg', am: 48, ar: 150 });
-  send(b, { t: 's', x: 40, z: 0, y: 0, yaw: Math.PI / 2,
+  send(b, { t: 's', x: -16, z: -24, y: 0, yaw: Math.PI,
     st: 'idle', w: 'smg', am: 49, ar: 150 });
   await delay(120);
-  send(a, { t: 'fire', w: 'smg', o: [-40, 1.1, 0], p: [40, 1.0, 0], d: [] });
+  send(a, { t: 'fire', w: 'smg', o: [-16, 1.1, 24], p: [-16, 1.0, -24], d: [] });
   send(a, { t: 'hit', target: b.welcome.id, dmg: 120, part: 'body', gib: 0,
-    p: [40, 1.0, 0] });
+    p: [-16, 1.0, -24] });
   a.messages.length = 0;
   snap = await waitFor(a, (m) => m.t === 'snap' && hpOf(m, b.welcome.id) < 74);
-  if (hpOf(snap, b.welcome.id) !== 66) {
+  if (hpOf(snap, b.welcome.id) !== 65) {
     throw new Error(`falloff SMG autoritativo incorrecto: hp=${hpOf(snap, b.welcome.id)}`);
   }
 
@@ -161,9 +166,12 @@ try {
 
   // Romper la protección del target y dejar transcurrir la cadencia global
   // desde el disparo de escopeta anterior.
+  const dx = 3, dz = 4;
+  send(d, { t: 's', x: dx, z: dz, y: 0, yaw: Math.PI,
+    st: 'idle', w: 'smg', am: 50, ar: 150 });
+  d.self.x = dx; d.self.z = dz;
   send(d, firePacket(d, a));
   await delay(1550);
-  const dx = d.self.x, dz = d.self.z;
   send(a, { t: 's', x: dx, z: dz - 4, y: 0, yaw: 0,
     st: 'idle', w: 'sniper', am: 1, ar: 5 });
   a.self.x = dx; a.self.z = dz - 4;
@@ -186,9 +194,12 @@ try {
   const bRespawn = await waitFor(a,
     (m) => m.t === 'respawn' && m.id === b.welcome.id, 6500);
   b.self = { ...b.self, ...bRespawn.spawn };
+  const rx = 3, rz = 4;
+  send(b, { t: 's', x: rx, z: rz, y: 0, yaw: Math.PI,
+    st: 'idle', w: 'smg', am: 50, ar: 150 });
+  b.self.x = rx; b.self.z = rz;
   send(b, firePacket(b, a));
   await delay(80);
-  const rx = b.self.x, rz = b.self.z;
   send(a, { t: 's', x: rx, z: rz - 4, y: 0, yaw: 0,
     st: 'idle', w: 'sniper', am: 1, ar: 4 });
   a.self.x = rx; a.self.z = rz - 4;
