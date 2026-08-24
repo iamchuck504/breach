@@ -58,6 +58,19 @@ check('cohetes reutilizan geometrías y materiales GPU',
   firstResources.length === secondResources.length && firstResources.every((r, i) =>
     r[0] === secondResources[i][0] && r[1] === secondResources[i][1]));
 
+// En online el mesh se predice, pero ni paredes ni jugadores locales pueden
+// detonarlo antes de la confirmación autoritativa.
+rockets.clear(); worldHit = { t: 0.05, normal: { x: 0, y: 0, z: 1 }, surface: 'metal' };
+let predictedBoom = false;
+rockets.fire({ x: 0, y: 1, z: 0 }, { x: 0, y: 0, z: -1 },
+  true, null, 'client:1', true);
+rockets.update(0.25, [{ id: 'victim', x: 0, y: 0, z: -0.2, alive: true }],
+  () => { predictedBoom = true; });
+const bound = rockets.bindId('client:1', 'r77');
+const removed = rockets.remove('r77');
+check('predicción online espera detonación del servidor',
+  !predictedBoom && bound && removed && rockets.list.length === 0);
+
 // La explosión debe crear una lectura más rica, scorch persistente y limpiar
 // todos los objetos temporales después de su TTL.
 const fxScene = new THREE.Scene();

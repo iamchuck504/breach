@@ -17,6 +17,34 @@ function geometry(layout) {
   return cache.get(layout);
 }
 
+function pointInsideBox(box, point) {
+  return point.x >= box.minx && point.x <= box.maxx &&
+    point.z >= box.minz && point.z <= box.maxz &&
+    point.y >= -0.1 && point.y <= box.h;
+}
+
+function pointInsideSegment(segment, point) {
+  if (point.y < -0.1 || point.y > segment.h) return false;
+  const tx = segment.b.x - segment.a.x, tz = segment.b.z - segment.a.z;
+  const len = Math.hypot(tx, tz); if (len < 0.001) return false;
+  const ux = tx / len, uz = tz / len;
+  const cx = (segment.a.x + segment.b.x) * 0.5;
+  const cz = (segment.a.z + segment.b.z) * 0.5;
+  const ox = point.x - cx, oz = point.z - cz;
+  return Math.abs(ox * ux + oz * uz) <= len * 0.5 &&
+    Math.abs(ox * segment.n.x + oz * segment.n.z) <= segment.half;
+}
+
+function pointInsideGeometry(layout, point) {
+  const g = geometry(layout);
+  if (g.boxes.some((box) => pointInsideBox(box, point)) ||
+      g.segments.some((segment) => pointInsideSegment(segment, point))) return true;
+  if (!g.helipad || point.y < -0.1 || point.y > g.helipad.height) return false;
+  const ax = Math.abs(point.x), az = Math.abs(point.z);
+  return ax <= g.helipad.edge && az <= g.helipad.edge &&
+    ax + az <= g.helipad.diagonal;
+}
+
 function slabHit(axes, maxDist) {
   let near = -Infinity, far = Infinity;
   for (const a of axes) {
@@ -152,4 +180,39 @@ export function mapSurfaceContact(layout, from, to, tolerance = 0.35) {
   const distance = ORIGIN_NUDGE + hit;
   return [from[0] + dir.x * distance, from[1] + dir.y * distance,
     from[2] + dir.z * distance];
+}
+
+// Primer contacto que debe detener un proyectil recto. Incluye el suelo y
+// detecta un muzzle que haya nacido dentro de geometría para que nunca pueda
+// salir por la cara opuesta de una pared/cover.
+export function projectileMapContact(layout, from, direction, maxDistance) {
+  if (!Array.isArray(from) || !Array.isArray(direction) ||
+      ![...from, ...direction, maxDistance].every(Number.isFinite) || maxDistance <= 0) return null;
+  const length = Math.hypot(direction[0], direction[1], direction[2]);
+  if (length < 0.001) return null;
+  const dir = { x: direction[0] / length, y: direction[1] / length,
+    z: direction[2] / length };
+  const origin = { x: from[0], y: from[1], z: from[2] };
+  if (pointInsideGeometry(layout, origin)) {
+    return { distance: 0, point: from.slice(), normal: [-dir.x, -dir.y, -dir.z],
+      surface: 'concrete' };
+  }
+  let distance = firstMapIntersection(layout, origin, dir, maxDistance);
+  let normal = [-dir.x, -dir.y, -dir.z];
+  let surface = 'concrete';
+  if (dir.y < -1e-9) {
+    const floorHit = -origin.y / dir.y;
+    if (floorHit >= 0.0001 && floorHit <= maxDistance &&
+        (distance === null || floorHit < distance)) {
+      distance = floorHit; normal = [0, 1, 0]; surface = 'concrete';
+    }
+  }
+  if (distance === null) return null;
+  return {
+    distance,
+    point: [origin.x + dir.x * distance, origin.y + dir.y * distance,
+      origin.z + dir.z * distance],
+    normal,
+    surface,
+  };
 }

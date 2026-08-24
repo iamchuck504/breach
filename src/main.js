@@ -119,6 +119,7 @@ const G = {
   editorReturn: null,  // id del mapa en edición durante un playtest
   specialRound: 0,     // ronda cuyo arma especial ya fue colocada
   specialClaimT: 0,    // anti-spam del reclamo online del pedestal
+  rocketSeq: 0,        // correlación entre predicción local y cohete autoritativo
   mode: null,          // null | 'practice' | 'online'
   rig: null,           // rig local
   player: null,        // controller local
@@ -1853,9 +1854,10 @@ function setupOnlineBots(roster) {
       t: 'nade', bot: bot.id,
       o: [origin.x, origin.y, origin.z], v: [velocity.x, velocity.y, velocity.z],
     }),
-    botRocket: (bot, origin, dir) => G.net?.send({
+    botRocket: (bot, origin, dir, cid) => G.net?.send({
       t: 'rocket', bot: bot.id,
       o: [origin.x, origin.y, origin.z], d: [dir.x, dir.y, dir.z],
+      ...(cid ? { cid } : {}),
     }),
     claimBotSpecial: (bot) => G.net?.send({ t: 'takeSpecial', bot: bot.id }),
   }, {
@@ -2091,17 +2093,46 @@ function bindNet(net) {
     }
   });
   net.on('rocket', (m) => {
-    if (!alive() || m.id === net.id) return;
+    if (G.mode !== 'online' || m.id === net.id) return;
     const okVec = (v) => Array.isArray(v) && v.length === 3 && v.every((n) => typeof n === 'number' && isFinite(n));
-    if (!okVec(m.o) || !okVec(m.d)) return;
-    // mine=false: se ve y se oye, pero el daño lo reclama su dueño
+    if (!okVec(m.o) || !okVec(m.d) || typeof m.rid !== 'string') return;
     const source = G.remotes.get(m.id) || G.onlineBots?.botById?.(m.id);
     rockets.fire(
       { x: m.o[0], y: m.o[1], z: m.o[2] },
       new THREE.Vector3(m.d[0], m.d[1], m.d[2]).normalize(),
       false,
       source ? { id: m.id, team: source.team } : null,
+      m.rid,
+      true,
     );
+  });
+  net.on('rocketAck', (m) => {
+    const okVec = (v) => Array.isArray(v) && v.length === 3 &&
+      v.every((n) => typeof n === 'number' && isFinite(n));
+    if (typeof m.rid !== 'string') return;
+    if (typeof m.cid === 'string' && rockets.bindId(m.cid, m.rid)) return;
+    if (!okVec(m.o) || !okVec(m.d)) return;
+    const source = G.onlineBots?.botById?.(m.id);
+    rockets.fire({ x: m.o[0], y: m.o[1], z: m.o[2] },
+      new THREE.Vector3(...m.d).normalize(), true,
+      source ? { id: m.id, team: source.team } : null, m.rid, true);
+  });
+  net.on('rocketReject', (m) => {
+    if (typeof m.cid === 'string') rockets.remove(m.cid);
+  });
+  net.on('rocketClear', () => rockets.clear());
+  net.on('rocketBoom', (m) => {
+    const okVec = (v) => Array.isArray(v) && v.length === 3 &&
+      v.every((n) => typeof n === 'number' && isFinite(n));
+    if (typeof m.rid !== 'string' || !okVec(m.p)) return;
+    rockets.remove(m.rid);
+    const normal = okVec(m.n) ? { x: m.n[0], y: m.n[1], z: m.n[2] } : undefined;
+    const visual = okVec(m.vp) ? { x: m.vp[0], y: m.vp[1], z: m.vp[2] }
+      : { x: m.p[0], y: m.p[1], z: m.p[2] };
+    explodeRocket({ x: m.p[0], y: m.p[1], z: m.p[2] }, false, null, {
+      kind: m.kind, direct: !!m.direct, targetId: m.target,
+      normal, surface: m.surface, visualPos: visual,
+    });
   });
   // arma especial online: el SERVIDOR decide quién se la lleva
   net.on('specialTaken', (m) => {
@@ -2888,12 +2919,15 @@ function fireShot() {
 
   // bazooka: proyectil REAL, sin hitscan — el cohete hace el daño al explotar
   if (def.projectile) {
-    rockets.fire({ x: muzzle.x, y: muzzle.y, z: muzzle.z }, baseDir);
+    const cid = G.mode === 'online' ? `p:${++G.rocketSeq}` : null;
+    rockets.fire({ x: muzzle.x, y: muzzle.y, z: muzzle.z }, baseDir,
+      true, null, cid, G.mode === 'online');
     // replicar el proyectil: los demás clientes lo ven volar y explotar
     G.net?.send({
       t: 'rocket',
       o: [muzzle.x, muzzle.y, muzzle.z],
       d: [baseDir.x, baseDir.y, baseDir.z],
+      ...(cid ? { cid } : {}),
     });
     if (G.spawnProt > 0) { G.spawnProt = 0; hud.hint(t('msg.protectionBroken'), 900); }
     effects.muzzleFlash(muzzle, true);

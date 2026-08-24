@@ -18,7 +18,9 @@ import {
   MAX_WS_PAYLOAD, MessageRateGuard, acceptMovement, consumeShotAmmo,
   createAmmoBudget, grantWeaponAmmo, refillNormalAmmo, resetMovementGuard,
 } from './guards.js';
-import { clipMapEndpoint, mapLineBlocked, mapSurfaceContact } from './map-geometry.js';
+import {
+  clipMapEndpoint, mapLineBlocked, mapSurfaceContact, projectileMapContact,
+} from './map-geometry.js';
 
 const PORT = process.env.PORT || 8787;
 const HP = TUNING.combat.hp, REGEN_DELAY = TUNING.combat.regenDelay,
@@ -40,8 +42,8 @@ const FIRE_RULES = {
     maxDamage: WD.pistol.dmg * WD.pistol.headMult },
   sniper: { interval: 60 / WD.sniper.rpm, range: WD.sniper.range,
     maxDamage: WD.sniper.dmg * WD.sniper.headMult },
-  // el splash puede alcanzar a varios: el presupuesto cubre 3 impactos y su
-  // "rango" al validar hits es el radio de la explosión, no el del vuelo
+  // La trayectoria/splash de bazooka se resuelve en activeRockets. La regla
+  // conserva cadencia/rango como fuente común de balance.
   bazooka: { interval: 60 / WD.bazooka.rpm, range: WD.bazooka.range,
     maxDamage: WD.bazooka.dmg * 3, hitRange: WD.bazooka.splashRadius + 0.8 },
   // tolerancia de red pequeña sobre los 1.82 m físicos del cliente
@@ -57,6 +59,9 @@ const clampDropWep = (w) => (VALID_WEAPONS.has(w) && w !== 'grenade' ? w : 'smg'
 const HIT_WINDOW = .28;
 const NADE_RELAY_INTERVAL = 60 / WD.grenade.rpm * .82;
 const ROCKET_RELAY_INTERVAL = FIRE_RULES.bazooka.interval * .82;
+const ROCKET_SPEED = WD.bazooka.projSpeed;
+const ROCKET_FUSE_RADIUS = 0.7;
+const ROCKET_SURFACE_OFFSET = 0.28;
 const VALID_STATES = new Set(['idle', 'run', 'roadie', 'dive', 'slide', 'cover_low',
   'cover_high', 'blind_over', 'blind_low_left', 'blind_low_right',
   'blind_high_left', 'blind_high_right', 'jump', 'flip', 'mantle', 'melee', 'dead']);
@@ -100,8 +105,8 @@ const server = http.createServer((req, res) => {
 });
 
 const wss = new WebSocketServer({ server, maxPayload: MAX_WS_PAYLOAD });
-const players = new Map(), bots = new Map(), drops = new Map();
-let nextId = 1, nextBotId = 1, nextDropId = 1, hostId = null;
+const players = new Map(), bots = new Map(), drops = new Map(), activeRockets = new Map();
+let nextId = 1, nextBotId = 1, nextDropId = 1, nextRocketId = 1, hostId = null;
 let settings = { ...DEFAULT_LOBBY_SETTINGS }, phase = 'empty', phaseTimer = null, startAt = 0, round = 0;
 let wins = { red: 0, blue: 0 }, pools = { red: 0, blue: 0 };
 
@@ -183,9 +188,17 @@ const firstSpecial = process.env.SPECIAL_FIRST_WEAPON === 'bazooka' ? 'bazooka' 
 function specialForRound(r) {
   return r % 2 === 1 ? firstSpecial : (firstSpecial === 'sniper' ? 'bazooka' : 'sniper');
 }
-function resetWorld() { drops.clear(); for (const c of CRATES) { c.up = true; c.t = 0; } }
+function clearActiveRockets(notify = true) {
+  if (!activeRockets.size) return;
+  activeRockets.clear();
+  if (notify && players.size) broadcastRaw({ t: 'rocketClear' });
+}
+function resetWorld() {
+  drops.clear(); clearActiveRockets();
+  for (const c of CRATES) { c.up = true; c.t = 0; }
+}
 function resetRoom() {
-  clearTimer(); players.clear(); bots.clear(); drops.clear(); hostId = null;
+  clearTimer(); players.clear(); bots.clear(); drops.clear(); activeRockets.clear(); hostId = null;
   settings = { ...DEFAULT_LOBBY_SETTINGS }; phase = 'empty'; startAt = 0; round = 0;
   wins = { red: 0, blue: 0 }; pools = { red: 0, blue: 0 }; resetWorld();
 }
@@ -235,17 +248,33 @@ function relayNade(sourceWs, shooter, msg) {
 
 function relayRocket(sourceWs, shooter, msg) {
   if (!shooter?.alive || phase !== 'playing' ||
-      shooter.w !== 'bazooka' || shooter.specialWep !== 'bazooka') return false;
+      shooter.specialWep !== 'bazooka') return false;
   const o = vec3(msg.o), d = vec3(msg.d); if (!o || !d) return false;
   const now = nowSec();
   if (now - shooter.lastRocketAt < ROCKET_RELAY_INTERVAL) return false;
   const horizontalOrigin = Math.hypot(o[0] - shooter.x, o[2] - shooter.z);
   const verticalOrigin = Math.abs(o[1] - ((shooter.y || 0) + 1.1));
   const len = Math.hypot(d[0], d[1], d[2]);
-  if (horizontalOrigin > 3 || verticalOrigin > 4 || len < 0.5 || len > 1.5) return false;
-  const dir = d.map((n) => +(n / len).toFixed(5));
-  shooter.lastRocketAt = now;
-  broadcastRawExcept(sourceWs, { t: 'rocket', id: shooter.id, o, d: dir });
+  if (horizontalOrigin > 2.2 || verticalOrigin > 2.2 || len < 0.5 || len > 1.5) return false;
+  if (!consumeShotAmmo(shooter, 'bazooka')) return false;
+  const dir = d.map((n) => +(n / len).toFixed(6));
+  const rid = `r${nextRocketId++}`;
+  const cid = typeof msg.cid === 'string' && /^[a-zA-Z0-9:_-]{1,40}$/.test(msg.cid)
+    ? msg.cid : null;
+  const staticContact = projectileMapContact(settings.map, o, dir, WD.bazooka.range);
+  activeRockets.set(rid, {
+    rid, shooter, shooterId: shooter.id, team: shooter.team,
+    origin: o, direction: dir, launchedAt: now, traveled: 0,
+    staticContact,
+  });
+  // La posesión autoritativa basta: un cambio de arma puede llegar un snapshot
+  // después que el click con latencia. El launch aprobado corrige ese desfase.
+  shooter.w = 'bazooka';
+  shooter.lastRocketAt = now; shooter.lastFireAt = now;
+  shooter.pendingShot = null; shooter.prot = 0;
+  const packet = { t: 'rocket', rid, id: shooter.id, o, d: dir };
+  broadcastRawExcept(sourceWs, packet);
+  send(sourceWs, { t: 'rocketAck', rid, id: shooter.id, cid, o, d: dir });
   return true;
 }
 function livesOf(team) { return pools[team] + allSlots().filter((p) => p.team === team && p.alive).length; }
@@ -296,6 +325,7 @@ function holdRoundResult(winner) {
   if (phase !== 'playing') return;
   clearTimer();
   phase = 'round-finish';
+  clearActiveRockets();
   // El servidor deja de aceptar combate inmediatamente, pero pospone el
   // anuncio para que todos los clientes vean completa la reacción final.
   phaseTimer = setTimeout(() => finishRound(winner), Math.max(0, ROUND_FINISH_HOLD) * 1000);
@@ -323,16 +353,15 @@ function registerFire(shooter, msg, isBotFire = false) {
   if (!shooter?.alive || phase !== 'playing') return false;
   const o = vec3(msg.o), pt = vec3(msg.p); if (!o || !pt) return false;
   const weapon = FIREABLE.has(msg.w) ? msg.w : 'smg', rule = FIRE_RULES[weapon], now = nowSec();
+  // La bazooka nace exclusivamente mediante `rocket`; aceptar un `fire` en
+  // el punto de explosión devolvería al cliente autoridad sobre la trayectoria.
+  if (weapon === 'bazooka') return false;
   // el melee no depende del arma en mano; el resto debe coincidir con ella
   if ((weapon !== 'melee' && weapon !== shooter.w) || now - shooter.lastFireAt < rule.interval * .82) return false;
-  // Un PROYECTIL explota lejos de quien lo lanzó: su "disparo" se registra en
-  // el punto de la explosión, así que no se le exige nacer junto al tirador
-  // (sí el resto: cadencia, arma en mano y alcance del splash).
-  const proj = weapon === 'bazooka';
   const melee = weapon === 'melee';
   const originTolerance = melee ? 0.9 : (isBotFire ? 6 : 5);
-  if (!proj && (Math.hypot(o[0] - shooter.x, o[2] - shooter.z) > originTolerance || Math.abs(o[1] - ((shooter.y || 0) + 1.1)) > (melee ? 1.1 : 4))) return false;
-  if (proj && Math.hypot(o[0] - shooter.x, o[2] - shooter.z) > rule.range + 4) return false;
+  if (Math.hypot(o[0] - shooter.x, o[2] - shooter.z) > originTolerance ||
+      Math.abs(o[1] - ((shooter.y || 0) + 1.1)) > (melee ? 1.1 : 4)) return false;
   if (Math.hypot(pt[0] - o[0], pt[1] - o[1], pt[2] - o[2]) > rule.range + (melee ? 0.22 : 2)) return false;
   if (melee) {
     const dx = pt[0] - o[0], dz = pt[2] - o[2], len = Math.hypot(dx, dz);
@@ -340,7 +369,7 @@ function registerFire(shooter, msg, isBotFire = false) {
     if (len > 0.001 && (dx * fx + dz * fz) / len < Math.cos(62 * Math.PI / 180)) return false;
   }
   if (!consumeShotAmmo(shooter, weapon)) return false;
-  const endpoint = proj ? pt : clipMapEndpoint(settings.map, o, pt);
+  const endpoint = clipMapEndpoint(settings.map, o, pt);
   // Solo retransmitir impactos que realmente coincidan con la primera
   // superficie física de ese rayo. Evita decals suspendidos o pintados a
   // través del mapa por un cliente modificado.
@@ -480,6 +509,50 @@ function claimMatchesShot(shot, point) {
   return dot >= Math.cos(degrees * Math.PI / 180);
 }
 
+function commitAuthoritativeDamage(shooter, target, shot, msg, dist, authoritative,
+  now, deferRoundCheck = false) {
+  const dmg = Math.min(authoritative.dmg, shot.remainingDamage);
+  if (dmg <= 0) return { applied: false, killed: false };
+  const part = authoritative.part;
+  shot.hitIds.add(target.id); shot.remainingDamage -= dmg;
+  target.hp -= dmg; target.lastDamage = now;
+  if (shot.wep === 'melee') {
+    const p = vec3(msg.p) || [target.x, (target.y || 0) + 1, target.z];
+    broadcastRaw({ t: 'hitConfirm', target: target.id, from: shooter.id,
+      w: 'melee', dmg: Math.round(dmg), p });
+  }
+  if (target.hp > 0) {
+    if (shot.wep === 'bazooka') {
+      const p = vec3(msg.p) || [target.x, (target.y || 0) + 1, target.z];
+      broadcastRaw({ t: 'hitConfirm', target: target.id, from: shooter.id,
+        w: 'bazooka', dmg: Math.round(dmg), p, ep: shot.origin });
+    }
+    return { applied: true, killed: false };
+  }
+  target.hp = 0; target.alive = false; target.deaths++;
+  if (target.id !== shooter.id) shooter.kills++;
+  const gib = shot.wep === 'shotgun' && dist <= FIRE_RULES.shotgun.gibRange && !!msg.gib;
+  const sniperHeadshot = isSniperHeadshotDeath(shot.wep, part);
+  const directRocket = shot.wep === 'bazooka'
+    ? shot.directTargetId === target.id
+    : dist <= 0.82;
+  const explosiveLevel = rocketDeathLevel(shot.wep, dist, dmg, directRocket);
+  const deathPoint = validatedDeathPoint(target, part, vec3(msg.p));
+  broadcastRaw({ t: 'death', target: target.id, from: shooter.id, gib: gib ? 1 : 0,
+    hs: sniperHeadshot ? 1 : 0, ex: explosiveLevel, w: shot.wep,
+    dist: +dist.toFixed(2), dmg: Math.round(dmg), part,
+    ...(deathPoint ? { p: deathPoint } : {}),
+    ...(shot.wep === 'bazooka' ? { ep: shot.origin } : {}),
+    kn: shooter.name, kt: shooter.team, vn: target.name, vt: target.team });
+  dropWeapon(target);
+  target.specialWep = null;
+  if (pools[target.team] > 0) { pools[target.team]--; target.respawnAt = now + RESPAWN_TIME; }
+  else target.respawnAt = 0;
+  broadcastRaw({ t: 'score', ...livesState(), wins: { ...wins } });
+  if (!deferRoundCheck) checkRoundEnd();
+  return { applied: true, killed: true };
+}
+
 function registerHit(shooter, msg) {
   const target = players.get(msg.target) || bots.get(msg.target);
   const shot = shooter?.pendingShot, rule = shot ? FIRE_RULES[shot.wep] : null, now = nowSec();
@@ -500,45 +573,100 @@ function registerHit(shooter, msg) {
     if (len > 0.001 && (dx * fx + dz * fz) / len < Math.cos(58 * Math.PI / 180)) return;
   }
   const authoritative = authoritativeDamage(shooter, target, shot, msg, dist, pose);
-  const dmg = Math.min(authoritative.dmg, shot.remainingDamage); if (dmg <= 0) return;
-  const part = authoritative.part;
-  shot.hitIds.add(target.id); shot.remainingDamage -= dmg; target.hp -= dmg; target.lastDamage = now;
-  if (shot.wep === 'melee') {
-    const p = vec3(msg.p) || [target.x, (target.y || 0) + 1, target.z];
-    broadcastRaw({ t: 'hitConfirm', target: target.id, from: shooter.id,
-      w: 'melee', dmg: Math.round(dmg), p });
+  commitAuthoritativeDamage(shooter, target, shot, msg, dist, authoritative, now);
+}
+
+function rocketPoint(rocket, distance) {
+  return [
+    rocket.origin[0] + rocket.direction[0] * distance,
+    rocket.origin[1] + rocket.direction[1] * distance,
+    rocket.origin[2] + rocket.direction[2] * distance,
+  ];
+}
+
+function firstRocketTarget(rocket, fromDistance, toDistance, now) {
+  if (toDistance < fromDistance) return null;
+  let best = null;
+  for (const target of allSlots()) {
+    if (!target.alive || target.prot > now || target.id === rocket.shooterId ||
+        target.team === rocket.team) continue;
+    const centerY = (target.y || 0) + 0.9;
+    const rel = [target.x - rocket.origin[0], centerY - rocket.origin[1],
+      target.z - rocket.origin[2]];
+    const along = rel[0] * rocket.direction[0] + rel[1] * rocket.direction[1] +
+      rel[2] * rocket.direction[2];
+    const distance = Math.max(fromDistance, Math.min(toDistance, along));
+    const point = rocketPoint(rocket, distance);
+    const separation = Math.hypot(target.x - point[0], centerY - point[1], target.z - point[2]);
+    if (separation > ROCKET_FUSE_RADIUS || (best && distance >= best.distance)) continue;
+    best = { target, distance };
   }
-  if (target.hp > 0) {
-    // La posición de la explosión viene del pendingShot validado, no del
-    // cliente que reclama el daño. Así host y clientes reproducen la misma
-    // reacción no letal sin permitir que el tirador invente el empuje.
-    if (shot.wep === 'bazooka') {
-      const p = vec3(msg.p) || [target.x, (target.y || 0) + 1, target.z];
-      broadcastRaw({ t: 'hitConfirm', target: target.id, from: shooter.id,
-        w: 'bazooka', dmg: Math.round(dmg), p, ep: shot.origin });
+  return best;
+}
+
+function detonateRocket(rocket, distance, kind, directTarget = null) {
+  if (!activeRockets.delete(rocket.rid)) return;
+  const contact = kind === 'world' && rocket.staticContact
+    ? rocket.staticContact.point.slice()
+    : rocketPoint(rocket, distance);
+  const blast = kind === 'world'
+    ? contact.map((n, i) => n - rocket.direction[i] * ROCKET_SURFACE_OFFSET)
+    : contact.slice();
+  const normal = kind === 'world' && rocket.staticContact?.normal
+    ? rocket.staticContact.normal
+    : rocket.direction.map((n) => -n);
+  broadcastRaw({
+    t: 'rocketBoom', rid: rocket.rid, id: rocket.shooterId,
+    p: blast, vp: contact, n: normal,
+    kind, direct: directTarget ? 1 : 0,
+    ...(directTarget ? { target: directTarget.id } : {}),
+    surface: rocket.staticContact?.surface || (directTarget ? 'flesh' : 'concrete'),
+  });
+
+  if (phase !== 'playing') return;
+  const now = nowSec();
+  const shot = {
+    at: now, wep: 'bazooka', origin: blast, endpoint: blast, direction: rocket.direction,
+    length: 0, remainingDamage: Infinity, hitIds: new Set(),
+    directTargetId: directTarget?.id || null,
+  };
+  let killed = false;
+  for (const target of allSlots()) {
+    if (!target.alive || target.prot > now) continue;
+    const self = target.id === rocket.shooterId;
+    if (target.team === rocket.team && !self) continue;
+    const point = [target.x, (target.y || 0) + 0.9, target.z];
+    const dist = distance3(blast, point);
+    if (dist > WD.bazooka.splashRadius ||
+        mapLineBlocked(settings.map, blast, point, 0.22)) continue;
+    const authoritative = {
+      dmg: rocketSplashDamage(WD.bazooka, dist, self), part: 'body',
+    };
+    const result = commitAuthoritativeDamage(rocket.shooter, target, shot,
+      { p: point, gib: 0 }, dist, authoritative, now, true);
+    killed ||= result.killed;
+  }
+  if (killed) checkRoundEnd();
+}
+
+function tickRockets(now) {
+  for (const rocket of [...activeRockets.values()]) {
+    const nextDistance = Math.min(WD.bazooka.range,
+      Math.max(rocket.traveled, (now - rocket.launchedAt) * ROCKET_SPEED));
+    const staticDistance = rocket.staticContact?.distance ?? Infinity;
+    const segmentEnd = Math.min(nextDistance, staticDistance, WD.bazooka.range);
+    const direct = firstRocketTarget(rocket, rocket.traveled, segmentEnd, now);
+    if (direct && direct.distance < staticDistance - 0.001) {
+      detonateRocket(rocket, direct.distance, 'direct', direct.target); continue;
     }
-    return;
+    if (rocket.staticContact && nextDistance >= staticDistance) {
+      detonateRocket(rocket, staticDistance, 'world'); continue;
+    }
+    if (nextDistance >= WD.bazooka.range) {
+      detonateRocket(rocket, WD.bazooka.range, 'air'); continue;
+    }
+    rocket.traveled = nextDistance;
   }
-  target.hp = 0; target.alive = false; target.deaths++;
-  if (target.id !== shooter.id) shooter.kills++;
-  const gib = shot.wep === 'shotgun' && dist <= FIRE_RULES.shotgun.gibRange && !!msg.gib;
-  // El servidor decide la reacción: nunca acepta un flag de headshot/gore
-  // enviado por el cliente. `part` ya fue recalculado por validatedPart y
-  // esta rama solo se alcanza después de confirmar la muerte.
-  const sniperHeadshot = isSniperHeadshotDeath(shot.wep, part);
-  const explosiveLevel = rocketDeathLevel(shot.wep, dist, dmg, dist <= 0.82);
-  const deathPoint = validatedDeathPoint(target, part, vec3(msg.p));
-  broadcastRaw({ t: 'death', target: target.id, from: shooter.id, gib: gib ? 1 : 0,
-    hs: sniperHeadshot ? 1 : 0, ex: explosiveLevel, w: shot.wep,
-    dist: +dist.toFixed(2), dmg: Math.round(dmg), part,
-    ...(deathPoint ? { p: deathPoint } : {}),
-    ...(shot.wep === 'bazooka' ? { ep: shot.origin } : {}),
-    kn: shooter.name, kt: shooter.team, vn: target.name, vt: target.team });
-  dropWeapon(target);
-  target.specialWep = null;
-  if (pools[target.team] > 0) { pools[target.team]--; target.respawnAt = now + RESPAWN_TIME; }
-  else target.respawnAt = 0;
-  broadcastRaw({ t: 'score', ...livesState(), wins: { ...wins } }); checkRoundEnd();
 }
 
 wss.on('connection', (ws) => {
@@ -654,9 +782,12 @@ wss.on('connection', (ws) => {
       b.w = requestedWep; registerFire(b, msg, true);
     } } return; }
     // Proyectiles visuales: quien dispara ya los simuló localmente. El server
-    // valida origen/cadencia/inventario y los reenvía solo a los demás.
+    // valida lanzamiento, simula trayectoria/impacto y decide todo el splash.
     if (msg.t === 'rocket') {
-      relayRocket(ws, eventShooter(me, msg), msg);
+      if (!relayRocket(ws, eventShooter(me, msg), msg)) {
+        const cid = typeof msg.cid === 'string' ? msg.cid.slice(0, 40) : null;
+        send(ws, { t: 'rocketReject', cid });
+      }
       return;
     }
     if (msg.t === 'nade') {
@@ -708,6 +839,7 @@ wss.on('connection', (ws) => {
 
 setInterval(() => {
   const now = nowSec();
+  if (phase === 'playing') tickRockets(now);
   if (phase === 'playing') for (const p of allSlots()) {
     if (p.alive && p.hp < HP && now - p.lastDamage > REGEN_DELAY) p.hp = Math.min(HP, p.hp + REGEN_RATE / TICK_HZ);
     if (!p.alive && p.respawnAt > 0 && now >= p.respawnAt) {

@@ -134,17 +134,17 @@ export class Rockets {
     return g;
   }
 
-  // mine=false: cohete de OTRO jugador (online). Vuela y explota igual, pero
-  // su daño lo reclama su dueño — sin esto cada cliente aplicaría el splash.
-  // owner: {team, id} cuando lo lanza un bot (el splash respeta bandos).
-  fire(o, dir, mine = true, owner = null) {
+  // En local, mine/owner deciden quién aplica el daño. En online,
+  // authoritative=true conserva solo la predicción visual: el servidor envía
+  // después el contacto y el splash definitivos.
+  fire(o, dir, mine = true, owner = null, id = null, authoritative = false) {
     const d = TUNING.weapons.bazooka;
     const mesh = this._buildMesh();
     mesh.position.set(o.x, o.y, o.z);
     mesh.lookAt(o.x + dir.x, o.y + dir.y, o.z + dir.z);
     this.scene.add(mesh);
     this.list.push({
-      mesh, mine, owner,
+      mesh, mine, owner, id, authoritative,
       x: o.x, y: o.y, z: o.z,
       vx: dir.x * d.projSpeed, vy: dir.y * d.projSpeed, vz: dir.z * d.projSpeed,
       t: 0, maxT: (d.range / d.projSpeed) + 0.2,
@@ -156,6 +156,18 @@ export class Rockets {
     for (let i = this.list.length - 1; i >= 0; i--) {
       const r = this.list[i];
       r.t += dt;
+      // Online, el servidor decide contacto y detonación. El cliente conserva
+      // movimiento inmediato del mesh, pero nunca inventa el punto de splash.
+      if (r.authoritative) {
+        r.x += r.vx * dt; r.y += r.vy * dt; r.z += r.vz * dt;
+        r.mesh.position.set(r.x, r.y, r.z);
+        // Fallback de limpieza: WebSocket es fiable, pero un cambio de fase o
+        // desconexión no debe dejar proyectiles visuales para siempre.
+        if (r.t > r.maxT + 2) {
+          this.scene.remove(r.mesh); this.list.splice(i, 1);
+        }
+        continue;
+      }
       const step = Math.hypot(r.vx, r.vy, r.vz) * dt;
       TMP_V.set(r.x, r.y, r.z);
       TMP_D.set(r.vx, r.vy, r.vz).normalize();
@@ -231,6 +243,22 @@ export class Rockets {
         r.mesh.position.set(r.x, r.y, r.z);
       }
     }
+  }
+
+  bindId(clientId, serverId) {
+    const rocket = this.list.find((r) => r.id === clientId);
+    if (!rocket) return false;
+    rocket.id = serverId;
+    rocket.authoritative = true;
+    return true;
+  }
+
+  remove(id) {
+    const index = this.list.findIndex((r) => r.id === id);
+    if (index < 0) return false;
+    this.scene.remove(this.list[index].mesh);
+    this.list.splice(index, 1);
+    return true;
   }
 
   clear() {

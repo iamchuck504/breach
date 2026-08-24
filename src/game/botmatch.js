@@ -1067,6 +1067,7 @@ export class BotMatch {
     this.enemyHeat = { red: [0, 0, 0], blue: [0, 0, 0] };
     this.specialSeeker = { red: null, blue: null }; // un solo bot por equipo va al pedestal
     this.tacticalClaims = new Map(); // destinos/ángulos reservados por bot
+    this._rocketSeq = 0;
 
     if (!this.external) this.stats.set('player', {
       name: cb.playerName, team: this.playerTeam, kills: 0, deaths: 0,
@@ -1714,11 +1715,12 @@ export class BotMatch {
     _v1.set(bot.pos.x, bot.y + 1.35, bot.pos.z);
     _v2.set(enemy.x - bot.pos.x, (enemy.y ?? 0) + 0.9 - (bot.y + 1.35), enemy.z - bot.pos.z).normalize();
     this.cb.audio?.gun?.('bazooka', { position: _v1.clone() });
+    const cid = this.external ? `b:${bot.id}:${++this._rocketSeq}` : null;
     rockets.fire({ x: _v1.x, y: _v1.y, z: _v1.z }, _v2.clone(), true,
-      { team: bot.team, id: bot.id, name: bot.name });
+      { team: bot.team, id: bot.id, name: bot.name }, cid, this.external);
     this.cb.botRocket?.(bot,
       { x: _v1.x, y: _v1.y, z: _v1.z },
-      { x: _v2.x, y: _v2.y, z: _v2.z });
+      { x: _v2.x, y: _v2.y, z: _v2.z }, cid);
   }
 
   // El bot toma el arma especial del pedestal (mismo pedestal y misma regla
