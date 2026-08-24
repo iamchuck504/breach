@@ -271,7 +271,7 @@ const dieIn = async (tag, prep, expectState = null, keepPosition = false) => {
     problems.push(`MUERTE ${tag}: apariencia de cadáver no se restauró al revivir`);
   }
   await flush('muerte-' + tag);
-  console.log(`muerte ${tag}: st=${res.stAtDeath} disp=${post.disp ?? '?'}m`);
+  console.log(`muerte ${tag}: st=${res.stAtDeath} disp=${post.disp ?? '?'}m mute=${post.corpseAmount ?? '?'}`);
 };
 
 // posicionarse frente a una cara LOW real (mismo método probado del smoke)

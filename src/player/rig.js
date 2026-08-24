@@ -14,6 +14,8 @@ import { isSniperHeadshotDeath, rocketDeathLevel } from '../combat/death-reactio
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
+const monotonicSeconds = () => (globalThis.performance?.now?.() ?? Date.now()) / 1000;
+
 function extrudedPlate(points, bevel = 0.065) {
   const shape = new THREE.Shape();
   shape.moveTo(points[0][0], points[0][1]);
@@ -993,6 +995,10 @@ export class Rig {
 
     this.rag = {
       t: 0,
+      // El tratamiento visual es PRESENTACIÓN, no física. Mantener un reloj
+      // monotónico evita que un hitch o una pestaña ralentizada deje durante
+      // varios segundos un cadáver con los colores de un jugador vivo.
+      visualStartedAt: monotonicSeconds(),
       // reacción al impacto ANTES de perder el cuerpo: el golpe se "encaja"
       // un instante (más potencia = más encaje) mientras el paso trastabilla
       reactT: 0.09 + power * 0.09,
@@ -1621,7 +1627,7 @@ export class Rig {
     if (p.state === 'dead' && this.rag) {
       const r = this.rag;
       r.t += dt;
-      this._updateCorpseVisual(r.t);
+      this._updateCorpseVisual(Math.max(r.t, monotonicSeconds() - r.visualStartedAt));
       const fr = Math.exp(-6 * dt);
       r.vx *= fr; r.vz *= fr;
       r.ox += r.vx * dt; r.oz += r.vz * dt;

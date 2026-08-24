@@ -34,9 +34,11 @@
     "check:lobby": "node scripts/check-lobby.mjs",
     "check:online-map-items": "node scripts/check-online-map-items.mjs",
     "check:mp-bot-special": "node scripts/check-mp-bot-special.mjs",
+    "check:online-projectiles": "node scripts/check-online-projectiles.mjs",
     "check:editor": "node scripts/check-editor.mjs",
     "check:editor-sanity": "node scripts/check-editor-sanity.mjs",
-    "test": "npm run check:controller && npm run check:menu-controller && npm run check:reload-cancel && npm run check:melee && npm run check:melee-net && npm run check:round-flow && npm run check:combat-orientation && npm run check:camera-resume && npm run check:cover-fire && npm run check:impacts && npm run check:spatial-audio && npm run check:i18n && npm run check:shotgun-pattern && npm run check:warmup && npm run check:lobby && npm run check:online-map-items && npm run check:mp-bot-special && npm run check:online-fire && npm run check:weapon-balance && npm run check:sniper && npm run check:bazooka && npm run check:weapon-wheel"
+    "test": "npm run check:controller && npm run check:menu-controller && npm run check:reload-cancel && npm run check:melee && npm run check:melee-net && npm run check:round-flow && npm run check:combat-orientation && npm run check:camera-resume && npm run check:cover-fire && npm run check:impacts && npm run check:spatial-audio && npm run check:i18n && npm run check:shotgun-pattern && npm run check:warmup && npm run check:lobby && npm run check:online-map-items && npm run check:mp-bot-special && npm run check:online-projectiles && npm run check:online-fire && npm run check:weapon-balance && npm run check:sniper && npm run check:bazooka && npm run check:weapon-wheel",
+    "verify": "npm run build && npm test"
   },
   "dependencies": {
     "lil-gui": "^0.20.0",

@@ -50,6 +50,8 @@ const clampWep = (w) => (VALID_WEAPONS.has(w) ? w : 'smg');
 // la granada no es un arma soltable: el drop degrada a smg
 const clampDropWep = (w) => (VALID_WEAPONS.has(w) && w !== 'grenade' ? w : 'smg');
 const HIT_WINDOW = .28;
+const NADE_RELAY_INTERVAL = 60 / WD.grenade.rpm * .82;
+const ROCKET_RELAY_INTERVAL = FIRE_RULES.bazooka.interval * .82;
 const VALID_STATES = new Set(['idle', 'run', 'roadie', 'dive', 'slide', 'cover_low',
   'cover_high', 'blind_over', 'blind_low_left', 'blind_low_right',
   'blind_high_left', 'blind_high_right', 'jump', 'flip', 'mantle', 'melee', 'dead']);
@@ -79,6 +81,10 @@ const nowSec = () => Date.now() / 1000;
 const send = (ws, obj) => { if (ws?.readyState === 1) ws.send(JSON.stringify(obj)); };
 function sendRaw(ws, data) { if (ws?.readyState === 1) ws.send(data); }
 function broadcastRaw(obj) { const data = JSON.stringify(obj); for (const p of players.values()) sendRaw(p.ws, data); }
+function broadcastRawExcept(ws, obj) {
+  const data = JSON.stringify(obj);
+  for (const p of players.values()) if (p.ws !== ws) sendRaw(p.ws, data);
+}
 const allSlots = () => [...players.values(), ...bots.values()];
 const inMatch = () => ['intro', 'countdown', 'playing', 'round-finish', 'intermission', 'final'].includes(phase);
 const isHost = (p) => !!p && p.id === hostId;
@@ -118,7 +124,10 @@ function clearTimer() { if (phaseTimer) clearTimeout(phaseTimer); phaseTimer = n
 // bazooka). El servidor es la ÚNICA autoridad de quién se la lleva: dos
 // jugadores que la reclaman a la vez producen un solo ganador.
 let special = { wep: null, taken: true, by: null };
-function specialForRound(r) { return r % 2 === 1 ? 'sniper' : 'bazooka'; }
+const firstSpecial = process.env.SPECIAL_FIRST_WEAPON === 'bazooka' ? 'bazooka' : 'sniper';
+function specialForRound(r) {
+  return r % 2 === 1 ? firstSpecial : (firstSpecial === 'sniper' ? 'bazooka' : 'sniper');
+}
 function resetWorld() { drops.clear(); for (const c of CRATES) { c.up = true; c.t = 0; } }
 function resetRoom() {
   clearTimer(); players.clear(); bots.clear(); drops.clear(); hostId = null;
@@ -139,8 +148,47 @@ function freshCombatState(p, spawn) {
   Object.assign(p, { x: spawn.x, z: spawn.z, y: 0, yaw: spawn.yaw, st: 'idle', aim: 0,
     p: 0, w: 'smg', sp: 0, hp: HP, alive: true,
     specialWep: null,
+    nades: p.bot ? 1 : WD.grenade.mag,
+    lastNadeAt: -Infinity, lastRocketAt: -Infinity,
     lastDamage: 0, respawnAt: 0, prot: startAt + SPAWN_PROT,
     lastFireAt: -Infinity, pendingShot: null });
+}
+
+function eventShooter(me, msg) {
+  if (msg.bot === undefined || msg.bot === null) return me;
+  if (!isHost(me)) return null;
+  return bots.get(String(msg.bot)) || null;
+}
+
+function relayNade(sourceWs, shooter, msg) {
+  if (!shooter?.alive || phase !== 'playing' || shooter.nades <= 0) return false;
+  const o = vec3(msg.o), v = vec3(msg.v); if (!o || !v) return false;
+  const now = nowSec();
+  if (now - shooter.lastNadeAt < NADE_RELAY_INTERVAL) return false;
+  const horizontalOrigin = Math.hypot(o[0] - shooter.x, o[2] - shooter.z);
+  const verticalOrigin = Math.abs(o[1] - ((shooter.y || 0) + 1.1));
+  const speed = Math.hypot(v[0], v[1], v[2]);
+  if (horizontalOrigin > 2.5 || verticalOrigin > 3 || speed < 0.5 || speed > 18) return false;
+  shooter.lastNadeAt = now;
+  shooter.nades--;
+  broadcastRawExcept(sourceWs, { t: 'nade', id: shooter.id, o, v });
+  return true;
+}
+
+function relayRocket(sourceWs, shooter, msg) {
+  if (!shooter?.alive || phase !== 'playing' ||
+      shooter.w !== 'bazooka' || shooter.specialWep !== 'bazooka') return false;
+  const o = vec3(msg.o), d = vec3(msg.d); if (!o || !d) return false;
+  const now = nowSec();
+  if (now - shooter.lastRocketAt < ROCKET_RELAY_INTERVAL) return false;
+  const horizontalOrigin = Math.hypot(o[0] - shooter.x, o[2] - shooter.z);
+  const verticalOrigin = Math.abs(o[1] - ((shooter.y || 0) + 1.1));
+  const len = Math.hypot(d[0], d[1], d[2]);
+  if (horizontalOrigin > 3 || verticalOrigin > 4 || len < 0.5 || len > 1.5) return false;
+  const dir = d.map((n) => +(n / len).toFixed(5));
+  shooter.lastRocketAt = now;
+  broadcastRawExcept(sourceWs, { t: 'rocket', id: shooter.id, o, d: dir });
+  return true;
 }
 function livesOf(team) { return pools[team] + allSlots().filter((p) => p.team === team && p.alive).length; }
 function livesState() { return { red: livesOf('red'), blue: livesOf('blue') }; }
@@ -491,11 +539,14 @@ wss.on('connection', (ws) => {
       if (SPECIAL_WEAPONS.has(requestedWep) && b.specialWep !== requestedWep) return;
       b.w = requestedWep; registerFire(b, msg, true);
     } } return; }
-    // granada de humo: solo visual/oclusión — el server la reenvía y cada
-    // cliente simula el mismo proyectil determinista
+    // Proyectiles visuales: quien dispara ya los simuló localmente. El server
+    // valida origen/cadencia/inventario y los reenvía solo a los demás.
+    if (msg.t === 'rocket') {
+      relayRocket(ws, eventShooter(me, msg), msg);
+      return;
+    }
     if (msg.t === 'nade') {
-      const o = vec3(msg.o), v = vec3(msg.v);
-      if (me?.alive && phase === 'playing' && o && v) broadcastRaw({ t: 'nade', id: me.id, o, v });
+      relayNade(ws, eventShooter(me, msg), msg);
       return;
     }
     if (msg.t === 'hit') { registerHit(me, msg); return; }
@@ -544,6 +595,8 @@ setInterval(() => {
     if (p.alive && p.hp < HP && now - p.lastDamage > REGEN_DELAY) p.hp = Math.min(HP, p.hp + REGEN_RATE / TICK_HZ);
     if (!p.alive && p.respawnAt > 0 && now >= p.respawnAt) {
       p.alive = true; p.hp = HP; p.respawnAt = 0; p.prot = now + SPAWN_PROT;
+      p.w = 'smg'; p.specialWep = null; p.nades = p.bot ? 1 : WD.grenade.mag;
+      p.lastNadeAt = -Infinity; p.lastRocketAt = -Infinity;
       const spawn = pickSpawn(p.team); Object.assign(p, { x: spawn.x, z: spawn.z, y: 0, yaw: spawn.yaw });
       broadcastRaw({ t: 'respawn', id: p.id, spawn });
     }

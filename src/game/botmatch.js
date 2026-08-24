@@ -1661,10 +1661,10 @@ export class BotMatch {
     const speed = TUNING.weapons.grenade.throwSpeed * Math.min(1, reach / 8);
     bot.nades--;
     bot.nadeCd = 12 + Math.random() * 8;
-    smoke.throwNade(
-      { x: bot.pos.x + nx * 0.5, y: bot.y + 1.2, z: bot.pos.z + nz * 0.5 },
-      { x: nx * speed, y: TUNING.weapons.grenade.throwUp * 0.8, z: nz * speed },
-    );
+    const origin = { x: bot.pos.x + nx * 0.5, y: bot.y + 1.2, z: bot.pos.z + nz * 0.5 };
+    const velocity = { x: nx * speed, y: TUNING.weapons.grenade.throwUp * 0.8, z: nz * speed };
+    smoke.throwNade(origin, velocity);
+    this.cb.botNade?.(bot, origin, velocity);
     return true;
   }
 
@@ -1716,6 +1716,9 @@ export class BotMatch {
     this.cb.audio?.gun?.('bazooka', { position: _v1.clone() });
     rockets.fire({ x: _v1.x, y: _v1.y, z: _v1.z }, _v2.clone(), true,
       { team: bot.team, id: bot.id, name: bot.name });
+    this.cb.botRocket?.(bot,
+      { x: _v1.x, y: _v1.y, z: _v1.z },
+      { x: _v2.x, y: _v2.y, z: _v2.z });
   }
 
   // El bot toma el arma especial del pedestal (mismo pedestal y misma regla

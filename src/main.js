@@ -1849,6 +1849,14 @@ function setupOnlineBots(roster) {
     botFire: (bot, origin, point, wep, impacts) => G.net?.botFire(bot.id, origin, point, wep, impacts),
     botHit: (bot, targetId, dmg, part, gib, point, meta) =>
       G.net?.botHit(bot.id, targetId, dmg, part, gib, point, meta),
+    botNade: (bot, origin, velocity) => G.net?.send({
+      t: 'nade', bot: bot.id,
+      o: [origin.x, origin.y, origin.z], v: [velocity.x, velocity.y, velocity.z],
+    }),
+    botRocket: (bot, origin, dir) => G.net?.send({
+      t: 'rocket', bot: bot.id,
+      o: [origin.x, origin.y, origin.z], d: [dir.x, dir.y, dir.z],
+    }),
     claimBotSpecial: (bot) => G.net?.send({ t: 'takeSpecial', bot: bot.id }),
   }, {
     external: true, playerTeam: G.team, rounds: G.onlineSettings.rounds, lives: G.onlineSettings.lives,
