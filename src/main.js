@@ -2017,6 +2017,14 @@ function bindNet(net) {
     const r = G.remotes.get(m.id);
     if (r) r.firing = 0.45;
   });
+  net.on('correction', (m) => {
+    if (!alive() || !G.player || ![m.x, m.y, m.z].every(Number.isFinite)) return;
+    // Solo llega cuando el servidor rechazó un desplazamiento físicamente
+    // imposible. Limpiar momentum evita enviar de nuevo el mismo salto.
+    G.player.pos.x = m.x; G.player.pos.z = m.z; G.player.y = m.y;
+    G.player.vel.x = 0; G.player.vel.z = 0; G.player.vy = 0;
+    G.player.cover = null; G.player.coverEntry = null;
+  });
   net.on('hitConfirm', (m) => {
     if (!alive()) return;
     if (m.w === 'bazooka') {

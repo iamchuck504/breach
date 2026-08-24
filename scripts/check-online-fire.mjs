@@ -10,7 +10,8 @@ const port = 8794;
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
   // Esta prueba aísla autoridad balística; el flujo de presentación tiene su
   // propio contrato y aquí se desactiva para no añadir 13 s a cada ejecución.
-  env: { ...process.env, PORT: String(port), INTRO_TIME: '0', COUNTDOWN_TIME: '0' }, stdio: 'ignore',
+  env: { ...process.env, PORT: String(port), INTRO_TIME: '0', COUNTDOWN_TIME: '0',
+    NODE_ENV: 'test', ALLOW_TEST_TELEPORTS: '1' }, stdio: 'ignore',
 });
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 

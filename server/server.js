@@ -14,6 +14,10 @@ import { ROUND_FINISH_HOLD as DEFAULT_ROUND_FINISH_HOLD } from '../src/game/matc
 import { TUNING } from '../src/config/tuning.js';
 import { damageFalloff, firearmDamage, rocketSplashDamage } from '../src/combat/damage.js';
 import { isSniperHeadshotDeath, rocketDeathLevel } from '../src/combat/death-reactions.js';
+import {
+  MAX_WS_PAYLOAD, MessageRateGuard, acceptMovement, consumeShotAmmo,
+  createAmmoBudget, grantWeaponAmmo, refillNormalAmmo, resetMovementGuard,
+} from './guards.js';
 
 const PORT = process.env.PORT || 8787;
 const HP = TUNING.combat.hp, REGEN_DELAY = TUNING.combat.regenDelay,
@@ -59,19 +63,39 @@ const VALID_STATES = new Set(['idle', 'run', 'roadie', 'dive', 'slide', 'cover_l
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.join(dirname, '..', 'dist');
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.mp3': 'audio/mpeg', '.glb': 'model/gltf-binary', '.wasm': 'application/wasm' };
+const ALLOW_TEST_TELEPORTS = process.env.NODE_ENV === 'test' && process.env.ALLOW_TEST_TELEPORTS === '1';
+function textResponse(res, status, body) {
+  res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8' });
+  res.end(body);
+}
 const server = http.createServer((req, res) => {
-  let urlPath = decodeURIComponent(req.url.split('?')[0]);
-  if (urlPath === '/') urlPath = '/index.html';
-  const file = path.normalize(path.join(DIST, urlPath));
-  if (!file.startsWith(DIST) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
-    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end(fs.existsSync(DIST) ? 'not found' : 'Falta dist/: corre "npm run build" primero.'); return;
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    textResponse(res, 405, 'method not allowed'); return;
   }
+  let urlPath;
+  try { urlPath = decodeURIComponent(String(req.url || '/').split('?')[0]); }
+  catch { textResponse(res, 400, 'bad request'); return; }
+  if (urlPath.includes('\0')) { textResponse(res, 400, 'bad request'); return; }
+  if (urlPath === '/') urlPath = '/index.html';
+  const file = path.resolve(DIST, urlPath.replace(/^[\\/]+/, ''));
+  const relative = path.relative(DIST, file);
+  if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    textResponse(res, 404, 'not found'); return;
+  }
+  let stat;
+  try { stat = fs.statSync(file); } catch {
+    textResponse(res, 404, fs.existsSync(DIST) ? 'not found' : 'Falta dist/: corre "npm run build" primero.');
+    return;
+  }
+  if (stat.isDirectory()) { textResponse(res, 404, 'not found'); return; }
   res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
-  fs.createReadStream(file).pipe(res);
+  if (req.method === 'HEAD') { res.end(); return; }
+  const stream = fs.createReadStream(file);
+  stream.on('error', () => { if (!res.headersSent) textResponse(res, 500, 'read error'); else res.destroy(); });
+  stream.pipe(res);
 });
 
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({ server, maxPayload: MAX_WS_PAYLOAD });
 const players = new Map(), bots = new Map(), drops = new Map();
 let nextId = 1, nextBotId = 1, nextDropId = 1, hostId = null;
 let settings = { ...DEFAULT_LOBBY_SETTINGS }, phase = 'empty', phaseTimer = null, startAt = 0, round = 0;
@@ -148,10 +172,12 @@ function freshCombatState(p, spawn) {
   Object.assign(p, { x: spawn.x, z: spawn.z, y: 0, yaw: spawn.yaw, st: 'idle', aim: 0,
     p: 0, w: 'smg', sp: 0, hp: HP, alive: true,
     specialWep: null,
+    ammoBudget: createAmmoBudget(),
     nades: p.bot ? 1 : WD.grenade.mag,
     lastNadeAt: -Infinity, lastRocketAt: -Infinity,
     lastDamage: 0, respawnAt: 0, prot: startAt + SPAWN_PROT,
     lastFireAt: -Infinity, pendingShot: null });
+  resetMovementGuard(p, nowSec());
 }
 
 function eventShooter(me, msg) {
@@ -250,8 +276,15 @@ function checkRoundEnd() {
 }
 function dropWeapon(target) {
   const id = 'd' + nextDropId++;
+  const wep = clampDropWep(target.w);
+  const def = WD[wep] || WD.smg;
+  const remaining = Math.max(0, Math.floor(Number(target.ammoBudget?.[wep] || 0)));
+  // El cliente puede reportar su distribución cargador/reserva para el HUD,
+  // pero el total que queda en el arma es exclusivamente el del servidor.
+  const mag = Math.min(def.mag || 0, remaining);
+  const res = Math.min(def.reserve || 0, Math.max(0, remaining - mag));
   const d = { wep: clampDropWep(target.w), x: target.x, z: target.z, y: target.y || 0,
-    team: target.team, mag: target.am || 0, res: target.ar || 0, t: DROP_LIFE };
+    team: target.team, mag, res, t: DROP_LIFE };
   drops.set(id, d); broadcastRaw({ t: 'dropA', id, wep: d.wep, x: d.x, z: d.z, y: d.y, team: d.team, life: DROP_LIFE });
 }
 function registerFire(shooter, msg, isBotFire = false) {
@@ -274,6 +307,7 @@ function registerFire(shooter, msg, isBotFire = false) {
     const fx = -Math.sin(shooter.yaw || 0), fz = -Math.cos(shooter.yaw || 0);
     if (len > 0.001 && (dx * fx + dz * fz) / len < Math.cos(62 * Math.PI / 180)) return false;
   }
+  if (!consumeShotAmmo(shooter, weapon)) return false;
   const decals = Array.isArray(msg.d) ? msg.d.slice(0, 8).map(vec3).filter(Boolean) : undefined;
   const shotVec = [pt[0] - o[0], pt[1] - o[1], pt[2] - o[2]];
   const shotLen = Math.hypot(shotVec[0], shotVec[1], shotVec[2]);
@@ -450,7 +484,15 @@ function registerHit(shooter, msg) {
 
 wss.on('connection', (ws) => {
   let me = null;
+  const rateGuard = new MessageRateGuard(nowSec());
+  // Errores de protocolo/payload pertenecen a este peer. Sin listener, `ws`
+  // los eleva como excepción no manejada y un solo cliente puede tumbar la sala.
+  ws.on('error', () => { /* el cierre del socket hace la limpieza normal */ });
   ws.on('message', (data) => {
+    const bytes = typeof data === 'string' ? Buffer.byteLength(data) : (data?.byteLength || data?.length || 0);
+    if (!rateGuard.allow(nowSec(), bytes)) {
+      ws.close(1008, 'rate limit'); return;
+    }
     let msg; try { msg = JSON.parse(data); } catch { return; }
     if (msg.t === 'join' && !me) {
       const action = msg.action === 'create' ? 'create' : 'join';
@@ -514,18 +556,30 @@ wss.on('connection', (ws) => {
     }
     if (msg.t === 's') {
       if (phase !== 'playing' || !me.alive) { me.st = 'idle'; me.aim = 0; me.sp = 0; return; }
-      me.x = clamp(msg.x, -60, 60); me.z = clamp(msg.z, -60, 60); me.y = clamp(msg.y, 0, 20); me.yaw = clamp(msg.yaw, -10, 10);
+      if (![msg.x, msg.y, msg.z, msg.yaw].every((v) => typeof v === 'number' && Number.isFinite(v))) return;
+      const next = { x: clamp(msg.x, -60, 60), z: clamp(msg.z, -60, 60), y: clamp(msg.y, 0, 20) };
+      if (!acceptMovement(me, next, nowSec(), ALLOW_TEST_TELEPORTS)) {
+        send(ws, { t: 'correction', x: me.x, y: me.y || 0, z: me.z, reason: 'movement' });
+        return;
+      }
+      me.x = next.x; me.z = next.z; me.y = next.y; me.yaw = clamp(msg.yaw, -10, 10);
       me.st = VALID_STATES.has(String(msg.st)) && msg.st !== 'dead' ? msg.st : 'idle';
       me.aim = msg.aim ? 1 : 0; me.p = clamp(msg.p, -1.6, 1.6);
       const requestedWep = clampWep(msg.w);
       me.w = SPECIAL_WEAPONS.has(requestedWep) && me.specialWep !== requestedWep ? 'smg' : requestedWep;
-      me.am = clamp(msg.am, 0, 500); me.ar = clamp(msg.ar, 0, 500); me.sp = clamp(msg.sp, 0, 1); return;
+      const def = WD[me.w] || WD.smg;
+      me.am = clamp(msg.am, 0, def.mag || 0); me.ar = clamp(msg.ar, 0, def.reserve || 0);
+      me.sp = clamp(msg.sp, 0, 1); return;
     }
     if (msg.t === 'botState') {
       if (!isHost(me) || phase !== 'playing' || !Array.isArray(msg.bots)) return;
+      const stateNow = nowSec();
       for (const s of msg.bots.slice(0, MAX_PLAYERS)) {
         const b = bots.get(s.id); if (!b || !b.alive) continue;
-        b.x = clamp(s.x, -60, 60); b.z = clamp(s.z, -60, 60); b.y = clamp(s.y, 0, 20); b.yaw = clamp(s.yaw, -10, 10);
+        if (![s.x, s.y, s.z, s.yaw].every((v) => typeof v === 'number' && Number.isFinite(v))) continue;
+        const next = { x: clamp(s.x, -60, 60), z: clamp(s.z, -60, 60), y: clamp(s.y, 0, 20) };
+        if (!acceptMovement(b, next, stateNow, ALLOW_TEST_TELEPORTS)) continue;
+        b.x = next.x; b.z = next.z; b.y = next.y; b.yaw = clamp(s.yaw, -10, 10);
         b.st = VALID_STATES.has(String(s.st)) && s.st !== 'dead' ? s.st : 'idle';
         b.aim = s.aim ? 1 : 0; b.p = clamp(s.p, -1.6, 1.6);
         const requestedWep = clampWep(s.w);
@@ -555,6 +609,7 @@ wss.on('connection', (ws) => {
       const d = drops.get(msg.id);
       if (!d || !me.alive || phase !== 'playing' || Math.hypot(me.x - d.x, me.z - d.z) > 3) return;
       if (SPECIAL_WEAPONS.has(d.wep)) me.specialWep = d.wep;
+      grantWeaponAmmo(me, d.wep, d.mag, d.res);
       drops.delete(msg.id); broadcastRaw({ t: 'dropR', id: msg.id }); send(ws, { t: 'dropGive', wep: d.wep, mag: d.mag, res: d.res }); return;
     }
     // pickup del arma especial: gana el PRIMER reclamo válido y solo uno
@@ -565,6 +620,7 @@ wss.on('connection', (ws) => {
       if (!spot || Math.hypot(claimant.x - spot.x, claimant.z - spot.z) > 2.2 ||
           Math.abs((claimant.y || 0) - (spot.y || 0)) > 1.5) return;
       special.taken = true; special.by = claimant.id; claimant.specialWep = special.wep;
+      grantWeaponAmmo(claimant, special.wep);
       broadcastRaw({ t: 'specialTaken', id: claimant.id, wep: special.wep });
       return;
     }
@@ -574,6 +630,7 @@ wss.on('connection', (ws) => {
       if (!c || !spot || !c.up || !me.alive || phase !== 'playing' ||
           Math.hypot(me.x - spot.x, me.z - spot.z) > 3) return;
       c.up = false; c.t = CRATE_RESPAWN; broadcastRaw({ t: 'crate', i: msg.i, up: 0, by: me.id });
+      refillNormalAmmo(me);
     }
   });
   ws.on('close', () => {
@@ -595,9 +652,11 @@ setInterval(() => {
     if (p.alive && p.hp < HP && now - p.lastDamage > REGEN_DELAY) p.hp = Math.min(HP, p.hp + REGEN_RATE / TICK_HZ);
     if (!p.alive && p.respawnAt > 0 && now >= p.respawnAt) {
       p.alive = true; p.hp = HP; p.respawnAt = 0; p.prot = now + SPAWN_PROT;
-      p.w = 'smg'; p.specialWep = null; p.nades = p.bot ? 1 : WD.grenade.mag;
+      p.w = 'smg'; p.specialWep = null; p.ammoBudget = createAmmoBudget();
+      p.nades = p.bot ? 1 : WD.grenade.mag;
       p.lastNadeAt = -Infinity; p.lastRocketAt = -Infinity;
       const spawn = pickSpawn(p.team); Object.assign(p, { x: spawn.x, z: spawn.z, y: 0, yaw: spawn.yaw });
+      resetMovementGuard(p, now);
       broadcastRaw({ t: 'respawn', id: p.id, spawn });
     }
   }

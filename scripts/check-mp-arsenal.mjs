@@ -13,7 +13,8 @@ const CHROME = process.env.CHROME_PATH ||
   'C:\\Users\\iamch\\AppData\\Local\\ms-playwright\\chromium-1228\\chrome-win64\\chrome.exe';
 
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
-  env: { ...process.env, PORT: '8798', INTRO_TIME: '2', COUNTDOWN_TIME: '1' },
+  env: { ...process.env, PORT: '8798', INTRO_TIME: '2', COUNTDOWN_TIME: '1',
+    NODE_ENV: 'test', ALLOW_TEST_TELEPORTS: '1' },
   stdio: 'ignore',
 });
 await new Promise((r) => setTimeout(r, 900));

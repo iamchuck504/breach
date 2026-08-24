@@ -67,6 +67,8 @@ const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')],
     INTRO_TIME: '0.05',
     COUNTDOWN_TIME: '0.05',
     SPECIAL_FIRST_WEAPON: 'bazooka',
+    NODE_ENV: 'test',
+    ALLOW_TEST_TELEPORTS: '1',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
