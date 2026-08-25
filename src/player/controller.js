@@ -861,7 +861,14 @@ export class Controller {
       this.pos.x += this.vel.x * dt;
       this.pos.z += this.vel.z * dt;
     }
-    if (this.state !== 'mantle') this.world.resolveCircle(this.pos, PLAYER_R, this.y);
+    if (this.state !== 'mantle') {
+      // En cover la posición ya fue resuelta analíticamente contra ESA cara.
+      // Volver a empujar el círculo contra el mismo collider en el extremo
+      // pelea con el lean (sobre todo en bus/camión/Jersey) y produce jitter.
+      // Los demás obstáculos siguen resolviéndose con normalidad.
+      this.world.resolveCircle(this.pos, PLAYER_R, this.y,
+        this.state === 'cover' ? this.cover?.collider : null);
+    }
 
     // Nunca subir un desnivel grande solo porque groundHeight cambió bajo el
     // círculo (caso típico: entrar de lado en una rampa). Si el movimiento

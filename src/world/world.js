@@ -4841,10 +4841,11 @@ export class World {
 
   // Empuja un círculo (x,z,r) fuera de los AABBs. Muta p.
   // y: altura de los pies — las cajas por debajo no bloquean (se salta encima).
-  resolveCircle(p, r, y = 0) {
+  resolveCircle(p, r, y = 0, ignoredCollider = null) {
     for (let iter = 0; iter < 3; iter++) {
       let moved = false;
       for (const c of this.colliders) {
+        if (c === ignoredCollider) continue;
         if (y >= c.h - 0.05) continue;
         const cx = Math.max(c.minx, Math.min(c.maxx, p.x));
         const cz = Math.max(c.minz, Math.min(c.maxz, p.z));
@@ -4865,6 +4866,7 @@ export class World {
         moved = true;
       }
       for (const c of this.segmentColliders) {
+        if (c === ignoredCollider) continue;
         if (y >= c.h - 0.05) continue;
         const tx = c.b.x - c.a.x, tz = c.b.z - c.a.z;
         const len2 = tx * tx + tz * tz;
