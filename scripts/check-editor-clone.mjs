@@ -296,7 +296,8 @@ const linkedMove = await page.evaluate(() => {
   };
 });
 check('mover vehículo clonado desplaza visual + collider, sin copia estática',
-  linkedMove.found && linkedMove.selected === 2 &&
+  // Asset + cuerpo LOW + cabina física sin cover.
+  linkedMove.found && linkedMove.selected === 3 &&
   (linkedMove.before.x !== linkedMove.after.x || linkedMove.before.z !== linkedMove.after.z) &&
   linkedMove.visualAtNewPosition &&
   linkedMove.colliderAtNewPosition && !linkedMove.staleVisual,
@@ -429,8 +430,8 @@ check('postes/hidrantes colisionan; paradas son cover en U con frente abierto',
   solidStreetProps.assets === 20 && solidStreetProps.linked === 20 &&
   solidStreetProps.nonCover === 18 && solidStreetProps.cover === 6 &&
   solidStreetProps.blocked === 24 && solidStreetProps.openFronts === 2 &&
-  // Cuatro sedanes adicionales aportan 16 caras de cover simétricas.
-  solidStreetProps.coverFaces === 160,
+  // Los kioscos abiertos aportan caras únicamente en sus piezas reales.
+  solidStreetProps.coverFaces === 208,
   JSON.stringify(solidStreetProps));
 
 const buildingDuplicate = await page.evaluate(() => {

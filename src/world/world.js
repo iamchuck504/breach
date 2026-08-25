@@ -2601,7 +2601,7 @@ export class World {
     });
     const cornerTrim = new THREE.MeshStandardMaterial({ color: 0x77716a, roughness: 0.78 });
     const paperColors = [0xc65745, 0xd9b44a, 0x4f7891, 0xd6d0bd];
-    const addSidewalkKiosk = (x, z, w, d, toward, name, awningColor) => {
+    const addSidewalkKiosk = (x, z, w, d, toward, name, awningColor, decorLink) => {
       const kiosk = new THREE.Group();
       kiosk.position.set(x, 0, z);
       const addKioskPart = (geometry, material, px, py, pz) => {
@@ -2620,10 +2620,12 @@ export class World {
         addKioskPart(new THREE.BoxGeometry(0.11, 2.46, 0.11), cornerTrim,
           side * (w / 2 - 0.055), 1.35, frontZ - toward * 0.055);
       }
-      addKioskPart(new THREE.BoxGeometry(w - 0.16, 0.78, 0.18), kioskPanel,
-        0, 0.43, frontZ - toward * 0.06);
+      // El mostrador llega exactamente a LOW: coincide con su collider y se
+      // lee a escala humana, sin una franja invisible que reciba balas.
+      addKioskPart(new THREE.BoxGeometry(w - 0.16, 0.94, 0.18), kioskPanel,
+        0, 0.53, frontZ - toward * 0.06);
       addKioskPart(new THREE.BoxGeometry(w + 0.04, 0.10, 0.38), cornerTrim,
-        0, 0.87, frontZ + toward * 0.11);
+        0, 1.05, frontZ + toward * 0.11);
       const awning = addKioskPart(new THREE.BoxGeometry(w + 0.12, 0.12, 0.48),
         new THREE.MeshStandardMaterial({ color: awningColor, roughness: 0.74 }),
         0, 2.18, frontZ + toward * 0.20);
@@ -2652,17 +2654,21 @@ export class World {
             new THREE.CylinderGeometry(0.035, 0.045, 0.22, 8),
             new THREE.MeshStandardMaterial({ color, roughness: 0.62 }),
           );
-          bottle.position.set(dx, 1.03, frontZ - toward * 0.01); kiosk.add(bottle);
+          bottle.position.set(dx, 1.20, frontZ - toward * 0.01); kiosk.add(bottle);
         }
       }
       this._registerBaseDecor(kiosk, 'kiosk', {
-        x, z, rotation: 0, w, d, h: 2.71,
+        x, z, rotation: 0, w, d, h: 2.71, decorLink,
       });
     };
-    addSidewalkKiosk(-14.35, -29, 1.75, 1.75, 1, 'NEWS', 0x623b34);
-    addSidewalkKiosk(14.35, 29, 1.75, 1.75, -1, 'NEWS', 0x623b34);
-    addSidewalkKiosk(14.35, -26, 1.65, 1.65, 1, 'HOT DOGS', 0xb05f35);
-    addSidewalkKiosk(-14.35, 26, 1.65, 1.65, -1, 'HOT DOGS', 0xb05f35);
+    addSidewalkKiosk(-14.35, -29, 1.75, 1.75, 1, 'NEWS', 0x623b34,
+      'kiosk:news:south-left');
+    addSidewalkKiosk(14.35, 29, 1.75, 1.75, -1, 'NEWS', 0x623b34,
+      'kiosk:news:north-right');
+    addSidewalkKiosk(14.35, -26, 1.65, 1.65, 1, 'HOT DOGS', 0xb05f35,
+      'kiosk:hotdog:south-right');
+    addSidewalkKiosk(-14.35, 26, 1.65, 1.65, -1, 'HOT DOGS', 0xb05f35,
+      'kiosk:hotdog:north-left');
 
     // Los dumpsters pertenecen ahora a pequeños patios de servicio. Puerta,
     // luz y pintura de carga los conectan con el edificio en vez de dejarlos
@@ -2746,8 +2752,10 @@ export class World {
         part.position.set(px, py, pz); part.castShadow = true; part.receiveShadow = true;
         cart.add(part); return part;
       };
-      addCartPart(new THREE.BoxGeometry(1.24, 0.68, 0.64), coffeeBodyMat, 0, 0.48, 0);
-      addCartPart(new THREE.BoxGeometry(1.34, 0.10, 0.76), coffeeTopMat, 0, 0.87, 0);
+      // La base visual termina en 1.10 m, exactamente donde termina el LOW
+      // que usa movimiento, cover y balística.
+      addCartPart(new THREE.BoxGeometry(1.24, 0.86, 0.64), coffeeBodyMat, 0, 0.55, 0);
+      addCartPart(new THREE.BoxGeometry(1.34, 0.10, 0.76), coffeeTopMat, 0, 1.05, 0);
       for (const px of [-0.47, 0.47]) for (const pz of [-0.36, 0.36]) {
         const wheel = addCartPart(new THREE.CylinderGeometry(0.14, 0.14, 0.08, 12),
           coffeeWheelMat, px, 0.18, pz);
@@ -2757,11 +2765,11 @@ export class World {
         addCartPart(new THREE.BoxGeometry(0.055, 1.18, 0.055), coffeeMetalMat, px, 1.48, pz);
       }
       addCartPart(new THREE.BoxGeometry(1.52, 0.13, 0.90), coffeeAwningMat, 0, 2.09, 0);
-      addCartPart(new THREE.BoxGeometry(0.34, 0.34, 0.28), coffeeMetalMat, 0.27, 1.09, 0.02);
-      addCartPart(new THREE.BoxGeometry(0.24, 0.08, 0.16), coffeeTopMat, 0.27, 0.97, -0.20);
+      addCartPart(new THREE.BoxGeometry(0.34, 0.34, 0.28), coffeeMetalMat, 0.27, 1.27, 0.02);
+      addCartPart(new THREE.BoxGeometry(0.24, 0.08, 0.16), coffeeTopMat, 0.27, 1.15, -0.20);
       for (const px of [-0.22, -0.08]) {
         addCartPart(new THREE.CylinderGeometry(0.045, 0.04, 0.13, 10),
-          new THREE.MeshStandardMaterial({ color: 0xe7ddd0, roughness: 0.72 }), px, 1.00, -0.08);
+          new THREE.MeshStandardMaterial({ color: 0xe7ddd0, roughness: 0.72 }), px, 1.18, -0.08);
       }
       this._addMapSign('COFFEE', 0, 1.91, -0.46, Math.PI,
         { w: 1.16, h: 0.28, bg: '#3d2920', fg: '#f0d4a1', border: '#a96f45', parent: cart });

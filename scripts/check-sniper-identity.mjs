@@ -63,7 +63,12 @@ try {
     G.weapons.state.sniper.reload = 0;
     I._mouseAim = true;
   });
-  await page.waitForTimeout(750);
+  // Esperar al estado óptico, no a un número fijo de milisegundos: en una
+  // máquina cargada la interpolación conserva el mismo comportamiento pero
+  // puede necesitar algunos frames adicionales. Si nunca converge, el check
+  // inferior sigue fallando con el FOV real observado.
+  await page.waitForFunction(() => Math.abs(window.BREACH_CAM.fov - 20) < 1.2,
+    null, { timeout: 1800 }).catch(() => {});
 
   const scoped = await page.evaluate(() => {
     const G = window.BREACH;

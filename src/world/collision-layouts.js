@@ -68,19 +68,48 @@ function calleSpecs() {
     make(0, -34.5, 9, 2.5, HIGH, 'high', { visual: false }),
     make(-6.1, -33.4, 2.4, 0.9, LOW, 'low', { visual: false }),
     make(6.1, -33.4, 2.4, 0.9, LOW, 'low', { visual: false }),
-    make(-14.35, -29, 1.75, 1.75, HIGH, 'high', { visual: false }),
-    make(14.35, -26, 1.65, 1.65, HIGH, 'high', { visual: false }),
+    // Los vehículos conservan una base LOW para cover/mantle. La cabina se
+    // añade debajo como collider sólido sin caras de cover: así los disparos
+    // no atraviesan el techo, pero tampoco convertimos el auto completo en
+    // una caja invisible de 1.5–2 m sobre capó y maletero.
     make(-2.5, -28, 2.02, 4.45, LOW, 'low', { visual: false }),
+    make(-2.5, -28.05, 1.78, 2.82, 2.05, 'solid', { visual: false, mirror: true }),
     make(6.5, -21, 2.02, 4.45, LOW, 'low', { visual: false }),
+    make(6.5, -21.08, 1.78, 2.34, 1.52, 'solid', { visual: false, mirror: true }),
     make(-6.5, -16, 2.02, 4.45, LOW, 'low', { visual: false }),
+    make(-6.5, -16.08, 1.78, 2.34, 1.52, 'solid', { visual: false, mirror: true }),
     make(3, -10.5, 2.02, 4.45, LOW, 'low', { visual: false }),
+    make(3, -10.58, 1.78, 2.34, 1.52, 'solid', { visual: false, mirror: true }),
     make(-3, -5.5, 4.45, 2.02, LOW, 'low', { visual: false }),
+    make(-3.08, -5.5, 2.34, 1.78, 1.52, 'solid', { visual: false, mirror: true }),
     make(-1.2, -8.7, 3.2, 0.9, MID, 'mid', { visual: false }),
     make(-6.5, -1.5, 2.4, 7, HIGH, 'high', { visual: false }),
     make(-15.15, -8, 2.5, 2.2, LOW, 'low', { visual: false }),
     make(14.35, -8.5, 1.3, 0.75, LOW, 'low', { visual: false }),
     make(3.6, -2.2, 2.4, 0.9, LOW, 'low', { visual: false }),
   ];
+
+  // Un kiosco abierto no puede compartir el cubo HIGH que ocupaba toda su
+  // huella. Se modelan únicamente respaldo, laterales, postes y mostrador;
+  // el hueco de servicio permanece físicamente transitable y visible.
+  const addKiosk = (x, z, w, d, toward, decorLink) => {
+    const frontZ = z + toward * (d / 2 - 0.034);
+    const backZ = z - toward * (d / 2 - 0.055);
+    const sideZ = z - toward * d * 0.20;
+    const linked = { visual: false, mirror: false, decorLink };
+    out.push(make(x, backZ, w - 0.10, 0.11, 2.30, 'shelter', linked));
+    for (const side of [-1, 1]) {
+      out.push(make(x + side * (w / 2 - 0.05), sideZ,
+        0.10, d * 0.58, 2.28, 'shelter', linked));
+      out.push(make(x + side * (w / 2 - 0.055), frontZ,
+        0.14, 0.14, 2.46, 'solid', linked));
+    }
+    out.push(make(x, frontZ, w - 0.16, 0.18, LOW, 'low', linked));
+  };
+  addKiosk(-14.35, -29, 1.75, 1.75, 1, 'kiosk:news:south-left');
+  addKiosk(14.35, 29, 1.75, 1.75, -1, 'kiosk:news:north-right');
+  addKiosk(14.35, -26, 1.65, 1.65, 1, 'kiosk:hotdog:south-right');
+  addKiosk(-14.35, 26, 1.65, 1.65, -1, 'kiosk:hotdog:north-left');
   for (const z of [-35, -25, -15, -5, 5, 15, 25, 35]) {
     out.push(make(-12.6, z, 0.5, 0.5, 6.2, 'solid', {
       mirror: false, decorLink: `streetlight:left:${z}`,
