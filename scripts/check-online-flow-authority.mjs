@@ -11,7 +11,9 @@ const CHROME = process.env.CHROME_PATH || undefined;
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
   cwd: root,
-  env: { ...process.env, PORT: String(PORT), INTRO_TIME: '1.4', COUNTDOWN_TIME: '0.8',
+  // La ventana debe superar holgadamente el arranque de dos contextos bajo
+  // carga de CI. El test mide autoridad de fase, no velocidad de Playwright.
+  env: { ...process.env, PORT: String(PORT), INTRO_TIME: '4', COUNTDOWN_TIME: '1',
     NODE_ENV: 'test', ALLOW_TEST_TELEPORTS: '1' },
   stdio: 'ignore',
 });
@@ -106,7 +108,7 @@ try {
     JSON.stringify({ remoteBefore, remoteAfter }));
 
   await a.waitForFunction(() => window.BREACH.onlinePhase === 'playing', null,
-    { timeout: 6000 });
+    { timeout: 8000 });
 
   // El intermedio debe bloquear igual aunque no exista deadline pendiente.
   const intermission = await a.evaluate(async () => {

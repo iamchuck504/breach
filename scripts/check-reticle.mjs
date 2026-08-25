@@ -161,6 +161,62 @@ try {
     throw new Error('una obstrucción física desplazó la retícula ADS');
   }
 
+  // Bazooka ADS: la cámara define el punto deseado y el cohete sale desde el
+  // muzzle hacia ESE punto. Lanzarlo paralelo al eje óptico hace que falle la
+  // retícula por paralaje, especialmente al apuntar al suelo o a cover cercano.
+  const rocketAim = await page.evaluate(async () => {
+    const G = window.BREACH, I = window.BREACH_INPUT;
+    const W = window.BREACH_WORLD, R = window.BREACH_ROCKETS;
+    if (!G.weapons.hasWeapon('bazooka')) G.weapons.giveSpecial('bazooka');
+    else G.weapons.cur = 'bazooka';
+    G.weapons.st.mag = 1;
+    G.weapons.st.cd = 0;
+    G.weapons.st.reload = 0;
+    G.player.state = 'idle';
+    G.player.yaw = 0.42;
+    G.player.cam.yaw = 0.42;
+    G.player.cam.pitch = -0.28;
+    const alive = G.dummies.list.map((d) => d.alive);
+    for (const d of G.dummies.list) d.alive = false;
+    I._mouseAim = true;
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    let captured = null;
+    const oldFire = R.fire.bind(R);
+    R.fire = (origin, direction) => {
+      const ray = G.player.cam.aimRay();
+      const hit = W.raycastHit(ray.origin, ray.dir, G.weapons.def.range);
+      const point = ray.origin.clone().addScaledVector(ray.dir,
+        hit?.t ?? G.weapons.def.range);
+      const o = new window.THREE.Vector3(origin.x, origin.y, origin.z);
+      const expected = point.sub(o).normalize();
+      captured = {
+        dotExpected: direction.dot(expected),
+        dotCamera: direction.dot(ray.dir),
+        origin: o.toArray(),
+        direction: direction.toArray(),
+        expected: expected.toArray(),
+      };
+      return null;
+    };
+    I._mouseFire = true;
+    I.firePressed = true;
+    await new Promise((resolve) => setTimeout(resolve, 130));
+    I._mouseFire = false;
+    I._mouseAim = false;
+    R.fire = oldFire;
+    G.dummies.list.forEach((d, i) => { d.alive = alive[i]; });
+    return captured;
+  });
+  if (!rocketAim || rocketAim.dotExpected < 0.9999) {
+    console.error('BAZOOKA ADS DEBUG', JSON.stringify(rocketAim));
+    throw new Error('el cohete ADS no salió desde el muzzle hacia el punto de la retícula');
+  }
+  if (rocketAim.dotCamera > 0.99999) {
+    console.error('BAZOOKA PARALLAX DEBUG', JSON.stringify(rocketAim));
+    throw new Error('el escenario no produjo paralaje para validar la guía de bazooka');
+  }
+
   // Todas las armas comparten el mismo contrato. Dejamos cámara/stick quietos
   // mientras rig, objetivos y FOV continúan actualizándose; la desviación debe
   // permanecer subpíxel y el sniper usa su cruz óptica equivalente.
@@ -203,7 +259,7 @@ try {
     console.error('RETICLE STABILITY DEBUG', JSON.stringify(stability));
     throw new Error(`retícula inestable: ${unstable.map((v) => v.weapon).join(', ')}`);
   }
-  console.log(`RETICLE OK · barrel ${result.errorPx.toFixed(2)} px · paralaje ${result.centerOffset.toFixed(1)} px · ADS obstruido ${ads.centerError.toFixed(2)} px · 5 armas estables`);
+  console.log(`RETICLE OK · barrel ${result.errorPx.toFixed(2)} px · paralaje ${result.centerOffset.toFixed(1)} px · bazooka guiada ${rocketAim.dotExpected.toFixed(5)} · 5 armas estables`);
 } finally {
   await browser?.close();
   server.kill();

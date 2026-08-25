@@ -3028,14 +3028,19 @@ function fireShot() {
 
   // bazooka: proyectil REAL, sin hitscan — el cohete hace el daño al explotar
   if (def.projectile) {
+    // La cámara elige el punto que percibe el jugador, pero el proyectil nace
+    // físicamente en el muzzle. Dirigirlo hacia ese punto elimina el paralaje
+    // de ADS sin convertir la bazooka en hitscan: paredes intermedias todavía
+    // detonan el cohete durante su vuelo normal.
+    const projectileDir = aiming ? currentFireDirection(muzzle, def.range) : baseDir;
     const cid = G.mode === 'online' ? `p:${++G.rocketSeq}` : null;
-    rockets.fire({ x: muzzle.x, y: muzzle.y, z: muzzle.z }, baseDir,
+    rockets.fire({ x: muzzle.x, y: muzzle.y, z: muzzle.z }, projectileDir,
       true, null, cid, G.mode === 'online');
     // replicar el proyectil: los demás clientes lo ven volar y explotar
     G.net?.send({
       t: 'rocket',
       o: [muzzle.x, muzzle.y, muzzle.z],
-      d: [baseDir.x, baseDir.y, baseDir.z],
+      d: [projectileDir.x, projectileDir.y, projectileDir.z],
       ...(cid ? { cid } : {}),
     });
     if (G.spawnProt > 0) { G.spawnProt = 0; hud.hint(t('msg.protectionBroken'), 900); }
@@ -3044,8 +3049,7 @@ function fireShot() {
     input.pad.rumble(110, 0.6, 1.0);
     G.rig.kick(def.recoil * 0.5);
     shoulderCam.addShake(def.recoil * TUNING.cam.shakeFire);
-    shoulderCam.pitch = Math.min(TUNING.cam.pitchMax * Math.PI / 180,
-      shoulderCam.pitch + def.recoil * 0.006);
+    shoulderCam.addPitchRecoil(def.recoil * 0.006);
     return;
   }
 
@@ -3101,8 +3105,7 @@ function fireShot() {
   else input.pad.rumble(45, 0.2, 0.4);
   G.rig.kick(def.recoil * 0.5);
   shoulderCam.addShake(def.recoil * TUNING.cam.shakeFire);
-  shoulderCam.pitch = Math.min(TUNING.cam.pitchMax * Math.PI / 180,
-    shoulderCam.pitch + def.recoil * 0.006);
+  shoulderCam.addPitchRecoil(def.recoil * 0.006);
 
   // aplicar daño
   let hitSomeone = false;
@@ -3669,6 +3672,9 @@ function frame(now) {
         input.requestLock();
       }
     }
+    // Recuperar antes de simular/disparar mantiene aimRay, retícula y cámara
+    // renderizada sobre el mismo pitch durante todo el frame.
+    shoulderCam.recoverPitchRecoil(dt);
 
     // pausa real en práctica y vs bots; online la partida sigue.
     // Simulación por frame con dt variable: a ≥30 fps es EXACTAMENTE un paso

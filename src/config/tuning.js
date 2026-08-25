@@ -80,6 +80,8 @@ export const TUNING = {
     coverDist: 3.0,
     shakeRoadie: 0,       // sin shake al correr (0 = apagado)
     shakeFire: 0.35,      // kick al disparar
+    pitchRecoilRecover: 12, // retorno exponencial; ~90% en 0.2 s
+    pitchRecoilMaxDeg: 4, // evita acumular elevación sin límite en automático
     minDist: 0.5,
   },
   weapons: {

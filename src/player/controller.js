@@ -223,6 +223,7 @@ export class Controller {
     this.yaw = spawn.yaw;
     this.cam.yaw = spawn.yaw;
     this.cam.pitch = -0.12;
+    this.cam.clearPitchRecoil?.();
     this.state = 'idle'; this.stateT = 0;
     this.cover = null; this.coverEntry = null; this.slide = null; this.dive = null;
     this.chain = 0; this.dead = false;

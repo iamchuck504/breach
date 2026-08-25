@@ -14,6 +14,7 @@ export class ShoulderCamera {
     this.fov = TUNING.cam.fovNormal;
     this.shake = 0;
     this.shakeT = 0;
+    this.pitchRecoil = 0;
     this.pos = new THREE.Vector3();
     this.pivot = new THREE.Vector3();
     this._tmp = new THREE.Vector3();
@@ -43,6 +44,12 @@ export class ShoulderCamera {
       pitchStep *= scale;
     }
     this.yaw += yawStep;
+    // Tirar manualmente hacia abajo compensa recoil y consume la deuda de
+    // recuperación. Sin esto, la cámara seguiría bajando sola después de que
+    // el jugador ya corrigió el arma.
+    if (pitchStep < 0 && this.pitchRecoil > 0) {
+      this.pitchRecoil = Math.max(0, this.pitchRecoil + pitchStep);
+    }
     this.pitch += pitchStep;
     const c = TUNING.cam;
     this.pitch = Math.max(c.pitchMin * DEG, Math.min(c.pitchMax * DEG, this.pitch));
@@ -50,12 +57,37 @@ export class ShoulderCamera {
 
   addShake(amount) { this.shake = Math.min(1.5, this.shake + amount); }
 
+  addPitchRecoil(amount) {
+    if (!Number.isFinite(amount) || amount <= 0) return;
+    const c = TUNING.cam;
+    const maxDebt = (c.pitchRecoilMaxDeg ?? 4) * DEG;
+    const pitchRoom = c.pitchMax * DEG - this.pitch;
+    const applied = Math.max(0, Math.min(amount, maxDebt - this.pitchRecoil, pitchRoom));
+    this.pitch += applied;
+    this.pitchRecoil += applied;
+  }
+
+  recoverPitchRecoil(dt) {
+    if (this.pitchRecoil <= 0 || !Number.isFinite(dt) || dt <= 0) return;
+    const rate = TUNING.cam.pitchRecoilRecover ?? 12;
+    let recovered = this.pitchRecoil * (1 - Math.exp(-rate * dt));
+    if (this.pitchRecoil - recovered < 1e-5) recovered = this.pitchRecoil;
+    this.pitch -= recovered;
+    this.pitchRecoil -= recovered;
+  }
+
+  clearPitchRecoil() { this.pitchRecoil = 0; }
+
   // stick derecho del gamepad (valores -1..1 ya con curva), escala por FOV
   applyStick(cx, cy, dt, invertY) {
     const zoomScale = this._scoped ? TUNING.cam.zoomSens : 1;
     const s = TUNING.cam.padSens * DEG * dt * (this.fov / TUNING.cam.fovNormal) * zoomScale;
     this.yaw -= cx * s;
-    this.pitch += (invertY ? cy : -cy) * s;
+    const pitchStep = (invertY ? cy : -cy) * s;
+    if (pitchStep < 0 && this.pitchRecoil > 0) {
+      this.pitchRecoil = Math.max(0, this.pitchRecoil + pitchStep);
+    }
+    this.pitch += pitchStep;
     const c = TUNING.cam;
     this.pitch = Math.max(c.pitchMin * DEG, Math.min(c.pitchMax * DEG, this.pitch));
   }
