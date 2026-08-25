@@ -8,8 +8,7 @@ import { clearClip } from './lib-clip.mjs';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const port = 8800;
-const chrome = process.env.CHROME_PATH ||
-  'C:\\Users\\iamch\\AppData\\Local\\ms-playwright\\chromium-1228\\chrome-win64\\chrome.exe';
+const chrome = process.env.CHROME_PATH || undefined;
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
   env: { ...process.env, PORT: String(port), INTRO_TIME: '1', COUNTDOWN_TIME: '0',
     NODE_ENV: 'test', ALLOW_TEST_TELEPORTS: '1' },

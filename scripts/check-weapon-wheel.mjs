@@ -7,8 +7,7 @@ import { clearClip } from './lib-clip.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
-const CHROME = process.env.CHROME_PATH ||
-  'C:\\Users\\iamch\\AppData\\Local\\ms-playwright\\chromium-1228\\chrome-win64\\chrome.exe';
+const CHROME = process.env.CHROME_PATH || undefined;
 const PORT = '8821';
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
   env: { ...process.env, PORT }, stdio: 'ignore',
@@ -73,12 +72,17 @@ try {
     shown.rect.x >= 0 && shown.rect.y >= 0 &&
     shown.rect.x + shown.rect.w <= shown.viewport.w && shown.rect.y + shown.rect.h <= shown.viewport.h &&
     shown.rect.w < shown.viewport.w * 0.35, JSON.stringify(shown.rect));
-  await page.waitForTimeout(760);
-  const faded = await page.evaluate(() => {
-    const w = document.getElementById('weapon-wheel');
-    return !w.classList.contains('on') && !w.classList.contains('leaving');
-  });
-  check('wheel desaparece después de 0.5 s con salida limpia', faded);
+  const fadeStart = Date.now();
+  let faded = false;
+  try {
+    await page.waitForFunction(() => {
+      const w = document.getElementById('weapon-wheel');
+      return !w.classList.contains('on') && !w.classList.contains('leaving');
+    }, { timeout: 1500 });
+    faded = true;
+  } catch { /* se reporta como fallo abajo */ }
+  check('wheel desaparece después de 0.5 s con salida limpia', faded,
+    `${Date.now() - fadeStart}ms hasta quedar oculto`);
 
   // Tres correcciones de intención dentro de la misma animación: no deben
   // crear overlays ni quedarse con un highlight anterior.

@@ -5,11 +5,11 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { clearClip } from './lib-clip.mjs';
+import { TUNING } from '../src/config/tuning.js';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const port = 8802;
-const chrome = process.env.CHROME_PATH ||
-  'C:\\Users\\iamch\\AppData\\Local\\ms-playwright\\chromium-1228\\chrome-win64\\chrome.exe';
+const chrome = process.env.CHROME_PATH || undefined;
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
   env: { ...process.env, PORT: String(port) }, stdio: 'ignore',
 });
@@ -64,13 +64,18 @@ try {
     return {
       hp: d.hp, hitMs, endMs, freezeSeen,
       travel: Math.hypot(G.player.pos.x - x0, G.player.pos.z - z0),
+      meleeTravel: G.player.meleeTravel,
       connected: G.player.meleeConnected,
     };
   });
   check('contacto temprano y confiable', hit.hitMs >= 75 && hit.hitMs <= 230, JSON.stringify(hit));
   check('un gesto aplica exactamente un golpe', hit.hp === 40, JSON.stringify(hit));
   check('hit-stop local breve sin congelar el mundo', hit.freezeSeen, JSON.stringify(hit));
-  check('embestida limitada (no dash)', hit.travel <= 0.36, JSON.stringify(hit));
+  // La posición final también incluye la resolución contra geometría/cuerpos,
+  // que depende del punto exacto donde esté el dummy. El contrato del ataque
+  // es meleeTravel: esa es la distancia aportada exclusivamente por el lunge.
+  check('embestida limitada (no dash)',
+    hit.meleeTravel <= TUNING.melee.maxLunge + 0.002, JSON.stringify(hit));
 
   const miss = await page.evaluate(async () => {
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));

@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview --port 5200",
     "server": "node server/server.js",
+    "pretest": "npm run build",
     "check:controller": "node scripts/check-controller.mjs",
     "check:menu-controller": "node scripts/check-menu-controller.mjs",
     "check:reload-cancel": "node scripts/check-reload-cancel.mjs",
@@ -43,10 +44,11 @@
     "check:online-flow": "node scripts/check-online-flow-authority.mjs",
     "check:calle-collision": "node scripts/check-calle-collision.mjs",
     "check:cover-lean": "node scripts/check-cover-lean-collision.mjs",
+    "check:test-portability": "node scripts/check-test-portability.mjs",
     "check:editor": "node scripts/check-editor.mjs",
     "check:editor-sanity": "node scripts/check-editor-sanity.mjs",
-    "test": "npm run check:controller && npm run check:menu-controller && npm run check:reload-cancel && npm run check:melee && npm run check:melee-net && npm run check:round-flow && npm run check:combat-orientation && npm run check:camera-resume && npm run check:cover-fire && npm run check:impacts && npm run check:spatial-audio && npm run check:i18n && npm run check:shotgun-pattern && npm run check:warmup && npm run check:lobby && npm run check:online-map-items && npm run check:mp-bot-special && npm run check:online-projectiles && npm run check:online-fire && npm run check:weapon-balance && npm run check:sniper && npm run check:bazooka && npm run check:weapon-wheel && npm run check:server-guards && npm run check:server-hardening && npm run check:map-authority && npm run check:rocket-authority && npm run check:smoke-authority && npm run check:online-flow && npm run check:calle-collision && npm run check:cover-lean",
-    "verify": "npm run build && npm test"
+    "test": "npm run check:test-portability && npm run check:controller && npm run check:menu-controller && npm run check:reload-cancel && npm run check:melee && npm run check:melee-net && npm run check:round-flow && npm run check:combat-orientation && npm run check:camera-resume && npm run check:cover-fire && npm run check:impacts && npm run check:spatial-audio && npm run check:i18n && npm run check:shotgun-pattern && npm run check:warmup && npm run check:lobby && npm run check:online-map-items && npm run check:mp-bot-special && npm run check:online-projectiles && npm run check:online-fire && npm run check:weapon-balance && npm run check:sniper && npm run check:bazooka && npm run check:weapon-wheel && npm run check:server-guards && npm run check:server-hardening && npm run check:map-authority && npm run check:rocket-authority && npm run check:smoke-authority && npm run check:online-flow && npm run check:calle-collision && npm run check:cover-lean",
+    "verify": "npm test"
   },
   "dependencies": {
     "lil-gui": "^0.20.0",

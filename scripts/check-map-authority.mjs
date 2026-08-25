@@ -11,8 +11,7 @@ import { mapLineBlocked } from '../server/map-geometry.js';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const port = 8811;
-const chrome = process.env.CHROME_PATH ||
-  'C:\\Users\\iamch\\AppData\\Local\\ms-playwright\\chromium-1228\\chrome-win64\\chrome.exe';
+const chrome = process.env.CHROME_PATH || undefined;
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 assert.equal(mapLineBlocked('fortaleza', [0, 1, -4], [0, 1, 4]), true);

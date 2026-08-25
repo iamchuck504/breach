@@ -10,7 +10,7 @@ de combate táctico en tercera persona: rebotes entre coberturas, correr, mantle
 
 ```bash
 npm install
-npm run dev        # cliente en http://localhost:5173
+npm run dev        # cliente en http://localhost:5200
 ```
 
 ## Multijugador (LAN)
@@ -42,9 +42,9 @@ en mano y su munición no se rellena en cajas. En online el pedestal lo
 arbitra el servidor (dos jugadores a la vez = un solo ganador). Los
 cuerpos colisionan (empuje suave, sin atrapamientos).
 
-**Recarga activa:** pulsar recargar OTRA VEZ durante la recarga. Dentro de
-la banda marcada, el cargador se llena al instante y das +20% de daño
-durante 5 s; fuera de ella el arma se atasca y la recarga se alarga.
+La recarga puede cancelarse para disparar: conserva únicamente la munición
+que ya haya entrado al arma. Breach no utiliza recarga activa ni bonificadores
+de daño ligados a la recarga.
 
 **Swat turn:** desde cobertura, correr de frente hacia otra cobertura a
 menos de ~5 m cruza el hueco de un tirón y te pega a ella (si no hay nada
@@ -56,11 +56,12 @@ pedestal — la bazooka solo con línea limpia y sin compañeros en el radio.
 
 ## Mapas
 
-**Fortaleza** (día, castillo), **Azoteas** (noche urbana), **Calle
-Cerrada** (avenida al atardecer), **Estación de Metro** (subterráneo),
-**Prisión** (patio + celdas) y **Pueblo Abandonado** (ruinas abiertas).
-Selector en el menú y en el lobby; 5 variantes de soldado por equipo en
-PERSONAJE. Opciones (Audio / Video / Idioma / Controles) en el menú.
+La rotación jugable actual contiene **Fortaleza** (día, castillo),
+**Azoteas** (noche urbana) y **Calle Cerrada** (calle urbana nocturna).
+Son los únicos mapas disponibles en el menú y el lobby. Hay builders de mapas
+experimentales fuera de rotación, pero no se anuncian como contenido jugable.
+Hay 5 variantes de soldado por equipo en PERSONAJE y opciones de Audio, Video,
+Idioma y Controles en el menú.
 
 ## Editor de mapas (sandbox)
 
@@ -87,7 +88,7 @@ escritos a mano, así que lo que ves en el editor es lo que el juego simula
 - **Playtest** instantáneo: juegas el mapa en edición y `ESC` vuelve al
   editor con todo intacto. Un mapa válido aparece en el selector y en el
   lobby local, y los bots lo navegan.
-- **Clonar mapa del juego:** cualquiera de los 6 layouts reales se clona a un
+- **Clonar mapa del juego:** cualquiera de los 3 layouts activos se clona a un
   mapa editable conservando TODO — cada caja exacta del builder original
   (color, cover, colliders invisibles, material de impacto), spawns con
   orientación, munición y arma especial con altura. La decoración (fachadas,
@@ -119,6 +120,8 @@ directo "BREACH Editor" del escritorio).
 ## Validación (headless, sin abrir ventana)
 
 ```bash
+npx playwright install chromium        # una vez por máquina/CI
+npm test                                # genera dist y ejecuta la suite oficial
 node scripts/smoke.mjs               # suite integral (movimiento, bots, MP, UI)
 node scripts/check-movement.mjs      # harness agresivo de movilidad + muertes
 node scripts/check-editor.mjs        # editor: construir, validar, playtest, volver

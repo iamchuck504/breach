@@ -941,6 +941,10 @@ document.addEventListener('pointerdown', () => { setTimeout(sanitizeClip, 80); }
 // pantalla completa automática al iniciar partida: con Keyboard Lock activo
 // ni Esc suelta el pointer lock → sin salidas sucias durante el juego
 function enterFullscreen() {
+  // ?nolock es el modo deliberadamente windowed de editor/harness. Pedir
+  // fullscreen aquí vuelve imposible redimensionar el viewport y contradice
+  // la promesa de no capturar la ventana durante pruebas automatizadas.
+  if (input.lockDisabled) return;
   try {
     if (!document.fullscreenElement) {
       const p = document.documentElement.requestFullscreen();
