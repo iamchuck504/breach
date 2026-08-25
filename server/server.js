@@ -312,6 +312,7 @@ function prepareRound(first = false) {
   special = { wep: specialForRound(round), taken: false, by: null };
   phase = first ? 'intro' : 'countdown';
   broadcastRaw({ t: first ? 'matchStart' : 'prepare', phase, startAt, round,
+    startsIn: Math.max(0, startAt - nowSec()),
     settings: { ...settings }, wins: { ...wins }, lives: livesState(), players: roster.map(pub), rows: statRows(),
     special: { wep: special.wep } });
   phaseTimer = setTimeout(() => { phaseTimer = null; phase = 'playing'; startAt = 0;
@@ -563,16 +564,17 @@ function commitAuthoritativeDamage(shooter, target, shot, msg, dist, authoritati
     : dist <= 0.82;
   const explosiveLevel = rocketDeathLevel(shot.wep, dist, dmg, directRocket);
   const deathPoint = validatedDeathPoint(target, part, vec3(msg.p));
+  const respawnDelay = pools[target.team] > 0 ? RESPAWN_TIME : 0;
+  if (respawnDelay > 0) { pools[target.team]--; target.respawnAt = now + respawnDelay; }
+  else target.respawnAt = 0;
   broadcastRaw({ t: 'death', target: target.id, from: shooter.id, gib: gib ? 1 : 0,
     hs: sniperHeadshot ? 1 : 0, ex: explosiveLevel, w: shot.wep,
-    dist: +dist.toFixed(2), dmg: Math.round(dmg), part,
+    dist: +dist.toFixed(2), dmg: Math.round(dmg), part, respawn: respawnDelay,
     ...(deathPoint ? { p: deathPoint } : {}),
     ...(shot.wep === 'bazooka' ? { ep: shot.origin } : {}),
     kn: shooter.name, kt: shooter.team, vn: target.name, vt: target.team });
   dropWeapon(target);
   target.specialWep = null;
-  if (pools[target.team] > 0) { pools[target.team]--; target.respawnAt = now + RESPAWN_TIME; }
-  else target.respawnAt = 0;
   broadcastRaw({ t: 'score', ...livesState(), wins: { ...wins } });
   if (!deferRoundCheck) checkRoundEnd();
   return { applied: true, killed: true };
@@ -918,10 +920,16 @@ setInterval(() => {
   }
   for (const [id, d] of drops) { d.t -= 1 / TICK_HZ; if (d.t <= 0) { drops.delete(id); broadcastRaw({ t: 'dropR', id }); } }
   for (let i = 0; i < CRATES.length; i++) { const c = CRATES[i]; if (!c.up) { c.t -= 1 / TICK_HZ; if (c.t <= 0) { c.up = true; broadcastRaw({ t: 'crate', i, up: 1 }); } } }
-  if (players.size && inMatch()) broadcastRaw({ t: 'snap', phase, lives: livesState(), wins: { ...wins },
+  if (players.size && inMatch()) broadcastRaw({ t: 'snap', phase,
+    startsIn: (phase === 'intro' || phase === 'countdown')
+      ? Math.max(0, startAt - now) : 0,
+    lives: livesState(), wins: { ...wins },
     ps: allSlots().map((p) => ({ id: p.id, x: p.x ?? 0, z: p.z ?? 0, y: p.y || 0,
       yaw: p.yaw || 0, st: p.st || 'idle', aim: p.aim || 0, p: p.p || 0, w: p.w || 'smg',
-      sp: p.sp || 0, hp: Math.round(p.hp), alive: p.alive, inv: p.prot > now ? 1 : 0, bot: p.bot ? 1 : 0 })) });
+      sp: p.sp || 0, hp: Math.round(p.hp), alive: p.alive,
+      resp: !p.alive && p.respawnAt > now ? +(p.respawnAt - now).toFixed(2) : 0,
+      rq: !p.alive && p.respawnAt > 0 ? 1 : 0,
+      inv: p.prot > now ? 1 : 0, bot: p.bot ? 1 : 0 })) });
 }, 1000 / TICK_HZ);
 
 function num(v) { return typeof v === 'number' && Number.isFinite(v) ? v : 0; }

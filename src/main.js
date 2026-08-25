@@ -132,6 +132,7 @@ const G = {
   dropSeq: 0,
   spawnProt: 0,        // protección de spawn (5s, se rompe al disparar)
   respawnT: 0,         // countdown visible de reaparición
+  selfRespawnPending: false, // únicamente el server decide si queda una vida
   playerLastHit: 99,
   remotes: new Map(),  // id -> RemotePlayer
   onlineRows: [],      // kills/deaths autoritativos expuestos por el servidor
@@ -177,9 +178,20 @@ const spectatorRay = new THREE.Vector3();
 function matchControlsLocked() {
   if (G.mode === 'bots' && G.botMatch) return G.botMatch.controlsLocked();
   if (G.mode === 'online') {
-    return !!G.onlineFinal || (G.onlineStartAt > Date.now() / 1000);
+    // `onlineStartAt` solo presenta el 3…2…1. La fase recibida del servidor
+    // es la única autoridad para habilitar movimiento, armas y pickups.
+    return G.onlinePhase !== 'playing';
   }
   return false;
+}
+
+function localStartDeadline(message, fallbackSeconds = 0) {
+  const now = Date.now() / 1000;
+  const startsIn = Number(message?.startsIn);
+  if (Number.isFinite(startsIn)) return now + Math.max(0, startsIn);
+  const absolute = Number(message?.startAt);
+  return Number.isFinite(absolute) && absolute > 0
+    ? absolute : now + Math.max(0, fallbackSeconds);
 }
 
 function mvpOf(rows) {
@@ -363,6 +375,7 @@ function spectatorView() {
   let respawn = '';
   if (G.respawnT > 0) respawn = t('spectator.respawnsIn', { count: Math.ceil(G.respawnT) });
   else if (G.mode === 'bots' && G.botMatch?.pool[G.team] <= 0) respawn = t('spectator.noRespawns');
+  else if (G.mode === 'online' && !G.selfRespawnPending) respawn = t('spectator.noRespawns');
   else if (!G.selfAlive) respawn = t('spectator.waitingRespawn');
   return {
     name: target?.name || t('hud.waitingTeammate'),
@@ -1394,6 +1407,7 @@ function teardown({ keepNet = false, keepLobby = true } = {}) {
   G.specialRound = 0;
   G.spawnProt = 0;
   G.respawnT = 0;
+  G.selfRespawnPending = false;
   hud.respawnTick(null);
   hud.centerOff();  // sin "GANA ROJO" colándose a la partida siguiente
   hud.clearFeed();
@@ -1874,7 +1888,8 @@ function setupOnlineMatch(m) {
   const net = G.net; if (!net) return;
   teardown({ keepNet: true, keepLobby: true });
   G.mode = 'online'; G.onlineSettings = m.settings || G.lobby.settings;
-  G.onlinePhase = m.phase || 'intro'; G.onlineStartAt = m.startAt || 0;
+  G.onlinePhase = m.phase || 'intro';
+  G.onlineStartAt = localStartDeadline(m, INTRO_TIME + COUNTDOWN_TIME);
   G.onlineWins = m.wins || { red: 0, blue: 0 }; G.scores = m.lives || { red: G.onlineSettings.lives, blue: G.onlineSettings.lives };
   G.mapChoice = G.onlineSettings.map; world.setLayout(G.mapChoice); effects.clearImpacts();
   audio.setAmbience(G.mapChoice);
@@ -1912,6 +1927,55 @@ function addRemote(p) {
   // posición real desde el welcome: sin ella nacían apilados en (0,0)
   if (typeof p.x === 'number') { r.x = p.x; r.z = p.z; }
   G.remotes.set(p.id, r);
+}
+
+function reconcileLocalOnlineSnapshot(snapshot) {
+  if (!G.player || !snapshot) return;
+  const serverAlive = snapshot.alive !== false;
+  const wasAlive = G.selfAlive;
+  const respawnSeconds = Number(snapshot.resp);
+  if (serverAlive) {
+    G.selfRespawnPending = false;
+    G.respawnT = 0;
+  } else {
+    if (Number.isFinite(respawnSeconds)) G.respawnT = Math.max(0, respawnSeconds);
+    if (snapshot.rq !== undefined) G.selfRespawnPending = !!snapshot.rq;
+  }
+
+  if (!serverAlive && wasAlive) {
+    // Fallback ante una muerte perdida por una transición/reconexión: el snap
+    // no reproduce gore ni audio, pero nunca deja un jugador vivo localmente
+    // cuando el servidor ya lo considera eliminado.
+    G.selfAlive = false;
+    G.weapons.cancelActions();
+    if (!G.player.dead) G.player.kill();
+    enterSpectator();
+  } else if (serverAlive && !wasAlive) {
+    // WebSocket mantiene orden y normalmente `respawn` llega primero. Este
+    // camino reconcilia el estado si la UI se montó tarde o cambió de host.
+    G.selfAlive = true;
+    G.player.respawn({ x: snapshot.x, z: snapshot.z, yaw: snapshot.yaw || 0 });
+    G.weapons.reset();
+    G.rig?.setWeapon?.('smg');
+    exitSpectator();
+  } else {
+    G.selfAlive = serverAlive;
+  }
+
+  // Durante fases bloqueadas el spawn/pose del servidor es source of truth.
+  // En gameplay normal seguimos usando predicción local + `correction` para
+  // no introducir rubber-banding en cada snapshot.
+  if (serverAlive && G.onlinePhase !== 'playing' &&
+      [snapshot.x, snapshot.y, snapshot.z].every(Number.isFinite)) {
+    G.player.pos.x = snapshot.x;
+    G.player.pos.z = snapshot.z;
+    G.player.y = snapshot.y;
+    G.player.vel.x = 0;
+    G.player.vel.z = 0;
+    G.player.vy = 0;
+    G.player.cover = null;
+    G.player.coverEntry = null;
+  }
 }
 
 // ---------- red ----------
@@ -1971,14 +2035,19 @@ function bindNet(net) {
   net.on('snap', (m) => {
     if (!alive()) return;
     G.onlinePhase = m.phase || G.onlinePhase;
+    if ((G.onlinePhase === 'intro' || G.onlinePhase === 'countdown') &&
+        Number.isFinite(Number(m.startsIn))) {
+      G.onlineStartAt = Date.now() / 1000 + Math.max(0, Number(m.startsIn));
+    } else if (G.onlinePhase === 'playing') G.onlineStartAt = 0;
     if (m.lives) G.scores = m.lives;
     if (m.wins) G.onlineWins = m.wins;
-    for (const p of m.ps) {
+    for (const p of m.ps || []) {
       if (p.id === net.id) {
         // G.selfAlive: el golpe mortal ya sonó con 'death' — sin el guard
         // sonaba hurt + shake + rumble sobre un jugador ya muerto
         if (p.hp < G.selfHp && G.selfAlive) { audio.hurt(); shoulderCam.addShake(0.4); input.pad.rumble(140, 0.5, 0.7); }
         G.selfHp = p.hp;
+        reconcileLocalOnlineSnapshot(p);
         continue;
       }
       const hosted = G.onlineBots?.botById(p.id);
@@ -2274,6 +2343,9 @@ function bindNet(net) {
     }
     if (m.target === net.id) {
       G.selfAlive = false;
+      G.respawnT = Number.isFinite(Number(m.respawn))
+        ? Math.max(0, Number(m.respawn)) : TUNING.combat.respawnTime;
+      G.selfRespawnPending = G.respawnT > 0;
       G.weapons.cancelActions();
       G.rig.setDeathContext({
         impact: deathImpactFor(G.player.pos),
@@ -2286,7 +2358,6 @@ function bindNet(net) {
       enterSpectator();
       audio.death();
       input.pad.rumble(350, 0.8, 1.0);
-      G.respawnT = TUNING.combat.respawnTime;
     } else if (m.from === net.id) {
       audio.kill();
       hud.hitmarker();
@@ -2338,13 +2409,14 @@ function bindNet(net) {
       G.selfAlive = true;
       G.selfHp = TUNING.combat.hp;
       G.respawnT = 0;
+      G.selfRespawnPending = false;
       G.player.respawn(m.spawn);
       G.weapons.reset();
       G.rig.setWeapon('smg');
       exitSpectator();
       // El reset de fin de partida coloca al jugador antes de la presentación;
       // la protección empieza al terminar el 3…2…1, no 13 s antes.
-      if (!G.onlineFinal && G.onlineStartAt <= Date.now() / 1000) grantSpawnProtection();
+      if (G.onlinePhase === 'playing') grantSpawnProtection();
       hud.centerOff();
     } else if (G.onlineBots?.botById(m.id)) {
       G.onlineBots.respawnExternal(m.id, m.spawn);
@@ -2365,7 +2437,8 @@ function bindNet(net) {
   } });
   net.on('roundEnd', (m) => {
     if (!alive()) return;
-    G.onlinePhase = 'intermission'; G.onlineWins = m.wins || G.onlineWins;
+    G.onlinePhase = 'intermission'; G.onlineStartAt = 0;
+    G.onlineWins = m.wins || G.onlineWins;
     G.onlineRoundResult = { winner: m.winner, wins: G.onlineWins,
       rows: (m.rows || G.onlineRows).map((r) => ({ ...r, score: r.score ?? (r.kills || 0) * 100 })) };
   });
@@ -2383,7 +2456,7 @@ function bindNet(net) {
     if (!alive()) return;
     G.onlineFinal = null;
     G.onlineRoundResult = null; G.onlinePhase = m.phase || 'countdown';
-    G.onlineStartAt = m.startAt || (Date.now() / 1000 + INTRO_TIME + COUNTDOWN_TIME);
+    G.onlineStartAt = localStartDeadline(m, COUNTDOWN_TIME);
     spawnOnlineSpecial(m.special);
     if (m.lives) G.scores = m.lives;
     if (m.wins) G.onlineWins = m.wins;
@@ -2396,6 +2469,7 @@ function bindNet(net) {
         const spawn = { x: p.x, z: p.z, yaw: p.team === 'red' ? Math.PI : 0 };
         if (p.id === net.id) {
           G.selfAlive = true; G.selfHp = TUNING.combat.hp; G.respawnT = 0;
+          G.selfRespawnPending = false;
           G.player.respawn(spawn); G.weapons.reset(); exitSpectator();
         } else if (G.onlineBots?.botById(p.id)) G.onlineBots.respawnExternal(p.id, spawn);
         else {
