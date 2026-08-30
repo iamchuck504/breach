@@ -89,9 +89,13 @@ try {
   check('scope usa zoom óptico real cercano a 20°',
     Math.abs(scoped.fov - 20) < 1.2, `fov=${scoped.fov.toFixed(2)}`);
 
-  // La cruz del scope es una referencia óptica fija. Antes seguía el punto
-  // resuelto desde el muzzle y alternaba a naranja cuando ese punto se alejaba
-  // del centro, de modo que paredes, enemigos o un giro podían moverla solos.
+  // La entrada al hombro es una transición visual breve; medir estabilidad
+  // después de que termina evita confundir esa animación intencional con drift.
+  await page.waitForTimeout(360);
+
+  // La cruz del scope no deriva ni cambia de color sin input. Puede abandonar
+  // el centro únicamente cuando otra geometría tapa el cañón; al despejar la
+  // trayectoria debe regresar al eje óptico.
   const scopeReticle = async () => page.evaluate(() => {
     const el = document.getElementById('scope-reticle');
     const r = el.getBoundingClientRect();
@@ -108,6 +112,14 @@ try {
     };
   });
   const reticleBefore = await scopeReticle();
+  await page.waitForTimeout(140);
+  const reticleStill = await scopeReticle();
+  const drift = Math.hypot(reticleStill.x - reticleBefore.x,
+    reticleStill.y - reticleBefore.y);
+  check('retícula scoped permanece estable sin input',
+    drift < 0.75,
+    JSON.stringify({ before: reticleBefore, still: reticleStill, drift }));
+
   await page.evaluate(() => {
     const G = window.BREACH;
     G.player.cam.yaw += 0.42;
@@ -117,15 +129,14 @@ try {
   await page.waitForTimeout(140);
   const reticleAfter = await scopeReticle();
   const centered = (v) => Math.hypot(v.x - v.cx, v.y - v.cy) < 0.75;
-  check('retícula scoped permanece centrada al mover cámara y personaje',
-    centered(reticleBefore) && centered(reticleAfter) &&
-      reticleBefore.left === '50%' && reticleAfter.left === '50%' &&
-      reticleBefore.top === '50%' && reticleAfter.top === '50%',
-    JSON.stringify({ before: reticleBefore, after: reticleAfter }));
+  check('retícula scoped vuelve al centro al despejar el cañón',
+    centered(reticleAfter) && reticleAfter.left === '50%' &&
+      reticleAfter.top === '50%', JSON.stringify({ before: reticleBefore, after: reticleAfter }));
   check('retícula scoped conserva el mismo color y estado visual',
-    reticleBefore.color === reticleAfter.color && !reticleBefore.blocked &&
-      !reticleAfter.blocked && !reticleBefore.outRange && !reticleAfter.outRange,
-    JSON.stringify({ before: reticleBefore, after: reticleAfter }));
+    reticleBefore.color === reticleStill.color && reticleBefore.color === reticleAfter.color &&
+      !reticleBefore.blocked && !reticleStill.blocked && !reticleAfter.blocked &&
+      !reticleBefore.outRange && !reticleStill.outRange && !reticleAfter.outRange,
+    JSON.stringify({ before: reticleBefore, still: reticleStill, after: reticleAfter }));
 
   // Disparar no debe cerrar el scope. Además exigimos que el disparo sí haya
   // ocurrido, para no aceptar un falso positivo por un input ignorado.

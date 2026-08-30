@@ -155,7 +155,7 @@ const G = {
   name: 'CHUCK',
   charVariant: (() => {
     const v = parseInt(localStorage.getItem('breach.character'), 10);
-    return v >= 0 && v <= 5 ? v : 0;
+    return v >= 0 && v <= 4 ? v : 0;
   })(),
   footAcc: 0,
   presentationAudioKey: '',
@@ -1123,7 +1123,7 @@ menuNavigator = new MenuControllerNavigator({
 
 function buildCharUI() {
   if (!charSlots.children.length) {
-    for (let v = 0; v < 6; v++) {
+    for (let v = 0; v < 5; v++) {
       const b = document.createElement('button');
       b.className = 'char-slot';
       b.dataset.v = v;
@@ -1164,7 +1164,7 @@ function updateCharSel() {
 }
 
 // Previews 3D: pose neutral sin armas para que casco, peto y proporciones se
-// lean completos. Una sola cámara/escala para las seis variantes: el selector
+// lean completos. Una sola cámara/escala para las cinco variantes: el selector
 // no falsea el tamaño relativo de ningún soldado.
 function renderCharPreviews() {
   const pr = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -1180,7 +1180,7 @@ function renderCharPreviews() {
   const pc = new THREE.PerspectiveCamera(30, 176 / 224, 0.1, 10);
   pc.position.set(0.52, 1.47, -2.75);
   pc.lookAt(0, 0.84, 0);
-  for (let v = 0; v < 6; v++) {
+  for (let v = 0; v < 5; v++) {
     const r = new Rig(ps, 'red', null, v);
     // Asentar piernas/torso y luego aplicar una pose de exhibición simétrica.
     for (let i = 0; i < 40; i++) r.update(1 / 30, { state: 'idle', speed: 0, aim: false, aimPitch: 0 });
@@ -2634,6 +2634,31 @@ function barrelReticleXY() {
   };
 }
 
+// En el scope la cruz permanece centrada mientras cámara y cañón alcanzan el
+// mismo objetivo. Si una cobertura cercana intercepta el rayo físico, usamos
+// exactamente la misma resolución guiada de fireShot y proyectamos ESE contacto
+// en pantalla. Así no hay offsets por arma ni una promesa falsa a través del
+// cover; al despejar el cañón la cruz vuelve al eje óptico inmediatamente.
+function scopedReticleState(maxRange) {
+  G.rig.root.updateWorldMatrix(true, true);
+  const muzzle = G.rig.muzzleWorld(_v1).clone();
+  const ray = shoulderCam.aimRay();
+  const hit = resolveGuidedShot(world, currentTargets(), ray.origin, muzzle,
+    ray.dir, maxRange, null);
+  if (!hit.blocked) return null;
+
+  camera.updateMatrixWorld(true);
+  const viewPoint = _v3.copy(hit.point).applyMatrix4(camera.matrixWorldInverse);
+  if (!Number.isFinite(viewPoint.z) || viewPoint.z >= -0.001) return null;
+  const ndc = _v2.copy(hit.point).project(camera);
+  if (!Number.isFinite(ndc.x) || !Number.isFinite(ndc.y)) return null;
+  return {
+    x: (ndc.x * 0.5 + 0.5) * innerWidth,
+    y: (-ndc.y * 0.5 + 0.5) * innerHeight,
+    blocked: true,
+  };
+}
+
 function coverFireClear() {
   const p = G.player;
   if (!p || p.state !== 'cover' || !p.cover) return true;
@@ -3192,13 +3217,12 @@ function updateReticle() {
     const ringPx = Math.tan(def.spreadAim * Math.PI / 180) /
       Math.tan(camera.fov * Math.PI / 360) * (innerHeight / 2);
     const ray = shoulderCam.aimRay();
-    // La cruz telescópica representa exclusivamente el eje óptico y debe ser
-    // una referencia estable. El disparo sigue usando resolveGuidedShot desde
-    // el muzzle, así que una pared cercana aún bloquea físicamente la bala sin
-    // mover ni recolorear la retícula.
+    // El scope conserva el centro óptico cuando el cañón tiene línea limpia.
+    // Solo una obstrucción física real desplaza la cruz al impacto que resolverá
+    // fireShot; esto evita el caso "retícula en el fondo, bala en el cover".
     if (scoped) {
       hud.reticle(false, null);
-      hud.sniperScope(true);
+      hud.sniperScope(true, scopedReticleState(def.range));
       return;
     }
     const guideT = staticHitDistance(ray.origin, ray.dir, 200);

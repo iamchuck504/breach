@@ -396,10 +396,10 @@ export class HUD {
     }
   }
 
-  // El scope comunica la intención óptica de la cámara y por eso su cruz es
-  // completamente estable. La validación muzzle→objetivo sigue ocurriendo en
-  // balística, pero no puede desplazar ni recolorear la retícula telescópica.
-  sniperScope(on) {
+  // El scope conserva una cruz óptica central cuando el cañón está libre. Una
+  // obstrucción real puede entregar la proyección exacta del impacto físico;
+  // HUD no calcula offsets ni cambia colores por su cuenta.
+  sniperScope(on, impactXY = null) {
     const root = this.el.sniperScope;
     const reticle = this.el.scopeReticle;
     if (!root || !reticle) return;
@@ -407,8 +407,8 @@ export class HUD {
     root.setAttribute('aria-hidden', on ? 'false' : 'true');
     this.el.hud.classList.toggle('scoped', !!on);
     reticle.classList.remove('blocked', 'out-range');
-    reticle.style.left = '50%';
-    reticle.style.top = '50%';
+    reticle.style.left = on && impactXY?.blocked ? `${impactXY.x}px` : '50%';
+    reticle.style.top = on && impactXY?.blocked ? `${impactXY.y}px` : '50%';
   }
 
   kill(killerName, killerTeam, victimName, victimTeam) {

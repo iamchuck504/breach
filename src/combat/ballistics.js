@@ -114,9 +114,22 @@ export function resolveGuidedShot(world, targets, cameraOrigin, ballisticOrigin,
       // remota, donde no existe una identidad compartida de colliders.
       visualOrigin: cameraOrigin.clone(),
       physicalPoint: physical.point.clone(),
+      guidePoint: guide.point.clone(),
+      blocked: false,
     };
   }
-  return physical;
+  const samePlayer = guide.kind === 'player' && physical.kind === 'player' &&
+    guide.id === physical.id;
+  const sameOpenRay = guide.kind === 'none' && physical.kind === 'none';
+  return {
+    ...physical,
+    guidePoint: guide.point.clone(),
+    // El scope necesita distinguir una diferencia de paralaje normal de una
+    // obstrucción real. Si cámara y cañón no terminan en el mismo objetivo, la
+    // marca óptica debe representar el contacto físico, no prometer el fondo.
+    blocked: !samePlayer && !sameOpenRay &&
+      physical.point.distanceTo(guide.point) > 0.08,
+  };
 }
 
 // Aplica dispersión cónica (grados) a una dirección

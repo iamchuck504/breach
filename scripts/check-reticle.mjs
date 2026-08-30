@@ -161,6 +161,81 @@ try {
     throw new Error('una obstrucción física desplazó la retícula ADS');
   }
 
+  // Sniper scoped con paralaje obstruido: la cámara ve el fondo, pero un cover
+  // distinto intercepta el rayo desde el cañón. La cruz debe proyectar el mismo
+  // punto físico que recibe el decal, no permanecer prometiendo el centro.
+  const sniperBlocked = await page.evaluate(async () => {
+    const G = window.BREACH, W = window.BREACH_WORLD, I = window.BREACH_INPUT;
+    if (!G.weapons.hasWeapon('sniper')) G.weapons.giveSpecial('sniper');
+    else G.weapons.cur = 'sniper';
+    G.weapons.swapT = 0;
+    G.weapons.state.sniper.mag = 1;
+    G.weapons.state.sniper.cd = 0;
+    G.weapons.state.sniper.reload = 0;
+    G.player.state = 'idle';
+    G.player.cover = null;
+    G.player.yaw = 0.35;
+    G.player.cam.yaw = 0.35;
+    G.player.cam.pitch = -0.04;
+    for (const d of G.dummies.list) d.alive = false;
+    I._mouseAim = true;
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    G.rig.root.updateWorldMatrix(true, true);
+    const muzzle = G.rig.muzzleWorld(new window.THREE.Vector3()).clone();
+    const ray = G.player.cam.aimRay();
+    const cameraOrigin = ray.origin.clone();
+    const farCollider = { id: 'far' }, nearCollider = { id: 'near' };
+    const oldRaycastHit = W.raycastHit.bind(W);
+    const oldRaycast = W.raycast.bind(W);
+    W.raycastHit = (origin, dir, maxDist) => {
+      const fromCamera = origin.distanceTo(cameraOrigin) < 0.12;
+      const t = Math.min(fromCamera ? 24 : 0.8, maxDist);
+      return { t, normal: { x: 0, y: 0, z: 1 }, surface: 'concrete',
+        collider: fromCamera ? farCollider : nearCollider };
+    };
+    W.raycast = () => null;
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    const guidePoint = cameraOrigin.clone().addScaledVector(ray.dir, 24);
+    const physicalDir = guidePoint.clone().sub(muzzle).normalize();
+    const expectedPoint = muzzle.clone().addScaledVector(physicalDir, 0.8);
+    const projected = expectedPoint.clone().project(window.BREACH_CAM);
+    const expected = {
+      x: (projected.x * 0.5 + 0.5) * innerWidth,
+      y: (-projected.y * 0.5 + 0.5) * innerHeight,
+    };
+    const el = document.getElementById('scope-reticle');
+    const rect = el.getBoundingClientRect();
+    const actual = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+
+    let impact = null;
+    const oldImpact = window.BREACH_EFFECTS.impact.bind(window.BREACH_EFFECTS);
+    window.BREACH_EFFECTS.impact = (point, normal, surface, opts) => {
+      impact = point.clone();
+      return oldImpact(point, normal, surface, opts);
+    };
+    I._mouseFire = true;
+    I.firePressed = true;
+    await new Promise((resolve) => setTimeout(resolve, 90));
+    I._mouseFire = false;
+    I._mouseAim = false;
+    window.BREACH_EFFECTS.impact = oldImpact;
+    W.raycastHit = oldRaycastHit;
+    W.raycast = oldRaycast;
+    return {
+      actual, expected,
+      reticleError: Math.hypot(actual.x - expected.x, actual.y - expected.y),
+      centerOffset: Math.hypot(actual.x - innerWidth / 2, actual.y - innerHeight / 2),
+      impactWorldError: impact ? impact.distanceTo(expectedPoint) : Infinity,
+    };
+  });
+  if (sniperBlocked.centerOffset < 4 || sniperBlocked.reticleError > 2.5 ||
+      sniperBlocked.impactWorldError > 0.14) {
+    console.error('SNIPER BLOCKED RETICLE DEBUG', JSON.stringify(sniperBlocked));
+    throw new Error('scope del sniper no representó el impacto físico obstruido');
+  }
+
   // Bazooka ADS: la cámara define el punto deseado y el cohete sale desde el
   // muzzle hacia ESE punto. Lanzarlo paralelo al eje óptico hace que falle la
   // retícula por paralaje, especialmente al apuntar al suelo o a cover cercano.
@@ -259,7 +334,7 @@ try {
     console.error('RETICLE STABILITY DEBUG', JSON.stringify(stability));
     throw new Error(`retícula inestable: ${unstable.map((v) => v.weapon).join(', ')}`);
   }
-  console.log(`RETICLE OK · barrel ${result.errorPx.toFixed(2)} px · paralaje ${result.centerOffset.toFixed(1)} px · bazooka guiada ${rocketAim.dotExpected.toFixed(5)} · 5 armas estables`);
+  console.log(`RETICLE OK · barrel ${result.errorPx.toFixed(2)} px · scope obstruido ${sniperBlocked.reticleError.toFixed(2)} px · bazooka guiada ${rocketAim.dotExpected.toFixed(5)} · 5 armas estables`);
 } finally {
   await browser?.close();
   server.kill();

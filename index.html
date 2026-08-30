@@ -46,9 +46,8 @@
   #crosshair.aim { display: block; }
   #crosshair svg { position: absolute; left: -200px; top: -200px; display: block; }
 
-  /* Scope del sniper: zoom real lo hace la cámara; la retícula óptica queda
-     fija en el centro. La balística todavía nace físicamente en el muzzle,
-     pero una obstrucción cercana nunca arrastra ni recolorea la cruz. */
+  /* Scope del sniper: zoom real lo hace la cámara. La cruz queda centrada con
+     línea limpia y solo se proyecta al contacto físico si el cañón está tapado. */
   #sniper-scope { position: fixed; inset: 0; z-index: 2; display: none;
     background: radial-gradient(circle at 50% 50%, rgba(11,17,21,.04) 0 42.6vmin,
       rgba(5,8,11,.88) 43vmin, rgba(2,4,6,.985) 44vmin 100%); }
@@ -590,7 +589,7 @@
 
   /* ---------- selección de personaje ---------- */
   #char-card { width: min(900px, calc(100vw - 48px)); display: none; }
-  #char-slots { display: grid; grid-template-columns: repeat(6,minmax(0,1fr)); gap: 9px; }
+  #char-slots { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 9px; }
   .char-slot { min-width: 0; background: rgba(17,20,25,.96); border: 1px solid var(--line);
     padding: 8px 7px; cursor: pointer; display: flex; flex-direction: column; align-items: center;
     gap: 7px; font-family: var(--mono); font-size: 9px; font-weight: 500;
@@ -642,7 +641,7 @@
     .menu-card, #controls-card, #char-card, #options-card, #audio-card, #video-card, #language-card { width: calc(100vw - 24px); padding: 20px; }
     .menu-grid, .cols { grid-template-columns: 1fr; }
     .utility-row, .settings-grid { grid-template-columns: 1fr; }
-    #char-slots { overflow-x: auto; grid-template-columns: repeat(6,112px); padding-bottom: 4px; }
+    #char-slots { overflow-x: auto; grid-template-columns: repeat(5,112px); padding-bottom: 4px; }
     #match-flow { padding: 24px; }
     .mf-teams, .mf-mvp { grid-template-columns: 1fr; }
     .mf-team { padding: 9px 10px; }
