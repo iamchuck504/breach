@@ -90,11 +90,11 @@ try {
       const G = window.BREACH, W = window.BREACH_WORLD;
       G.rig.root.updateWorldMatrix(true, true);
       const muzzle = G.rig.muzzleWorld(new window.THREE.Vector3()).clone();
-      const ray = G.player.cam.aimRay();
-      const contact = W.raycastHit(muzzle, ray.dir, G.weapons.def.range);
-      const t = contact?.t ?? W.raycast(muzzle, ray.dir, G.weapons.def.range) ??
+      const barrelDir = G.rig.gunForward(new window.THREE.Vector3()).normalize();
+      const contact = W.raycastHit(muzzle, barrelDir, G.weapons.def.range);
+      const t = contact?.t ?? W.raycast(muzzle, barrelDir, G.weapons.def.range) ??
         G.weapons.def.range;
-      const point = muzzle.clone().addScaledVector(ray.dir, t);
+      const point = muzzle.clone().addScaledVector(barrelDir, t);
       window.BREACH_CAM.updateMatrixWorld(true);
       const projected = point.project(window.BREACH_CAM);
       const expected = {

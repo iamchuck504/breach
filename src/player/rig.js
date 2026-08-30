@@ -376,6 +376,9 @@ export function buildPistol(teamColor) {
   g.add(gunBox(0.09, 0.028, 0.09, METAL, 0, -0.18, 0.085));   // base cargador
   g.userData.muzzle = anchor(g, 0, 0.065, -0.28);
   g.userData.grip = anchor(g, 0, -0.07, 0.055);
+  // La pistola permanece de una mano en hip, pero ADS usa este apoyo cercano
+  // al grip para una postura estabilizada de dos manos.
+  g.userData.aimSupport = anchor(g, -0.045, -0.045, -0.005);
   g.userData.mag = anchor(g, 0, -0.17, 0.085);
   g.userData.oneHand = true;
   return g;
@@ -482,6 +485,15 @@ export const WEAPON_SCALES = {
 // La granada sí admite escala uniforme porque su muzzle es el punto de suelta.
 export const EQUIPPED_WEAPON_VISUAL_SCALE = 0.8;
 
+const ADS_WEAPON_POSES = Object.freeze({
+  pistol:  { damp: 23, mount: [0.045, 0.10, -0.42], torsoPitch: -0.07, head: 0.30 },
+  smg:     { damp: 20, mount: [0.10, 0.055, -0.08], torsoPitch: -0.12, head: 0.25 },
+  shotgun: { damp: 19, mount: [0.11, 0.045, 0.02], torsoPitch: -0.15, head: 0.22 },
+  sniper:  { damp: 22, mount: [0.12, 0.085, 0.02], torsoPitch: -0.17, head: 0.18 },
+  bazooka: { damp: 18, mount: [0.17, 0.15, 0.03], torsoPitch: -0.19, head: 0.13 },
+  grenade: { damp: 21, mount: [0.06, 0.08, -0.38], torsoPitch: -0.09, head: 0.28 },
+});
+
 export function applyEquippedWeaponVisualScale(group, weapon) {
   if (group.userData.equippedVisual) return group.userData.equippedVisual;
 
@@ -508,7 +520,7 @@ export function applyEquippedWeaponVisualScale(group, weapon) {
 
   // Grip/forend/mag son sockets exclusivamente visuales del IK. Se mueven
   // con el mesh para que las manos sigan tocando la geometría reducida.
-  for (const key of ['grip', 'forend', 'mag']) {
+  for (const key of ['grip', 'forend', 'aimSupport', 'mag']) {
     const socket = group.userData[key];
     if (!socket) continue;
     socket.position.set(
@@ -1514,23 +1526,32 @@ export class Rig {
     if (p.state !== 'dead') this._deadT = 0;
     if (p.state !== 'melee') this._meleeT = 0;
 
-    // ADS: postura pronunciada — arma al hombro, pitch completo de cámara.
+    // ADS: postura pronunciada y específica por familia. La posición cambia
+    // cómo se sostiene el modelo, pero gunMount queda sin yaw/pitch local: la
+    // orientación funcional vive exclusivamente en aimRig y coincide con la
+    // intención de cámara.
     // roadie/blind_over excluidos: su brazo izq. es pose Euler y el IK de
     // aquí peleaba con ella (temblor) si un remoto llegaba con st+aim juntos
     if (p.aim && p.state !== 'dead' && p.state !== 'dive' && p.state !== 'slide' &&
         p.state !== 'roadie' && p.state !== 'blind_over' && p.state !== 'melee') {
-      damp = 18;
+      const adsPose = ADS_WEAPON_POSES[this._wep] ?? ADS_WEAPON_POSES.smg;
+      damp = adsPose.damp;
       leftOnGun = true;
       const lean = p.coverLean ?? 0; // asomarse en la orilla de pared alta
       const coverPose = p.state === 'cover_low'
         ? coverAimPose({ kind: p.coverKind, h: 1.1 }, pitch,
           p.coverAimExposure ?? 1)
         : null;
-      R(this.aimRig, pitch, (p.aimYawErr ?? 0) * 0.9, lean * 0.1);
-      R(this.torso, -0.12 - (coverPose?.torsoLean ?? 0), -0.15, -lean * 0.22);
-      R(this.head, pitch * 0.25, 0, lean * 0.08);
-      // arma al hombro derecho, a la altura de la mejilla (pronunciada)
-      M(0.11, 0.05, -0.38 - (coverPose?.gunForward ?? 0), 0, 0.05, 0);
+      const torsoPitch = adsPose.torsoPitch - (coverPose?.torsoLean ?? 0);
+      // Compensar inclinación de root+torso: el cañón visual conserva el pitch
+      // de cámara en vez de sumar accidentalmente la postura inclinada.
+      R(this.aimRig, pitch - rootRotX - torsoPitch, p.aimYawErr ?? 0, lean * 0.1);
+      R(this.torso, torsoPitch, 0, -lean * 0.22);
+      R(this.head, pitch * adsPose.head, 0, lean * 0.08);
+      // Pistola extendida, armas largas apoyadas y bazooka alta al hombro.
+      // Cero rotación local evita que el modelo prometa otra dirección.
+      M(adsPose.mount[0], adsPose.mount[1],
+        adsPose.mount[2] - (coverPose?.gunForward ?? 0), 0, 0, 0);
       if (coverPose) {
         hipsY = coverPose.hipsY;
         aimRigY = coverPose.aimRigY;
@@ -1775,11 +1796,15 @@ export class Rig {
       this._ikArm(this.armR, 1, this.aimRig.worldToLocal(TMP_A));
       // el gesto de recarga solo aplica en posturas con el arma al frente
       // (misma whitelist que reloadPose, calculada arriba). Las armas de una
-      // mano (pistola/granada) no llevan la izquierda al arma salvo recarga.
+      // mano (granada) no lleva la izquierda al arma; la pistola sí usa apoyo
+      // de dos manos únicamente al apuntar.
       const reloadIk = reloadPose;
       const oneHand = !!gun.userData.oneHand;
-      if ((leftOnGun && !oneHand) || reloadIk) {
-        const a = reloadIk ? (gun.userData.mag ?? gun.userData.forend) : gun.userData.forend;
+      const pistolAimSupport = p.aim ? gun.userData.aimSupport : null;
+      if ((leftOnGun && (!oneHand || pistolAimSupport)) || reloadIk) {
+        const a = reloadIk
+          ? (gun.userData.mag ?? gun.userData.forend ?? gun.userData.aimSupport)
+          : (pistolAimSupport ?? gun.userData.forend);
         a.getWorldPosition(TMP_B);
         const tgt = this.aimRig.worldToLocal(TMP_B);
         if (reloadIk) tgt.y -= 0.16 * Math.sin(Math.PI * (p.reloadT ?? 0));

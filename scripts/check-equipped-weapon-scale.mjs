@@ -34,7 +34,7 @@ for (const weapon of WEAPONS) {
 
   const equipped = build(0x4f8de0);
   const originalMuzzle = equipped.userData.muzzle.position.clone();
-  const originalSockets = Object.fromEntries(['grip', 'forend', 'mag']
+  const originalSockets = Object.fromEntries(['grip', 'forend', 'aimSupport', 'mag']
     .filter((key) => equipped.userData[key])
     .map((key) => [key, equipped.userData[key].position.clone()]));
   const visual = applyEquippedWeaponVisualScale(equipped, weapon);

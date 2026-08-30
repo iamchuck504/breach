@@ -69,8 +69,8 @@ check(shot.kind === 'world' && near(shot.t, 0.7),
   'ADS atravesó una esquina entre el arma y el objetivo de cámara');
 
 // ADS cerca de un vehículo: cámara y cañón pueden entrar por caras distintas
-// de su AABB. Si ambas trayectorias encontraron el mismo collider, la marca
-// debe conservar el punto prometido por la retícula y no saltar a otra cara.
+// de su AABB. La identidad compartida del collider NO permite reconciliar el
+// tiro a la cámara: la cara que encuentra el muzzle sigue siendo autoritativa.
 const vehicleCollider = {
   minx: -1, maxx: 1, minz: -6, maxz: -2, h: 2, surface: 'metal',
 };
@@ -84,14 +84,17 @@ const muzzleOrigin = new THREE.Vector3(2, 1, 0);
 const cameraDir = new THREE.Vector3(2, 0, -4).normalize();
 const cameraGuide = resolveShot(vehicleWorld, [], cameraOrigin, cameraDir, 30);
 shot = resolveGuidedShot(vehicleWorld, [], cameraOrigin, muzzleOrigin, cameraDir, 30);
+const physicalDir = cameraGuide.point.clone().sub(muzzleOrigin).normalize();
+const physicalHit = resolveShot(vehicleWorld, [], muzzleOrigin, physicalDir,
+  muzzleOrigin.distanceTo(cameraGuide.point) + 0.05);
 check(cameraGuide.collider === vehicleCollider && shot.collider === vehicleCollider,
-  'ballistics perdió la identidad del collider durante la reconciliación ADS');
-check(shot.point.distanceTo(cameraGuide.point) < 0.001,
-  `ADS impactó otra cara del mismo vehículo (${shot.point.toArray().join(', ')})`);
-check(shot.visualOrigin?.distanceTo(cameraOrigin) < 0.001,
-  'el decal reconciliado no conserva la línea óptica de la retícula');
-check(shot.physicalPoint && shot.physicalPoint.distanceTo(cameraGuide.point) > 0.5,
-  'la reconciliación perdió el contacto físico usado para validación remota');
+  'ballistics perdió la identidad del collider durante ADS');
+check(shot.point.distanceTo(physicalHit.point) < 0.001,
+  `ADS abandonó el contacto físico del muzzle (${shot.point.toArray().join(', ')})`);
+check(shot.point.distanceTo(cameraGuide.point) > 0.5 && shot.blocked,
+  'ADS atravesó otra cara del mismo vehículo por reconciliación óptica');
+check(!shot.visualOrigin && !shot.physicalPoint,
+  'ADS conserva rutas paralelas visual/física que pueden desincronizar decals');
 
 // Si el cañón encuentra OTRO objeto en el camino, no se permite reconciliar:
 // esa cobertura cercana debe seguir bloqueando aunque la cámara vea el fondo.

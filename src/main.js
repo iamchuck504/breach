@@ -18,7 +18,6 @@ import { damageFalloff, rocketSplashDamage } from './combat/damage.js';
 import {
   deathImpactPoint, isSniperHeadshotDeath, rocketDeathLevel,
 } from './combat/death-reactions.js';
-import { muzzleHasClearance, segmentsHaveClearance } from './combat/cover-fire.js';
 import { requiredFireBuffer } from './combat/fire-control.js';
 import { Effects } from './fx/effects.js';
 import { Audio, selectAudioListener } from './fx/audio.js';
@@ -2580,13 +2579,12 @@ function allCharacterTargets() {
   return currentTargets();
 }
 
-// Dirección de hipfire/blindfire: paralela a la cámara, con ORIGEN en el cañón
-// La mira sigue a la cámara; el personaje rota para acompañarla.
-function hipDir() {
-  const f = shoulderCam.flatForward();
-  const p = shoulderCam.pitch;
-  const cp = Math.cos(p), sp = Math.sin(p);
-  return new THREE.Vector3(f.x * cp, sp, f.z * cp).normalize();
+// Hip fire y blindfire pertenecen al arma, no a la cámara. Leer el quaternion
+// del muzzle después de actualizar el rig mantiene pose, trayectoria, tracer y
+// retícula sobre una única dirección física incluso durante transiciones.
+function barrelDirection(out = new THREE.Vector3()) {
+  G.rig.root.updateWorldMatrix(true, true);
+  return G.rig.gunForward(out).normalize();
 }
 
 function staticHitDistance(origin, dir, maxDist) {
@@ -2597,7 +2595,7 @@ function staticHitDistance(origin, dir, maxDist) {
 }
 
 function currentFireDirection(muzzle, maxRange = 80) {
-  if (!G.player.aim) return hipDir();
+  if (!G.player.aim) return barrelDirection(new THREE.Vector3());
   const ray = shoulderCam.aimRay();
   const guide = resolveShot(world, currentTargets(), ray.origin, ray.dir, maxRange, null);
   return _v3.copy(guide.point).sub(muzzle).normalize();
@@ -2614,7 +2612,7 @@ function barrelReticleXY() {
 
   G.rig.root.updateWorldMatrix(true, true);
   const muzzle = G.rig.muzzleWorld(_v1);
-  const dir = hipDir();
+  const dir = barrelDirection(_v2);
   // Las granadas no usan hitscan, pero mientras se prepara el lanzamiento el
   // indicador conserva una referencia frontal útil en vez de colapsar al
   // propio muzzle (range=0).
@@ -2634,12 +2632,11 @@ function barrelReticleXY() {
   };
 }
 
-// En el scope la cruz permanece centrada mientras cámara y cañón alcanzan el
-// mismo objetivo. Si una cobertura cercana intercepta el rayo físico, usamos
-// exactamente la misma resolución guiada de fireShot y proyectamos ESE contacto
-// en pantalla. Así no hay offsets por arma ni una promesa falsa a través del
-// cover; al despejar el cañón la cruz vuelve al eje óptico inmediatamente.
-function scopedReticleState(maxRange) {
+// En ADS/scope la cruz permanece centrada mientras cámara y cañón alcanzan el
+// mismo objetivo. Si una cobertura intercepta el rayo físico, proyectamos el
+// mismo contacto que resolverá fireShot. Así la UI nunca promete un punto que
+// la bala nacida en el muzzle no puede alcanzar.
+function guidedReticleState(maxRange) {
   G.rig.root.updateWorldMatrix(true, true);
   const muzzle = G.rig.muzzleWorld(_v1).clone();
   const ray = shoulderCam.aimRay();
@@ -2657,27 +2654,6 @@ function scopedReticleState(maxRange) {
     y: (-ndc.y * 0.5 + 0.5) * innerHeight,
     blocked: true,
   };
-}
-
-function coverFireClear() {
-  const p = G.player;
-  if (!p || p.state !== 'cover' || !p.cover) return true;
-  G.rig.setTransform(p.pos.x, p.pos.z, p.yaw, p.y);
-  G.rig.root.updateWorldMatrix(true, true);
-  const muzzle = G.rig.muzzleWorld(_v1);
-  const weaponRoot = G.rig.gunMount.getWorldPosition(_v2);
-  const dir = currentFireDirection(muzzle, G.weapons?.def?.range ?? 80);
-  if (!muzzleHasClearance(world, p.cover, weaponRoot, muzzle, dir)) return false;
-  if (p.blindMode === 'left' || p.blindMode === 'right') {
-    const point = (o) => o.getWorldPosition(new THREE.Vector3());
-    const segments = [];
-    for (const arm of [G.rig.armL, G.rig.armR]) {
-      const shoulder = point(arm.shoulder), elbow = point(arm.elbow), hand = point(arm.hand);
-      segments.push([shoulder, elbow], [elbow, hand]);
-    }
-    if (!segmentsHaveClearance(world, segments)) return false;
-  }
-  return true;
 }
 
 function coverPoseReady(wantsAim, wantsFire) {
@@ -2902,7 +2878,9 @@ function throwSmoke() {
   const d = TUNING.weapons.grenade;
   G.rig.setTransform(p.pos.x, p.pos.z, p.yaw, p.y);
   const muzzle = G.rig.muzzleWorld(_v1);
-  const dir = p.aim ? shoulderCam.aimRay().dir.clone() : hipDir();
+  const dir = p.aim
+    ? currentFireDirection(muzzle, 60).clone()
+    : barrelDirection(new THREE.Vector3());
   const o = { x: muzzle.x, y: muzzle.y, z: muzzle.z };
   const v = {
     x: dir.x * d.throwSpeed,
@@ -3047,7 +3025,7 @@ function fireShot() {
     cameraOrigin = ray.origin.clone();
     origin = muzzle.clone();
   } else {
-    baseDir = hipDir();
+    baseDir = barrelDirection(new THREE.Vector3());
     origin = muzzle.clone();
   }
 
@@ -3096,15 +3074,11 @@ function fireShot() {
     effects.tracer(muzzle, hit.point, scoped && w.cur === 'sniper');
     if (hit.kind === 'world') {
       effects.impact(hit.point, hit.normal, hit.surface, {
-        origin: hit.visualOrigin ?? origin,
+        origin,
         emphasized: scoped && w.cur === 'sniper',
       });
       audio.impact(hit.point, hit.surface);
-      // Para el cliente local, la marca sigue la misma línea óptica que la
-      // retícula. En red enviamos también el contacto físico original para que
-      // los demás clientes puedan validarlo sin compartir referencias internas
-      // de colliders.
-      worldImpacts.push(hit.physicalPoint ?? hit.point);
+      worldImpacts.push(hit.point);
     }
     if (hit.kind === 'player') {
       let dmg = def.dmg * damageFalloff(def, hit.t);
@@ -3208,11 +3182,9 @@ function updateReticle() {
   if (!canShow) { hud.reticle(false, null); hud.sniperScope(false); return; }
 
   if (p.aim) {
-    // ADS: el anillo representa exclusivamente la intención óptica de la
-    // cámara. La trayectoria sigue naciendo físicamente en el muzzle y una
-    // esquina todavía puede bloquearla, pero ese contacto no puede arrastrar
-    // la retícula: superficies, enemigos y animaciones cambiaban el punto de
-    // entrada del raycast cada frame y producían el salto visto en gameplay.
+    // La cámara define la intención; la posición contextual solo cambia cuando
+    // el rayo físico del muzzle queda obstruido. En ese caso retícula e impacto
+    // muestran el mismo punto en lugar de fingir que la bala llega al fondo.
     const def = G.weapons.def;
     const ringPx = Math.tan(def.spreadAim * Math.PI / 180) /
       Math.tan(camera.fov * Math.PI / 360) * (innerHeight / 2);
@@ -3222,12 +3194,12 @@ function updateReticle() {
     // fireShot; esto evita el caso "retícula en el fondo, bala en el cover".
     if (scoped) {
       hud.reticle(false, null);
-      hud.sniperScope(true, scopedReticleState(def.range));
+      hud.sniperScope(true, guidedReticleState(def.range));
       return;
     }
     const guideT = staticHitDistance(ray.origin, ray.dir, 200);
     hud.sniperScope(false);
-    hud.reticle(true, null, {
+    hud.reticle(true, guidedReticleState(def.range), {
       r: Math.min(190, ringPx),
       inRange: guideT <= def.range,
     });
@@ -3310,8 +3282,7 @@ function simStep(dt) {
   // debe poder representarla visualmente antes de emitir el proyectil.
   const aligned = p.fireAligned();
   const wantsFire = input.fireHeld || input.firePressed || G.fireBuffer > 0;
-  let canFire = stateOk && aligned &&
-    coverPoseReady(input.aimHeld, wantsFire) && (!wantsFire || coverFireClear());
+  let canFire = stateOk && aligned && coverPoseReady(input.aimHeld, wantsFire);
   // cualquier click que no pueda salir YA (roadie, cuerpo girando, cooldown,
   // dive/slide o recarga) queda bufereado — y el buffer dura AL MENOS
   // lo que falta de cooldown/recarga, para que el tiro encolado nunca se pierda
@@ -3405,8 +3376,7 @@ function simStep(dt) {
   // este mismo paso. Revalidar evita añadir un frame artificial de latencia.
   const stateOkAfter = !p.dead && p.state !== 'dive' && p.state !== 'slide' &&
     p.state !== 'roadie' && p.state !== 'mantle' && p.state !== 'melee' && input.anyDevice;
-  canFire = stateOkAfter && p.fireAligned() &&
-    coverPoseReady(p.aim, wantsFire) && (!wantsFire || coverFireClear());
+  canFire = stateOkAfter && p.fireAligned() && coverPoseReady(p.aim, wantsFire);
   const fired = p.dead ? false
     : G.weapons.update(dt, input.fireHeld, input.firePressed || G.fireBuffer > 0, canFire);
   // Tras la primera inserción desde 0, conservar margen para que cover/arma

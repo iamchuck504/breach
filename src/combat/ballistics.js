@@ -95,39 +95,23 @@ export function resolveGuidedShot(world, targets, cameraOrigin, ballisticOrigin,
   const physical = resolveShot(world, targets, ballisticOrigin, dir,
     Math.min(maxRange, len + 0.05), excludeId);
 
-  // Una cámara de hombro y el cañón observan un objeto cercano desde ángulos
-  // distintos. Con colliders AABB gruesos (vehículos, barricadas, edificios),
-  // el rayo del cañón puede entrar antes por otra cara DE LA MISMA caja y hacer
-  // que el impacto quede lejos de la retícula, aunque no exista una cobertura
-  // adicional entre ambos. En ese único caso reconciliamos al contacto elegido
-  // por la cámara. Un collider diferente sigue ganando siempre: las esquinas y
-  // coberturas reales continúan bloqueando el disparo.
-  const sameWorldCollider = guide.kind === 'world' && physical.kind === 'world' &&
-    guide.collider != null && guide.collider === physical.collider;
-  if (sameWorldCollider) {
-    return {
-      ...guide,
-      t: ballisticOrigin.distanceTo(guide.point),
-      point: guide.point.clone(),
-      // El decal local se proyecta con la misma línea óptica que prometió la
-      // retícula. El contacto físico se conserva aparte para validación visual
-      // remota, donde no existe una identidad compartida de colliders.
-      visualOrigin: cameraOrigin.clone(),
-      physicalPoint: physical.point.clone(),
-      guidePoint: guide.point.clone(),
-      blocked: false,
-    };
-  }
+  // El contacto físico SIEMPRE gana, incluso cuando cámara y muzzle alcanzan
+  // caras diferentes del mismo collider. Reconciliar por identidad de AABB
+  // permitía que una bala atravesara el borde visible de un auto/barandal para
+  // aparecer en el punto que veía la cámara. La retícula puede proyectar este
+  // contacto cercano; la balística nunca abandona el rayo nacido en el muzzle.
   const samePlayer = guide.kind === 'player' && physical.kind === 'player' &&
     guide.id === physical.id;
   const sameOpenRay = guide.kind === 'none' && physical.kind === 'none';
+  const sameWorldPoint = guide.kind === 'world' && physical.kind === 'world' &&
+    physical.point.distanceTo(guide.point) <= 0.08;
   return {
     ...physical,
     guidePoint: guide.point.clone(),
     // El scope necesita distinguir una diferencia de paralaje normal de una
     // obstrucción real. Si cámara y cañón no terminan en el mismo objetivo, la
     // marca óptica debe representar el contacto físico, no prometer el fondo.
-    blocked: !samePlayer && !sameOpenRay &&
+    blocked: !samePlayer && !sameOpenRay && !sameWorldPoint &&
       physical.point.distanceTo(guide.point) > 0.08,
   };
 }

@@ -114,8 +114,8 @@ try {
   }
 
   // ADS obstruido: la cámara alcanza un punto lejano, pero una pared ficticia
-  // queda inmediatamente delante del muzzle. La pared todavía bloquea la
-  // balística, pero no puede arrastrar el anillo fuera del centro.
+  // queda inmediatamente delante del muzzle. El anillo debe mostrar ese
+  // contacto físico, no permanecer en el centro prometiendo el fondo.
   const ads = await page.evaluate(async () => {
     const G = window.BREACH;
     const W = window.BREACH_WORLD;
@@ -128,7 +128,8 @@ try {
 
     G.rig.root.updateWorldMatrix(true, true);
     const muzzle = G.rig.muzzleWorld(new window.THREE.Vector3()).clone();
-    const cameraOrigin = G.player.cam.aimRay().origin.clone();
+    const ray = G.player.cam.aimRay();
+    const cameraOrigin = ray.origin.clone();
     const oldRaycastHit = W.raycastHit.bind(W);
     const oldRaycast = W.raycast.bind(W);
     W.raycastHit = (origin, dir, maxDist) => {
@@ -147,18 +148,27 @@ try {
     const ring = document.getElementById('crosshair');
     const rect = ring.getBoundingClientRect();
     const actual = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    const guidePoint = cameraOrigin.clone().addScaledVector(ray.dir, 24);
+    const physicalDir = guidePoint.clone().sub(muzzle).normalize();
+    const expectedPoint = muzzle.clone().addScaledVector(physicalDir, 0.55);
+    const projected = expectedPoint.clone().project(window.BREACH_CAM);
+    const expected = {
+      x: (projected.x * 0.5 + 0.5) * innerWidth,
+      y: (-projected.y * 0.5 + 0.5) * innerHeight,
+    };
     W.raycastHit = oldRaycastHit;
     W.raycast = oldRaycast;
     I._mouseAim = false;
     return {
       visible: ring.classList.contains('aim'),
-      actual,
-      centerError: Math.hypot(actual.x - innerWidth * 0.5, actual.y - innerHeight * 0.5),
+      actual, expected,
+      reticleError: Math.hypot(actual.x - expected.x, actual.y - expected.y),
+      centerOffset: Math.hypot(actual.x - innerWidth * 0.5, actual.y - innerHeight * 0.5),
     };
   });
-  if (!ads.visible || ads.centerError > 0.75) {
+  if (!ads.visible || ads.centerOffset < 4 || ads.reticleError > 2.5) {
     console.error('ADS RETICLE DEBUG', JSON.stringify(ads));
-    throw new Error('una obstrucción física desplazó la retícula ADS');
+    throw new Error('la retícula ADS no representó su obstrucción física');
   }
 
   // Sniper scoped con paralaje obstruido: la cámara ve el fondo, pero un cover

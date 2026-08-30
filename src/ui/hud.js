@@ -374,18 +374,18 @@ export class HUD {
     this.el.hitmarker.classList.add('pop');
   }
 
-  // ADS pertenece a la intención óptica estable. Sin ADS, barrelXY siempre es
-  // la proyección de la trayectoria física prevista desde el muzzle, tanto en
-  // hip fire como en blindfire. HUD solo dibuja la coordenada resuelta y nunca
-  // inventa offsets por arma, pose o lado de cover.
+  // barrelXY siempre es la proyección del contacto físico previsto. En ADS es
+  // null mientras el muzzle alcanza el objetivo óptico (centro) y contiene una
+  // coordenada únicamente si una obstrucción cercana intercepta la bala.
+  // Sin ADS representa la trayectoria física del cañón en hip/blindfire.
   reticle(aiming, barrelXY, aimInfo = null) {
     this.el.crosshair.classList.toggle('aim', aiming);
     if (aiming && aimInfo) {
       this.el.crossRing.setAttribute('r', Math.max(5, aimInfo.r).toFixed(1));
       // fuera del rango efectivo del arma: el anillo se atenúa
       this.el.crossRing.setAttribute('stroke-opacity', aimInfo.inRange ? '0.9' : '0.28');
-      this.el.crosshair.style.left = '50%';
-      this.el.crosshair.style.top = '50%';
+      this.el.crosshair.style.left = barrelXY ? `${barrelXY.x}px` : '50%';
+      this.el.crosshair.style.top = barrelXY ? `${barrelXY.y}px` : '50%';
     }
     if (!aiming && barrelXY) {
       this.el.barrel.classList.add('on');
