@@ -23,6 +23,7 @@
     "check:weapon-balance": "node scripts/check-weapon-balance.mjs",
     "check:sniper": "node scripts/check-sniper-identity.mjs",
     "check:bazooka": "node scripts/check-bazooka-identity.mjs",
+    "check:equipped-weapon-scale": "node scripts/check-equipped-weapon-scale.mjs",
     "check:weapon-wheel": "node scripts/check-weapon-wheel.mjs",
     "check:cover-fire": "node scripts/check-cover-fire.mjs",
     "check:blindfire": "node scripts/check-blindfire.mjs",
@@ -48,7 +49,7 @@
     "check:test-portability": "node scripts/check-test-portability.mjs",
     "check:editor": "node scripts/check-editor.mjs",
     "check:editor-sanity": "node scripts/check-editor-sanity.mjs",
-    "test": "npm run check:test-portability && npm run check:controller && npm run check:menu-controller && npm run check:reload-cancel && npm run check:melee && npm run check:melee-net && npm run check:round-flow && npm run check:combat-orientation && npm run check:camera-resume && npm run check:camera-recoil && npm run check:reticle && npm run check:cover-fire && npm run check:impacts && npm run check:spatial-audio && npm run check:i18n && npm run check:shotgun-pattern && npm run check:warmup && npm run check:lobby && npm run check:online-map-items && npm run check:mp-bot-special && npm run check:online-projectiles && npm run check:online-fire && npm run check:weapon-balance && npm run check:sniper && npm run check:bazooka && npm run check:weapon-wheel && npm run check:server-guards && npm run check:server-hardening && npm run check:map-authority && npm run check:rocket-authority && npm run check:smoke-authority && npm run check:online-flow && npm run check:calle-collision && npm run check:cover-lean",
+    "test": "npm run check:test-portability && npm run check:controller && npm run check:menu-controller && npm run check:reload-cancel && npm run check:melee && npm run check:melee-net && npm run check:round-flow && npm run check:combat-orientation && npm run check:camera-resume && npm run check:camera-recoil && npm run check:reticle && npm run check:cover-fire && npm run check:impacts && npm run check:spatial-audio && npm run check:i18n && npm run check:shotgun-pattern && npm run check:warmup && npm run check:lobby && npm run check:online-map-items && npm run check:mp-bot-special && npm run check:online-projectiles && npm run check:online-fire && npm run check:weapon-balance && npm run check:sniper && npm run check:bazooka && npm run check:equipped-weapon-scale && npm run check:weapon-wheel && npm run check:server-guards && npm run check:server-hardening && npm run check:map-authority && npm run check:rocket-authority && npm run check:smoke-authority && npm run check:online-flow && npm run check:calle-collision && npm run check:cover-lean",
     "verify": "npm test"
   },
   "dependencies": {

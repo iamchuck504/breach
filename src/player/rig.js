@@ -474,6 +474,55 @@ export const WEAPON_SCALES = {
   grenade: [1.16, 1.16, 1.16], sniper: [1.18, 1.18, 1.18], bazooka: [1.22, 1.22, 1.22],
 };
 
+// El root del arma es funcional: contiene el muzzle que alimenta disparos,
+// flash y clearance de cover. La reducción de escala debe vivir únicamente
+// en esta capa visual para no desplazar la trayectoria ni los sockets de red.
+// En armas de fuego conservamos Z (longitud cañón/culata) y reducimos 20% el
+// volumen transversal, que es lo que las hacía verse grandes contra el torso.
+// La granada sí admite escala uniforme porque su muzzle es el punto de suelta.
+export const EQUIPPED_WEAPON_VISUAL_SCALE = 0.8;
+
+export function applyEquippedWeaponVisualScale(group, weapon) {
+  if (group.userData.equippedVisual) return group.userData.equippedVisual;
+
+  const muzzle = group.userData.muzzle;
+  const sx = EQUIPPED_WEAPON_VISUAL_SCALE;
+  const sy = EQUIPPED_WEAPON_VISUAL_SCALE;
+  const sz = weapon === 'grenade' ? EQUIPPED_WEAPON_VISUAL_SCALE : 1;
+  const pivot = muzzle?.position ?? new THREE.Vector3();
+  const visual = new THREE.Group();
+  visual.name = 'equipped-weapon-visual';
+
+  // Los builders también se usan para pickups. Solo los meshes del modelo
+  // montado en el rig se trasladan aquí; las anclas lógicas permanecen fuera.
+  for (const child of [...group.children]) {
+    if (child.isMesh) visual.add(child);
+  }
+  visual.scale.set(sx, sy, sz);
+  visual.position.set(
+    pivot.x * (1 - sx),
+    pivot.y * (1 - sy),
+    pivot.z * (1 - sz),
+  );
+  group.add(visual);
+
+  // Grip/forend/mag son sockets exclusivamente visuales del IK. Se mueven
+  // con el mesh para que las manos sigan tocando la geometría reducida.
+  for (const key of ['grip', 'forend', 'mag']) {
+    const socket = group.userData[key];
+    if (!socket) continue;
+    socket.position.set(
+      pivot.x + (socket.position.x - pivot.x) * sx,
+      pivot.y + (socket.position.y - pivot.y) * sy,
+      pivot.z + (socket.position.z - pivot.z) * sz,
+    );
+  }
+
+  group.userData.equippedVisual = visual;
+  group.userData.equippedVisualScale = { x: sx, y: sy, z: sz };
+  return visual;
+}
+
 // temporales del IK
 const IK_S = new THREE.Vector3(), IK_V = new THREE.Vector3(), IK_POLE = new THREE.Vector3();
 const IK_N = new THREE.Vector3(), IK_U = new THREE.Vector3();
@@ -1055,7 +1104,8 @@ export class Rig {
     if (!g) {
       const build = WEAPON_BUILDERS[wep] ?? buildSMG;
       g = build(this._teamHex);
-      mergeDirectMeshes(g);
+      const visual = applyEquippedWeaponVisualScale(g, wep);
+      mergeDirectMeshes(visual);
       const s = WEAPON_SCALES[wep] ?? [1.3, 1.3, 1.3];
       g.scale.set(s[0], s[1], s[2]);
       this.guns[wep] = g;
