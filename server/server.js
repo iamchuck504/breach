@@ -752,7 +752,7 @@ wss.on('connection', (ws) => {
       const id = 'p' + nextId++;
       me = { ws, id, bot: false, team: assignTeam(), joinedAt: Date.now(),
         name: String(msg.name || 'ANON').slice(0, 14).toUpperCase(),
-        v: Math.min(4, Math.max(0, Math.round(num(msg.v)))), hp: HP, alive: true,
+        v: Math.min(5, Math.max(0, Math.round(num(msg.v)))), hp: HP, alive: true,
         kills: 0, deaths: 0, w: 'smg', specialWep: null,
         lastFireAt: -Infinity, pendingShot: null };
       players.set(id, me); if (!hostId) { hostId = id; phase = 'lobby'; }

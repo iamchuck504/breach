@@ -152,7 +152,7 @@ function glowMaterial(color) {
   return mat;
 }
 
-// Vanguard: cinco armaduras sobre EXACTAMENTE el mismo cuerpo, rig e hitbox.
+// Vanguard: seis armaduras sobre EXACTAMENTE el mismo cuerpo, rig e hitbox.
 // La identidad de clase vive en accesorios desmontables (casco, peto, mochila,
 // hombreras y faldón), nunca en la escala de huesos o extremidades.
 // Radio exclusivo del cadáver: la armadura bulky ocupa más que el círculo de
@@ -489,10 +489,12 @@ const clamp01 = (v) => Math.min(1, Math.max(-1, v));
 export class Rig {
   constructor(scene, team, name = null, variant = 0) {
     this.team = team;
-    this.variant = variant = Math.min(4, Math.max(0, variant | 0));
+    this.variant = variant = Math.min(5, Math.max(0, variant | 0));
     const tc = TEAM_COLORS[team];
 
     this.root = new THREE.Group();
+    this.root.userData.characterVariant = variant;
+    this.root.userData.prototype = variant === 5;
     scene.add(this.root);
 
     // --- jerarquía
@@ -648,14 +650,35 @@ export class Rig {
     this._deathHidden = [];   // piezas ocultas por daño fuerte; se restauran al respawn
   }
 
-  // Mismo volumen craneal para las cinco variantes. Todo lo que cambia es
+  // Mismo volumen craneal para las seis variantes. Todo lo que cambia es
   // casco/equipamiento superpuesto; nunca se escala this.head ni el esqueleto.
   _buildHead(tc, v) {
     const h = this.head;
     h.add(ball(0.12, DARK, 0, -0.015, 0.015, 1, 0.68, 1));        // cuello común
     h.add(ball(0.19, DARK, 0, 0.14, 0, 1.02, 1.02, 1));           // cabeza común
 
-    if (v === 1) {          // CENTINELA: carcasa torre + visor vertical
+    if (v === 5) {          // VANGUARD X: casco estratificado de prototipo
+      h.add(ball(0.205, MID, 0, 0.14, 0.01, 1.04, 1.03, 1.04));
+      // Carcasa superior, ceja y placas de mejilla: tres profundidades legibles
+      // sustituyen el efecto de "visor pegado sobre una esfera".
+      h.add(armorPlate(SHIELD_GEO, 0.34, 0.21, 0.25, PLATE, 0, 0.29, -0.005));
+      h.add(armorPlate(LIMB_GEO, 0.35, 0.075, 0.08, DARK, 0, 0.245, -0.205));
+      h.add(box(0.29, 0.095, 0.035, VISOR, 0, 0.18, -0.252));
+      h.add(glowBox(0.23, 0.035, 0.018, tc, 0, 0.18, -0.279));
+      for (const s of [-1, 1]) {
+        const cheek = armorPlate(LIMB_GEO, 0.105, 0.17, 0.075, MID,
+          s * 0.145, 0.075, -0.19);
+        cheek.rotation.z = s * 0.16;
+        h.add(cheek);
+        h.add(ball(0.062, METAL, s * 0.215, 0.17, 0.005, 0.72, 1, 1));
+        h.add(box(0.035, 0.085, 0.028, tc, s * 0.205, 0.17, -0.07));
+      }
+      h.add(armorPlate(SHIELD_GEO, 0.2, 0.12, 0.07, RUBBER, 0, 0.045, -0.21));
+      h.add(box(0.12, 0.035, 0.028, METAL, 0, 0.04, -0.255));
+      h.add(box(0.055, 0.055, 0.22, DARK, 0, 0.4, 0));
+      h.add(glowBox(0.025, 0.025, 0.065, tc, 0, 0.43, -0.08));
+      h.add(box(0.19, 0.055, 0.1, DARK, 0, -0.005, -0.14));
+    } else if (v === 1) {   // CENTINELA: carcasa torre + visor vertical
       h.add(armorBox(0.38, 0.5, 0.38, DARK, 0, 0.23, 0));
       h.add(armorBox(0.3, 0.42, 0.045, MID, 0, 0.23, -0.215));
       h.add(box(0.115, 0.31, 0.025, PLATE, 0, 0.24, -0.245));
@@ -720,7 +743,57 @@ export class Rig {
   // piezas anatómicas son idénticas para todas las variantes.
   _variantExtras(tc, v) {
     const t = this.torso;
-    if (v === 1) {
+    if (v === 5) {
+      // Coraza en capas: el volumen jugable sigue siendo idéntico; los paneles
+      // únicamente mejoran separación, material y lectura a media distancia.
+      t.add(armorPlate(CHEST_GEO, 0.6, 0.2, 0.075, PLATE, 0, 0.545, -0.305));
+      t.add(armorPlate(SHIELD_GEO, 0.34, 0.19, 0.055, MID, 0, 0.41, -0.335));
+      t.add(armorPlate(SHIELD_GEO, 0.18, 0.1, 0.035, tc, 0, 0.42, -0.372));
+      t.add(glowBox(0.095, 0.018, 0.016, tc, 0, 0.42, -0.394));
+      for (const s of [-1, 1]) {
+        t.add(box(0.055, 0.2, 0.025, METAL, s * 0.225, 0.47, -0.35));
+        t.add(armorBox(0.13, 0.1, 0.055, DARK, s * 0.19, 0.27, -0.3));
+        t.add(box(0.07, 0.025, 0.018, COPPER, s * 0.19, 0.28, -0.335));
+      }
+      // Faja abdominal articulada y hebilla central.
+      for (const y of [0.28, 0.22, 0.16]) {
+        t.add(armorPlate(LIMB_GEO, 0.31, 0.05, 0.03, MID, 0, y, -0.285));
+      }
+      t.add(armorPlate(SHIELD_GEO, 0.105, 0.075, 0.035, METAL, 0, 0.095, -0.205));
+      t.add(glowBox(0.04, 0.018, 0.016, tc, 0, 0.105, -0.23));
+
+      // Mochila técnica compacta: batería, radio y cierres visibles desde la
+      // cámara de tercera persona, sin empujar el arma secundaria hacia afuera.
+      t.add(armorBox(0.38, 0.3, 0.09, DARK, 0, 0.45, 0.255));
+      t.add(armorPlate(SHIELD_GEO, 0.25, 0.17, 0.045, PLATE, 0, 0.47, 0.325));
+      t.add(box(0.07, 0.2, 0.04, METAL, 0, 0.46, 0.36));
+      t.add(glowBox(0.025, 0.14, 0.018, tc, 0, 0.46, 0.39));
+      for (const s of [-1, 1]) {
+        t.add(tube(0.035, 0.18, MID, s * 0.13, 0.45, 0.36));
+        t.add(box(0.055, 0.035, 0.025, COPPER, s * 0.13, 0.36, 0.395));
+      }
+
+      // Protecciones animadas: cada pieza vive en su articulación correcta.
+      for (const [arm, s] of [[this.armL, -1], [this.armR, 1]]) {
+        const outer = armorPlate(PAULDRON_GEO, 0.3, 0.18, 0.25, PLATE,
+          s * 0.045, 0.075, -0.025);
+        outer.rotation.z = s * 0.1;
+        arm.shoulder.add(outer);
+        arm.shoulder.add(box(0.15, 0.028, 0.03, tc, s * 0.045, 0.08, -0.165));
+        arm.elbow.add(armorPlate(SHIELD_GEO, 0.14, 0.12, 0.035, METAL,
+          0, -0.12, -0.125));
+        arm.hand.add(armorPlate(SHIELD_GEO, 0.13, 0.075, 0.04, MID,
+          0, 0.025, -0.075));
+        arm.hand.add(box(0.09, 0.025, 0.025, PLATE, 0, 0.035, -0.105));
+      }
+      for (const [leg, s] of [[this.legL, -1], [this.legR, 1]]) {
+        leg.hip.add(armorPlate(LIMB_GEO, 0.12, 0.17, 0.035, MID,
+          s * 0.055, -0.14, -0.145));
+        leg.knee.add(box(0.035, 0.18, 0.035, METAL,
+          s * 0.085, -0.16, -0.135));
+        leg.knee.add(box(0.12, 0.025, 0.05, RUBBER, 0, -0.37, -0.07));
+      }
+    } else if (v === 1) {
       t.add(armorPlate(SHIELD_GEO, 0.4, 0.3, 0.06, PLATE, 0, 0.46, -0.3));
       t.add(box(0.055, 0.25, 0.025, METAL, -0.18, 0.46, -0.34));
       t.add(box(0.055, 0.25, 0.025, METAL, 0.18, 0.46, -0.34));

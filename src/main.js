@@ -155,7 +155,7 @@ const G = {
   name: 'CHUCK',
   charVariant: (() => {
     const v = parseInt(localStorage.getItem('breach.character'), 10);
-    return v >= 0 && v <= 4 ? v : 0;
+    return v >= 0 && v <= 5 ? v : 0;
   })(),
   footAcc: 0,
   presentationAudioKey: '',
@@ -1123,7 +1123,7 @@ menuNavigator = new MenuControllerNavigator({
 
 function buildCharUI() {
   if (!charSlots.children.length) {
-    for (let v = 0; v < 5; v++) {
+    for (let v = 0; v < 6; v++) {
       const b = document.createElement('button');
       b.className = 'char-slot';
       b.dataset.v = v;
@@ -1164,7 +1164,7 @@ function updateCharSel() {
 }
 
 // Previews 3D: pose neutral sin armas para que casco, peto y proporciones se
-// lean completos. Una sola cámara/escala para las cinco variantes: el selector
+// lean completos. Una sola cámara/escala para las seis variantes: el selector
 // no falsea el tamaño relativo de ningún soldado.
 function renderCharPreviews() {
   const pr = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -1180,7 +1180,7 @@ function renderCharPreviews() {
   const pc = new THREE.PerspectiveCamera(30, 176 / 224, 0.1, 10);
   pc.position.set(0.52, 1.47, -2.75);
   pc.lookAt(0, 0.84, 0);
-  for (let v = 0; v < 5; v++) {
+  for (let v = 0; v < 6; v++) {
     const r = new Rig(ps, 'red', null, v);
     // Asentar piernas/torso y luego aplicar una pose de exhibición simétrica.
     for (let i = 0; i < 40; i++) r.update(1 / 30, { state: 'idle', speed: 0, aim: false, aimPitch: 0 });
