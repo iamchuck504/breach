@@ -489,8 +489,8 @@ const ADS_WEAPON_POSES = Object.freeze({
   pistol:  { damp: 18, mount: [0.045, 0.10, -0.42], torsoPitch: -0.07, head: 0.30 },
   smg:     { damp: 16, mount: [0.10, 0.055, -0.08], torsoPitch: -0.12, head: 0.25 },
   shotgun: { damp: 15, mount: [0.11, 0.045, 0.02], torsoPitch: -0.15, head: 0.22 },
-  sniper:  { damp: 16, mount: [0.12, 0.085, 0.02], torsoPitch: -0.17, head: 0.18 },
-  bazooka: { damp: 14, mount: [0.17, 0.15, 0.03], torsoPitch: -0.19, head: 0.13 },
+  sniper:  { damp: 14, mount: [0.12, 0.085, 0.02], torsoPitch: -0.17, head: 0.18 },
+  bazooka: { damp: 12.5, mount: [0.17, 0.15, 0.03], torsoPitch: -0.19, head: 0.13 },
   grenade: { damp: 17, mount: [0.06, 0.08, -0.38], torsoPitch: -0.09, head: 0.28 },
 });
 
@@ -1281,23 +1281,20 @@ export class Rig {
         const m = p.state === 'run' ? 1 : 0;
         const tw = p.twist ?? 0; // torso/cabeza giran hacia la cámara
         rootRotX = (p.groundPitch ?? 0) * 0.72;
-        R(this.torso, -0.1 * m + Math.sin(ph * 0.4) * 0.015, tw * 0.55, swing * 0.04 * m);
+        // La postura relajada nace de brazos/arma al frente; el torso conserva
+        // su movilidad natural y no adopta todavía la rigidez de ADS.
+        R(this.torso, -0.1 * m + Math.sin(ph * 0.4) * 0.015,
+          tw * 0.55, swing * 0.04 * m);
         R(this.head, 0.05 * m, tw * 0.35, 0);
         R(this.legL.hip, swing * 0.75 * m, 0, 0); R(this.legL.knee, -(Math.max(0, -swing) * 1.1 + 0.1) * m, 0, 0);
         R(this.legR.hip, swing2 * 0.75 * m, 0, 0); R(this.legR.knee, -(Math.max(0, -swing2) * 1.1 + 0.1) * m, 0, 0);
         leftOnGun = true;
-        if (p.firing) {
-          // hip fire preparado: arma al frente SIN canteo, colineal al tiro.
-          // z -0.4: la coraza Vanguard llega a z-0.33 — más atrás, el receptor
-          // y las manos quedaban ENTERRADOS en el pecho
-          damp = 18;
-          M(0.15, -0.08, -0.38, 0, 0, 0);
-        } else {
-          // Low-ready conserva una altura relajada, pero no gira el cañón a
-          // un costado. Esa rotación decorativa hacía que la retícula siguiera
-          // el vehículo lateral y saltara al frente al primer disparo.
-          M(0.17, -0.2 + bob * 0.01 * m, -0.32, 0, 0, 0);
-        }
+        // El arma permanece al frente, sostenida por ambas manos y apenas por
+        // debajo de ADS. Así la silueta comunica la dirección del hip fire sin
+        // apuntar ópticamente. El target es idéntico antes/durante fire: no hay
+        // elevación súbita del muzzle ni salto de retícula al primer click.
+        damp = p.firing ? 18 : 14;
+        M(0.245, -0.15, -0.40, 0, 0.18, 0);
         hipsY = 0.66 + bob * 0.045 * m;
         break;
       }

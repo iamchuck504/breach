@@ -40,14 +40,24 @@ for (const weapon of weapons) {
   // lateral al frente justo al pulsar disparo.
   settle(rig, params(false, 0.2, false));
   const relaxed = rig.gunForward(new THREE.Vector3()).normalize();
+  const relaxedMuzzle = rig.muzzleWorld(new THREE.Vector3()).clone();
+  const relaxedMount = rig.gunMount.position.clone();
   rig.update(1 / 60, params(false, 0.2, true));
   const firstFireFrame = rig.gunForward(new THREE.Vector3()).normalize();
+  const firstFireMuzzle = rig.muzzleWorld(new THREE.Vector3()).clone();
   check(relaxed.dot(firstFireFrame) > 0.99999,
     `${weapon}: salto en el primer frame de hip fire (${relaxed.dot(firstFireFrame)})`);
+  check(relaxedMuzzle.distanceTo(firstFireMuzzle) < 0.012,
+    `${weapon}: el muzzle saltó al iniciar hip fire (${relaxedMuzzle.distanceTo(firstFireMuzzle)} m)`);
+  check(relaxedMount.x >= 0.244 && relaxedMount.z <= -0.399 && relaxedMount.y > -0.17,
+    `${weapon}: postura hip no mantiene el arma visible al frente (${relaxedMount.toArray()})`);
   settle(rig, params(false, 0.2, true));
   const hipA = rig.gunForward(new THREE.Vector3()).normalize();
+  const firingMuzzle = rig.muzzleWorld(new THREE.Vector3()).clone();
   check(relaxed.dot(hipA) > 0.9999,
     `${weapon}: el eje cambia entre low-ready y hip fire (${relaxed.dot(hipA)})`);
+  check(relaxedMuzzle.distanceTo(firingMuzzle) < 0.02,
+    `${weapon}: la pose relajada y la de disparo no comparten muzzle (${relaxedMuzzle.distanceTo(firingMuzzle)} m)`);
 
   // El eje visual del muzzle permanece estable sin input nuevo.
   rig.update(1 / 60, params(false, 0.2, true));
