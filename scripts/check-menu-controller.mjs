@@ -34,11 +34,11 @@ try {
 
   const tap = async (button) => {
     await page.evaluate(([i, down]) => window.__padButton(i, down), [button, true]);
-    // En gameplay headless el render 3D puede bajar de 20 fps; mantener el
-    // pulso dos frames evita que el harness sea más rápido que un toque humano.
-    await page.waitForTimeout(120);
+    // En gameplay headless el render 3D puede bajar de 12 fps durante carga;
+    // mantener el pulso al menos dos frames evita falsos negativos del poll.
+    await page.waitForTimeout(190);
     await page.evaluate(([i, down]) => window.__padButton(i, down), [button, false]);
-    await page.waitForTimeout(75);
+    await page.waitForTimeout(95);
   };
   const tapMirrored = async (button, key) => {
     await page.evaluate(({ button, key }) => {
@@ -48,12 +48,12 @@ try {
         document.dispatchEvent(new KeyboardEvent('keydown', { key, code: key, repeat: true, bubbles: true }));
       }
     }, { button, key });
-    await page.waitForTimeout(120);
+    await page.waitForTimeout(190);
     await page.evaluate(({ button, key }) => {
       window.__padButton(button, false);
       document.dispatchEvent(new KeyboardEvent('keyup', { key, code: key, bubbles: true }));
     }, { button, key });
-    await page.waitForTimeout(75);
+    await page.waitForTimeout(95);
   };
   const focus = (selector) => page.$eval(selector, (el) => el.focus());
   const active = () => page.evaluate(() => ({
@@ -121,7 +121,17 @@ try {
   await tap(12);
 
   await tap(0);  // open local lobby
-  await page.waitForSelector('#lobby-card:not(.off)');
+  await page.waitForTimeout(240);
+  if (!await page.$eval('#lobby-card', (el) => !el.classList.contains('off'))) {
+    const state = await page.evaluate(() => ({
+      focus: document.activeElement?.id,
+      bodyClass: document.body.className,
+      padIndex: window.BREACH_INPUT?.pad?._idx,
+      pressed: [...(window.BREACH_INPUT?.pad?.pressed || [])],
+      edges: [...(window.BREACH_INPUT?.pad?.justPressed || [])],
+    }));
+    throw new Error(`A no abrió el lobby local: ${JSON.stringify(state)}`);
+  }
   await expectFocus({ id: 'btn-lobby-start' }, 'el lobby no inició en Start Match');
   await tap(12);
   await expectFocus({ setting: 'postMatch' }, 'arriba desde Start no llegó al último ajuste');

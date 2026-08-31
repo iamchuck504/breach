@@ -224,10 +224,14 @@ export class Input {
   moveVec() {
     if (this.suppress) return { x: 0, z: 0 };
     let x = 0, z = 0;
-    if (this.keys.has(BINDS.kb.forward)) z += 1;
-    if (this.keys.has(BINDS.kb.back)) z -= 1;
-    if (this.keys.has(BINDS.kb.left)) x -= 1;
-    if (this.keys.has(BINDS.kb.right)) x += 1;
+    // Steam Desktop Layout puede duplicar el stick izquierdo como flechas.
+    // Aceptarlas como fallback no altera los binds configurables ni duplica el
+    // movimiento (el vector se normaliza), pero evita quedar inmóvil si Steam
+    // temporalmente publica teclado antes que su gamepad virtual.
+    if (this.keys.has(BINDS.kb.forward) || this.keys.has('ArrowUp')) z += 1;
+    if (this.keys.has(BINDS.kb.back) || this.keys.has('ArrowDown')) z -= 1;
+    if (this.keys.has(BINDS.kb.left) || this.keys.has('ArrowLeft')) x -= 1;
+    if (this.keys.has(BINDS.kb.right) || this.keys.has('ArrowRight')) x += 1;
     let len = Math.hypot(x, z);
     if (len === 0 && this.pad.connected) {
       x = this.pad.moveX; z = this.pad.moveZ;

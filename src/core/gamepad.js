@@ -3,6 +3,30 @@
 import { BINDS } from './bindings.js';
 
 const DEADZONE = 0.16;
+const SWITCH_AXIS = 0.28;
+const SWITCH_DELTA = 0.055;
+
+const buttonDown = (b, threshold = 0.5) =>
+  !!b && (b.pressed || Number(b.value || 0) > threshold);
+
+function padPriority(gp) {
+  const id = String(gp?.id || '').toLowerCase();
+  // Steam Input suele publicar un pad virtual estándar además del dispositivo
+  // físico. Si ambos emiten el mismo gesto, consumir el virtual evita layouts
+  // DInput sin normalizar y botones/ejes duplicados.
+  const steamVirtual = /steam.*(virtual|input)|virtual.*steam/.test(id);
+  const standard = gp?.mapping === 'standard';
+  return (standard ? 20 : 0) + (steamVirtual ? 8 : 0) +
+    (/xinput|xbox 360|xbox one/.test(id) ? 3 : 0);
+}
+
+function snapshot(gp) {
+  const axes = Array.from(gp?.axes || [], (v) => Number.isFinite(v) ? v : 0);
+  const buttons = Array.from(gp?.buttons || [], (b) => buttonDown(b));
+  return { axes, buttons };
+}
+
+function axisAt(s, i) { return Number(s?.axes?.[i] || 0); }
 
 export class PadInput {
   constructor() {
@@ -18,24 +42,65 @@ export class PadInput {
     this.sprintHeld = false;
     this._evadeHeldT = 0;
     this._gp = null;
+    this._samples = new Map();
   }
 
   poll(dt) {
-    const pads = navigator.getGamepads ? navigator.getGamepads() : [];
-    // Hay dispositivos virtuales "fantasma" (Steam, receivers, vJoy) que
-    // aparecen conectados pero nunca emiten input: nos quedamos con el pad
-    // que muestre ACTIVIDAD real, con índice pegajoso hasta que se desconecte.
-    const isActive = (g) =>
-      g.buttons.some((b) => b.pressed || b.value > 0.3) ||
-      g.axes.some((a) => Math.abs(a) > 0.35);
-    let gp = (this._idx >= 0 && pads[this._idx] && pads[this._idx].connected)
-      ? pads[this._idx] : null;
-    for (const g of pads) {
-      if (!g || !g.connected) continue;
-      if (!gp) { gp = g; continue; }
-      if (g.index !== gp.index && isActive(g) && !isActive(gp)) gp = g;
+    const raw = navigator.getGamepads ? navigator.getGamepads() : [];
+    const pads = Array.from(raw || []).filter((g) => g && g.connected !== false);
+    const live = new Set(pads.map((g, slot) => Number.isInteger(g.index) ? g.index : slot));
+    for (const index of this._samples.keys()) if (!live.has(index)) this._samples.delete(index);
+
+    // Un índice de Gamepad API puede quedar hueco al abrir/cerrar Steam. Buscar
+    // por gp.index en vez de asumir que index === posición del array evita que
+    // el pad activo se pierda durante ese hot-swap.
+    let gp = pads.find((g, slot) =>
+      (Number.isInteger(g.index) ? g.index : slot) === this._idx) || null;
+    let best = null;
+    for (let slot = 0; slot < pads.length; slot++) {
+      const g = pads[slot];
+      const index = Number.isInteger(g.index) ? g.index : slot;
+      const now = snapshot(g);
+      const prev = this._samples.get(index);
+      let buttonEdges = 0, heldButtons = 0;
+      for (let i = 0; i < now.buttons.length; i++) {
+        if (now.buttons[i]) {
+          heldButtons++;
+          if (!prev?.buttons?.[i]) buttonEdges++;
+        }
+      }
+      // Solo los cuatro ejes estándar de sticks deciden el dispositivo. Ejes
+      // extra de DInput suelen ser gatillos en -1 y antes contaban como
+      // actividad perpetua, dejando seleccionado un receiver/pad fantasma.
+      const stickMag = Math.max(
+        Math.hypot(axisAt(now, 0), axisAt(now, 1)),
+        Math.hypot(axisAt(now, 2), axisAt(now, 3)),
+      );
+      let axisDelta = 0;
+      if (prev) {
+        for (let i = 0; i < 4; i++) {
+          axisDelta = Math.max(axisDelta, Math.abs(axisAt(now, i) - axisAt(prev, i)));
+        }
+      }
+      const freshAxis = stickMag >= SWITCH_AXIS &&
+        (prev ? axisDelta >= SWITCH_DELTA : g.mapping === 'standard');
+      const fresh = buttonEdges > 0 || freshAxis;
+      const score = buttonEdges * 100 + (freshAxis ? 40 + stickMag * 10 : 0) +
+        Math.min(heldButtons, 4) + padPriority(g);
+      if (fresh && (!best || score > best.score)) best = { g, index, score };
+      this._samples.set(index, now);
     }
-    this._idx = gp ? gp.index : -1;
+
+    // El último pad usado es pegajoso. Solo una entrada NUEVA cambia de pad;
+    // si Steam abre en medio de la partida, su virtual toma control en el
+    // primer botón/movimiento y no hace falta recargar la página.
+    if (best && (!gp || best.index !== this._idx)) gp = best.g;
+    if (!gp && pads.length) {
+      gp = [...pads].sort((a, b) => padPriority(b) - padPriority(a))[0];
+    }
+    this._idx = gp
+      ? (Number.isInteger(gp.index) ? gp.index : pads.indexOf(gp))
+      : -1;
     this._gp = gp;
     this.justPressed.clear();
     if (!gp) {
@@ -46,10 +111,11 @@ export class PadInput {
     }
     this.connected = true;
     this.info = {
-      id: gp.id.slice(0, 44),
+      id: String(gp.id || 'Gamepad').slice(0, 44),
       mapping: gp.mapping || 'no-standard',
-      axes: gp.axes,
-      pressed: gp.buttons.map((b, i) => (b.pressed || b.value > 0.3 ? i : -1)).filter((i) => i >= 0),
+      axes: Array.from(gp.axes || []),
+      pressed: Array.from(gp.buttons || [], (b, i) => buttonDown(b, 0.3) ? i : -1)
+        .filter((i) => i >= 0),
     };
 
     const dz = (v) => Math.abs(v) < DEADZONE ? 0 : (v - Math.sign(v) * DEADZONE) / (1 - DEADZONE);
@@ -60,7 +126,7 @@ export class PadInput {
     this.camY = curve(dz(gp.axes[3] ?? 0));
 
     const now = new Set();
-    gp.buttons.forEach((b, i) => { if (b.pressed || b.value > 0.5) now.add(i); });
+    Array.from(gp.buttons || []).forEach((b, i) => { if (buttonDown(b)) now.add(i); });
     for (const i of now) if (!this.pressed.has(i)) this.justPressed.add(i);
     this.pressed = now;
 
