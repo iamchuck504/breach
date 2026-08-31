@@ -1287,15 +1287,16 @@ export class Rig {
         R(this.legR.hip, swing2 * 0.75 * m, 0, 0); R(this.legR.knee, -(Math.max(0, -swing2) * 1.1 + 0.1) * m, 0, 0);
         leftOnGun = true;
         if (p.firing) {
-          // blindfire de cadera: arma al frente SIN canteo, colineal al tiro.
+          // hip fire preparado: arma al frente SIN canteo, colineal al tiro.
           // z -0.4: la coraza Vanguard llega a z-0.33 — más atrás, el receptor
           // y las manos quedaban ENTERRADOS en el pecho
           damp = 18;
           M(0.15, -0.08, -0.38, 0, 0, 0);
         } else {
-          // low-ready diagonal: cruzada e inclinada, el cañón asoma
-          // sobre el hombro izquierdo visto desde atrás
-          M(0.17, -0.2 + bob * 0.01 * m, -0.32, 0.3, 0.4, 0.05);
+          // Low-ready conserva una altura relajada, pero no gira el cañón a
+          // un costado. Esa rotación decorativa hacía que la retícula siguiera
+          // el vehículo lateral y saltara al frente al primer disparo.
+          M(0.17, -0.2 + bob * 0.01 * m, -0.32, 0, 0, 0);
         }
         hipsY = 0.66 + bob * 0.045 * m;
         break;
@@ -1308,7 +1309,7 @@ export class Rig {
         R(this.legL.hip, 0.55, 0, 0); R(this.legL.knee, -1.0, 0, 0);
         R(this.legR.hip, 0.2, 0, 0); R(this.legR.knee, -0.5, 0, 0);
         leftOnGun = true;
-        M(0.16, -0.14, -0.34, 0, 0.15, 0);
+        M(0.16, -0.14, -0.34, 0, 0, 0);
         hipsY = 0.66;
         break;
       }
@@ -1562,9 +1563,9 @@ export class Rig {
         R(this.legR.hip, 0, 0, -0.1 + lean * 0.12);
       }
     } else if (p.state !== 'dead') {
-      // hipfire/blindfire: al DISPARAR, el arma apunta EXACTAMENTE a la línea
-      // de tiro (pitch completo + corrección de yaw mientras el cuerpo gira);
-      // relajado, solo sigue la mitad del pitch (ready natural)
+      // Hipfire/blindfire: el eje del arma permanece preparado y estable aun
+      // antes del click. La posición puede seguir siendo low-ready, pero su
+      // dirección no cambia de un eje decorativo a otro al disparar.
       const yawErr = p.aimYawErr ?? 0;
       if (p.state.startsWith('blind_')) {
         const parentPitch = p.state.startsWith('blind_low_') ? -0.42
@@ -1582,8 +1583,8 @@ export class Rig {
       } else if (p.state !== 'roadie' && p.state !== 'flip' && p.state !== 'mantle' &&
                  p.state !== 'melee') {
         // (roadie, flip, mantle y melee fijan su propio aimRig dentro del switch)
-        set(this.aimRig.rotation, 'x', pitch * (p.firing ? 1 : 0.5));
-        set(this.aimRig.rotation, 'y', p.firing ? yawErr : 0);
+        set(this.aimRig.rotation, 'x', pitch - rootRotX - this.torso.rotation.x);
+        set(this.aimRig.rotation, 'y', yawErr - this.torso.rotation.y);
       }
       // el roll del lean de ADS no debe quedarse pegado en hipfire
       set(this.aimRig.rotation, 'z', 0);

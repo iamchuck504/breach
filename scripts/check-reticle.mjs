@@ -114,8 +114,8 @@ try {
   }
 
   // ADS obstruido: la cámara alcanza un punto lejano, pero una pared ficticia
-  // queda inmediatamente delante del muzzle. El anillo debe mostrar ese
-  // contacto físico, no permanecer en el centro prometiendo el fondo.
+  // queda inmediatamente delante del muzzle. El anillo conserva el centro y
+  // comunica la obstrucción con estado visual, sin saltar por paralaje.
   const ads = await page.evaluate(async () => {
     const G = window.BREACH;
     const W = window.BREACH_WORLD;
@@ -161,19 +161,20 @@ try {
     I._mouseAim = false;
     return {
       visible: ring.classList.contains('aim'),
+      blocked: ring.classList.contains('blocked'),
       actual, expected,
       reticleError: Math.hypot(actual.x - expected.x, actual.y - expected.y),
       centerOffset: Math.hypot(actual.x - innerWidth * 0.5, actual.y - innerHeight * 0.5),
     };
   });
-  if (!ads.visible || ads.centerOffset < 4 || ads.reticleError > 2.5) {
+  if (!ads.visible || !ads.blocked || ads.centerOffset > 0.75) {
     console.error('ADS RETICLE DEBUG', JSON.stringify(ads));
-    throw new Error('la retícula ADS no representó su obstrucción física');
+    throw new Error('la retícula ADS saltó o no comunicó la obstrucción física');
   }
 
   // Sniper scoped con paralaje obstruido: la cámara ve el fondo, pero un cover
-  // distinto intercepta el rayo desde el cañón. La cruz debe proyectar el mismo
-  // punto físico que recibe el decal, no permanecer prometiendo el centro.
+  // distinto intercepta el rayo desde el cañón. La cruz óptica permanece
+  // centrada, marca bloqueo y el decal conserva el contacto físico correcto.
   const sniperBlocked = await page.evaluate(async () => {
     const G = window.BREACH, W = window.BREACH_WORLD, I = window.BREACH_INPUT;
     if (!G.weapons.hasWeapon('sniper')) G.weapons.giveSpecial('sniper');
@@ -235,15 +236,16 @@ try {
     W.raycast = oldRaycast;
     return {
       actual, expected,
+      blocked: el.classList.contains('blocked'),
       reticleError: Math.hypot(actual.x - expected.x, actual.y - expected.y),
       centerOffset: Math.hypot(actual.x - innerWidth / 2, actual.y - innerHeight / 2),
       impactWorldError: impact ? impact.distanceTo(expectedPoint) : Infinity,
     };
   });
-  if (sniperBlocked.centerOffset < 4 || sniperBlocked.reticleError > 2.5 ||
+  if (!sniperBlocked.blocked || sniperBlocked.centerOffset > 0.75 ||
       sniperBlocked.impactWorldError > 0.14) {
     console.error('SNIPER BLOCKED RETICLE DEBUG', JSON.stringify(sniperBlocked));
-    throw new Error('scope del sniper no representó el impacto físico obstruido');
+    throw new Error('scope del sniper saltó o perdió el impacto físico obstruido');
   }
 
   // Bazooka ADS: la cámara define el punto deseado y el cohete sale desde el
@@ -344,7 +346,7 @@ try {
     console.error('RETICLE STABILITY DEBUG', JSON.stringify(stability));
     throw new Error(`retícula inestable: ${unstable.map((v) => v.weapon).join(', ')}`);
   }
-  console.log(`RETICLE OK · barrel ${result.errorPx.toFixed(2)} px · scope obstruido ${sniperBlocked.reticleError.toFixed(2)} px · bazooka guiada ${rocketAim.dotExpected.toFixed(5)} · 5 armas estables`);
+  console.log(`RETICLE OK · barrel ${result.errorPx.toFixed(2)} px · ADS/scope centrados con bloqueo · bazooka guiada ${rocketAim.dotExpected.toFixed(5)} · 5 armas estables`);
 } finally {
   await browser?.close();
   server.kill();

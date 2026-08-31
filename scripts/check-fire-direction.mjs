@@ -30,10 +30,22 @@ for (const weapon of weapons) {
   rig.setWeapon(weapon);
   rig.setTransform(0, 0, 0, 0);
 
-  // Hip fire no recibe corrección óptica oculta: la dirección observable es
-  // exactamente la del muzzle y permanece estable sin input nuevo.
+  // La pose relajada y el primer frame de hip fire comparten el mismo eje.
+  // Antes low-ready añadía yaw/pitch local y la retícula saltaba del vehículo
+  // lateral al frente justo al pulsar disparo.
+  settle(rig, params(false, 0.2, false));
+  const relaxed = rig.gunForward(new THREE.Vector3()).normalize();
+  rig.update(1 / 60, params(false, 0.2, true));
+  const firstFireFrame = rig.gunForward(new THREE.Vector3()).normalize();
+  check(relaxed.dot(firstFireFrame) > 0.99999,
+    `${weapon}: salto en el primer frame de hip fire (${relaxed.dot(firstFireFrame)})`);
   settle(rig, params(false, 0.2, true));
   const hipA = rig.gunForward(new THREE.Vector3()).normalize();
+  check(relaxed.dot(hipA) > 0.9999,
+    `${weapon}: el eje cambia entre low-ready y hip fire (${relaxed.dot(hipA)})`);
+
+  // Hip fire no recibe corrección óptica oculta: la dirección observable es
+  // exactamente la del muzzle y permanece estable sin input nuevo.
   rig.update(1 / 60, params(false, 0.2, true));
   const hipB = rig.gunForward(new THREE.Vector3()).normalize();
   check(hipA.dot(hipB) > 0.99999,

@@ -45,9 +45,11 @@
     display: none; }
   #crosshair.aim { display: block; }
   #crosshair svg { position: absolute; left: -200px; top: -200px; display: block; }
+  #crosshair.blocked circle { stroke: #ff8a3d; }
+  #crosshair.blocked circle:last-child { fill: #ff8a3d; }
 
-  /* Scope del sniper: zoom real lo hace la cámara. La cruz queda centrada con
-     línea limpia y solo se proyecta al contacto físico si el cañón está tapado. */
+  /* Scope del sniper: zoom real lo hace la cámara. La cruz óptica siempre
+     queda centrada; una obstrucción del cañón solo cambia su color. */
   #sniper-scope { position: fixed; inset: 0; z-index: 2; display: none;
     background: radial-gradient(circle at 50% 50%, rgba(11,17,21,.04) 0 42.6vmin,
       rgba(5,8,11,.88) 43vmin, rgba(2,4,6,.985) 44vmin 100%); }
@@ -60,6 +62,7 @@
     transform: translate(-50%,-50%); color: rgba(230,238,241,.94);
     filter: drop-shadow(0 1px 2px rgba(0,0,0,.9)); }
   #scope-reticle svg { width: 100%; height: 100%; overflow: visible; }
+  #scope-reticle.blocked { color: #ff8a3d; }
   @keyframes scope-in { from { opacity: 0; } to { opacity: 1; } }
 
   #barrel-dot { position: fixed; left: -100px; top: -100px; width: 14px; height: 14px;
