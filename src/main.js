@@ -3215,18 +3215,20 @@ function fireShot() {
   const targets = currentTargets();
   // MODELO GEARS (pedido explícito de Chuck): en ADS el DAÑO viaja por el
   // EJE ÓPTICO — la retícula es la verdad absoluta y el cañón solo emite
-  // los efectos (tracer/flash), igual que en Gears of War. El origen NO es
-  // la cámara (retrasada sobre el hombro) sino su proyección al plano del
-  // personaje, a la altura del pecho: no se dispara "desde los ojos" —
-  // nada que tape TU CUERPO se atraviesa, y asomar solo la cámara por una
-  // esquina no da tiro. El aim-over queda como acomodo VISUAL del arma
-  // (que el cañón no se vea enterrado en el parapeto al disparar).
+  // los efectos (tracer/flash), igual que en Gears of War. El trace parte
+  // de la CÁMARA (que colisiona: nunca está dentro de geometría) — partir
+  // del plano del pecho parecía más "justo" pero pegado a un bus el origen
+  // caía DENTRO del collider y la bala salía por la cara trasera (decals
+  // detrás del objeto). El alcance y el falloff se miden desde el plano
+  // del jugador para no regalar ni robar ~2m (la escopeta lo notaba).
+  // El aim-over queda como acomodo VISUAL del arma.
   let damageOrigin = origin;
+  let falloffBase = 0;
   if (aiming) {
     adsAdjustFireOrigin(targets, cameraOrigin, baseDir, muzzle, def.range, def);
-    const tChest = Math.max(0, _v2.set(G.player.pos.x, (G.player.y ?? 0) + 1.3,
+    damageOrigin = cameraOrigin.clone();
+    falloffBase = Math.max(0, _v2.set(G.player.pos.x, (G.player.y ?? 0) + 1.3,
       G.player.pos.z).sub(cameraOrigin).dot(ray.dir));
-    damageOrigin = cameraOrigin.clone().addScaledVector(ray.dir, tChest);
   }
   const dmgByTarget = new Map();
   let anyPoint = null;
@@ -3238,7 +3240,8 @@ function fireShot() {
       // El scope promete exactamente su punto. Fuera del scope (incluido
       // hip/blindfire del sniper) se conserva la dispersión configurada.
       : scoped ? baseDir.clone() : applySpread(baseDir, spread);
-    const hit = resolveShot(world, targets, damageOrigin, dir, def.range, null);
+    const hit = resolveShot(world, targets, damageOrigin, dir,
+      def.range + falloffBase, null);
     anyPoint = hit.point;
     // TRACER estilo Gears: sale del cañón — pero si ese segmento visual
     // cruzaría el borde que la bala real (eje óptico) libró, el trazo se
@@ -3265,10 +3268,12 @@ function fireShot() {
       worldImpacts.push(hit.point);
     }
     if (hit.kind === 'player') {
-      let dmg = def.dmg * damageFalloff(def, hit.t);
+      // distancia de daño desde el PLANO del jugador, no desde la cámara
+      const dist = Math.max(0, hit.t - falloffBase);
+      let dmg = def.dmg * damageFalloff(def, dist);
       if (hit.part === 'head') dmg *= def.headMult;
       const e = dmgByTarget.get(hit.id) || {
-        dmg: 0, part: hit.part, dist: hit.t, point: hit.point, pellets: 0,
+        dmg: 0, part: hit.part, dist, point: hit.point, pellets: 0,
       };
       e.dmg += dmg;
       e.pellets++;

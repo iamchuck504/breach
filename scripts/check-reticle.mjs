@@ -204,9 +204,11 @@ try {
       impact = point.clone();
       return oldImpact(point, normal, surface, opts);
     };
-    // MODELO GEARS: el daño viaja por el EJE ÓPTICO desde la proyección del
-    // pecho sobre el rayo de mira. El stub tapa ese rayo a 0.8m del origen
-    // de daño: la bala pega ahí — la retícula jamás concede penetración.
+    // MODELO GEARS (cámara-céntrico): la bala del scope viaja por el EJE
+    // ÓPTICO desde la cámara y pega EXACTAMENTE el punto que promete la
+    // cruz. El stub tapa a 0.8m todos los rayos que NO son de cámara (el
+    // cañón): eso ya no altera el tiro — el arma es cosmética, como en
+    // Gears. La cruz permanece centrada e inmutable.
     let fired = false;
     const oldTracer = window.BREACH_EFFECTS.tracer;
     window.BREACH_EFFECTS.tracer = function (o, p2, em) {
@@ -222,13 +224,6 @@ try {
     I._mouseFire = false;
     I._mouseAim = false;
     window.BREACH_EFFECTS.tracer = oldTracer;
-    // réplica del origen de daño: proyección del pecho al rayo de mira
-    const chest = new window.THREE.Vector3(
-      G.player.pos.x, (G.player.y ?? 0) + 1.3, G.player.pos.z);
-    const tChest = Math.max(0, chest.sub(cameraOrigin).dot(ray.dir));
-    const damageOrigin = cameraOrigin.clone().addScaledVector(ray.dir, tChest);
-    const expectedPhysicalPoint = damageOrigin.clone().addScaledVector(
-      guidePoint.clone().sub(damageOrigin).normalize(), 0.8);
     window.BREACH_EFFECTS.impact = oldImpact;
     W.raycastHit = oldRaycastHit;
     W.raycast = oldRaycast;
@@ -238,15 +233,13 @@ try {
       fired: G.weapons.st.mag < magBefore,
       reticleError: Math.hypot(actual.x - expected.x, actual.y - expected.y),
       centerOffset: Math.hypot(actual.x - innerWidth / 2, actual.y - innerHeight / 2),
-      impactWorldError: impact && expectedPhysicalPoint
-        ? impact.distanceTo(expectedPhysicalPoint) : Infinity,
-      penetratedToGuide: impact ? impact.distanceTo(guidePoint) < 0.2 : false,
+      impactAtPromise: impact ? impact.distanceTo(guidePoint) < 0.25 : false,
     };
   });
   if (sniperCentered.blocked || sniperCentered.centerOffset > 0.75 || !sniperCentered.fired ||
-      sniperCentered.impactWorldError > 0.14 || sniperCentered.penetratedToGuide) {
-    console.error('SNIPER PHYSICAL ADS DEBUG', JSON.stringify(sniperCentered));
-    throw new Error('scope del sniper atravesó el cover entre muzzle y objetivo');
+      !sniperCentered.impactAtPromise) {
+    console.error('SNIPER GEARS ADS DEBUG', JSON.stringify(sniperCentered));
+    throw new Error('el scope debe pegar exactamente el punto prometido por la cruz');
   }
 
   // Bazooka ADS: la cámara define el punto deseado y el cohete sale desde el

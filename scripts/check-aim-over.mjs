@@ -351,6 +351,58 @@ const hip = await page.evaluate(async () => {
 check('hipfire intacto: sin alzada, dispara normal',
   hip.lift === 0 && hip.fired === true, JSON.stringify(hip));
 
+// ---------------------------------------------------------------------------
+// 5) PEGADO A UN OBJETO GRANDE (caso bus): el trace nace en la CÁMARA — la
+//    bala pega la cara FRONTAL, jamás nace dentro y sale por atrás.
+// ---------------------------------------------------------------------------
+const pegado = await page.evaluate(async () => {
+  const G = window.BREACH, W = window.BREACH_WORLD, I = window.BREACH_INPUT;
+  const E = window.BREACH_EFFECTS;
+  // "bus" sintético pegado al jugador (cara frontal a 0.5m)
+  W.colliders.push({ minx: 11, minz: 8.4, maxx: 17, maxz: 11.4, h: 3, surface: 'metal' });
+  G.player.pos.x = 14; G.player.pos.z = 11.9;
+  G.player.yaw = 0; G.player.cam.yaw = 0; G.player.cam.pitch = 0;
+  G.weapons.cur = 'smg'; G.weapons.st.mag = 50; G.weapons.st.cd = 0;
+  I._mouseAim = true;
+  await new Promise((r) => setTimeout(r, 500));
+  let tracerPoint = null;
+  const oldTracer = E.tracer;
+  E.tracer = function (o, p2, em) { tracerPoint = tracerPoint ?? p2.clone(); return oldTracer.call(this, o, p2, em); };
+  I._mouseFire = true; I.firePressed = true;
+  await new Promise((r) => setTimeout(r, 120));
+  I._mouseFire = false; I._mouseAim = false;
+  await new Promise((r) => setTimeout(r, 120));
+  E.tracer = oldTracer;
+  W.colliders.pop();
+  return { shotZ: tracerPoint?.z ?? null };
+});
+check('pegado a un objeto grande: la bala pega la cara FRONTAL (no sale detrás)',
+  pegado.shotZ !== null && pegado.shotZ > 11.3,
+  `impacto z=${pegado.shotZ?.toFixed(2)} (cara frontal en 11.4, trasera en 8.4)`);
+
+// ---------------------------------------------------------------------------
+// 6) DECAL FLOTANTE: un contacto físico SIN superficie visual cerca (el
+//    collider sobresale del mesh) no pinta marca; contra una pared real sí.
+// ---------------------------------------------------------------------------
+const decalGate = await page.evaluate(() => {
+  const E = window.BREACH_EFFECTS, T = window.THREE;
+  const count = () => E.decals?.activeCount ?? null; // ImpactDecalPool
+  const before = count();
+  // punto en el AIRE (centro del mapa, 2m de altura, sin mesh cerca)
+  E.impact(new T.Vector3(14, 2.4, -2), { x: 0, y: 0, z: 1 }, 'concrete',
+    { origin: new T.Vector3(14, 2.4, 4) });
+  const afterAir = count();
+  // contra el muro perimetral real
+  E.impact(new T.Vector3(14, 1.2, -26.7), { x: 0, y: 0, z: 1 }, 'stone',
+    { origin: new T.Vector3(14, 1.3, -20) });
+  const afterWall = count();
+  return { before, afterAir, afterWall, countable: before !== null };
+});
+check('decal flotante bloqueado; decal en pared real intacto',
+  !decalGate.countable ||
+  (decalGate.afterAir === decalGate.before && decalGate.afterWall === decalGate.before + 1),
+  JSON.stringify(decalGate));
+
 check('sin errores de página', pageErrors === 0, `errores=${pageErrors}`);
 
 console.log(fails.length ? `\nFALLOS: ${fails.length}` : '\nAIM-OVER: todo verde');

@@ -290,13 +290,21 @@ export class Effects {
 
   impact(pos, normal = null, surface = 'concrete', options = null) {
     const emphasized = !!options?.emphasized;
-    const projected = normal && options?.origin && this.world?.projectImpactSurface
+    const canProject = normal && options?.origin && this.world?.projectImpactSurface;
+    const projected = canProject
       ? this.world.projectImpactSurface(options.origin, pos, normal, surface)
       : null;
     const impactPos = projected?.point || pos;
     const impactNormal = projected?.normal || normal;
     const impactSurface = projected?.surface || surface;
-    if (impactNormal) this.decals.add(impactPos, impactNormal, impactSurface, emphasized ? 1.65 : 1);
+    // Si la reproyección visual NO encontró superficie cerca del contacto
+    // físico, el punto está en el AIRE (el collider AABB sobresale del mesh
+    // — capós inclinados, bordes de assets): mejor sin marca que un decal
+    // flotante. El puff sí sale: feedback de que la bala se detuvo ahí.
+    const airborne = canProject && !projected;
+    if (impactNormal && !airborne) {
+      this.decals.add(impactPos, impactNormal, impactSurface, emphasized ? 1.65 : 1);
+    }
     // Los decals siempre se registran; los puffs se presupuestan para que una
     // escopeta no cree ocho sistemas de partículas en el mismo frame. Un
     // impacto local de sniper scoped siempre conserva un puff único y breve:
