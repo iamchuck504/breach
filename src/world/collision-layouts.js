@@ -149,11 +149,12 @@ function calleSpecs() {
   addKiosk(14.35, -25.81, 1.83, 2.21, 1, 'kiosk:hotdog:south-right');
   addKiosk(-14.35, 25.81, 1.83, 2.21, -1, 'kiosk:hotdog:north-left');
   for (const z of [-35, -25, -15, -5, 5, 15, 25, 35]) {
-    // poste real ~0.3: el 0.5 anterior era pared invisible alrededor
-    out.push(make(-12.6, z, 0.34, 0.34, 6.2, 'solid', {
+    // poste real medido: 0.2 de grosor con cara en ±12.69 — más grueso era
+    // pared invisible y los decals del borde se suprimían por caer en aire
+    out.push(make(-12.6, z, 0.22, 0.22, 6.2, 'solid', {
       mirror: false, decorLink: `streetlight:left:${z}`,
     }));
-    out.push(make(12.6, z, 0.34, 0.34, 6.2, 'solid', {
+    out.push(make(12.6, z, 0.22, 0.22, 6.2, 'solid', {
       mirror: false, decorLink: `streetlight:right:${z}`,
     }));
   }
