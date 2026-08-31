@@ -91,6 +91,90 @@ check('la retícula ni se movió ni se recoloreó',
   !librable.crossBlockedClass && librable.crossCentered);
 
 // ---------------------------------------------------------------------------
+// 1b) GATILLO IMPACIENTE: aim + click EN EL MISMO INSTANTE. El arma aún está
+//     subiendo — ninguna bala puede estamparse en la caja: el click espera
+//     en el buffer y sale cuando el cañón libra.
+// ---------------------------------------------------------------------------
+const impaciente = await page.evaluate(async () => {
+  const G = window.BREACH, I = window.BREACH_INPUT, E = window.BREACH_EFFECTS;
+  I._mouseAim = false;
+  await new Promise((r) => setTimeout(r, 450));
+  G.weapons.st.mag = 50; G.weapons.st.cd = 0;
+  const hits = [];
+  const oldTracer = E.tracer;
+  E.tracer = function (o, p2, em) { hits.push([p2.x, p2.y, p2.z]); return oldTracer.call(this, o, p2, em); };
+  // aim y fire en el MISMO frame
+  I._mouseAim = true; I._mouseFire = true; I.firePressed = true;
+  await new Promise((r) => setTimeout(r, 700));
+  I._mouseFire = false;
+  await new Promise((r) => setTimeout(r, 150));
+  E.tracer = oldTracer;
+  const onBox = hits.filter(([, y, z]) => z > 11.5 && z < 12.5 && y < 1.4).length;
+  const beyond = hits.filter(([, , z]) => z < 10).length;
+  return { shots: hits.length, onBox, beyond, mag: G.weapons.st.mag };
+});
+check('click instantáneo: NINGUNA bala se estampa en la caja',
+  impaciente.onBox === 0 && impaciente.shots > 0 && impaciente.beyond === impaciente.shots,
+  JSON.stringify(impaciente));
+
+// ---------------------------------------------------------------------------
+// 1c) APUNTANDO HACIA ABAJO: el muzzle real gira por debajo de la base — el
+//     caso que se escapaba con la base analítica fija (reporte de Chuck).
+// ---------------------------------------------------------------------------
+const picado = await page.evaluate(async () => {
+  const G = window.BREACH, I = window.BREACH_INPUT, E = window.BREACH_EFFECTS;
+  G.player.cam.pitch = -0.08; // la mira cae al suelo lejano tras la caja
+  G.weapons.st.mag = 50; G.weapons.st.cd = 0;
+  await new Promise((r) => setTimeout(r, 500));
+  const lift = G.aimOver.lift;
+  const hits = [];
+  const oldTracer = E.tracer;
+  E.tracer = function (o, p2, em) { hits.push([p2.x, p2.y, p2.z]); return oldTracer.call(this, o, p2, em); };
+  I._mouseFire = true; I.firePressed = true;
+  await new Promise((r) => setTimeout(r, 400));
+  I._mouseFire = false;
+  await new Promise((r) => setTimeout(r, 150));
+  E.tracer = oldTracer;
+  const onBox = hits.filter(([, y, z]) => z > 11.5 && z < 12.5 && y < 1.4).length;
+  return { lift, shots: hits.length, onBox };
+});
+check('apuntando hacia abajo la alzada compensa el giro del cañón',
+  picado.onBox === 0 && picado.shots > 0 && picado.lift > 0.05,
+  JSON.stringify(picado));
+
+// ---------------------------------------------------------------------------
+// 1d) BARRIDO DE ARMAS: pistola (cañón corto) y escopeta (8 pellets con
+//     dispersión) tampoco estampan nada en la caja.
+// ---------------------------------------------------------------------------
+for (const wep of ['pistol', 'shotgun']) {
+  const sweep = await page.evaluate(async (wep) => {
+    const G = window.BREACH, I = window.BREACH_INPUT, E = window.BREACH_EFFECTS;
+    G.player.cam.pitch = -0.02;
+    G.weapons.cur = wep;
+    G.weapons.st.mag = G.weapons.def.mag; G.weapons.st.cd = 0; G.weapons.st.reload = 0;
+    await new Promise((r) => setTimeout(r, 550));
+    const hits = [];
+    const oldTracer = E.tracer;
+    E.tracer = function (o, p2, em) { hits.push([p2.x, p2.y, p2.z]); return oldTracer.call(this, o, p2, em); };
+    I._mouseFire = true; I.firePressed = true;
+    await new Promise((r) => setTimeout(r, 350));
+    I._mouseFire = false;
+    await new Promise((r) => setTimeout(r, 150));
+    E.tracer = oldTracer;
+    const onBox = hits.filter(([, y, z]) => z > 11.5 && z < 12.5 && y < 1.4).length;
+    return { lift: G.aimOver.lift, shots: hits.length, onBox };
+  }, wep);
+  // escopeta: el cono de 4.6° puede morder el borde con UN pellet extremo —
+  // eso es dispersión legítima (el propio rayo de cámara del pellet roza la
+  // caja); el contrato es que el central y ≥7/8 libran
+  const ok = wep === 'shotgun'
+    ? sweep.onBox <= 1 && sweep.shots >= 8
+    : sweep.onBox === 0 && sweep.shots > 0;
+  check(`${wep}: el cono libra la caja (central + resto del patrón)`, ok, JSON.stringify(sweep));
+}
+await page.evaluate(() => { window.BREACH.weapons.cur = 'smg'; window.BREACH.weapons.st.mag = 50; });
+
+// ---------------------------------------------------------------------------
 // 2) BLOQUEO TOTAL (salvaguarda): con maxLift 0.34 ≈ paralaje cámara-arma,
 //    casi toda vista libre es alcanzable — geometría "cámara libra pero ni el
 //    tope libra" es exótica. Se fuerza bajando el tope EN VIVO (mismo knob

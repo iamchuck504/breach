@@ -267,13 +267,19 @@ try {
     G.weapons.st.cd = 0;
     G.weapons.st.reload = 0;
     G.player.state = 'idle';
+    // posición despejada FIJA: el aim-over puede diferir el gatillo unos
+    // frames si un borde cercano tapa el cañón, y esta fase mide la
+    // dirección del cohete, no la espera del gatillo (se restaura al salir:
+    // la fase de visibilidad ADS depende de la posición original)
+    const prevPos = { x: G.player.pos.x, z: G.player.pos.z };
+    G.player.pos.x = 14; G.player.pos.z = 14;
     G.player.yaw = 0.42;
     G.player.cam.yaw = 0.42;
     G.player.cam.pitch = -0.28;
     const alive = G.dummies.list.map((d) => d.alive);
     for (const d of G.dummies.list) d.alive = false;
     I._mouseAim = true;
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await new Promise((resolve) => setTimeout(resolve, 320));
 
     let captured = null;
     const oldFire = R.fire.bind(R);
@@ -295,10 +301,15 @@ try {
     };
     I._mouseFire = true;
     I.firePressed = true;
-    await new Promise((resolve) => setTimeout(resolve, 130));
+    // el aim-over puede retener el click mientras el arma libra un borde:
+    // mantener el gatillo hasta capturar el cohete (tope 500ms)
+    for (let i = 0; i < 25 && !captured; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
     I._mouseFire = false;
     I._mouseAim = false;
     R.fire = oldFire;
+    G.player.pos.x = prevPos.x; G.player.pos.z = prevPos.z;
     G.dummies.list.forEach((d, i) => { d.alive = alive[i]; });
     return captured;
   });

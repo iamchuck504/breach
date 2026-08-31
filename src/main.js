@@ -113,7 +113,7 @@ const G = {
   fireBuffer: 0,       // click de disparo pendiente mientras el cuerpo gira
   pendingShots: 0,     // tiros aprobados que esperan la pose/muzzle de este frame
   pendingThrows: 0,    // granadas aprobadas que esperan la pose de este frame
-  aimOver: { lift: 0, blocked: false }, // ADS: alzada del arma para librar bordes cercanos
+  aimOver: { lift: 0, blocked: false, holdFire: false, stuckT: 0, lastGuide: null }, // ADS: alzada del arma para librar bordes cercanos
   throwT: 0,           // gesto de lanzamiento en curso
   throwPending: false, // el bote aún no ha salido de la mano
   editorReturn: null,  // id del mapa en edición durante un playtest
@@ -1413,7 +1413,8 @@ function teardown({ keepNet = false, keepLobby = true } = {}) {
   G.fireBuffer = 0;
   G.pendingShots = 0;
   G.pendingThrows = 0;
-  G.aimOver.lift = 0; G.aimOver.blocked = false;
+  G.aimOver.lift = 0; G.aimOver.blocked = false; G.aimOver.holdFire = false;
+  G.aimOver.stuckT = 0;
   smoke.clear();
   specials.clear();
   rockets.clear();
@@ -2645,11 +2646,13 @@ const _ao1 = new THREE.Vector3(), _ao2 = new THREE.Vector3();
 const _ao3 = new THREE.Vector3(), _ao4 = new THREE.Vector3();
 // alturas discretas (histéresis natural: sin oscilar en bordes milimétricos)
 const AIM_OVER_LIFTS = [0, 0.12, 0.2, 0.27, 0.34];
-// La detección parte de una altura de hombro ANALÍTICA, no del muzzle del
-// rig: el muzzle real ya incluye la alzada y el dip que este mismo sistema
-// aplicó (medido: el dip bajaba el muzzle 1.22→0.84 y el detector, midiendo
-// desde el arma caída, veía un bloqueo eterno — realimentación).
-const AIM_OVER_BASE_Y = 1.2;
+// Alturas naturales del muzzle por arma (medidas en ADS, pitch 0, de pie) y
+// alcance hacia delante del cañón: el fallback analítico las usa cuando el
+// muzzle real está contaminado por el dip de bloqueo (medido: el dip bajaba
+// el muzzle 1.22→0.84 y el detector, midiendo desde el arma caída, veía un
+// bloqueo eterno — realimentación).
+const AIM_OVER_MUZZLE_Y = { smg: 1.24, shotgun: 1.3, pistol: 1.34, sniper: 1.32, bazooka: 1.35 };
+const AIM_OVER_MUZZLE_FWD = { smg: 1.0, shotgun: 1.14, pistol: 0.8, sniper: 1.39, bazooka: 0.94 };
 
 function aimOverEligible(p) {
   const w = G.weapons;
@@ -2666,7 +2669,7 @@ function aimOverEligible(p) {
 function updateAimOver(dt) {
   const st = G.aimOver, cfg = TUNING.aimOver;
   const p = G.player;
-  let targetLift = 0, blocked = false;
+  let targetLift = 0, blocked = false, holdFire = false;
   if (p && G.rig && aimOverEligible(p)) {
     const def = G.weapons.def;
     const range = def.range > 0 ? def.range : 60;
@@ -2675,34 +2678,79 @@ function updateAimOver(dt) {
     const guideT = Math.min(staticHitDistance(ray.origin, ray.dir, range), range);
     const guide = _ao1.copy(ray.origin).addScaledVector(ray.dir, guideT);
     G.rig.root.updateWorldMatrix(true, true);
-    // XZ del muzzle real (offsets laterales del arma importan en esquinas);
-    // Y analítica fija: inmune a la alzada/inclinación que nosotros mismos
-    // aplicamos al rig (sin ella el detector oscila o se bloquea solo)
     const muzzle = G.rig.muzzleWorld(_ao2);
-    muzzle.y = (p.y ?? 0) + AIM_OVER_BASE_Y;
+
+    // GARANTÍA DURA: si la línea REAL del cañón (pose actual, alzada a medio
+    // camino incluida) sigue tapada en el tramo cercano, el gatillo espera.
+    // Sin esto, un click en el primer frame de ADS —o apuntando hacia abajo,
+    // donde el muzzle gira por debajo de la base analítica— salía con el
+    // arma a medio subir y la bala pegaba el borde igual. El click no se
+    // pierde: G.fireBuffer lo retiene y sale en cuanto el cañón libra.
+    const realDir = _ao4.copy(guide).sub(muzzle);
+    const realLen = realDir.length();
+    if (realLen > 1.2) {
+      realDir.multiplyScalar(1 / realLen);
+      const nearReal = Math.min(cfg.nearDist, realLen - 0.6);
+      if (nearReal > 0.1 &&
+          staticHitDistance(muzzle, realDir, nearReal) < nearReal - 1e-3) {
+        holdFire = true;
+      }
+    }
+
+    // Base de detección 100% ANALÍTICA: tabla por arma + giro por pitch
+    // (apuntar abajo baja el cañón). Jamás se deriva del muzzle del rig:
+    // el lift/dip que nosotros aplicamos más el lag del damp realimentaban
+    // el sensor (lift oscilando entre escalones, bloqueos eternos).
+    muzzle.y = (p.y ?? 0) + (AIM_OVER_MUZZLE_Y[G.weapons.cur] ?? 1.28) +
+      Math.sin(p.aimPitch ?? 0) * (AIM_OVER_MUZZLE_FWD[G.weapons.cur] ?? 1);
+    // margen inferior de la escalera: borde bajo del cono de dispersión
+    // (la escopeta reparte 8 perdigones — su cono real es más ancho)
+    const marginDown = -(0.07 + (def.pellets > 1 ? 0.1 : 0));
     if (_ao3.copy(guide).sub(muzzle).length() > 1.2) {
       let cleared = null;
       for (const h of AIM_OVER_LIFTS) {
         if (h > cfg.maxLift + 1e-6) break;
-        const from = _ao3.set(muzzle.x, muzzle.y + h, muzzle.z);
-        const d = _ao4.copy(guide).sub(from);
-        const len = d.length();
-        if (len < 0.6) break;
-        d.multiplyScalar(1 / len);
-        // solo el tramo CERCANO importa: un muro a media distancia es un
-        // bloqueo legítimo y ahí manda el modelo físico de siempre
-        const near = Math.min(cfg.nearDist, len - 0.6);
-        if (near <= 0.1) break;
-        if (staticHitDistance(from, d, near) >= near - 1e-3) { cleared = h; break; }
+        // el rayo central Y el borde inferior del cono deben librar — mejor
+        // un escalón de sobra que un tiro estampado en el parapeto
+        let ok = true;
+        for (const margin of [0, marginDown]) {
+          const from = _ao3.set(muzzle.x, muzzle.y + h + margin, muzzle.z);
+          const d = _ao4.copy(guide).sub(from);
+          const len = d.length();
+          if (len < 0.6) { ok = false; break; }
+          d.multiplyScalar(1 / len);
+          // solo el tramo CERCANO importa: un muro a media distancia es un
+          // bloqueo legítimo y ahí manda el modelo físico de siempre
+          const near = Math.min(cfg.nearDist, len - 0.6);
+          if (near <= 0.1) { ok = false; break; }
+          if (staticHitDistance(from, d, near) < near - 1e-3) { ok = false; break; }
+        }
+        if (ok) { cleared = h; break; }
       }
       if (cleared === null) blocked = true;
       else targetLift = cleared;
     }
+
+    // Anti-atasco: si la escalera dice "librable" pero la línea REAL sigue
+    // tapada con la alzada ya asentada (error residual de la analítica), no
+    // dejar el arma muda para siempre: tras un momento se trata como bloqueo
+    // (dip + gatillo inerte, señal clara). Mover la mira resetea y reintenta.
+    if (holdFire && !blocked && Math.abs(st.lift - targetLift) < 0.01) {
+      st.stuckT += dt;
+      if (st.stuckT > 0.35) blocked = true;
+    } else if (!holdFire) {
+      st.stuckT = 0;
+    }
+    if (st.lastGuide && guide.distanceTo(st.lastGuide) > 0.8) st.stuckT = 0;
+    (st.lastGuide ??= new THREE.Vector3()).copy(guide);
   }
   const speed = targetLift > st.lift ? cfg.rise : cfg.fall;
   st.lift += (targetLift - st.lift) * (1 - Math.exp(-speed * dt));
   if (Math.abs(st.lift - targetLift) < 0.004) st.lift = targetLift;
   st.blocked = blocked;
+  // holdFire = "no dispares ESTE frame": bloqueo total o cañón aún tapado
+  // mientras el arma sube. La retícula jamás se entera; el click espera.
+  st.holdFire = blocked || holdFire;
 }
 
 function coverPoseReady(wantsAim, wantsFire) {
@@ -3282,7 +3330,8 @@ function simStep(dt) {
     G.fireBuffer = 0;
     G.pendingShots = 0;
     G.pendingThrows = 0;
-    G.aimOver.lift = 0; G.aimOver.blocked = false;
+    G.aimOver.lift = 0; G.aimOver.blocked = false; G.aimOver.holdFire = false;
+    G.aimOver.stuckT = 0;
     p.update(dt, input, false);
     if (G.botMatch) G.botMatch.update(dt);
     if (G.net) { G.net.tickState(dt, p, G.weapons); G.net.tickBotState(dt, G.onlineBots?.bots); }
@@ -3315,7 +3364,10 @@ function simStep(dt) {
   // No redefine la trayectoria: ADS usa cámara; hip/blindfire usan cañón.
   const aligned = p.fireAligned();
   const wantsFire = input.fireHeld || input.firePressed || G.fireBuffer > 0;
-  let canFire = stateOk && aligned && coverPoseReady(input.aimHeld, wantsFire);
+  // aim-over: holdFire (frame anterior) también bufferiza el click — el tiro
+  // espera a que el cañón libre el borde en vez de estamparse en él
+  let canFire = stateOk && aligned && coverPoseReady(input.aimHeld, wantsFire) &&
+    !G.aimOver.holdFire;
   // cualquier click que no pueda salir YA (roadie, cuerpo girando, cooldown,
   // dive/slide o recarga) queda bufereado — y el buffer dura AL MENOS
   // lo que falta de cooldown/recarga, para que el tiro encolado nunca se pierda
@@ -3413,7 +3465,12 @@ function simStep(dt) {
   // cañón quedó irremediablemente tapado (gatillo inerte, munición intacta)
   updateAimOver(dt);
   canFire = stateOkAfter && p.fireAligned() && coverPoseReady(p.aim, wantsFire) &&
-    !G.aimOver.blocked;
+    !G.aimOver.holdFire;
+  // un click único mientras el aim-over sube el arma no se pierde: espera en
+  // el buffer y sale en cuanto el cañón libra el borde
+  if (input.firePressed && !p.dead && !canFire && G.aimOver.holdFire) {
+    G.fireBuffer = Math.max(G.fireBuffer, 0.35);
+  }
   const fired = p.dead ? false
     : G.weapons.update(dt, input.fireHeld, input.firePressed || G.fireBuffer > 0, canFire);
   // Tras la primera inserción desde 0, conservar margen para que cover/arma

@@ -100,7 +100,7 @@ export const TUNING = {
     enabled: 1,
     nearDist: 2.4,  // solo estorbos a menos de esto del cañón cuentan (m)
     maxLift: 0.34,  // tope del gesto: deja el muzzle ~altura de los ojos (m)
-    rise: 10,       // subida exponencial (por segundo)
+    rise: 14,       // subida exponencial (por segundo; rápida = menos espera del gatillo)
     fall: 7,        // bajada exponencial
   },
   weapons: {
