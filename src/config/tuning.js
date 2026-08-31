@@ -89,6 +89,20 @@ export const TUNING = {
     pitchRecoilMaxDeg: 4, // evita acumular elevación sin límite en automático
     minDist: 0.5,
   },
+  // ADS: la cámara va ~0.3m por encima del cañón (medido: muzzle SMG ~1.22,
+  // cámara ~1.51), así que un borde a la altura del pecho (pegado O a unos
+  // metros) corta la línea del arma aunque el círculo vea libre. Ni la
+  // retícula se mueve ni la bala nace "en los ojos" (vetado: se siente
+  // trampa): el PERSONAJE levanta el arma lo justo para librar el borde; si
+  // ni el tope libra, el arma se inclina y el gatillo queda inerte.
+  // enabled 0 = comportamiento anterior (kill switch en vivo, F10).
+  aimOver: {
+    enabled: 1,
+    nearDist: 2.4,  // solo estorbos a menos de esto del cañón cuentan (m)
+    maxLift: 0.34,  // tope del gesto: deja el muzzle ~altura de los ojos (m)
+    rise: 10,       // subida exponencial (por segundo)
+    fall: 7,        // bajada exponencial
+  },
   weapons: {
     smg: {
       nameKey: 'weapon.smg', rpm: 620, dmg: 10, headMult: 1.6,

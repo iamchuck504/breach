@@ -113,6 +113,7 @@ const G = {
   fireBuffer: 0,       // click de disparo pendiente mientras el cuerpo gira
   pendingShots: 0,     // tiros aprobados que esperan la pose/muzzle de este frame
   pendingThrows: 0,    // granadas aprobadas que esperan la pose de este frame
+  aimOver: { lift: 0, blocked: false }, // ADS: alzada del arma para librar bordes cercanos
   throwT: 0,           // gesto de lanzamiento en curso
   throwPending: false, // el bote aún no ha salido de la mano
   editorReturn: null,  // id del mapa en edición durante un playtest
@@ -1412,6 +1413,7 @@ function teardown({ keepNet = false, keepLobby = true } = {}) {
   G.fireBuffer = 0;
   G.pendingShots = 0;
   G.pendingThrows = 0;
+  G.aimOver.lift = 0; G.aimOver.blocked = false;
   smoke.clear();
   specials.clear();
   rockets.clear();
@@ -2629,6 +2631,80 @@ function barrelReticleXY() {
   };
 }
 
+// ---------- aim-over (ADS): librar bordes cercanos que tapan el cañón ----------
+// La cámara va ~0.3m por encima del muzzle en ADS (medido: SMG ~1.22 vs
+// cámara ~1.51): un borde a la altura del pecho entre jugador y objetivo
+// corta la línea del arma aunque el círculo (centro de pantalla) vea libre —
+// el tiro se estampa en tu propio parapeto a un metro. Vetado mover o
+// recolorear la retícula y vetado disparar "desde los ojos" (se siente
+// trampa): el PERSONAJE levanta el conjunto arma+brazos lo justo para librar
+// el borde (la bala sigue naciendo del cañón real). Si ni el tope del gesto
+// libra, el arma se inclina hacia abajo y el gatillo queda inerte: mejor no
+// disparar que desperdiciar la bala. TUNING.aimOver (F10) apaga todo en vivo.
+const _ao1 = new THREE.Vector3(), _ao2 = new THREE.Vector3();
+const _ao3 = new THREE.Vector3(), _ao4 = new THREE.Vector3();
+// alturas discretas (histéresis natural: sin oscilar en bordes milimétricos)
+const AIM_OVER_LIFTS = [0, 0.12, 0.2, 0.27, 0.34];
+// La detección parte de una altura de hombro ANALÍTICA, no del muzzle del
+// rig: el muzzle real ya incluye la alzada y el dip que este mismo sistema
+// aplicó (medido: el dip bajaba el muzzle 1.22→0.84 y el detector, midiendo
+// desde el arma caída, veía un bloqueo eterno — realimentación).
+const AIM_OVER_BASE_Y = 1.2;
+
+function aimOverEligible(p) {
+  const w = G.weapons;
+  if (!TUNING.aimOver.enabled || !p || !p.aim || p.dead || !w || w.swapping ||
+      w.def.thrown || !G.selfAlive) return false;
+  // cover y blindfire ya gestionan su propia exposición (coverAimPose/lean);
+  // los estados acrobáticos no sostienen una intención óptica estable
+  const s = p.state || '';
+  return s !== 'dead' && s !== 'dive' && s !== 'slide' && s !== 'roadie' &&
+    s !== 'melee' && s !== 'mantle' && s !== 'flip' &&
+    !s.startsWith('cover') && !s.startsWith('blind_');
+}
+
+function updateAimOver(dt) {
+  const st = G.aimOver, cfg = TUNING.aimOver;
+  const p = G.player;
+  let targetLift = 0, blocked = false;
+  if (p && G.rig && aimOverEligible(p)) {
+    const def = G.weapons.def;
+    const range = def.range > 0 ? def.range : 60;
+    const ray = shoulderCam.aimRay();
+    // punto que promete el círculo (solo geometría: la obstrucción es del mundo)
+    const guideT = Math.min(staticHitDistance(ray.origin, ray.dir, range), range);
+    const guide = _ao1.copy(ray.origin).addScaledVector(ray.dir, guideT);
+    G.rig.root.updateWorldMatrix(true, true);
+    // XZ del muzzle real (offsets laterales del arma importan en esquinas);
+    // Y analítica fija: inmune a la alzada/inclinación que nosotros mismos
+    // aplicamos al rig (sin ella el detector oscila o se bloquea solo)
+    const muzzle = G.rig.muzzleWorld(_ao2);
+    muzzle.y = (p.y ?? 0) + AIM_OVER_BASE_Y;
+    if (_ao3.copy(guide).sub(muzzle).length() > 1.2) {
+      let cleared = null;
+      for (const h of AIM_OVER_LIFTS) {
+        if (h > cfg.maxLift + 1e-6) break;
+        const from = _ao3.set(muzzle.x, muzzle.y + h, muzzle.z);
+        const d = _ao4.copy(guide).sub(from);
+        const len = d.length();
+        if (len < 0.6) break;
+        d.multiplyScalar(1 / len);
+        // solo el tramo CERCANO importa: un muro a media distancia es un
+        // bloqueo legítimo y ahí manda el modelo físico de siempre
+        const near = Math.min(cfg.nearDist, len - 0.6);
+        if (near <= 0.1) break;
+        if (staticHitDistance(from, d, near) >= near - 1e-3) { cleared = h; break; }
+      }
+      if (cleared === null) blocked = true;
+      else targetLift = cleared;
+    }
+  }
+  const speed = targetLift > st.lift ? cfg.rise : cfg.fall;
+  st.lift += (targetLift - st.lift) * (1 - Math.exp(-speed * dt));
+  if (Math.abs(st.lift - targetLift) < 0.004) st.lift = targetLift;
+  st.blocked = blocked;
+}
+
 function coverPoseReady(wantsAim, wantsFire) {
   const p = G.player;
   if (!p || p.state !== 'cover' || !p.cover) return true;
@@ -3206,6 +3282,7 @@ function simStep(dt) {
     G.fireBuffer = 0;
     G.pendingShots = 0;
     G.pendingThrows = 0;
+    G.aimOver.lift = 0; G.aimOver.blocked = false;
     p.update(dt, input, false);
     if (G.botMatch) G.botMatch.update(dt);
     if (G.net) { G.net.tickState(dt, p, G.weapons); G.net.tickBotState(dt, G.onlineBots?.bots); }
@@ -3332,7 +3409,11 @@ function simStep(dt) {
   // este mismo paso. Revalidar evita añadir un frame artificial de latencia.
   const stateOkAfter = !p.dead && p.state !== 'dive' && p.state !== 'slide' &&
     p.state !== 'roadie' && p.state !== 'mantle' && p.state !== 'melee' && input.anyDevice;
-  canFire = stateOkAfter && p.fireAligned() && coverPoseReady(p.aim, wantsFire);
+  // aim-over: con el estado ya asentado, decidir la alzada del arma y si el
+  // cañón quedó irremediablemente tapado (gatillo inerte, munición intacta)
+  updateAimOver(dt);
+  canFire = stateOkAfter && p.fireAligned() && coverPoseReady(p.aim, wantsFire) &&
+    !G.aimOver.blocked;
   const fired = p.dead ? false
     : G.weapons.update(dt, input.fireHeld, input.firePressed || G.fireBuffer > 0, canFire);
   // Tras la primera inserción desde 0, conservar margen para que cover/arma
@@ -3667,6 +3748,8 @@ function frame(now) {
       throwReleased: G.throwT > 0 && !G.throwPending,
       reloading: G.weapons.reloading,
       reloadT: G.weapons.reloading ? 1 - G.weapons.st.reload / G.weapons.def.reloadTime : 0,
+      aimLift: G.aimOver.lift,
+      aimBlocked: G.aimOver.blocked,
     });
     while (G.pendingShots > 0) {
       fireShot();

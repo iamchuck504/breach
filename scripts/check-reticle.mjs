@@ -189,8 +189,6 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 80));
 
     const guidePoint = cameraOrigin.clone().addScaledVector(ray.dir, 24);
-    const expectedPhysicalPoint = muzzle.clone().addScaledVector(
-      guidePoint.clone().sub(muzzle).normalize(), 0.8);
     const projected = guidePoint.clone().project(window.BREACH_CAM);
     const expected = {
       x: (projected.x * 0.5 + 0.5) * innerWidth,
@@ -206,17 +204,40 @@ try {
       impact = point.clone();
       return oldImpact(point, normal, surface, opts);
     };
+    // Este stub crea un cover que tapa el cañón A CUALQUIER ALTURA. Con
+    // aim-over activo el contrato nuevo es más fuerte que "pegar el cover":
+    // el gatillo queda inerte y la bala (única) no se gasta.
+    const magBefore = G.weapons.st.mag;
+    I._mouseFire = true;
+    I.firePressed = true;
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    I._mouseFire = false;
+    const blockedState = G.aimOver.blocked;
+    const heldFire = { impact, mag: G.weapons.st.mag };
+    // Con el kill switch apagado se conserva el contrato físico clásico: la
+    // bala nace en el muzzle y el primer contacto (el cover a 0.8m) la para.
+    const TUNING = (await import('/src/config/tuning.js')).TUNING;
+    TUNING.aimOver.enabled = 0;
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    G.rig.root.updateWorldMatrix(true, true);
+    const muzzleNow = G.rig.muzzleWorld(new window.THREE.Vector3()).clone();
+    const expectedPhysicalPoint = muzzleNow.clone().addScaledVector(
+      guidePoint.clone().sub(muzzleNow).normalize(), 0.8);
     I._mouseFire = true;
     I.firePressed = true;
     await new Promise((resolve) => setTimeout(resolve, 90));
     I._mouseFire = false;
     I._mouseAim = false;
+    TUNING.aimOver.enabled = 1;
     window.BREACH_EFFECTS.impact = oldImpact;
     W.raycastHit = oldRaycastHit;
     W.raycast = oldRaycast;
     return {
       actual, expected,
       blocked: el.classList.contains('blocked'),
+      aimOverBlocked: blockedState,
+      heldMag: heldFire.mag, magBefore,
+      heldImpact: heldFire.impact !== null,
       reticleError: Math.hypot(actual.x - expected.x, actual.y - expected.y),
       centerOffset: Math.hypot(actual.x - innerWidth / 2, actual.y - innerHeight / 2),
       impactWorldError: impact ? impact.distanceTo(expectedPhysicalPoint) : Infinity,
@@ -227,6 +248,11 @@ try {
       sniperCentered.impactWorldError > 0.14 || sniperCentered.penetratedToGuide) {
     console.error('SNIPER PHYSICAL ADS DEBUG', JSON.stringify(sniperCentered));
     throw new Error('scope del sniper atravesó el cover entre muzzle y objetivo');
+  }
+  if (!sniperCentered.aimOverBlocked || sniperCentered.heldImpact ||
+      sniperCentered.heldMag !== sniperCentered.magBefore) {
+    console.error('SNIPER AIM-OVER DEBUG', JSON.stringify(sniperCentered));
+    throw new Error('aim-over: un cover imposible de librar debe dejar el gatillo inerte');
   }
 
   // Bazooka ADS: la cámara define el punto deseado y el cohete sale desde el
