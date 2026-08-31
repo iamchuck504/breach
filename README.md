@@ -71,24 +71,29 @@ un mapa del editor es un objeto de datos (`src/world/map-data.js`) que
 escritos a mano, así que lo que ves en el editor es lo que el juego simula
 — no hay un "formato de editor" y otro "formato de juego".
 
-- **Cámara:** WASD mover · E/C subir-bajar · clic derecho mirar · rueda zoom
+- **Cámara:** WASD mover · ESPACIO/C subir-bajar · clic derecho mirar · rueda zoom
   · `T` vista superior.
-- **Construir:** biblioteca a la izquierda, `ALT+CLIC` para colocar, clic
-  para seleccionar, `SHIFT+CLIC` multi-selección.
-- **Editar:** mover/rotar/escalar, `CTRL+D` duplicar, `SUPR` borrar,
-  `CTRL+Z`/`CTRL+SHIFT+Z` deshacer-rehacer, valores exactos X/Z/W/D/H/ROT
-  en el panel derecho, snapping de posición y rotación, **espejo X/Z**.
+- **Construir:** biblioteca buscable y filtrable a la izquierda, doble clic o
+  **INSERTAR EN VISTA** para colocar al centro, `ALT+CLIC` para colocar en un
+  punto concreto, clic para seleccionar y `SHIFT+CLIC` para multiselección.
+- **Editar:** `Q/W/E/R` selecciona/mueve/rota/escala, `F` enfoca la selección,
+  `CTRL+D` duplica, `SUPR` borra, `CTRL+Z`/`CTRL+Y` deshace-rehace y el panel
+  derecho actualiza X/Z/W/D/H/ROT/escala en vivo. Incluye snapping, espejo X/Z
+  y `ESC` cancela una transformación antes de limpiar la selección o salir.
 - **Marcadores:** spawns por equipo (con orientación), munición y punto de
   arma especial. Se ven en el editor, no en partida.
 - **Visualización:** overlay de **cover real** (leído de `world.faces`, con
   color por altura) y de **navegación** (celdas transitables según la física
   del juego) + **ruta A→B** para detectar zonas inaccesibles.
-- **Validación** en vivo: spawns, separación entre bandos, límites, pickups
-  dentro de geometría, cobertura utilizable y conexión rojo↔azul.
+- **Validación** agrupada: errores, advertencias y checks correctos para
+  spawns, separación, límites, pickups, cover y conexión rojo↔azul. Los
+  hallazgos asociados a objetos se pueden pulsar para seleccionarlos y
+  enfocarlos; los errores bloquean un export frágil.
 - **Playtest** instantáneo: juegas el mapa en edición y `ESC` vuelve al
   editor con todo intacto. Un mapa válido aparece en el selector y en el
   lobby local, y los bots lo navegan.
-- **Clonar mapa del juego:** cualquiera de los 3 layouts activos se clona a un
+- **Clonar mapa del juego:** cualquiera de los layouts existentes (activos o
+  builders experimentales) se clona a un
   mapa editable conservando TODO — cada caja exacta del builder original
   (color, cover, colliders invisibles, material de impacto), spawns con
   orientación, munición y arma especial con altura. La decoración (fachadas,
@@ -102,8 +107,12 @@ escritos a mano, así que lo que ves en el editor es lo que el juego simula
   (proporciones y altura de gameplay) con regla de alturas (LOW 1.1 · ojos
   1.3 · cabeza 1.74 · MID 1.9 · HIGH 3.0). Se mueve/duplica/oculta (botón
   REF) y **nunca viaja en el export** ni aparece en partida.
+- **Guardado seguro:** indicador de cambios, confirmación al cambiar/salir,
+  `CTRL+S`, `CTRL+SHIFT+S` y recuperación automática del último borrador tras
+  un cierre inesperado. Los anchos de panel y preferencias del editor se
+  recuerdan entre sesiones.
 - **Exportar / Importar:** el JSON exportado ES el formato del juego (sin
-  conversión); la validación acompaña el export avisando sin bloquear. Un
+  conversión); la validación bloquea errores y pide confirmación ante avisos. Un
   fichero en `src/world/maps/*.json` queda empaquetado como mapa del juego
   en modos locales.
 
@@ -116,6 +125,8 @@ Vite lo elimina del build de producción. Atajos: `http://127.0.0.1:5200/?editor
 entra directo al editor sin pasar por el menú, y `scripts/editor.ps1` arranca
 el dev server si hace falta y abre el navegador ahí (es lo que usa el acceso
 directo "BREACH Editor" del escritorio).
+El acceso se instala o repara con `npm run editor:shortcut`; `npm run editor`
+abre el editor y arranca su servidor local oculto si todavía no está activo.
 
 ## Validación (headless, sin abrir ventana)
 

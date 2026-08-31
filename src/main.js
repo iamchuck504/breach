@@ -851,7 +851,11 @@ document.addEventListener('fullscreenchange', () => {
 
 input.onEscape = () => {
   // el editor y su playtest tienen su propia salida (no abren la pausa)
-  if (G.mode === 'editor') { closeEditor(); return; }
+  if (G.mode === 'editor') {
+    if (editor?.handleEscape()) return;
+    closeEditor();
+    return;
+  }
   if (G.editorReturn) { returnToEditor(); return; }
   if ((menuIsOpen() || !splash.classList.contains('off')) && menuNavigator?.back()) return;
   if (!G.mode) return;
@@ -1099,7 +1103,11 @@ document.getElementById('btn-char-back').addEventListener('click', () => showCha
 function navigateMenuBack() {
   if (!splash.classList.contains('off')) return false;
   // en el editor, Esc sale de él (no abre la pausa del juego)
-  if (G.mode === 'editor') { closeEditor(); return true; }
+  if (G.mode === 'editor') {
+    if (editor?.handleEscape()) return true;
+    closeEditor();
+    return true;
+  }
   // durante un playtest, Esc vuelve al editor con el mapa intacto
   if (G.editorReturn) { returnToEditor(); return true; }
   // jerarquía: subcard → Opciones → menú principal
@@ -1742,8 +1750,9 @@ async function openEditor(map = null) {
   editorUI.show(true);
 }
 
-function closeEditor() {
-  if (!editor) return;
+function closeEditor({ force = false } = {}) {
+  if (!editor) return false;
+  if (!force && editor.dirty && !confirm(t('editor.unsavedExit'))) return false;
   editor.close();
   editor.discardDraft();
   editorUI.show(false);
@@ -1753,6 +1762,7 @@ function closeEditor() {
   showMenuBackdrop();
   hud.show(false);
   hud.showMenu(true);
+  return true;
 }
 
 // Playtest: valida el borrador y entra a jugarlo sin guardarlo implícitamente.

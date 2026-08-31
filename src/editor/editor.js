@@ -29,6 +29,7 @@ const CHAR_HEAD = 1.74;
 const DEG = Math.PI / 180;
 const SNAP_POS = [0, 0.25, 0.5, 1, 2];
 const SNAP_ROT = [0, 15, 30, 45, 90];
+const RECOVERY_KEY = 'breach.editor.recovery.v1';
 
 export class MapEditor {
   constructor({ scene, camera, renderer, world, canvas, onPlaytest, onExit }) {
@@ -53,6 +54,7 @@ export class MapEditor {
     this.redoStack = [];
     this.brush = 'coverLow';     // pieza activa de la biblioteca
     this.dirty = false;
+    this.lastSavedAt = null;
     this.pathTest = null;        // { a, b, route }
     this.status = '';
 
@@ -82,6 +84,7 @@ export class MapEditor {
 
   close() {
     this.active = false;
+    this._flushRecovery();
     this.scene.remove(this.overlay);
   }
 
@@ -95,6 +98,7 @@ export class MapEditor {
     stageMap(this.map);                      // borrador en memoria, no persistencia
     this.world.setLayout(mapLayoutId(this.map), true); // force: mismo id, datos nuevos
     this.refreshOverlay();
+    if (this.dirty) this._scheduleRecovery();
   }
 
   // Migración transparente de clones guardados antes de que los assets base
@@ -223,6 +227,7 @@ export class MapEditor {
     if (this.undoStack.length > 80) this.undoStack.shift();
     this.redoStack.length = 0;
     this.dirty = true;
+    this._scheduleRecovery();
   }
   undo() {
     if (!this.undoStack.length) return this.setStatus(t('editor.status.nothingUndo'));
@@ -245,6 +250,55 @@ export class MapEditor {
   }
 
   setStatus(msg) { this.status = msg; this.onChange?.(); }
+
+  // Recuperación local independiente del guardado normal. Nunca publica ni
+  // altera el mapa persistido: solo conserva el último borrador por si el
+  // navegador o el servidor local se cierran inesperadamente.
+  _scheduleRecovery() {
+    clearTimeout(this._recoveryTimer);
+    this._recoveryTimer = setTimeout(() => this._flushRecovery(), 220);
+  }
+
+  _flushRecovery() {
+    clearTimeout(this._recoveryTimer);
+    this._recoveryTimer = null;
+    if (!this.dirty || !this.map) return;
+    try {
+      localStorage.setItem(RECOVERY_KEY, JSON.stringify({
+        version: 1,
+        savedAt: Date.now(),
+        map: this.map,
+      }));
+    } catch { /* almacenamiento privado/lleno: el editor sigue funcionando */ }
+  }
+
+  recovery() {
+    try {
+      const value = JSON.parse(localStorage.getItem(RECOVERY_KEY) || 'null');
+      return value?.version === 1 && value?.map?.objects ? value : null;
+    } catch { return null; }
+  }
+
+  restoreRecovery() {
+    const value = this.recovery();
+    if (!value) return false;
+    if (this.map?.id) unstageMap(this.map.id);
+    this.map = JSON.parse(JSON.stringify(value.map));
+    this.selection.clear();
+    this.undoStack.length = 0;
+    this.redoStack.length = 0;
+    this.dirty = true;
+    this.rebuild();
+    this.frameCamera();
+    this.setStatus(t('editor.status.recovered'));
+    return true;
+  }
+
+  clearRecovery() {
+    clearTimeout(this._recoveryTimer);
+    this._recoveryTimer = null;
+    try { localStorage.removeItem(RECOVERY_KEY); } catch { /* ok */ }
+  }
 
   // ------------------------------------------------------------- edición
   place(x, z) {
@@ -358,10 +412,10 @@ export class MapEditor {
   }
 
   // Edición numérica exacta desde el panel de propiedades
-  setField(field, value) {
+  setField(field, value, { record = true } = {}) {
     const sel = this.selected();
     if (!sel.length) return;
-    this.pushUndo('propiedad');
+    if (record) this.pushUndo('propiedad');
     for (const o of sel) {
       if (field === 'h' && paletteById(o.p)?.t === 'box') {
         // altura jugable: SOLO las tres alturas legales del juego
@@ -370,6 +424,65 @@ export class MapEditor {
       if (field === 'rot' && paletteById(o.p)?.t === 'spawn') o.yaw = value * DEG;
     }
     this.rebuild();
+  }
+
+  selectObjects(ids, { focus = false } = {}) {
+    const known = new Set(this.map.objects.map((o) => o.id));
+    this.selection = new Set((ids || []).filter((id) => known.has(id)));
+    this.refreshOverlay();
+    if (focus) this.focusSelection();
+    this.onChange?.();
+  }
+
+  focusSelection() {
+    const sel = this.selected();
+    if (!sel.length) return this.setStatus(t('editor.status.focusNeedsSelection'));
+    const boxes = sel.map((o) => this.objectBox(o));
+    const center = {
+      x: boxes.reduce((n, b) => n + (b.minx + b.maxx) / 2, 0) / boxes.length,
+      y: boxes.reduce((n, b) => n + (b.miny + b.maxy) / 2, 0) / boxes.length,
+      z: boxes.reduce((n, b) => n + (b.minz + b.maxz) / 2, 0) / boxes.length,
+    };
+    const span = Math.max(2,
+      ...boxes.map((b) => Math.max(b.maxx - b.minx, b.maxz - b.minz, b.maxy - b.miny)));
+    const dir = this._camDir();
+    const distance = Math.max(5, span * 3.2);
+    this.cam.x = center.x - dir.x * distance;
+    this.cam.z = center.z - dir.z * distance;
+    this.cam.y = Math.max(1.8, center.y - dir.y * distance);
+    this.setStatus(t('editor.status.focused', { count: sel.length }));
+  }
+
+  insertBrushAtView() {
+    const g = this.groundPoint(0, 0);
+    if (!g) return this.setStatus(t('editor.status.insertUnavailable'));
+    this.place(g.x, g.z);
+    this.setTool('move');
+    this.focusSelection();
+  }
+
+  handleEscape() {
+    if (this.drag?.kind === 'move' && this.drag.moved && this.drag.before) {
+      this.restore(this.drag.before);
+      if (this.undoStack.at(-1)?.data === this.drag.before) this.undoStack.pop();
+      this.dirty = this.drag.dirtyBefore;
+      this.drag = null;
+      this.rebuild();
+      this.setStatus(t('editor.status.transformCancelled'));
+      return true;
+    }
+    if (this.pathTest) {
+      this.clearPathTest();
+      this.setStatus(t('editor.status.routeCleared'));
+      return true;
+    }
+    if (this.selection.size) {
+      this.selection.clear();
+      this.refreshOverlay();
+      this.onChange?.();
+      return true;
+    }
+    return false;
   }
 
   // Espejo sobre un eje: crea la mitad reflejada respetando rotación y yaw
@@ -424,6 +537,8 @@ export class MapEditor {
     const ray = this.screenRay(nx, ny);
     let best = null;
     for (const o of this.map.objects) {
+      if (o.p === 'charRef' && !this.showCharRefs) continue;
+      if (o.baseDecor && this.map.decor === false) continue;
       const box = this.objectBox(o);
       const t = rayBox(ray, box);
       if (t !== null && (!best || t < best.t)) best = { t, o };
@@ -468,6 +583,9 @@ export class MapEditor {
     this._matSelFill = new THREE.MeshBasicMaterial({
       color: 0xff8b42, transparent: true, opacity: 0.11, depthWrite: false,
     });
+    this._matGizmoX = new THREE.MeshBasicMaterial({ color: 0xe95b52, depthTest: false });
+    this._matGizmoZ = new THREE.MeshBasicMaterial({ color: 0x4fa9e8, depthTest: false });
+    this._matGizmoTool = new THREE.MeshBasicMaterial({ color: 0xffc45d, depthTest: false });
     this._matTeam = {
       red: new THREE.MeshBasicMaterial({ color: 0xd94f3f, transparent: true, opacity: 0.75 }),
       blue: new THREE.MeshBasicMaterial({ color: 0x4f8de0, transparent: true, opacity: 0.75 }),
@@ -554,7 +672,9 @@ export class MapEditor {
 
   _refreshSelection() {
     this._clear(this.selBox);
-    for (const o of this.selected()) {
+    const selected = this.selected();
+    const centers = [];
+    for (const o of selected) {
       const b = this.objectBox(o);
       const geo = new THREE.BoxGeometry(b.maxx - b.minx, b.maxy - b.miny, b.maxz - b.minz);
       const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo), this._matSel);
@@ -562,7 +682,38 @@ export class MapEditor {
       const fill = new THREE.Mesh(geo, this._matSelFill);
       fill.position.copy(edges.position);
       this.selBox.add(fill, edges);
+      centers.push(edges.position.clone());
     }
+    if (!centers.length || this.tool === 'select') return;
+    const center = centers.reduce((sum, p) => sum.add(p), new THREE.Vector3()).multiplyScalar(1 / centers.length);
+    center.y = Math.max(...centers.map((p) => p.y)) + 0.18;
+    const size = 1.35;
+    if (this.tool === 'rotate') {
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(size, 0.055, 8, 40), this._matGizmoTool);
+      ring.rotation.x = Math.PI / 2;
+      ring.position.copy(center);
+      ring.renderOrder = 30;
+      this.selBox.add(ring);
+      return;
+    }
+    const axis = (x, z, mat) => {
+      const length = new THREE.Mesh(new THREE.BoxGeometry(Math.abs(x) || 0.055, 0.055, Math.abs(z) || 0.055), mat);
+      length.position.set(center.x + x / 2, center.y, center.z + z / 2);
+      length.renderOrder = 30;
+      const handleGeo = this.tool === 'scale'
+        ? new THREE.BoxGeometry(0.22, 0.22, 0.22)
+        : new THREE.ConeGeometry(0.13, 0.34, 10);
+      const handle = new THREE.Mesh(handleGeo, mat);
+      handle.position.set(center.x + x, center.y, center.z + z);
+      if (this.tool !== 'scale') {
+        handle.rotation.z = z ? 0 : -Math.PI / 2;
+        if (z) handle.rotation.x = z > 0 ? Math.PI / 2 : -Math.PI / 2;
+      }
+      handle.renderOrder = 30;
+      this.selBox.add(length, handle);
+    };
+    axis(size, 0, this._matGizmoX);
+    axis(0, size, this._matGizmoZ);
   }
 
   // Personajes de referencia: el Rig REAL del juego (mismas proporciones que
@@ -826,8 +977,9 @@ export class MapEditor {
   validate() {
     const report = validateMap(this.map, this.world);
     const conn = this.spawnsConnected();
-    if (conn === true) report.push({ level: 'ok', key: 'nav', msg: 'Rojo y azul conectados', i18nKey: 'editor.validation.nav.ok' });
-    else if (conn === false) report.push({ level: 'error', key: 'nav', msg: 'Los spawns NO están conectados', i18nKey: 'editor.validation.nav.error' });
+    const spawnIds = this.map.objects.filter((o) => o.p === 'spawnRed' || o.p === 'spawnBlue').map((o) => o.id);
+    if (conn === true) report.push({ level: 'ok', key: 'nav', msg: 'Rojo y azul conectados', objectIds: spawnIds, i18nKey: 'editor.validation.nav.ok' });
+    else if (conn === false) report.push({ level: 'error', key: 'nav', msg: 'Los spawns NO están conectados', objectIds: spawnIds, i18nKey: 'editor.validation.nav.error' });
     return report;
   }
 
@@ -836,6 +988,7 @@ export class MapEditor {
   // -------------------------------------------------------------- archivo
   newMap() {
     if (this.map?.id) unstageMap(this.map.id);
+    this.clearRecovery();
     this.map = newMap();
     this.selection.clear();
     this.undoStack.length = 0; this.redoStack.length = 0;
@@ -846,6 +999,7 @@ export class MapEditor {
   load(id) {
     const m = getMap(id);
     if (!m) return;
+    this.clearRecovery();
     this.map = JSON.parse(JSON.stringify(m));
     this.selection.clear();
     this.undoStack.length = 0; this.redoStack.length = 0;
@@ -857,6 +1011,8 @@ export class MapEditor {
   save() {
     saveMap(this.map);
     this.dirty = false;
+    this.lastSavedAt = Date.now();
+    this.clearRecovery();
     this.setStatus(t('editor.status.saved', { name: this.map.name }));
   }
   saveAs(name) {
@@ -866,6 +1022,8 @@ export class MapEditor {
     saveMap(this.map);
     this.rebuild();
     this.dirty = false;
+    this.lastSavedAt = Date.now();
+    this.clearRecovery();
     this.setStatus(t('editor.status.savedAs', { name: this.map.name }));
   }
   duplicate() { const d = duplicateMap(this.map.id); if (d) this.setStatus(t('editor.status.duplicateMap', { name: d.name })); }
@@ -936,14 +1094,17 @@ export class MapEditor {
   _bindInput() {
     this._onKey = (e) => {
       if (!this.active) return;
-      if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT')) return;
+      if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) return;
       const k = e.key.toLowerCase();
       if (e.ctrlKey && k === 'z') { e.preventDefault(); e.shiftKey ? this.redo() : this.undo(); return; }
       if (e.ctrlKey && k === 'y') { e.preventDefault(); this.redo(); return; }
       if (e.ctrlKey && k === 'd') { e.preventDefault(); this.duplicateSelection(); return; }
+      if (e.ctrlKey && e.shiftKey && k === 's') { e.preventDefault(); this.onSaveAsRequest?.(); return; }
       if (e.ctrlKey && k === 's') { e.preventDefault(); this.save(); return; }
-      if (k === 'delete' || k === 'backspace') { this.deleteSelection(); return; }
-      if (k === 'escape') { this.selection.clear(); this.refreshOverlay(); return; }
+      if (k === 'delete' || k === 'backspace') { e.preventDefault(); (this.onDeleteRequest ?? (() => this.deleteSelection()))(); return; }
+      // La salida global del editor consulta handleEscape() antes de cerrar.
+      // Aquí solo evitamos que el navegador interprete Esc por su cuenta.
+      if (k === 'escape') { e.preventDefault(); return; }
       const arrows = {
         arrowleft: [-1, 0], arrowright: [1, 0],
         arrowup: [0, -1], arrowdown: [0, 1],
@@ -958,9 +1119,11 @@ export class MapEditor {
         return;
       }
       if (k === 'q') this.setTool('select');
-      if (k === 'w') { /* también movimiento de cámara */ }
+      if (k === 'w') this.setTool('move');
+      if (k === 'e') this.setTool('rotate');
+      if (k === 'r' && !e.ctrlKey) this.setTool('scale');
+      if (k === 'f') this.focusSelection();
       if (k === 'g') { this.showGrid = !this.showGrid; this._refreshGrid(); this.onChange?.(); }
-      if (k === 'r' && !e.ctrlKey) this.rotateSelection(this.snapRot || 90);
       if (k === 't') this.topView();
       this.keys.add(e.code);
     };
@@ -979,6 +1142,13 @@ export class MapEditor {
     window.addEventListener('keydown', this._onKey);
     window.addEventListener('keyup', this._onKeyUp);
     window.addEventListener('wheel', this._onWheel, { passive: true });
+    this._onBeforeUnload = (e) => {
+      if (!this.active || !this.dirty) return;
+      this._flushRecovery();
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', this._onBeforeUnload);
   }
 
   _camDir() {
@@ -1013,6 +1183,7 @@ export class MapEditor {
       // desde aquí (un solo undo por gesto y sin deriva acumulada).
       this.drag = {
         kind: 'move', last: g, moved: false, acc: 0,
+        before: this.snapshot(), dirtyBefore: this.dirty,
         start: this.selected().map((o) => ({ id: o.id, rot: o.rot ?? 0, w: o.w, d: o.d, scale: o.scale })),
       };
       this.refreshOverlay();
@@ -1099,9 +1270,9 @@ export class MapEditor {
 
   onPointerUp() { this.drag = null; }
 
-  setTool(t) { this.tool = t; this.onChange?.(); }
+  setTool(t) { this.tool = t; this._refreshSelection(); this.onChange?.(); }
 
-  // Cámara de edición: WASD + E/C para subir/bajar, Shift acelera
+  // Cámara de edición: WASD + Espacio/C para subir/bajar, Shift acelera
   update(dt) {
     if (!this.active) return;
     const dir = this._camDir();
@@ -1111,7 +1282,7 @@ export class MapEditor {
     if (this.keys.has('KeyS')) mz -= 1;
     if (this.keys.has('KeyA')) mx -= 1;
     if (this.keys.has('KeyD')) mx += 1;
-    if (this.keys.has('KeyE') || this.keys.has('Space')) my += 1;
+    if (this.keys.has('Space')) my += 1;
     if (this.keys.has('KeyC') || this.keys.has('ControlLeft')) my -= 1;
     const boost = this.keys.has('ShiftLeft') ? 2.6 : 1;
     const sp = this.cam.speed * boost * dt;
@@ -1132,6 +1303,8 @@ export class MapEditor {
     window.removeEventListener('keydown', this._onKey);
     window.removeEventListener('keyup', this._onKeyUp);
     window.removeEventListener('wheel', this._onWheel);
+    window.removeEventListener('beforeunload', this._onBeforeUnload);
+    clearTimeout(this._recoveryTimer);
     for (const entry of this._charRigs.values()) {
       entry.rig.dispose(this.charRefGroup);
       this._disposeRuler(entry.ruler);

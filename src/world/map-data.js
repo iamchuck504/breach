@@ -359,8 +359,8 @@ export function bundledMaps() { return Object.values(bundledStore()); }
 // ---------------------------------------------------------------------------
 export function validateMap(map, world = null) {
   const out = [];
-  const add = (level, key, msg, vars = {}) => out.push({
-    level, key, msg, vars, i18nKey: `editor.validation.${key}.${level}`,
+  const add = (level, key, msg, vars = {}, objectIds = []) => out.push({
+    level, key, msg, vars, objectIds, i18nKey: `editor.validation.${key}.${level}`,
   });
   const { red, blue } = spawnsOf(map);
   const inBounds = (o) => {
@@ -376,12 +376,12 @@ export function validateMap(map, world = null) {
     return Math.abs(o.x) + fp.w / 2 <= map.fx + 1.2 && Math.abs(o.z) + fp.d / 2 <= map.fz + 1.2;
   };
 
-  if (red.length >= 4) add('ok', 'redSpawn', `Spawns rojos (${red.length}/4)`, { count: red.length });
+  if (red.length >= 4) add('ok', 'redSpawn', `Spawns rojos (${red.length}/4)`, { count: red.length }, red.map((o) => o.id));
   else add('error', 'redSpawn', red.length
-    ? `Faltan spawns rojos (${red.length}/4)` : 'Faltan spawns del equipo rojo (0/4)', { count: red.length });
-  if (blue.length >= 4) add('ok', 'blueSpawn', `Spawns azules (${blue.length}/4)`, { count: blue.length });
+    ? `Faltan spawns rojos (${red.length}/4)` : 'Faltan spawns del equipo rojo (0/4)', { count: red.length }, red.map((o) => o.id));
+  if (blue.length >= 4) add('ok', 'blueSpawn', `Spawns azules (${blue.length}/4)`, { count: blue.length }, blue.map((o) => o.id));
   else add('error', 'blueSpawn', blue.length
-    ? `Faltan spawns azules (${blue.length}/4)` : 'Faltan spawns del equipo azul (0/4)', { count: blue.length });
+    ? `Faltan spawns azules (${blue.length}/4)` : 'Faltan spawns del equipo azul (0/4)', { count: blue.length }, blue.map((o) => o.id));
 
   // separación entre bandos: spawns enfrentados, no mezclados
   if (red.length && blue.length) {
@@ -389,24 +389,24 @@ export function validateMap(map, world = null) {
     for (const r of red) for (const b of blue) {
       worst = Math.min(worst, Math.hypot(r.x - b.x, r.z - b.z));
     }
-    if (worst < 12) add('warn', 'spawnDist', `Spawns muy cerca entre sí (${worst.toFixed(1)}m)`, { distance: worst.toFixed(1) });
+    if (worst < 12) add('warn', 'spawnDist', `Spawns muy cerca entre sí (${worst.toFixed(1)}m)`, { distance: worst.toFixed(1) }, [...red, ...blue].map((o) => o.id));
     else add('ok', 'spawnDist', `Separación entre bandos ${worst.toFixed(1)}m`, { distance: worst.toFixed(1) });
   }
 
   const outside = map.objects.filter((o) => !inBounds(o));
-  if (outside.length) add('error', 'bounds', `${outside.length} objeto(s) fuera de los límites`, { count: outside.length });
+  if (outside.length) add('error', 'bounds', `${outside.length} objeto(s) fuera de los límites`, { count: outside.length }, outside.map((o) => o.id));
   else add('ok', 'bounds', 'Todo dentro de los límites');
 
   const unknown = map.objects.filter((o) => !paletteById(o.p));
-  if (unknown.length) add('error', 'unknownPiece', `${unknown.length} pieza(s) desconocida(s)`, { count: unknown.length });
+  if (unknown.length) add('error', 'unknownPiece', `${unknown.length} pieza(s) desconocida(s)`, { count: unknown.length }, unknown.map((o) => o.id));
 
   const crates = cratesOf(map);
   if (!crates.length) add('warn', 'ammo', 'Sin cajas de munición');
-  else add('ok', 'ammo', `Cajas de munición (${crates.length})`, { count: crates.length });
+  else add('ok', 'ammo', `Cajas de munición (${crates.length})`, { count: crates.length }, crates.map((o) => o.id));
 
   const special = specialOf(map);
   if (!special) add('warn', 'special', 'Sin punto de arma especial');
-  else add('ok', 'special', 'Punto de arma especial');
+  else add('ok', 'special', 'Punto de arma especial', {}, [special.id]);
 
   // Comprobaciones que necesitan la geometría ya construida
   if (world) {
@@ -416,7 +416,7 @@ export function validateMap(map, world = null) {
       return Math.hypot(p.x - x, p.z - z) < 0.02;
     };
     const blockedSpawns = [...red, ...blue].filter((s) => !free(s.x, s.z, 0.6));
-    if (blockedSpawns.length) add('error', 'spawnClear', `${blockedSpawns.length} spawn(s) dentro de geometría`, { count: blockedSpawns.length });
+    if (blockedSpawns.length) add('error', 'spawnClear', `${blockedSpawns.length} spawn(s) dentro de geometría`, { count: blockedSpawns.length }, blockedSpawns.map((o) => o.id));
     else if (red.length || blue.length) add('ok', 'spawnClear', 'Spawns despejados');
 
     // Para un pickup, la geometría LOW no es "pared": se recoge parado al
@@ -430,7 +430,7 @@ export function validateMap(map, world = null) {
     });
     const blockedPickups = [...crates, ...(special ? [special] : [])]
       .filter((c) => !pickupFree(c.x, c.z, 0.45));
-    if (blockedPickups.length) add('error', 'pickupClear', `${blockedPickups.length} pickup(s) dentro de geometría`, { count: blockedPickups.length });
+    if (blockedPickups.length) add('error', 'pickupClear', `${blockedPickups.length} pickup(s) dentro de geometría`, { count: blockedPickups.length }, blockedPickups.map((o) => o.id));
     else if (crates.length || special) add('ok', 'pickupClear', 'Pickups accesibles');
 
     const covers = world.faces.filter((f) => f.h <= 2.6).length;

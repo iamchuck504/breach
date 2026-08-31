@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --port 5200",
+    "editor": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/editor.ps1",
+    "editor:shortcut": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-editor-shortcut.ps1",
     "build": "vite build",
     "preview": "vite preview --port 5200",
     "server": "node server/server.js",
