@@ -1,5 +1,5 @@
-// Contrato global de tiro: barrel físico sin ADS; cámara como guía con ADS,
-// manteniendo muzzle, pose e IK coherentes para todas las armas equipables.
+// Contrato visual del arma: el mesh no cambia de eje entre low-ready y el
+// primer disparo; la guía central de gameplay se valida en check-reticle.
 import * as THREE from 'three';
 import { Rig } from '../src/player/rig.js';
 
@@ -44,12 +44,11 @@ for (const weapon of weapons) {
   check(relaxed.dot(hipA) > 0.9999,
     `${weapon}: el eje cambia entre low-ready y hip fire (${relaxed.dot(hipA)})`);
 
-  // Hip fire no recibe corrección óptica oculta: la dirección observable es
-  // exactamente la del muzzle y permanece estable sin input nuevo.
+  // El eje visual del muzzle permanece estable sin input nuevo.
   rig.update(1 / 60, params(false, 0.2, true));
   const hipB = rig.gunForward(new THREE.Vector3()).normalize();
   check(hipA.dot(hipB) > 0.99999,
-    `${weapon}: barrel hip/blind deriva sin cambio de input (${hipA.dot(hipB)})`);
+    `${weapon}: eje visual deriva sin cambio de input (${hipA.dot(hipB)})`);
 
   // Un solo frame de transición no puede teletransportar el arma. La
   // orientación converge después a la cámara y conserva muzzle como origen.
@@ -93,4 +92,4 @@ if (failures.length) {
   failures.forEach((f) => console.error(` - ${f}`));
   process.exit(1);
 }
-console.log('FIRE DIRECTION OK · barrel hip/blind · guía ADS/zoom · 5 poses · pitch · IK · transición');
+console.log('FIRE DIRECTION OK · eje visual estable · 5 poses · pitch · IK · transición');

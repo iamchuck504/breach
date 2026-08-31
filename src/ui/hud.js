@@ -2,8 +2,8 @@ import { t, getLanguage } from '../core/i18n.js';
 import { TUNING } from '../config/tuning.js';
 import { weaponIconMarkup } from './weapon-icons.js';
 
-// HUD sobre DOM. Toda retícula se proyecta desde la trayectoria física del
-// cañón: ADS usa el anillo y hip/blind usa #barrel-dot.
+// HUD sobre DOM. Toda retícula permanece en el centro óptico: ADS usa el
+// anillo y hip/blind usa #barrel-dot; la balística converge desde el muzzle.
 export class HUD {
   constructor() {
     this.el = {
@@ -374,10 +374,9 @@ export class HUD {
     this.el.hitmarker.classList.add('pop');
   }
 
-  // En ADS la cruz óptica nunca abandona el centro. barrelXY solo comunica que
+  // La retícula nunca abandona el centro. barrelXY solo comunica que
   // existe una obstrucción entre muzzle y objetivo; mover la cruz a ese contacto
   // provocaba saltos grandes al rozar vehículos, barandales o cover cercano.
-  // Sin ADS representa la trayectoria física del cañón en hip/blindfire.
   reticle(aiming, barrelXY, aimInfo = null) {
     this.el.crosshair.classList.toggle('aim', aiming);
     this.el.crosshair.classList.toggle('blocked', !!(aiming && barrelXY?.blocked));
@@ -390,8 +389,8 @@ export class HUD {
     }
     if (!aiming && barrelXY) {
       this.el.barrel.classList.add('on');
-      this.el.barrel.style.left = barrelXY.x + 'px';
-      this.el.barrel.style.top = barrelXY.y + 'px';
+      this.el.barrel.style.left = '50%';
+      this.el.barrel.style.top = '50%';
     } else {
       this.el.barrel.classList.remove('on');
     }

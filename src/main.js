@@ -2589,14 +2589,6 @@ function allCharacterTargets() {
   return currentTargets();
 }
 
-// Hip fire y blindfire pertenecen al arma, no a la cámara. Leer el quaternion
-// del muzzle después de actualizar el rig mantiene pose, trayectoria, tracer y
-// retícula sobre una única dirección física incluso durante transiciones.
-function barrelDirection(out = new THREE.Vector3()) {
-  G.rig.root.updateWorldMatrix(true, true);
-  return G.rig.gunForward(out).normalize();
-}
-
 function staticHitDistance(origin, dir, maxDist) {
   // raycastHit incluye suelo, helipuerto y rampas; raycast es el fallback
   // simplificado usado por locomoción. La retícula debe seguir balística.
@@ -2605,47 +2597,13 @@ function staticHitDistance(origin, dir, maxDist) {
 }
 
 function currentFireDirection(muzzle, maxRange = 80) {
-  if (!G.player.aim) return barrelDirection(new THREE.Vector3());
   const ray = shoulderCam.aimRay();
   const guide = resolveShot(world, currentTargets(), ray.origin, ray.dir, maxRange, null);
   return _v3.copy(guide.point).sub(muzzle).normalize();
 }
 
-// Proyecta la trayectoria CENTRAL que saldría físicamente del muzzle en este
-// frame para TODO disparo sin ADS. No se limita al flag transitorio blindMode:
-// hip fire junto a una pared y la entrada/salida de la pose de blindfire tienen
-// exactamente el mismo problema de paralaje. La misma pareja origin+dir que
-// usa fireShot() resuelve aquí el contacto previsto; no existen offsets fijos.
-function barrelReticleXY() {
-  const p = G.player, def = G.weapons?.def;
-  if (!p || p.aim || !def) return null;
-
-  G.rig.root.updateWorldMatrix(true, true);
-  const muzzle = G.rig.muzzleWorld(_v1);
-  const dir = barrelDirection(_v2);
-  // Las granadas no usan hitscan, pero mientras se prepara el lanzamiento el
-  // indicador conserva una referencia frontal útil en vez de colapsar al
-  // propio muzzle (range=0).
-  const range = def.range > 0 ? def.range : 60;
-  const hit = resolveShot(world, currentTargets(), muzzle, dir, range, null);
-
-  // shoulderCam ya actualizó posición/rotación este frame, pero renderer aún
-  // no corrió. Actualizar matrices evita proyectar con la cámara anterior.
-  camera.updateMatrixWorld(true);
-  const viewPoint = _v3.copy(hit.point).applyMatrix4(camera.matrixWorldInverse);
-  if (!Number.isFinite(viewPoint.z) || viewPoint.z >= -0.001) return null;
-  const ndc = _v2.copy(hit.point).project(camera);
-  if (!Number.isFinite(ndc.x) || !Number.isFinite(ndc.y)) return null;
-  return {
-    x: (ndc.x * 0.5 + 0.5) * innerWidth,
-    y: (-ndc.y * 0.5 + 0.5) * innerHeight,
-  };
-}
-
-// En ADS/scope la cruz permanece centrada mientras cámara y cañón alcanzan el
-// mismo objetivo. Si una cobertura intercepta el rayo físico, proyectamos el
-// mismo contacto que resolverá fireShot. Así la UI nunca promete un punto que
-// la bala nacida en el muzzle no puede alcanzar.
+// La retícula nunca abandona el centro. Este estado solo comunica que existe
+// una obstrucción física entre muzzle y el punto central elegido por cámara.
 function guidedReticleState(maxRange) {
   G.rig.root.updateWorldMatrix(true, true);
   const muzzle = G.rig.muzzleWorld(_v1).clone();
@@ -2654,16 +2612,7 @@ function guidedReticleState(maxRange) {
     ray.dir, maxRange, null);
   if (!hit.blocked) return null;
 
-  camera.updateMatrixWorld(true);
-  const viewPoint = _v3.copy(hit.point).applyMatrix4(camera.matrixWorldInverse);
-  if (!Number.isFinite(viewPoint.z) || viewPoint.z >= -0.001) return null;
-  const ndc = _v2.copy(hit.point).project(camera);
-  if (!Number.isFinite(ndc.x) || !Number.isFinite(ndc.y)) return null;
-  return {
-    x: (ndc.x * 0.5 + 0.5) * innerWidth,
-    y: (-ndc.y * 0.5 + 0.5) * innerHeight,
-    blocked: true,
-  };
+  return { blocked: true };
 }
 
 function coverPoseReady(wantsAim, wantsFire) {
@@ -2888,9 +2837,7 @@ function throwSmoke() {
   const d = TUNING.weapons.grenade;
   G.rig.setTransform(p.pos.x, p.pos.z, p.yaw, p.y);
   const muzzle = G.rig.muzzleWorld(_v1);
-  const dir = p.aim
-    ? currentFireDirection(muzzle, 60).clone()
-    : barrelDirection(new THREE.Vector3());
+  const dir = currentFireDirection(muzzle, 60).clone();
   const o = { x: muzzle.x, y: muzzle.y, z: muzzle.z };
   const v = {
     x: dir.x * d.throwSpeed,
@@ -3026,18 +2973,13 @@ function fireShot() {
   // el muzzle evita lanzar el tracer desde la pose espacial anterior.
   G.rig.setTransform(G.player.pos.x, G.player.pos.z, G.player.yaw, G.player.y);
   const muzzle = G.rig.muzzleWorld(_v1).clone();
-  let baseDir, origin, cameraOrigin = null;
-  if (aiming) {
-    const ray = shoulderCam.aimRay();
-    baseDir = ray.dir.clone();
-    // La cámara elige el punto percibido; la balística sale desde el cuerpo
-    // para que una esquina entre arma y objetivo sí pueda bloquear el tiro.
-    cameraOrigin = ray.origin.clone();
-    origin = muzzle.clone();
-  } else {
-    baseDir = barrelDirection(new THREE.Vector3());
-    origin = muzzle.clone();
-  }
+  const ray = shoulderCam.aimRay();
+  const baseDir = ray.dir.clone();
+  // Regla global: el centro de cámara elige el objetivo en hip, blindfire,
+  // ADS y scope. La bala sigue naciendo en el muzzle, de modo que una pared
+  // entre arma y objetivo continúa bloqueándola físicamente.
+  const cameraOrigin = ray.origin.clone();
+  const origin = muzzle.clone();
 
   // bazooka: proyectil REAL, sin hitscan — el cohete hace el daño al explotar
   if (def.projectile) {
@@ -3045,7 +2987,7 @@ function fireShot() {
     // físicamente en el muzzle. Dirigirlo hacia ese punto elimina el paralaje
     // de ADS sin convertir la bazooka en hitscan: paredes intermedias todavía
     // detonan el cohete durante su vuelo normal.
-    const projectileDir = aiming ? currentFireDirection(muzzle, def.range) : baseDir;
+    const projectileDir = currentFireDirection(muzzle, def.range);
     const cid = G.mode === 'online' ? `p:${++G.rocketSeq}` : null;
     rockets.fire({ x: muzzle.x, y: muzzle.y, z: muzzle.z }, projectileDir,
       true, null, cid, G.mode === 'online');
@@ -3077,9 +3019,8 @@ function fireShot() {
       // El scope promete exactamente su punto. Fuera del scope (incluido
       // hip/blindfire del sniper) se conserva la dispersión configurada.
       : scoped ? baseDir.clone() : applySpread(baseDir, spread);
-    const hit = aiming
-      ? resolveGuidedShot(world, targets, cameraOrigin, origin, dir, def.range, null)
-      : resolveShot(world, targets, origin, dir, def.range, null);
+    const hit = resolveGuidedShot(world, targets, cameraOrigin, origin,
+      dir, def.range, null);
     anyPoint = hit.point;
     effects.tracer(muzzle, hit.point, scoped && w.cur === 'sniper');
     if (hit.kind === 'world') {
@@ -3216,12 +3157,10 @@ function updateReticle() {
     return;
   }
 
-  // Todo disparo sin ADS vuelve a seguir la trayectoria física del muzzle,
-  // como hacía el sistema antes de la regresión. Esto cubre blindfire lateral,
-  // superior y también hip fire pegado a geometría aunque el flag interno de
-  // cover todavía no se haya activado o ya esté terminando su recovery.
+  // Hip fire y blindfire usan el mismo centro fijo que ADS. El estado de
+  // obstrucción puede cambiar, pero la posición de la retícula jamás lo hace.
   hud.sniperScope(false);
-  hud.reticle(false, barrelReticleXY());
+  hud.reticle(false, { centered: true, ...guidedReticleState(G.weapons.def.range) });
 }
 
 // ---------- loop principal ----------

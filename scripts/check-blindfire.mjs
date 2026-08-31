@@ -87,23 +87,11 @@ try {
     });
     await page.waitForTimeout(620);
     const result = await page.evaluate(() => {
-      const G = window.BREACH, W = window.BREACH_WORLD;
-      G.rig.root.updateWorldMatrix(true, true);
-      const muzzle = G.rig.muzzleWorld(new window.THREE.Vector3()).clone();
-      const barrelDir = G.rig.gunForward(new window.THREE.Vector3()).normalize();
-      const contact = W.raycastHit(muzzle, barrelDir, G.weapons.def.range);
-      const t = contact?.t ?? W.raycast(muzzle, barrelDir, G.weapons.def.range) ??
-        G.weapons.def.range;
-      const point = muzzle.clone().addScaledVector(barrelDir, t);
-      window.BREACH_CAM.updateMatrixWorld(true);
-      const projected = point.project(window.BREACH_CAM);
-      const expected = {
-        x: (projected.x * 0.5 + 0.5) * innerWidth,
-        y: (-projected.y * 0.5 + 0.5) * innerHeight,
-      };
+      const G = window.BREACH;
       const dot = document.getElementById('barrel-dot');
       const rect = dot.getBoundingClientRect();
       const actual = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      const center = { x: innerWidth / 2, y: innerHeight / 2 };
       return {
         weapon: G.weapons.cur,
         mag: G.weapons.st.mag,
@@ -112,9 +100,8 @@ try {
         mode: G.player.blindMode,
         exposure: G.player.blindPoseExposure,
         reticleVisible: dot.classList.contains('on'),
-        reticleError: Math.hypot(expected.x - actual.x, expected.y - actual.y),
-        centerOffset: Math.hypot(expected.x - innerWidth * 0.5, expected.y - innerHeight * 0.5),
-        hitDistance: t,
+        reticleError: Math.hypot(center.x - actual.x, center.y - actual.y),
+        centerOffset: Math.hypot(center.x - actual.x, center.y - actual.y),
       };
     });
     await page.evaluate(() => { window.BREACH_INPUT._mouseFire = false; });
