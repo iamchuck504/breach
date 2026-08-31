@@ -82,40 +82,6 @@ export function resolveShot(world, targets, origin, dir, maxRange, excludeId = n
   return hit;
 }
 
-// La cámara define la intención, pero el segundo ray nace en el personaje.
-// Así ADS conserva precisión a distancia sin atravesar una esquina situada
-// entre el arma y el punto que la cámara alcanza a ver.
-export function resolveGuidedShot(world, targets, cameraOrigin, ballisticOrigin,
-  cameraDir, maxRange, excludeId = null) {
-  const guide = resolveShot(world, targets, cameraOrigin, cameraDir, maxRange, excludeId);
-  const dir = guide.point.clone().sub(ballisticOrigin);
-  const len = dir.length();
-  if (len <= 0.001) return guide;
-  dir.multiplyScalar(1 / len);
-  const physical = resolveShot(world, targets, ballisticOrigin, dir,
-    Math.min(maxRange, len + 0.05), excludeId);
-
-  // El contacto físico SIEMPRE gana, incluso cuando cámara y muzzle alcanzan
-  // caras diferentes del mismo collider. Reconciliar por identidad de AABB
-  // permitía que una bala atravesara el borde visible de un auto/barandal para
-  // aparecer en el punto que veía la cámara. La retícula puede proyectar este
-  // contacto cercano; la balística nunca abandona el rayo nacido en el muzzle.
-  const samePlayer = guide.kind === 'player' && physical.kind === 'player' &&
-    guide.id === physical.id;
-  const sameOpenRay = guide.kind === 'none' && physical.kind === 'none';
-  const sameWorldPoint = guide.kind === 'world' && physical.kind === 'world' &&
-    physical.point.distanceTo(guide.point) <= 0.08;
-  return {
-    ...physical,
-    guidePoint: guide.point.clone(),
-    // El scope necesita distinguir una diferencia de paralaje normal de una
-    // obstrucción real. Si cámara y cañón no terminan en el mismo objetivo, la
-    // marca óptica debe representar el contacto físico, no prometer el fondo.
-    blocked: !samePlayer && !sameOpenRay && !sameWorldPoint &&
-      physical.point.distanceTo(guide.point) > 0.08,
-  };
-}
-
 // Aplica dispersión cónica (grados) a una dirección
 export function applySpread(dir, spreadDeg) {
   const s = (spreadDeg * Math.PI / 180);

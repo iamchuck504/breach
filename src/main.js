@@ -13,7 +13,7 @@ import { Controller, PLAYER_R } from './player/controller.js';
 import { RemotePlayer } from './player/remote.js';
 import { Dummies } from './player/practice.js';
 import { Weapons } from './combat/weapons.js';
-import { resolveShot, resolveGuidedShot, applySpread, applyPelletPattern } from './combat/ballistics.js';
+import { resolveShot, applySpread, applyPelletPattern } from './combat/ballistics.js';
 import { damageFalloff, rocketSplashDamage } from './combat/damage.js';
 import {
   deathImpactPoint, isSniperHeadshotDeath, rocketDeathLevel,
@@ -2629,19 +2629,6 @@ function barrelReticleXY() {
   };
 }
 
-// En ADS la cruz sí permanece en el centro; este estado comunica únicamente
-// que una obstrucción física inmediata gana frente al objetivo óptico.
-function guidedReticleState(maxRange) {
-  G.rig.root.updateWorldMatrix(true, true);
-  const muzzle = G.rig.muzzleWorld(_v1).clone();
-  const ray = shoulderCam.aimRay();
-  const hit = resolveGuidedShot(world, currentTargets(), ray.origin, muzzle,
-    ray.dir, maxRange, null);
-  if (!hit.blocked) return null;
-
-  return { blocked: true };
-}
-
 function coverPoseReady(wantsAim, wantsFire) {
   const p = G.player;
   if (!p || p.state !== 'cover' || !p.cover) return true;
@@ -3040,8 +3027,11 @@ function fireShot() {
       // El scope promete exactamente su punto. Fuera del scope (incluido
       // hip/blindfire del sniper) se conserva la dispersión configurada.
       : scoped ? baseDir.clone() : applySpread(baseDir, spread);
+    // ADS es una promesa estricta de pantalla: el rayo central decide el hit.
+    // El muzzle permanece como origen visual de flash/tracer, pero ninguna
+    // segunda consulta desde el arma puede desviar el impacto fuera de la cruz.
     const hit = aiming
-      ? resolveGuidedShot(world, targets, cameraOrigin, origin, dir, def.range, null)
+      ? resolveShot(world, targets, cameraOrigin, dir, def.range, null)
       : resolveShot(world, targets, origin, dir, def.range, null);
     anyPoint = hit.point;
     effects.tracer(muzzle, hit.point, scoped && w.cur === 'sniper');
@@ -3155,24 +3145,20 @@ function updateReticle() {
   if (!canShow) { hud.reticle(false, null); hud.sniperScope(false); return; }
 
   if (p.aim) {
-    // La cámara define la intención; la posición contextual solo cambia cuando
-    // el rayo físico del muzzle queda obstruido. En ese caso retícula e impacto
-    // muestran el mismo punto en lugar de fingir que la bala llega al fondo.
+    // ADS es siempre la intención central de cámara. No existe corrección de
+    // paralaje ni estado de obstrucción del muzzle que mueva o recoloree la cruz.
     const def = G.weapons.def;
     const ringPx = Math.tan(def.spreadAim * Math.PI / 180) /
       Math.tan(camera.fov * Math.PI / 360) * (innerHeight / 2);
     const ray = shoulderCam.aimRay();
-    // El scope conserva el centro óptico cuando el cañón tiene línea limpia.
-    // Solo una obstrucción física real desplaza la cruz al impacto que resolverá
-    // fireShot; esto evita el caso "retícula en el fondo, bala en el cover".
     if (scoped) {
       hud.reticle(false, null);
-      hud.sniperScope(true, guidedReticleState(def.range));
+      hud.sniperScope(true, null);
       return;
     }
     const guideT = staticHitDistance(ray.origin, ray.dir, 200);
     hud.sniperScope(false);
-    hud.reticle(true, guidedReticleState(def.range), {
+    hud.reticle(true, null, {
       r: Math.min(190, ringPx),
       inRange: guideT <= def.range,
     });

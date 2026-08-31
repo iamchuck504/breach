@@ -378,7 +378,9 @@ export class HUD {
   // barrel porque su cañón puede estar fuera de esa línea central.
   reticle(aiming, barrelXY, aimInfo = null) {
     this.el.crosshair.classList.toggle('aim', aiming);
-    this.el.crosshair.classList.toggle('blocked', !!(aiming && barrelXY?.blocked));
+    // ADS nunca hereda estados de obstrucción del muzzle: la marca central es
+    // la autoridad del hit y no puede cambiar de color por paralaje.
+    this.el.crosshair.classList.remove('blocked');
     if (aiming && aimInfo) {
       this.el.crossRing.setAttribute('r', Math.max(5, aimInfo.r).toFixed(1));
       // fuera del rango efectivo del arma: el anillo se atenúa
@@ -395,16 +397,15 @@ export class HUD {
     }
   }
 
-  // El scope conserva siempre su cruz óptica central. Una obstrucción real
-  // cambia únicamente el estado visual; nunca la posición de la retícula.
-  sniperScope(on, impactXY = null) {
+  // El scope conserva siempre su cruz óptica central y su color base.
+  sniperScope(on) {
     const root = this.el.sniperScope;
     const reticle = this.el.scopeReticle;
     if (!root || !reticle) return;
     root.classList.toggle('on', !!on);
     root.setAttribute('aria-hidden', on ? 'false' : 'true');
     this.el.hud.classList.toggle('scoped', !!on);
-    reticle.classList.toggle('blocked', !!(on && impactXY?.blocked));
+    reticle.classList.remove('blocked');
     reticle.classList.remove('out-range');
     reticle.style.left = '50%';
     reticle.style.top = '50%';

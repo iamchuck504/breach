@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { World } from '../src/world/world.js';
-import { resolveShot, resolveGuidedShot } from '../src/combat/ballistics.js';
+import { resolveShot } from '../src/combat/ballistics.js';
 import { Effects } from '../src/fx/effects.js';
 
 const fail = [];
@@ -52,7 +52,8 @@ shot = resolveShot(shotWorld, [{ id: 'p', x: 3, z: 0, alive: true }],
 check(shot.kind === 'player' && !shot.normal && !shot.surface,
   'un impacto de personaje heredó datos de decal');
 
-// ADS: la cámara ve el blanco, pero el origen físico tiene una pared cerca.
+// ADS estricto: la cámara ve el blanco y su rayo es autoritativo. Una pared
+// que solo interceptaría un segundo rayo desde el muzzle no cambia el hit.
 const cornerWorld = {
   raycastHit(origin) {
     return origin.x > 0.5
@@ -61,59 +62,11 @@ const cornerWorld = {
   },
   raycast: () => null,
 };
-shot = resolveGuidedShot(cornerWorld,
+shot = resolveShot(cornerWorld,
   [{ id: 'p', x: 0, z: -5, alive: true }],
-  new THREE.Vector3(0, 1, 0), new THREE.Vector3(1, 1, 0),
-  new THREE.Vector3(0, 0, -1), 20);
-check(shot.kind === 'world' && near(shot.t, 0.7),
-  'ADS atravesó una esquina entre el arma y el objetivo de cámara');
-
-// ADS cerca de un vehículo: cámara y cañón pueden entrar por caras distintas
-// de su AABB. La identidad compartida del collider NO permite reconciliar el
-// tiro a la cámara: la cara que encuentra el muzzle sigue siendo autoritativa.
-const vehicleCollider = {
-  minx: -1, maxx: 1, minz: -6, maxz: -2, h: 2, surface: 'metal',
-};
-const vehicleWorld = Object.create(World.prototype);
-vehicleWorld.fx = 20; vehicleWorld.fz = 20; vehicleWorld.layout = 'calle';
-vehicleWorld.surfaceZones = [];
-vehicleWorld.segmentColliders = [];
-vehicleWorld.colliders = [vehicleCollider];
-const cameraOrigin = new THREE.Vector3(-3, 1, 0);
-const muzzleOrigin = new THREE.Vector3(2, 1, 0);
-const cameraDir = new THREE.Vector3(2, 0, -4).normalize();
-const cameraGuide = resolveShot(vehicleWorld, [], cameraOrigin, cameraDir, 30);
-shot = resolveGuidedShot(vehicleWorld, [], cameraOrigin, muzzleOrigin, cameraDir, 30);
-const physicalDir = cameraGuide.point.clone().sub(muzzleOrigin).normalize();
-const physicalHit = resolveShot(vehicleWorld, [], muzzleOrigin, physicalDir,
-  muzzleOrigin.distanceTo(cameraGuide.point) + 0.05);
-check(cameraGuide.collider === vehicleCollider && shot.collider === vehicleCollider,
-  'ballistics perdió la identidad del collider durante ADS');
-check(shot.point.distanceTo(physicalHit.point) < 0.001,
-  `ADS abandonó el contacto físico del muzzle (${shot.point.toArray().join(', ')})`);
-check(shot.point.distanceTo(cameraGuide.point) > 0.5 && shot.blocked,
-  'ADS atravesó otra cara del mismo vehículo por reconciliación óptica');
-check(!shot.visualOrigin && !shot.physicalPoint,
-  'ADS conserva rutas paralelas visual/física que pueden desincronizar decals');
-
-// Si el cañón encuentra OTRO objeto en el camino, no se permite reconciliar:
-// esa cobertura cercana debe seguir bloqueando aunque la cámara vea el fondo.
-const farCollider = {
-  minx: -1, maxx: 1, minz: -8, maxz: -6, h: 2, surface: 'stone',
-};
-const nearBlocker = {
-  minx: 0.8, maxx: 1.5, minz: -3, maxz: -2, h: 2, surface: 'metal',
-};
-const blockedWorld = Object.create(World.prototype);
-blockedWorld.fx = 20; blockedWorld.fz = 20; blockedWorld.layout = 'calle';
-blockedWorld.surfaceZones = [];
-blockedWorld.segmentColliders = [];
-blockedWorld.colliders = [farCollider, nearBlocker];
-shot = resolveGuidedShot(blockedWorld, [],
-  new THREE.Vector3(0, 1, 0), new THREE.Vector3(2, 1, 0),
-  new THREE.Vector3(0, 0, -1), 30);
-check(shot.kind === 'world' && shot.collider === nearBlocker,
-  'ADS atravesó un collider distinto situado entre el cañón y la retícula');
+  new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, -1), 30);
+check(shot.kind === 'player' && shot.id === 'p',
+  'ADS dejó que una obstrucción exclusiva del muzzle desviara el rayo central');
 
 // El collider puede ser una caja simple, pero el decal debe caer sobre la
 // piel visual real (fachada/capó inclinado) y omitir halos aditivos.

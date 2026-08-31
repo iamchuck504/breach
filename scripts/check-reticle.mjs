@@ -104,9 +104,8 @@ try {
     throw new Error('hip fire separó retícula, barrel y trayectoria física');
   }
 
-  // ADS obstruido: la cámara alcanza un punto lejano, pero una pared ficticia
-  // queda inmediatamente delante del muzzle. El anillo conserva el centro y
-  // comunica la obstrucción con estado visual, sin saltar por paralaje.
+  // ADS estricto: una pared ficticia situada solo delante del muzzle no puede
+  // mover, recolorear ni bloquear la retícula central.
   const ads = await page.evaluate(async () => {
     const G = window.BREACH;
     const W = window.BREACH_WORLD;
@@ -139,34 +138,24 @@ try {
     const ring = document.getElementById('crosshair');
     const rect = ring.getBoundingClientRect();
     const actual = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-    const guidePoint = cameraOrigin.clone().addScaledVector(ray.dir, 24);
-    const guidedDir = guidePoint.sub(muzzle).normalize();
-    const expectedPoint = muzzle.clone().addScaledVector(guidedDir, 0.55);
-    const projected = expectedPoint.clone().project(window.BREACH_CAM);
-    const expected = {
-      x: (projected.x * 0.5 + 0.5) * innerWidth,
-      y: (-projected.y * 0.5 + 0.5) * innerHeight,
-    };
     W.raycastHit = oldRaycastHit;
     W.raycast = oldRaycast;
     I._mouseAim = false;
     return {
       visible: ring.classList.contains('aim'),
       blocked: ring.classList.contains('blocked'),
-      actual, expected,
-      reticleError: Math.hypot(actual.x - expected.x, actual.y - expected.y),
+      actual,
       centerOffset: Math.hypot(actual.x - innerWidth * 0.5, actual.y - innerHeight * 0.5),
     };
   });
-  if (!ads.visible || !ads.blocked || ads.centerOffset > 0.75) {
+  if (!ads.visible || ads.blocked || ads.centerOffset > 0.75) {
     console.error('ADS RETICLE DEBUG', JSON.stringify(ads));
-    throw new Error('la retícula ADS saltó o no comunicó la obstrucción física');
+    throw new Error('la retícula ADS reaccionó a una obstrucción exclusiva del muzzle');
   }
 
-  // Sniper scoped con paralaje obstruido: la cámara ve el fondo, pero un cover
-  // distinto intercepta el rayo desde el cañón. La cruz óptica permanece
-  // centrada, marca bloqueo y el decal conserva el contacto físico correcto.
-  const sniperBlocked = await page.evaluate(async () => {
+  // Sniper scoped: aunque un segundo rayo desde el cañón encontraría cover, la
+  // cruz y el impacto permanecen exactamente en el rayo central de cámara.
+  const sniperCentered = await page.evaluate(async () => {
     const G = window.BREACH, W = window.BREACH_WORLD, I = window.BREACH_INPUT;
     if (!G.weapons.hasWeapon('sniper')) G.weapons.giveSpecial('sniper');
     else G.weapons.cur = 'sniper';
@@ -185,7 +174,6 @@ try {
 
     G.rig.root.updateWorldMatrix(true, true);
     const muzzle = G.rig.muzzleWorld(new window.THREE.Vector3()).clone();
-    const weaponRoot = G.rig.activeGun.getWorldPosition(new window.THREE.Vector3()).clone();
     const ray = G.player.cam.aimRay();
     const cameraOrigin = ray.origin.clone();
     const farCollider = { id: 'far' }, nearCollider = { id: 'near' };
@@ -193,9 +181,6 @@ try {
     const oldRaycast = W.raycast.bind(W);
     W.raycastHit = (origin, dir, maxDist) => {
       const fromCamera = origin.distanceTo(cameraOrigin) < 0.12;
-      // El obstáculo empieza DELANTE del muzzle. No simular una pared entre
-      // la raíz del arma y el cañón, porque ese caso debe bloquear el gatillo.
-      if (origin.distanceTo(weaponRoot) < 0.12) return null;
       const t = Math.min(fromCamera ? 24 : 0.8, maxDist);
       return { t, normal: { x: 0, y: 0, z: 1 }, surface: 'concrete',
         collider: fromCamera ? farCollider : nearCollider };
@@ -203,9 +188,7 @@ try {
     W.raycast = () => null;
     await new Promise((resolve) => setTimeout(resolve, 80));
 
-    const guidePoint = cameraOrigin.clone().addScaledVector(ray.dir, 24);
-    const guidedDir = guidePoint.sub(muzzle).normalize();
-    const expectedPoint = muzzle.clone().addScaledVector(guidedDir, 0.8);
+    const expectedPoint = cameraOrigin.clone().addScaledVector(ray.dir, 24);
     const projected = expectedPoint.clone().project(window.BREACH_CAM);
     const expected = {
       x: (projected.x * 0.5 + 0.5) * innerWidth,
@@ -237,10 +220,10 @@ try {
       impactWorldError: impact ? impact.distanceTo(expectedPoint) : Infinity,
     };
   });
-  if (!sniperBlocked.blocked || sniperBlocked.centerOffset > 0.75 ||
-      sniperBlocked.impactWorldError > 0.14) {
-    console.error('SNIPER BLOCKED RETICLE DEBUG', JSON.stringify(sniperBlocked));
-    throw new Error('scope del sniper saltó o perdió el impacto físico obstruido');
+  if (sniperCentered.blocked || sniperCentered.centerOffset > 0.75 ||
+      sniperCentered.impactWorldError > 0.14) {
+    console.error('SNIPER CENTERED RETICLE DEBUG', JSON.stringify(sniperCentered));
+    throw new Error('scope del sniper abandonó el impacto indicado por la retícula central');
   }
 
   // Bazooka ADS: la cámara define el punto deseado y el cohete sale desde el

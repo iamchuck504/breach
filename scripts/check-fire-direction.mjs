@@ -159,4 +159,4 @@ if (failures.length) {
   failures.forEach((f) => console.error(` - ${f}`));
   process.exit(1);
 }
-console.log('FIRE DIRECTION OK · hip físico · ADS guiado · 5 poses · cover · pitch · IK · remoto');
+console.log('FIRE DIRECTION OK · hip físico · ADS central · 5 poses · cover · pitch · IK · remoto');

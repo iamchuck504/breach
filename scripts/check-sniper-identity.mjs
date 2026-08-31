@@ -93,9 +93,8 @@ try {
   // después de que termina evita confundir esa animación intencional con drift.
   await page.waitForTimeout(360);
 
-  // La cruz del scope no deriva ni cambia de color sin input. Puede abandonar
-  // el centro únicamente cuando otra geometría tapa el cañón; al despejar la
-  // trayectoria debe regresar al eje óptico.
+  // La cruz del scope no deriva ni cambia de color: ADS usa siempre el rayo
+  // central y no hereda estados de obstrucción del muzzle.
   const scopeReticle = async () => page.evaluate(() => {
     const el = document.getElementById('scope-reticle');
     const r = el.getBoundingClientRect();
@@ -129,14 +128,13 @@ try {
   await page.waitForTimeout(140);
   const reticleAfter = await scopeReticle();
   const centered = (v) => Math.hypot(v.x - v.cx, v.y - v.cy) < 0.75;
-  check('retícula scoped vuelve al centro al despejar el cañón',
+  check('retícula scoped permanece centrada tras mover la cámara',
     centered(reticleAfter) && reticleAfter.left === '50%' &&
       reticleAfter.top === '50%', JSON.stringify({ before: reticleBefore, after: reticleAfter }));
-  check('retícula scoped solo cambia de color cuando cambia la obstrucción',
-    reticleBefore.color === reticleStill.color &&
-      reticleBefore.blocked === reticleStill.blocked &&
-      !reticleBefore.outRange && !reticleStill.outRange &&
-      !reticleAfter.blocked && !reticleAfter.outRange,
+  check('retícula scoped conserva color y estado central en todo momento',
+    reticleBefore.color === reticleStill.color && reticleBefore.color === reticleAfter.color &&
+      !reticleBefore.blocked && !reticleStill.blocked && !reticleAfter.blocked &&
+      !reticleBefore.outRange && !reticleStill.outRange && !reticleAfter.outRange,
     JSON.stringify({ before: reticleBefore, still: reticleStill, after: reticleAfter }));
 
   // Disparar no debe cerrar el scope. Además exigimos que el disparo sí haya
