@@ -486,15 +486,15 @@ export const WEAPON_SCALES = {
 export const EQUIPPED_WEAPON_VISUAL_SCALE = 0.8;
 
 const ADS_WEAPON_POSES = Object.freeze({
-  // La cámara sigue siendo tercera persona. `center + mount.x` presenta el
-  // muzzle cerca de su línea central y `height` lo lleva a la misma altura.
-  // Así la animación, no una bala fantasma, elimina el paralaje peligroso.
-  pistol:  { damp: 8, center: 0.53, height: 0.58, mount: [0.045, 0.10, -0.42], torsoPitch: -0.07, head: 0.30 },
-  smg:     { damp: 8, center: 0.48, height: 0.68, mount: [0.10, 0.055, -0.10], torsoPitch: -0.12, head: 0.25 },
-  shotgun: { damp: 8, center: 0.47, height: 0.62, mount: [0.11, 0.045, 0.00], torsoPitch: -0.15, head: 0.22 },
-  sniper:  { damp: 8, center: 0.46, height: 0.60, mount: [0.12, 0.085, 0.00], torsoPitch: -0.17, head: 0.18 },
-  bazooka: { damp: 8, center: 0.41, height: 0.57, mount: [0.17, 0.15, 0.02], torsoPitch: -0.19, head: 0.13 },
-  grenade: { damp: 8, center: 0.52, height: 0.59, mount: [0.06, 0.08, -0.38], torsoPitch: -0.09, head: 0.28 },
+  // ADS no se obtiene acercando la cámara a la espalda. Cada pose desplaza
+  // físicamente arma y manos desde el low-ready lateral hacia la línea de
+  // visión, manteniendo la cámara sobre el hombro con espacio libre delante.
+  pistol:  { damp: 18, center: 0.15, mount: [0.045, 0.10, -0.42], torsoPitch: -0.07, head: 0.30 },
+  smg:     { damp: 16, center: 0.14, mount: [0.10, 0.055, -0.10], torsoPitch: -0.12, head: 0.25 },
+  shotgun: { damp: 13.5, center: 0.15, mount: [0.11, 0.045, 0.00], torsoPitch: -0.15, head: 0.22 },
+  sniper:  { damp: 12.5, center: 0.16, mount: [0.12, 0.085, 0.00], torsoPitch: -0.17, head: 0.18 },
+  bazooka: { damp: 12.5, center: 0.10, mount: [0.17, 0.15, 0.02], torsoPitch: -0.19, head: 0.13 },
+  grenade: { damp: 17, center: 0.12, mount: [0.06, 0.08, -0.38], torsoPitch: -0.09, head: 0.28 },
 });
 
 export function applyEquippedWeaponVisualScale(group, weapon) {
@@ -1292,17 +1292,12 @@ export class Rig {
         R(this.legL.hip, swing * 0.75 * m, 0, 0); R(this.legL.knee, -(Math.max(0, -swing) * 1.1 + 0.1) * m, 0, 0);
         R(this.legR.hip, swing2 * 0.75 * m, 0, 0); R(this.legR.knee, -(Math.max(0, -swing2) * 1.1 + 0.1) * m, 0, 0);
         leftOnGun = true;
-        // Guardia relajada tipo shooter de cobertura: ambas manos sostienen el
-        // arma al frente y a altura de pecho, pero sin llevarla todavía a la
-        // línea óptica. El mismo target se usa antes/durante el disparo, por lo
-        // que la trayectoria hip es legible sin producir un salto al click.
+        // El arma permanece al frente, sostenida por ambas manos y apenas por
+        // debajo de ADS. Así la silueta comunica la dirección del hip fire sin
+        // apuntar ópticamente. El target es idéntico antes/durante fire: no hay
+        // elevación súbita del muzzle ni salto de retícula al primer click.
         damp = p.firing ? 18 : 14;
-        M(0.20, 0.13, -0.16, 0, 0.06, 0);
-        // Presentar hombros y arma hacia el corredor de cámara reduce el
-        // paralaje de tercera persona, pero conserva una línea de hip propia:
-        // no se convierte en ADS ni se fuerza el tiro al centro de pantalla.
-        aimRigX = 0.30;
-        aimRigY = 0.58;
+        M(0.245, -0.15, -0.40, 0, 0.18, 0);
         hipsY = 0.66 + bob * 0.045 * m;
         break;
       }
@@ -1416,7 +1411,7 @@ export class Rig {
         R(this.legR.hip, 1.15, 0, 0); R(this.legR.knee, -1.65, 0, 0);
         // arma por encima del cover, mano izq. apoyada cerca del pecho
         R(this.armL.shoulder, 0.5, -0.5, -0.15); R(this.armL.elbow, 1.4, 0, 0);
-        M(0.08, 0.32, -0.38 - blindPose.gunForward, 0, 0, 0);
+        M(0.06, 0.28, -0.32 - blindPose.gunForward, 0, 0, 0);
         hipsY = blindPose.hipsY;
         aimRigY = blindPose.aimRigY;
         break;
@@ -1546,13 +1541,8 @@ export class Rig {
       // Trasladar el conjunto completo (hombros, brazos y arma), no solo el
       // gunMount. Así el gesto se acerca a la línea óptica sin estirar el IK
       // ni separar las manos de grip/forend.
+      aimRigX = adsPose.center;
       const lean = p.coverLean ?? 0; // asomarse en la orilla de pared alta
-      const aimSide = lean < -0.1 ? -1 : 1;
-      // El roll de corner lean desplaza el extremo del arma hacia fuera y
-      // abajo. Compensarlo en la pose mantiene el muzzle sobre la cámara del
-      // hombro elegido sin cambiar la trayectoria balística.
-      aimRigX = (adsPose.center - (lean ? 0.15 : 0)) * aimSide;
-      aimRigY = adsPose.height + (lean ? 0.13 : 0);
       const coverPose = p.state === 'cover_low'
         ? coverAimPose({ kind: p.coverKind, h: 1.1 }, pitch,
           p.coverAimExposure ?? 1)
@@ -1565,13 +1555,11 @@ export class Rig {
       R(this.head, pitch * adsPose.head, 0, lean * 0.08);
       // Pistola extendida, armas largas apoyadas y bazooka alta al hombro.
       // Cero rotación local evita que el modelo prometa otra dirección.
-      M(adsPose.mount[0] * aimSide, adsPose.mount[1],
+      M(adsPose.mount[0], adsPose.mount[1],
         adsPose.mount[2] - (coverPose?.gunForward ?? 0), 0, 0, 0);
       if (coverPose) {
         hipsY = coverPose.hipsY;
-        // Mantener la altura específica del arma y sumar únicamente la
-        // exposición que pide la cobertura (0.5 es el neutral histórico).
-        aimRigY += coverPose.aimRigY - 0.5;
+        aimRigY = coverPose.aimRigY;
       }
       if (lean) {
         // piernas plantadas hacia la pared, torso fuera de la esquina
@@ -1603,7 +1591,7 @@ export class Rig {
         // Low-ready acompaña solo parte del pitch y permanece ligado al cuerpo.
         // No cambia al apretar fire: muzzle, retícula y primer tiro ya estaban
         // alineados con esta misma trayectoria física en el frame anterior.
-        set(this.aimRig.rotation, 'x', pitch * 0.55);
+        set(this.aimRig.rotation, 'x', pitch * 0.85);
         set(this.aimRig.rotation, 'y', 0);
       }
       // el roll del lean de ADS no debe quedarse pegado en hipfire

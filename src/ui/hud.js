@@ -2,11 +2,10 @@ import { t, getLanguage } from '../core/i18n.js';
 import { TUNING } from '../config/tuning.js';
 import { weaponIconMarkup } from './weapon-icons.js';
 
-// HUD sobre DOM. ADS conserva el centro óptico; hip/blind proyecta el eje
-// físico del barrel y dibuja alrededor el cono real de dispersión.
+// HUD sobre DOM. Toda retícula permanece en el centro óptico: ADS usa el
+// anillo y hip/blind usa #barrel-dot; la balística converge desde el muzzle.
 export class HUD {
   constructor() {
-    this._barrelRadius = 5;
     this.el = {
       hud: document.getElementById('hud'),
       crosshair: document.getElementById('crosshair'),
@@ -14,7 +13,6 @@ export class HUD {
       sniperScope: document.getElementById('sniper-scope'),
       scopeReticle: document.getElementById('scope-reticle'),
       barrel: document.getElementById('barrel-dot'),
-      barrelRing: document.getElementById('barrel-ring'),
       vignette: document.getElementById('vignette'),
       hitmarker: document.getElementById('hitmarker'),
       score: document.getElementById('score'),
@@ -394,12 +392,6 @@ export class HUD {
       this.el.barrel.classList.add('on');
       this.el.barrel.style.left = barrelXY.x + 'px';
       this.el.barrel.style.top = barrelXY.y + 'px';
-      const targetRadius = Math.max(5, barrelXY.r ?? 5);
-      // La apertura responde rápido cuando aparece una pared cercana y se
-      // contrae suavemente al salir; el centro jamás se desplaza ni parpadea.
-      const blend = targetRadius > this._barrelRadius ? 0.55 : 0.16;
-      this._barrelRadius += (targetRadius - this._barrelRadius) * blend;
-      this.el.barrelRing?.setAttribute('r', this._barrelRadius.toFixed(1));
     } else {
       this.el.barrel.classList.remove('on');
     }

@@ -76,11 +76,12 @@ export const TUNING = {
     shoulder: 0.82,       // desplazamiento lateral sobre el hombro derecho
     height: 1.62, dist: 2.7,
     roadieHeight: 1.62, roadieDist: 2.7, // = cámara normal: correr NO mueve la cámara
-    // ADS conserva un encuadre over-the-shoulder, pero su línea óptica pasa
-    // cerca del muzzle presentado por la pose. Reducir ese paralaje físico es
-    // lo que evita ver un blanco por encima/al lado de una cobertura mientras
-    // el cañón todavía apunta contra ella; no se concede penetración.
-    aimShoulder: 0.80, aimHeight: 1.41, aimDist: 3.20,
+    // ADS acerca y cierra el FOV, pero conserva una vista limpia por encima
+    // del hombro. La cámara elige el objetivo central y el muzzle sigue siendo
+    // el origen físico; cualquier geometría entre ambos detiene el disparo.
+    // Encuadre tipo shooter over-the-shoulder: el personaje ocupa el tercio
+    // izquierdo y el zoom favorece el espacio jugable, no su espalda.
+    aimShoulder: 1.08, aimHeight: 1.60, aimDist: 2.2,
     coverDist: 3.0,
     shakeRoadie: 0,       // sin shake al correr (0 = apagado)
     shakeFire: 0.35,      // kick al disparar
@@ -178,7 +179,6 @@ export const TUNING = {
     // bufereado mientras el cuerpo gira, en vez de disparar visualmente al revés.
     fireAlignMaxDeg: 50,
     visualAimMaxDeg: 52,  // giro máximo que compensa naturalmente el torso/arma
-    aimMuzzleMaxOffset: 0.28, // tolera la compresión final de la pose en cover bajo
     bodyTurnAimDeg: 600,  // velocidad angular máxima apuntando/disparando
     bodyTurnBlindDeg: 420,// blindfire en cover: giro más pesado, nunca snap 180°
     bodyTurnFollowDeg: 360,

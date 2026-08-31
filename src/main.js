@@ -19,7 +19,6 @@ import {
   deathImpactPoint, isSniperHeadshotDeath, rocketDeathLevel,
 } from './combat/death-reactions.js';
 import { requiredFireBuffer } from './combat/fire-control.js';
-import { muzzleHasClearance } from './combat/cover-fire.js';
 import { Effects } from './fx/effects.js';
 import { Audio, selectAudioListener } from './fx/audio.js';
 import { HUD } from './ui/hud.js';
@@ -2522,10 +2521,6 @@ function stepSound(x, z, kind, y = 0) {
 
 // ---------- disparos ----------
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
-const _reticleMuzzle = new THREE.Vector3(), _reticleDir = new THREE.Vector3();
-const _reticleSide = new THREE.Vector3(), _reticleUp = new THREE.Vector3();
-const _reticleSample = new THREE.Vector3(), _reticlePoint = new THREE.Vector3();
-const _reticleProjected = new THREE.Vector3();
 const CROUCH_STATES = new Set(['cover_low', 'blind_over', 'blind_low_left', 'blind_low_right']);
 const isCrouchState = (st) => CROUCH_STATES.has(st);
 
@@ -2612,98 +2607,26 @@ function currentFireDirection(muzzle, maxRange = 80) {
   return _v3.copy(guide.point).sub(muzzle).normalize();
 }
 
-// Hip fire y blindfire no comparten la intención óptica de ADS. Su centro usa
-// una guía lejana sobre el eje físico del cañón: al cruzar una esquina cercana
-// no salta de un lado a otro por el cambio brusco de profundidad. El anillo sí
-// incluye la huella proyectada de los contactos del cono contra geometría
-// cercana, de modo que nunca promete una precisión que el muzzle no posee.
+// Hip fire y blindfire no comparten la intención óptica de ADS: proyectamos el
+// primer contacto del rayo que sale físicamente del cañón. No hay offsets fijos
+// y la marca se adapta a arma, pose, cover, ángulo y distancia.
 function barrelReticleXY() {
   const p = G.player, def = G.weapons?.def;
   if (!p || p.aim || !def) return null;
   G.rig.root.updateWorldMatrix(true, true);
-  const muzzle = G.rig.muzzleWorld(_reticleMuzzle);
-  const dir = barrelDirection(_reticleDir);
+  const muzzle = G.rig.muzzleWorld(_v1);
+  const dir = barrelDirection(_v2);
   const range = def.range > 0 ? def.range : 60;
+  const hit = resolveShot(world, currentTargets(), muzzle, dir, range, null);
   camera.updateMatrixWorld(true);
-  const guideDistance = Math.min(range, 32);
-  _reticlePoint.copy(dir).multiplyScalar(guideDistance).add(muzzle);
-  const viewPoint = _reticleProjected.copy(_reticlePoint)
-    .applyMatrix4(camera.matrixWorldInverse);
+  const viewPoint = _v3.copy(hit.point).applyMatrix4(camera.matrixWorldInverse);
   if (!Number.isFinite(viewPoint.z) || viewPoint.z >= -0.001) return null;
-  const ndc = _reticleProjected.copy(_reticlePoint).project(camera);
+  const ndc = _v2.copy(hit.point).project(camera);
   if (!Number.isFinite(ndc.x) || !Number.isFinite(ndc.y)) return null;
-  const x = (ndc.x * 0.5 + 0.5) * innerWidth;
-  const y = (-ndc.y * 0.5 + 0.5) * innerHeight;
-
-  const spreadDeg = p.state === 'cover' ? def.spreadBlind : def.spreadHip;
-  const spread = Math.tan(Math.max(0, spreadDeg) * Math.PI / 180);
-  let radius = spread / Math.tan(camera.fov * Math.PI / 360) * (innerHeight / 2);
-  // Incluso un arma sin spread puede tocar una superficie cercana: por el
-  // paralaje de tercera persona ese contacto no coincide en píxeles con la
-  // guía lejana. El anillo debe contenerlo sin mover el centro.
-  const centerT = staticHitDistance(muzzle, dir, range);
-  _reticlePoint.copy(dir).multiplyScalar(centerT).add(muzzle);
-  _reticleProjected.copy(_reticlePoint).project(camera);
-  if (Number.isFinite(_reticleProjected.x) && Number.isFinite(_reticleProjected.y) &&
-      _reticleProjected.z >= -1.1 && _reticleProjected.z <= 1.1) {
-    const sx = (_reticleProjected.x * 0.5 + 0.5) * innerWidth;
-    const sy = (-_reticleProjected.y * 0.5 + 0.5) * innerHeight;
-    radius = Math.max(radius, Math.hypot(sx - x, sy - y));
-  }
-  if (spread > 0.0001) {
-    const referenceUp = Math.abs(dir.y) > 0.9
-      ? _reticleUp.set(1, 0, 0) : _reticleUp.set(0, 1, 0);
-    _reticleSide.crossVectors(dir, referenceUp).normalize();
-    _reticleUp.crossVectors(_reticleSide, dir).normalize();
-    // Ocho bordes deterministas son suficientes para capturar una esquina sin
-    // convertir el HUD en otro muestreo aleatorio distinto al disparo real.
-    for (let i = 0; i < 8; i++) {
-      const a = i * Math.PI / 4;
-      _reticleSample.copy(dir)
-        .addScaledVector(_reticleSide, Math.cos(a) * spread)
-        .addScaledVector(_reticleUp, Math.sin(a) * spread).normalize();
-      const t = staticHitDistance(muzzle, _reticleSample, range);
-      _reticlePoint.copy(_reticleSample).multiplyScalar(t).add(muzzle);
-      _reticleProjected.copy(_reticlePoint).project(camera);
-      if (!Number.isFinite(_reticleProjected.x) || !Number.isFinite(_reticleProjected.y) ||
-          _reticleProjected.z < -1.1 || _reticleProjected.z > 1.1) continue;
-      const sx = (_reticleProjected.x * 0.5 + 0.5) * innerWidth;
-      const sy = (-_reticleProjected.y * 0.5 + 0.5) * innerHeight;
-      radius = Math.max(radius, Math.hypot(sx - x, sy - y));
-    }
-  }
-  return { x, y, r: Math.min(190, radius) };
-}
-
-// El gatillo espera a que la animación pueda representar físicamente el tiro.
-// ADS requiere que el muzzle ya esté cerca de la línea óptica; hip/blindfire
-// conserva su eje propio, pero todo el cono debe haber salido de SU cover.
-// No mueve la retícula, no cambia su color y jamás ignora geometría.
-function physicalFirePoseReady(aiming = G.player?.aim) {
-  const p = G.player, def = G.weapons?.def;
-  if (!p || !def || !G.rig?.activeGun) return false;
-  G.rig.root.updateWorldMatrix(true, true);
-  const muzzle = G.rig.muzzleWorld(new THREE.Vector3()).clone();
-  const weaponRoot = G.rig.gunMount.getWorldPosition(new THREE.Vector3()).clone();
-  const ray = aiming ? shoulderCam.aimRay() : null;
-  const dir = aiming
-    ? resolveShot(world, currentTargets(), ray.origin, ray.dir, def.range, null)
-      .point.clone().sub(muzzle).normalize()
-    : barrelDirection(new THREE.Vector3());
-  const spread = aiming ? def.spreadAim
-    : p.state === 'cover' ? def.spreadBlind : def.spreadHip;
-  // ADS ya tiene la animación colineal y su círculo comunica el spread. Para
-  // hip/blind sí exigimos que el cono completo haya salido de la cobertura
-  // propia, porque allí el paralaje cercano es mucho mayor.
-  if (!muzzleHasClearance(world, p.cover, weaponRoot, muzzle, dir,
-      aiming ? 0 : spread)) return false;
-
-  if (!aiming) return true;
-  const toMuzzle = muzzle.clone().sub(ray.origin);
-  const along = toMuzzle.dot(ray.dir);
-  if (along <= 0) return false;
-  const nearest = ray.origin.clone().addScaledVector(ray.dir, along);
-  return nearest.distanceTo(muzzle) <= TUNING.combat.aimMuzzleMaxOffset;
+  return {
+    x: (ndc.x * 0.5 + 0.5) * innerWidth,
+    y: (-ndc.y * 0.5 + 0.5) * innerHeight,
+  };
 }
 
 function coverPoseReady(wantsAim, wantsFire) {
@@ -3244,8 +3167,7 @@ function updateReticle() {
 
   // Sin ADS, la marca representa la trayectoria física actual del barrel.
   hud.sniperScope(false);
-  const barrel = barrelReticleXY();
-  hud.reticle(false, barrel);
+  hud.reticle(false, barrelReticleXY());
 }
 
 // ---------- loop principal ----------
@@ -3316,8 +3238,7 @@ function simStep(dt) {
   // No redefine la trayectoria: ADS usa cámara; hip/blindfire usan cañón.
   const aligned = p.fireAligned();
   const wantsFire = input.fireHeld || input.firePressed || G.fireBuffer > 0;
-  let canFire = stateOk && aligned && coverPoseReady(input.aimHeld, wantsFire) &&
-    physicalFirePoseReady(input.aimHeld);
+  let canFire = stateOk && aligned && coverPoseReady(input.aimHeld, wantsFire);
   // cualquier click que no pueda salir YA (roadie, cuerpo girando, cooldown,
   // dive/slide o recarga) queda bufereado — y el buffer dura AL MENOS
   // lo que falta de cooldown/recarga, para que el tiro encolado nunca se pierda
@@ -3411,8 +3332,7 @@ function simStep(dt) {
   // este mismo paso. Revalidar evita añadir un frame artificial de latencia.
   const stateOkAfter = !p.dead && p.state !== 'dive' && p.state !== 'slide' &&
     p.state !== 'roadie' && p.state !== 'mantle' && p.state !== 'melee' && input.anyDevice;
-  canFire = stateOkAfter && p.fireAligned() && coverPoseReady(p.aim, wantsFire) &&
-    physicalFirePoseReady();
+  canFire = stateOkAfter && p.fireAligned() && coverPoseReady(p.aim, wantsFire);
   const fired = p.dead ? false
     : G.weapons.update(dt, input.fireHeld, input.firePressed || G.fireBuffer > 0, canFire);
   // Tras la primera inserción desde 0, conservar margen para que cover/arma
