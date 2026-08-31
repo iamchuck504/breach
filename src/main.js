@@ -113,7 +113,7 @@ const G = {
   fireBuffer: 0,       // click de disparo pendiente mientras el cuerpo gira
   pendingShots: 0,     // tiros aprobados que esperan la pose/muzzle de este frame
   pendingThrows: 0,    // granadas aprobadas que esperan la pose de este frame
-  aimOver: { lift: 0, blocked: false, holdFire: false, stuckT: 0, lastGuide: null }, // ADS: alzada del arma para librar bordes cercanos
+  aimOver: { lift: 0 },  // ADS: alzada del arma para librar bordes cercanos
   throwT: 0,           // gesto de lanzamiento en curso
   throwPending: false, // el bote aún no ha salido de la mano
   editorReturn: null,  // id del mapa en edición durante un playtest
@@ -1413,8 +1413,7 @@ function teardown({ keepNet = false, keepLobby = true } = {}) {
   G.fireBuffer = 0;
   G.pendingShots = 0;
   G.pendingThrows = 0;
-  G.aimOver.lift = 0; G.aimOver.blocked = false; G.aimOver.holdFire = false;
-  G.aimOver.stuckT = 0;
+  G.aimOver.lift = 0;
   smoke.clear();
   specials.clear();
   rockets.clear();
@@ -2673,94 +2672,86 @@ function aimOverEligible(p) {
     !s.startsWith('cover') && !s.startsWith('blind_');
 }
 
+// ¿Desde este origen, el rayo central Y el borde BAJO del cono (rotado como
+// el spread real: diverge con la distancia) libran el tramo cercano hacia
+// guide? Solo lo vertical veta: un desvío lateral que roza una pared al
+// costado es dispersión legítima (exigirlo cancelaba la corrección entera
+// junto a paredes laterales irrelevantes — medido en fortaleza). El
+// descuento 0.25 solo evita chocar contra la superficie del propio guide.
+function aimOverOriginClear(from, guide, spreadPerMeter) {
+  const d = _ao4.copy(guide).sub(from);
+  const len = d.length();
+  if (len < 0.6) return false;
+  d.multiplyScalar(1 / len);
+  const near = Math.min(TUNING.aimOver.nearDist, len - 0.25);
+  if (near <= 0.1) return false;
+  if (staticHitDistance(from, d, near) < near - 1e-3) return false;
+  _ao4.set(d.x, d.y - spreadPerMeter, d.z).normalize();
+  return staticHitDistance(from, _ao4, near) >= near - 1e-3;
+}
+
+// ¿El cono COMPLETO (central, bajo y ambos lados) libra desde este origen?
+// Solo lo usa el ajuste del disparo para decidir un ARRIMADO opcional: un
+// cono que muerde lateralmente jamás veta el tiro (fallback = disparar).
+function aimOverConeClear(from, guide, spreadPerMeter) {
+  if (!aimOverOriginClear(from, guide, spreadPerMeter)) return false;
+  const d = _ao4.copy(guide).sub(from);
+  const len = d.length();
+  d.multiplyScalar(1 / len);
+  const near = Math.min(TUNING.aimOver.nearDist, len - 0.25);
+  const cx = d.x, cy = d.y, cz = d.z;
+  const rl = Math.hypot(-cz, cx) || 1;
+  const rx = -cz / rl, rz = cx / rl;
+  for (const side of [spreadPerMeter, -spreadPerMeter]) {
+    _ao4.set(cx + rx * side, cy, cz + rz * side).normalize();
+    if (staticHitDistance(from, _ao4, near) < near - 1e-3) return false;
+  }
+  return true;
+}
+
+// Escalera de alzada: menor h que deja el cono libre desde (origin + h).
+// Devuelve null si ni el tope libra (geometría que alzar no resuelve).
+function aimOverClearance(origin, guide, spreadDownRad, maxLift) {
+  const spreadPerMeter = Math.tan(spreadDownRad) + 0.025; // + colchón fijo
+  for (const h of AIM_OVER_LIFTS) {
+    if (h > maxLift + 1e-6) break;
+    const from = _ao3.set(origin.x, origin.y + h, origin.z);
+    if (aimOverOriginClear(from, guide, spreadPerMeter)) return h;
+  }
+  return null;
+}
+
+// Alzada PREVENTIVA (suave, por frame): acerca el arma a la altura que libra
+// para que el disparo casi nunca necesite el ajuste instantáneo de fireShot.
+// Sin estados de bloqueo ni retención: el gatillo SIEMPRE responde — si nada
+// libra, el arma se queda en su pose y el tiro pega lo que físicamente hay.
 function updateAimOver(dt) {
   const st = G.aimOver, cfg = TUNING.aimOver;
   const p = G.player;
-  let targetLift = 0, blocked = false, holdFire = false;
+  let targetLift = 0;
   if (p && G.rig && aimOverEligible(p)) {
     const def = G.weapons.def;
     const range = def.range > 0 ? def.range : 60;
     const ray = shoulderCam.aimRay();
     // punto que promete el círculo, CON personajes: el tiro real apunta al
     // enemigo/dummy si lo hay, y esa línea pasa por otro sitio que la del
-    // mundo desnudo — detectar contra un guide distinto dejaba escapar
-    // estampados al apuntar a alguien asomado tras un bloque
+    // mundo desnudo
     const guideHit = resolveShot(world, currentTargets(), ray.origin, ray.dir, range, null);
     const guide = _ao1.copy(guideHit.point);
     G.rig.root.updateWorldMatrix(true, true);
+    // Base 100% ANALÍTICA (tabla por arma + giro por pitch), XZ del muzzle
+    // real. Jamás se deriva la altura del muzzle del rig: el lift que
+    // nosotros aplicamos más el lag del damp realimentaban el sensor.
     const muzzle = G.rig.muzzleWorld(_ao2);
-
-    // GARANTÍA DURA: si la línea REAL del cañón (pose actual, alzada a medio
-    // camino incluida) sigue tapada en el tramo cercano, el gatillo espera.
-    // Sin esto, un click en el primer frame de ADS —o apuntando hacia abajo,
-    // donde el muzzle gira por debajo de la base analítica— salía con el
-    // arma a medio subir y la bala pegaba el borde igual. El click no se
-    // pierde: G.fireBuffer lo retiene y sale en cuanto el cañón libra.
-    const realDir = _ao4.copy(guide).sub(muzzle);
-    const realLen = realDir.length();
-    if (realLen > 1.2) {
-      realDir.multiplyScalar(1 / realLen);
-      const nearReal = Math.min(cfg.nearDist, realLen - 0.6);
-      if (nearReal > 0.1 &&
-          staticHitDistance(muzzle, realDir, nearReal) < nearReal - 1e-3) {
-        holdFire = true;
-      }
-    }
-
-    // Base de detección 100% ANALÍTICA: tabla por arma + giro por pitch
-    // (apuntar abajo baja el cañón). Jamás se deriva del muzzle del rig:
-    // el lift/dip que nosotros aplicamos más el lag del damp realimentaban
-    // el sensor (lift oscilando entre escalones, bloqueos eternos).
     muzzle.y = (p.y ?? 0) + (AIM_OVER_MUZZLE_Y[G.weapons.cur] ?? 1.28) +
       Math.sin(p.aimPitch ?? 0) * (AIM_OVER_MUZZLE_FWD[G.weapons.cur] ?? 1);
-    // margen inferior de la escalera: borde bajo del cono de dispersión
-    // (la escopeta reparte 8 perdigones — su cono real es más ancho)
-    const marginDown = -(0.07 + (def.pellets > 1 ? 0.1 : 0));
     if (_ao3.copy(guide).sub(muzzle).length() > 1.2) {
-      let cleared = null;
-      for (const h of AIM_OVER_LIFTS) {
-        if (h > cfg.maxLift + 1e-6) break;
-        // el rayo central Y el borde inferior del cono deben librar — mejor
-        // un escalón de sobra que un tiro estampado en el parapeto
-        let ok = true;
-        for (const margin of [0, marginDown]) {
-          const from = _ao3.set(muzzle.x, muzzle.y + h + margin, muzzle.z);
-          const d = _ao4.copy(guide).sub(from);
-          const len = d.length();
-          if (len < 0.6) { ok = false; break; }
-          d.multiplyScalar(1 / len);
-          // solo el tramo CERCANO importa: un muro a media distancia es un
-          // bloqueo legítimo y ahí manda el modelo físico de siempre
-          const near = Math.min(cfg.nearDist, len - 0.6);
-          if (near <= 0.1) { ok = false; break; }
-          if (staticHitDistance(from, d, near) < near - 1e-3) { ok = false; break; }
-        }
-        if (ok) { cleared = h; break; }
-      }
-      if (cleared === null) blocked = true;
-      else targetLift = cleared;
+      targetLift = aimOverClearance(muzzle, guide, aimOverSpreadDown(def), cfg.maxLift) ?? 0;
     }
-
-    // Anti-atasco: si la escalera dice "librable" pero la línea REAL sigue
-    // tapada con la alzada ya asentada (error residual de la analítica), no
-    // dejar el arma muda para siempre: tras un momento se trata como bloqueo
-    // (dip + gatillo inerte, señal clara). Mover la mira resetea y reintenta.
-    if (holdFire && !blocked && Math.abs(st.lift - targetLift) < 0.01) {
-      st.stuckT += dt;
-      if (st.stuckT > 0.35) blocked = true;
-    } else if (!holdFire) {
-      st.stuckT = 0;
-    }
-    if (st.lastGuide && guide.distanceTo(st.lastGuide) > 0.8) st.stuckT = 0;
-    (st.lastGuide ??= new THREE.Vector3()).copy(guide);
   }
   const speed = targetLift > st.lift ? cfg.rise : cfg.fall;
   st.lift += (targetLift - st.lift) * (1 - Math.exp(-speed * dt));
   if (Math.abs(st.lift - targetLift) < 0.004) st.lift = targetLift;
-  st.blocked = blocked;
-  // holdFire = "no dispares ESTE frame": bloqueo total o cañón aún tapado
-  // mientras el arma sube. La retícula jamás se entera; el click espera.
-  st.holdFire = blocked || holdFire;
 }
 
 function coverPoseReady(wantsAim, wantsFire) {
@@ -3112,33 +3103,68 @@ function sniperScopeActive() {
     !G.spectator.active && !matchControlsLocked() && !menuIsOpen());
 }
 
-// RED FINAL anti-estampado (ADS): se evalúa DENTRO del disparo, con el
-// muzzle y el RAYO DEFINITIVO de este tiro (spread incluido) — ninguna
-// predicción por frames puede cerrarlo del todo: la pose cambia entre
-// decisión y disparo, el guide del tiro incluye personajes y 0.9° de
-// dispersión bastan para morder un borde que el rayo central libra. Si la
-// bala va a estamparse en el mundo a quemarropa mientras el CÍRCULO promete
-// un punto mucho más lejano, el tiro se cancela: la bala vuelve al cargador
-// y el click reintenta solo en cuanto el aim-over acomode el arma. El kill
-// switch (enabled=0) lo apaga.
-function adsFinalShotBlocked(targets, cameraOrigin, baseDir, muzzle, shotDir, range) {
-  if (!TUNING.aimOver.enabled) return false;
-  // lo que el círculo (rayo central) promete a este tiro
-  const promised = resolveShot(world, targets, cameraOrigin, baseDir, range, null);
-  const promisedLen = _v2.copy(promised.point).sub(muzzle).length();
-  if (promisedLen < 1.2) return false; // mirando algo pegado: bloqueo legítimo
-  const near = Math.min(TUNING.aimOver.nearDist, promisedLen - 0.6);
-  if (near <= 0.1) return false;
-  return staticHitDistance(muzzle, shotDir, near) < near - 1e-3;
+// Peor desviación vertical del cono del arma: el spread completo para un
+// proyectil, y el pellet diagonal-bajo del patrón para la escopeta.
+function aimOverSpreadDown(def) {
+  const deg = (def.spreadAim ?? 0) * (def.pellets > 1 ? 0.85 : 1);
+  return deg * Math.PI / 180;
 }
 
-// Bala de vuelta al cargador + click en espera: el jugador percibe lo mismo
-// que el holdFire (el arma aún no dispara), sin flash, sonido ni red.
-function refundBlockedShot() {
-  const s = G.weapons.st;
-  s.mag = Math.min(G.weapons.def.mag, s.mag + 1);
-  s.cd = 0;
-  G.fireBuffer = Math.max(G.fireBuffer, 0.3);
+// RED FINAL anti-estampado (ADS): se resuelve DENTRO del disparo, en el
+// mismo frame — el gatillo SIEMPRE responde. Si la línea de ESTE tiro va a
+// estamparse en el mundo a quemarropa mientras el círculo promete un punto
+// mucho más lejano, el ORIGEN del disparo se ajusta ahí mismo: primero
+// ALZADA (el caso común: borde horizontal delante) y si no basta, ARRIMADO
+// lateral hacia el eje de la cámara (rozando una pared alta al costado, la
+// cámara pasa por un lado y el cañón cruza la esquina — alzar no resuelve
+// una pared de 3m; pegar el arma al pecho sí es un gesto físico del
+// personaje y jamás cruza el eje de la vista). El rig converge a la pose en
+// un par de frames; tracer y flash salen del punto ajustado, mezclados con
+// el recoil ni se nota. Si NADA libra —geometría exótica—, el tiro sale
+// igual desde donde está y pega lo que físicamente hay: nunca se niega,
+// nunca atraviesa, nunca miente la retícula. El kill switch lo apaga.
+const AIM_OVER_SIDES = [0.1, 0.18, 0.26];
+
+function adsAdjustFireOrigin(targets, cameraOrigin, baseDir, muzzle, range, def) {
+  if (!TUNING.aimOver.enabled) return;
+  const promised = resolveShot(world, targets, cameraOrigin, baseDir, range, null);
+  const guide = _ao1.copy(promised.point);
+  if (_ao2.copy(guide).sub(muzzle).length() < 1.2) return; // mirando algo pegado
+  const spreadPerMeter = Math.tan(aimOverSpreadDown(def)) + 0.025;
+  // 1) alzada vertical (margen extra sobre maxLift: el ajuste es puntual)
+  const h = aimOverClearance(muzzle, guide, aimOverSpreadDown(def),
+    TUNING.aimOver.maxLift + 0.08);
+  if (h !== null && h > 0) {
+    muzzle.y += h;
+    // acercar la pose del rig al punto real del tiro (converge con su damp)
+    G.aimOver.lift = Math.min(TUNING.aimOver.maxLift, G.aimOver.lift + h);
+    return;
+  }
+  // Con el eje vertical limpio, el CONO puede seguir mordiendo de costado
+  // (dispersión contra una pared lateral): si es el caso, intentar arrimado.
+  if (h === 0 && aimOverConeClear(muzzle, guide, spreadPerMeter)) return;
+  // 2) arrimado lateral hacia el eje de la cámara (con alzada combinada); el
+  //    tope de alzada respeta el knob (max(0, maxLift))
+  const latX = cameraOrigin.x - muzzle.x, latZ = cameraOrigin.z - muzzle.z;
+  const latLen = Math.hypot(latX, latZ);
+  if (latLen < 0.05) return;
+  const lx = latX / latLen, lz = latZ / latLen;
+  const lim = Math.max(0, TUNING.aimOver.maxLift);
+  const dys = [...new Set([0, Math.min(0.2, lim), lim])];
+  for (const s of AIM_OVER_SIDES) {
+    if (s > latLen) break; // jamás cruzar el eje de la cámara
+    for (const dy of dys) {
+      const from = _ao2.set(muzzle.x + lx * s, muzzle.y + dy, muzzle.z + lz * s);
+      const ok = h === 0
+        ? aimOverConeClear(from, guide, spreadPerMeter)   // busca librar el CONO
+        : aimOverOriginClear(from, guide, spreadPerMeter); // busca librar el eje
+      if (!ok) continue;
+      muzzle.copy(from);
+      if (dy > 0) G.aimOver.lift = Math.min(lim, G.aimOver.lift + dy);
+      return;
+    }
+  }
+  // nada libra: geometría exótica — el tiro sale igual (física honesta)
 }
 
 function fireShot() {
@@ -3164,11 +3190,12 @@ function fireShot() {
     let projectileDir = baseDir;
     if (aiming) {
       const targets = currentTargets();
+      // elevar/arrimar el origen si un borde cercano taparía el cohete (solo
+      // si el círculo promete más lejos); la dirección apunta al guide
+      adsAdjustFireOrigin(targets, cameraOrigin, ray.dir, muzzle, def.range, def);
       const guide = resolveShot(world, targets, cameraOrigin, ray.dir,
         def.range, null);
       projectileDir = _v3.copy(guide.point).sub(muzzle).normalize().clone();
-      if (adsFinalShotBlocked(targets, cameraOrigin, ray.dir, muzzle,
-          projectileDir, def.range)) { refundBlockedShot(); return; }
     }
     const cid = G.mode === 'online' ? `p:${++G.rocketSeq}` : null;
     rockets.fire({ x: muzzle.x, y: muzzle.y, z: muzzle.z }, projectileDir,
@@ -3186,13 +3213,11 @@ function fireShot() {
   }
 
   const targets = currentTargets();
-  // red final (escopeta): el rayo CENTRAL no puede estamparse; los pellets
-  // extremos del cono que muerden un borde son dispersión legítima. Las
-  // armas de UN proyectil se validan dentro del loop con su rayo definitivo.
-  if (aiming && def.pellets > 1 &&
-      adsFinalShotBlocked(targets, cameraOrigin, baseDir, muzzle, baseDir, def.range)) {
-    refundBlockedShot();
-    return;
+  // red final: si el tiro va a estamparse a quemarropa con el círculo
+  // prometiendo lejos, el origen se alza/arrima AHORA al punto que libra
+  if (aiming) {
+    adsAdjustFireOrigin(targets, cameraOrigin, baseDir, muzzle, def.range, def);
+    origin.copy(muzzle);
   }
   const dmgByTarget = new Map();
   let anyPoint = null;
@@ -3204,12 +3229,6 @@ function fireShot() {
       // El scope promete exactamente su punto. Fuera del scope (incluido
       // hip/blindfire del sniper) se conserva la dispersión configurada.
       : scoped ? baseDir.clone() : applySpread(baseDir, spread);
-    // red final (un proyectil): validar el rayo DEFINITIVO, spread incluido
-    if (aiming && def.pellets === 1 &&
-        adsFinalShotBlocked(targets, cameraOrigin, baseDir, muzzle, dir, def.range)) {
-      refundBlockedShot();
-      return;
-    }
     // La cámara elige el punto deseado, pero la bala siempre nace en el muzzle.
     // Si algo ocupa el segmento físico hacia ese punto, ese primer contacto
     // detiene el tiro: la retícula nunca concede wall penetration.
@@ -3389,8 +3408,7 @@ function simStep(dt) {
     G.fireBuffer = 0;
     G.pendingShots = 0;
     G.pendingThrows = 0;
-    G.aimOver.lift = 0; G.aimOver.blocked = false; G.aimOver.holdFire = false;
-    G.aimOver.stuckT = 0;
+    G.aimOver.lift = 0;
     p.update(dt, input, false);
     if (G.botMatch) G.botMatch.update(dt);
     if (G.net) { G.net.tickState(dt, p, G.weapons); G.net.tickBotState(dt, G.onlineBots?.bots); }
@@ -3423,10 +3441,7 @@ function simStep(dt) {
   // No redefine la trayectoria: ADS usa cámara; hip/blindfire usan cañón.
   const aligned = p.fireAligned();
   const wantsFire = input.fireHeld || input.firePressed || G.fireBuffer > 0;
-  // aim-over: holdFire (frame anterior) también bufferiza el click — el tiro
-  // espera a que el cañón libre el borde en vez de estamparse en él
-  let canFire = stateOk && aligned && coverPoseReady(input.aimHeld, wantsFire) &&
-    !G.aimOver.holdFire;
+  let canFire = stateOk && aligned && coverPoseReady(input.aimHeld, wantsFire);
   // cualquier click que no pueda salir YA (roadie, cuerpo girando, cooldown,
   // dive/slide o recarga) queda bufereado — y el buffer dura AL MENOS
   // lo que falta de cooldown/recarga, para que el tiro encolado nunca se pierda
@@ -3523,16 +3538,10 @@ function simStep(dt) {
   // este mismo paso. Revalidar evita añadir un frame artificial de latencia.
   const stateOkAfter = !p.dead && p.state !== 'dive' && p.state !== 'slide' &&
     p.state !== 'roadie' && p.state !== 'mantle' && p.state !== 'melee' && input.anyDevice;
-  // aim-over: con el estado ya asentado, decidir la alzada del arma y si el
-  // cañón quedó irremediablemente tapado (gatillo inerte, munición intacta)
+  // aim-over: con el estado ya asentado, acercar el arma a la altura que
+  // libra (preventivo; el ajuste definitivo ocurre dentro del disparo)
   updateAimOver(dt);
-  canFire = stateOkAfter && p.fireAligned() && coverPoseReady(p.aim, wantsFire) &&
-    !G.aimOver.holdFire;
-  // un click único mientras el aim-over sube el arma no se pierde: espera en
-  // el buffer y sale en cuanto el cañón libra el borde
-  if (input.firePressed && !p.dead && !canFire && G.aimOver.holdFire) {
-    G.fireBuffer = Math.max(G.fireBuffer, 0.35);
-  }
+  canFire = stateOkAfter && p.fireAligned() && coverPoseReady(p.aim, wantsFire);
   const fired = p.dead ? false
     : G.weapons.update(dt, input.fireHeld, input.firePressed || G.fireBuffer > 0, canFire);
   // Tras la primera inserción desde 0, conservar margen para que cover/arma
@@ -3868,7 +3877,6 @@ function frame(now) {
       reloading: G.weapons.reloading,
       reloadT: G.weapons.reloading ? 1 - G.weapons.st.reload / G.weapons.def.reloadTime : 0,
       aimLift: G.aimOver.lift,
-      aimBlocked: G.aimOver.blocked,
     });
     while (G.pendingShots > 0) {
       fireShot();

@@ -57,7 +57,7 @@ const librable = await page.evaluate(async () => {
   G.player.cam.pitch = -0.02;
   I._mouseAim = true;
   await new Promise((r) => setTimeout(r, 900));
-  const lift = G.aimOver.lift, blocked = G.aimOver.blocked;
+  const lift = G.aimOver.lift;
   // sin aim-over ¿la línea base del cañón estaba tapada de verdad?
   G.rig.root.updateWorldMatrix(true, true);
   const muzzle = G.rig.muzzleWorld(new window.THREE.Vector3());
@@ -74,7 +74,7 @@ const librable = await page.evaluate(async () => {
   const cross = document.getElementById('crosshair');
   const style = getComputedStyle(cross);
   return {
-    lift, blocked, baseMuzzleY: baseY, muzzleY: muzzle.y,
+    lift, baseMuzzleY: baseY, muzzleY: muzzle.y,
     magBefore, magAfter: G.weapons.st.mag,
     shotZ: tracerPoint?.z ?? null,
     crossBlockedClass: cross.classList.contains('blocked'),
@@ -82,7 +82,7 @@ const librable = await page.evaluate(async () => {
   };
 });
 check('el borde cercano activa la alzada del arma',
-  librable.lift >= 0.08 && librable.lift <= 0.34 && !librable.blocked,
+  librable.lift >= 0.08 && librable.lift <= 0.34,
   `lift=${librable.lift?.toFixed(2)}`);
 check('el disparo LIBRA la caja y pega lejos (donde promete el círculo)',
   librable.magAfter < librable.magBefore && librable.shotZ !== null && librable.shotZ < 10,
@@ -104,6 +104,10 @@ const impaciente = await page.evaluate(async () => {
   const oldTracer = E.tracer;
   E.tracer = function (o, p2, em) { hits.push([p2.x, p2.y, p2.z]); return oldTracer.call(this, o, p2, em); };
   // aim y fire en el MISMO frame
+  const t0 = performance.now();
+  let firstShotMs = null;
+  const prevPush = hits.push.bind(hits);
+  hits.push = (v) => { if (firstShotMs === null) firstShotMs = performance.now() - t0; return prevPush(v); };
   I._mouseAim = true; I._mouseFire = true; I.firePressed = true;
   await new Promise((r) => setTimeout(r, 700));
   I._mouseFire = false;
@@ -111,11 +115,14 @@ const impaciente = await page.evaluate(async () => {
   E.tracer = oldTracer;
   const onBox = hits.filter(([, y, z]) => z > 11.5 && z < 12.5 && y < 1.4).length;
   const beyond = hits.filter(([, , z]) => z < 10).length;
-  return { shots: hits.length, onBox, beyond, mag: G.weapons.st.mag };
+  return { shots: hits.length, onBox, beyond, mag: G.weapons.st.mag, firstShotMs };
 });
 check('click instantáneo: NINGUNA bala se estampa en la caja',
   impaciente.onBox === 0 && impaciente.shots > 0 && impaciente.beyond === impaciente.shots,
   JSON.stringify(impaciente));
+check('el gatillo responde YA (sin negaciones ni esperas)',
+  impaciente.firstShotMs !== null && impaciente.firstShotMs < 250,
+  `primer tiro a ${Math.round(impaciente.firstShotMs ?? 9999)}ms`);
 
 // ---------------------------------------------------------------------------
 // 1c) APUNTANDO HACIA ABAJO: el muzzle real gira por debajo de la base — el
@@ -190,18 +197,38 @@ const tortura = await page.evaluate(async () => {
   let nearSlams = 0, shots = 0, legitClose = 0;
   const W = window.BREACH_WORLD, V3 = window.THREE.Vector3;
   const oldTracer = E.tracer;
-  // BUG = la bala pega CERCA mientras el círculo prometía LEJOS. Pegar la
-  // caja cuando el círculo apunta A la caja es veraz (no cuenta).
+  // BUG = PARALAJE puro: la bala pega CERCA mientras el círculo prometía
+  // LEJOS *y* la cámara con el MISMO desvío del tiro también libraba. Si la
+  // versión de cámara del rayo desviado pega igual, es dispersión visible
+  // desde el círculo (cono real del arma): legítimo, no cuenta. Pegar la
+  // caja cuando el círculo apunta A la caja tampoco cuenta (veraz).
   E.tracer = function (o, p2, em) {
     shots++;
     const shotDist = p2.distanceTo(o);
     if (shotDist < 3) {
       // misma fuente que fireShot: aimRay (cámara colisionada, SIN shake)
       const ray = G.player.cam.aimRay();
-      const camDist = W.raycastHit(ray.origin, ray.dir, 60)?.t ??
-        W.raycast(ray.origin, ray.dir, 60) ?? 60;
-      if (camDist > shotDist + 1.8) nearSlams++;
-      else legitClose++;
+      const cast = (origin, d2) => W.raycastHit(origin, d2, 60)?.t ??
+        W.raycast(origin, d2, 60) ?? 60;
+      const camCentral = cast(ray.origin, ray.dir);
+      const shotDir = p2.clone().sub(o).normalize();
+      const camAlongShot = cast(ray.origin, shotDir);
+      // pared RASANTE: si la cámara con el mismo desvío pega la misma
+      // superficie (aunque más adelante — la distancia al impacto es
+      // inestable en rasantes), es dispersión visible, no paralaje engañoso
+      if (camCentral > shotDist + 1.8 &&
+          camAlongShot > Math.max(shotDist + 1.8, shotDist * 3)) {
+        nearSlams++;
+        (window.__slams ??= []).push({
+          o: [+o.x.toFixed(2), +o.y.toFixed(2), +o.z.toFixed(2)],
+          p2: [+p2.x.toFixed(2), +p2.y.toFixed(2), +p2.z.toFixed(2)],
+          shotDist: +shotDist.toFixed(2),
+          camCentral: +camCentral.toFixed(1), camAlongShot: +camAlongShot.toFixed(1),
+          lift: +G.aimOver.lift.toFixed(3),
+          pitch: +G.player.cam.pitch.toFixed(3), yaw: +G.player.cam.yaw.toFixed(3),
+          state: G.player.state, wep: G.weapons.cur,
+        });
+      } else legitClose++;
     }
     return oldTracer.call(this, o, p2, em);
   };
@@ -220,49 +247,42 @@ const tortura = await page.evaluate(async () => {
   G.player.cam.pitch = -0.02; G.player.cam.yaw = 0;
   G.weapons.st.reserve = 150;
   await new Promise((r) => setTimeout(r, 400));
-  return { nearSlams, shots, legitClose };
+  return { nearSlams, shots, legitClose, slams: window.__slams ?? [] };
 });
 check('TORTURA: cero balas estampadas (círculo lejos, bala cerca) en 4s de barrido+spam',
   tortura.nearSlams === 0 && tortura.shots > 10,
   JSON.stringify(tortura));
 
 // ---------------------------------------------------------------------------
-// 2) BLOQUEO TOTAL (salvaguarda): con maxLift 0.34 ≈ paralaje cámara-arma,
-//    casi toda vista libre es alcanzable — geometría "cámara libra pero ni el
-//    tope libra" es exótica. Se fuerza bajando el tope EN VIVO (mismo knob
-//    del F10) para validar el mecanismo: gatillo inerte + arma inclinada.
+// 2) GEOMETRÍA IMPOSIBLE (ni el tope libra, forzado con maxLift 0.05): el
+//    gatillo RESPONDE IGUAL — dispara y pega lo que físicamente hay. Jamás
+//    se niega, jamás atraviesa, jamás toca la retícula.
 // ---------------------------------------------------------------------------
-const bloqueado = await page.evaluate(async () => {
-  const G = window.BREACH, W = window.BREACH_WORLD, I = window.BREACH_INPUT;
-  const E = window.BREACH_EFFECTS;
+const imposible = await page.evaluate(async () => {
+  const G = window.BREACH, I = window.BREACH_INPUT, E = window.BREACH_EFFECTS;
   const TUNING = (await import('/src/config/tuning.js')).TUNING;
-  TUNING.aimOver.maxLift = 0.05; // ningún escalón libra la caja h1.28
+  TUNING.aimOver.maxLift = -1; // escalera vacía: NADA libra (imposible real)
   await new Promise((r) => setTimeout(r, 700));
-  const blocked = G.aimOver.blocked, lift = G.aimOver.lift;
-  let tracerCalls = 0;
+  const lift = G.aimOver.lift;
+  let tracerPoint = null;
   const oldTracer = E.tracer;
-  E.tracer = function (...a) { tracerCalls++; return oldTracer.apply(this, a); };
+  E.tracer = function (o, p2, em) { tracerPoint = tracerPoint ?? p2.clone(); return oldTracer.call(this, o, p2, em); };
   const magBefore = G.weapons.st.mag;
   I._mouseFire = true; I.firePressed = true;
-  await new Promise((r) => setTimeout(r, 400));
+  await new Promise((r) => setTimeout(r, 150));
   I._mouseFire = false;
-  await new Promise((r) => setTimeout(r, 450));
+  await new Promise((r) => setTimeout(r, 150));
   E.tracer = oldTracer;
-  G.rig.root.updateWorldMatrix(true, true);
-  const fwd = G.rig.gunForward(new window.THREE.Vector3()).normalize();
   return {
-    blocked, lift, magBefore, magAfter: G.weapons.st.mag, tracerCalls,
-    gunDipY: fwd.y, camPitch: G.player.cam.pitch,
+    lift, magBefore, magAfter: G.weapons.st.mag,
+    shotZ: tracerPoint?.z ?? null,
+    crossBlocked: document.getElementById('crosshair').classList.contains('blocked'),
   };
 });
-check('bloqueo irremediable detectado (sin alzada suficiente)',
-  bloqueado.blocked === true, `lift=${bloqueado.lift?.toFixed(2)}`);
-check('gatillo inerte: ni bala ni munición desperdiciada',
-  bloqueado.magAfter === bloqueado.magBefore && bloqueado.tracerCalls === 0,
-  `mag=${bloqueado.magAfter}/${bloqueado.magBefore} tracers=${bloqueado.tracerCalls}`);
-check('el arma se inclina hacia abajo (aviso físico, no de HUD)',
-  bloqueado.gunDipY < -0.3,
-  `gunForward.y=${bloqueado.gunDipY?.toFixed(2)} con cámara a ${bloqueado.camPitch}`);
+check('geometría imposible: el gatillo RESPONDE igual (física honesta)',
+  imposible.magAfter < imposible.magBefore && imposible.shotZ !== null &&
+  Math.abs(imposible.shotZ - 12.3) < 0.8 && !imposible.crossBlocked,
+  JSON.stringify(imposible));
 
 // ---------------------------------------------------------------------------
 // 3) KILL SWITCH en vivo: enabled=0 restaura el comportamiento anterior
@@ -273,7 +293,7 @@ const apagado = await page.evaluate(async () => {
   TUNING.aimOver.enabled = 0;
   TUNING.aimOver.maxLift = 0.34; // restaurar el tope tocado en la fase 2
   await new Promise((r) => setTimeout(r, 700));
-  const blocked = G.aimOver.blocked, lift = G.aimOver.lift;
+  const lift = G.aimOver.lift;
   let tracerPoint = null;
   const oldTracer = E.tracer;
   E.tracer = function (o, p2, em) { tracerPoint = p2.clone(); return oldTracer.call(this, o, p2, em); };
@@ -285,12 +305,12 @@ const apagado = await page.evaluate(async () => {
   E.tracer = oldTracer;
   TUNING.aimOver.enabled = 1;
   return {
-    blocked, lift, fired: G.weapons.st.mag < magBefore,
+    lift, fired: G.weapons.st.mag < magBefore,
     shotZ: tracerPoint?.z ?? null,
   };
 });
-check('kill switch: sin alzada ni bloqueo, el tiro vuelve a pegar en la caja',
-  apagado.blocked === false && apagado.lift < 0.03 && apagado.fired &&
+check('kill switch: sin alzada, el tiro vuelve a pegar en la caja',
+  apagado.lift < 0.03 && apagado.fired &&
   apagado.shotZ !== null && Math.abs(apagado.shotZ - 12.3) < 0.8,
   `lift=${apagado.lift?.toFixed(3)} shotZ=${apagado.shotZ?.toFixed(1)}`);
 
@@ -301,7 +321,7 @@ const hip = await page.evaluate(async () => {
   const G = window.BREACH, W = window.BREACH_WORLD, I = window.BREACH_INPUT;
   I._mouseAim = false;
   await new Promise((r) => setTimeout(r, 500));
-  const lift = G.aimOver.lift, blocked = G.aimOver.blocked;
+  const lift = G.aimOver.lift;
   const magBefore = G.weapons.st.mag;
   I._mouseFire = true; I.firePressed = true;
   await new Promise((r) => setTimeout(r, 90));
@@ -309,10 +329,10 @@ const hip = await page.evaluate(async () => {
   await new Promise((r) => setTimeout(r, 120));
   // limpiar la caja sintética
   W.colliders.length = window.__baseColliders;
-  return { lift, blocked, fired: G.weapons.st.mag < magBefore };
+  return { lift, fired: G.weapons.st.mag < magBefore };
 });
-check('hipfire intacto: sin alzada, sin bloqueo, dispara normal',
-  hip.lift === 0 && hip.blocked === false && hip.fired === true, JSON.stringify(hip));
+check('hipfire intacto: sin alzada, dispara normal',
+  hip.lift === 0 && hip.fired === true, JSON.stringify(hip));
 
 check('sin errores de página', pageErrors === 0, `errores=${pageErrors}`);
 

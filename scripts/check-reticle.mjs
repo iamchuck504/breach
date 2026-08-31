@@ -204,35 +204,24 @@ try {
       impact = point.clone();
       return oldImpact(point, normal, surface, opts);
     };
-    // Este stub crea un cover que tapa el cañón A CUALQUIER ALTURA. Con
-    // aim-over activo el contrato nuevo es más fuerte que "pegar el cover":
-    // el gatillo queda inerte y la bala (única) no se gasta.
-    const magBefore = G.weapons.st.mag;
-    I._mouseFire = true;
-    I.firePressed = true;
-    await new Promise((resolve) => setTimeout(resolve, 120));
-    I._mouseFire = false;
-    const blockedState = G.aimOver.blocked;
-    const heldFire = { impact, mag: G.weapons.st.mag };
-    // Con el kill switch apagado se conserva el contrato físico clásico: la
-    // bala nace en el muzzle y el primer contacto (el cover a 0.8m) la para.
-    // El click retenido quedó en G.fireBuffer, así que el tiro sale SOLO en
-    // cuanto el aim-over deja de retener — se espera ese disparo automático
-    // y el punto esperado se calcula con el ORIGEN REAL capturado del tracer
-    // (comparar contra un muzzle previo era sensible al timing de la pose).
-    const TUNING = (await import('/src/config/tuning.js')).TUNING;
+    // Este stub crea un cover que tapa el cañón A CUALQUIER ALTURA: el
+    // aim-over no puede librarlo y el gatillo RESPONDE IGUAL — la bala nace
+    // en el muzzle y el primer contacto físico (el cover a 0.8m) la para.
+    // El punto esperado se calcula con el ORIGEN REAL capturado del tracer.
     let shotOrigin = null;
     const oldTracer = window.BREACH_EFFECTS.tracer;
     window.BREACH_EFFECTS.tracer = function (o, p2, em) {
       shotOrigin = shotOrigin ?? o.clone();
       return oldTracer.call(this, o, p2, em);
     };
-    TUNING.aimOver.enabled = 0;
-    for (let i = 0; i < 60 && !shotOrigin; i++) {
+    const magBefore = G.weapons.st.mag;
+    I._mouseFire = true;
+    I.firePressed = true;
+    for (let i = 0; i < 20 && !shotOrigin; i++) {
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
+    I._mouseFire = false;
     I._mouseAim = false;
-    TUNING.aimOver.enabled = 1;
     window.BREACH_EFFECTS.tracer = oldTracer;
     const expectedPhysicalPoint = shotOrigin
       ? shotOrigin.clone().addScaledVector(
@@ -244,9 +233,7 @@ try {
     return {
       actual, expected,
       blocked: el.classList.contains('blocked'),
-      aimOverBlocked: blockedState,
-      heldMag: heldFire.mag, magBefore,
-      heldImpact: heldFire.impact !== null,
+      fired: G.weapons.st.mag < magBefore,
       reticleError: Math.hypot(actual.x - expected.x, actual.y - expected.y),
       centerOffset: Math.hypot(actual.x - innerWidth / 2, actual.y - innerHeight / 2),
       impactWorldError: impact && expectedPhysicalPoint
@@ -254,15 +241,10 @@ try {
       penetratedToGuide: impact ? impact.distanceTo(guidePoint) < 0.2 : false,
     };
   });
-  if (sniperCentered.blocked || sniperCentered.centerOffset > 0.75 ||
+  if (sniperCentered.blocked || sniperCentered.centerOffset > 0.75 || !sniperCentered.fired ||
       sniperCentered.impactWorldError > 0.14 || sniperCentered.penetratedToGuide) {
     console.error('SNIPER PHYSICAL ADS DEBUG', JSON.stringify(sniperCentered));
     throw new Error('scope del sniper atravesó el cover entre muzzle y objetivo');
-  }
-  if (!sniperCentered.aimOverBlocked || sniperCentered.heldImpact ||
-      sniperCentered.heldMag !== sniperCentered.magBefore) {
-    console.error('SNIPER AIM-OVER DEBUG', JSON.stringify(sniperCentered));
-    throw new Error('aim-over: un cover imposible de librar debe dejar el gatillo inerte');
   }
 
   // Bazooka ADS: la cámara define el punto deseado y el cohete sale desde el

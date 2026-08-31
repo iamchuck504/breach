@@ -1548,13 +1548,9 @@ export class Rig {
           p.coverAimExposure ?? 1)
         : null;
       const torsoPitch = adsPose.torsoPitch - (coverPose?.torsoLean ?? 0);
-      // aim-over bloqueado: el borde no se puede librar ni con la alzada
-      // máxima — el arma se inclina hacia abajo como aviso físico en el
-      // mundo (la retícula jamás se toca) y el gatillo queda inerte.
-      const blockDip = p.aimBlocked ? 0.5 : 0;
       // Compensar inclinación de root+torso: el cañón visual conserva el pitch
       // de cámara en vez de sumar accidentalmente la postura inclinada.
-      R(this.aimRig, pitch - rootRotX - torsoPitch - blockDip, p.aimYawErr ?? 0, lean * 0.1);
+      R(this.aimRig, pitch - rootRotX - torsoPitch, p.aimYawErr ?? 0, lean * 0.1);
       R(this.torso, torsoPitch, 0, -lean * 0.22);
       R(this.head, pitch * adsPose.head, 0, lean * 0.08);
       // Pistola extendida, armas largas apoyadas y bazooka alta al hombro.
