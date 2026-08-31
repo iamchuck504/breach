@@ -12,9 +12,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
 const CHROME = process.env.CHROME_PATH || undefined;
 
-const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
-  env: { ...process.env, PORT: '8792' }, stdio: 'ignore',
-});
+// Este sanity valida los builders fuente, no una copia posiblemente antigua
+// o bloqueada de dist/. Mantenerlo sobre Vite evita aprobar visuales/física
+// de una build distinta a la rama que se está revisando.
+const server = spawn(process.execPath, [
+  path.join(root, 'node_modules', 'vite', 'bin', 'vite.js'),
+  '--host', '127.0.0.1', '--port', '8792', '--strictPort',
+], { env: { ...process.env }, stdio: 'ignore' });
 await new Promise((r) => setTimeout(r, 900));
 
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
@@ -70,10 +74,11 @@ for (const map of MAPS) {
       : null;
     // caras de cobertura utilizables por la IA (h <= 2.6) y alturas válidas
     const covers = W.faces.filter((f) => f.h <= 2.6).length;
-    // 2.45 m corresponde a los laterales/trasera físicos del refugio de bus:
-    // cover alto con la altura real del asset, no un bloque táctico genérico.
+    // Los refugios/kioscos abiertos conservan paredes de 2.28/2.30 m y el
+    // refugio de bus una piel física de 2.45 m. Son caras estructurales de
+    // assets a escala humana, no nuevas alturas de bloque táctico.
     const badHeights = [...new Set(W.faces.map((f) => +f.h.toFixed(2)))]
-      .filter((h) => ![1.1, 1.9, 2.45, 3].includes(h));
+      .filter((h) => ![1.1, 1.9, 2.28, 2.30, 2.45, 3].includes(h));
     const activeStreetBuildings = W.mapGroup.children
       .filter((o) => o.userData?.streetBuilding);
     const continuationBuildings = W.mapGroup.children

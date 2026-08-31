@@ -11,8 +11,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
 const CHROME = process.env.CHROME_PATH || undefined;
 
-const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
-  env: { ...process.env, PORT: '8797' }, stdio: 'ignore',
+// El servidor online publica dist/, que puede pertenecer a una build anterior
+// o estar bloqueada por el sitio live. Para QA visual necesitamos renderizar
+// exactamente el código fuente de esta rama, por eso la captura usa Vite.
+const server = spawn(process.execPath, [
+  path.join(root, 'node_modules', 'vite', 'bin', 'vite.js'),
+  '--host', '127.0.0.1', '--port', '8797', '--strictPort',
+], {
+  env: { ...process.env }, stdio: 'ignore',
 });
 await new Promise((r) => setTimeout(r, 900));
 
@@ -47,6 +53,10 @@ const shots = LAYOUT === 'azoteas' ? [
   ['fachada-centro', [-10.5, 3.0, -2.5], [-18.5, 3.1, 0]],
   ['fachada-sur', [-10.5, 3.3, -30], [-18.5, 4.2, -35.8]],
   ['fachada-norte', [10.5, 3.0, -19], [18.5, 2.8, -23.8]],
+  ['bus-frontal', [-10.5, 2.15, -34.5], [0, 1.55, -34.5]],
+  ['bus-lateral', [0, 2.15, -27.2], [0, 1.55, -34.5]],
+  ['truck-frontal', [-6.5, 2.05, -7.2], [-6.5, 1.45, -1.5]],
+  ['truck-lateral', [0.8, 2.05, -1.5], [-6.5, 1.45, -1.5]],
 ] : [
   ['aerea', [0, 44, -40], [0, 0, 2]],
   ['spawn', [-4, 2.2, -19.5], [2, 1.6, -26]],
