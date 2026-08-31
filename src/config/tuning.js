@@ -77,9 +77,11 @@ export const TUNING = {
     height: 1.62, dist: 2.7,
     roadieHeight: 1.62, roadieDist: 2.7, // = cámara normal: correr NO mueve la cámara
     // ADS acerca y cierra el FOV, pero conserva una vista limpia por encima
-    // del hombro. El muzzle NO tiene que ocupar la línea óptica de cámara:
-    // sale de su posición física y converge al punto elegido por la retícula.
-    aimShoulder: 0.88, aimHeight: 1.58, aimDist: 1.8,
+    // del hombro. El muzzle permanece como origen visual; la retícula central
+    // sigue siendo la autoridad del impacto.
+    // Encuadre tipo shooter over-the-shoulder: el personaje ocupa el tercio
+    // izquierdo y el zoom favorece el espacio jugable, no su espalda.
+    aimShoulder: 1.08, aimHeight: 1.60, aimDist: 2.2,
     coverDist: 3.0,
     shakeRoadie: 0,       // sin shake al correr (0 = apagado)
     shakeFire: 0.35,      // kick al disparar

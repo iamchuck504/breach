@@ -351,6 +351,34 @@ try {
         }
         return true;
       });
+      const bounds = { left: Infinity, right: -Infinity, top: Infinity, bottom: -Infinity };
+      const corner = new window.THREE.Vector3();
+      G.rig.root.traverse((obj) => {
+        if (!obj.isMesh || !obj.geometry) return;
+        let node = obj;
+        while (node) {
+          if (!node.visible || node === G.rig.nameTag) return;
+          node = node.parent;
+        }
+        obj.geometry.computeBoundingBox();
+        const box = obj.geometry.boundingBox;
+        if (!box) return;
+        for (const x of [box.min.x, box.max.x]) {
+          for (const y of [box.min.y, box.max.y]) {
+            for (const z of [box.min.z, box.max.z]) {
+              corner.set(x, y, z).applyMatrix4(obj.matrixWorld).project(window.BREACH_CAM);
+              if (!Number.isFinite(corner.x) || !Number.isFinite(corner.y) ||
+                  corner.z < -1.1 || corner.z > 1.1) continue;
+              const sx = (corner.x * 0.5 + 0.5) * innerWidth;
+              const sy = (-corner.y * 0.5 + 0.5) * innerHeight;
+              bounds.left = Math.min(bounds.left, sx);
+              bounds.right = Math.max(bounds.right, sx);
+              bounds.top = Math.min(bounds.top, sy);
+              bounds.bottom = Math.max(bounds.bottom, sy);
+            }
+          }
+        }
+      });
       out.push({
         weapon,
         blockers: hits.slice(0, 4).map((hit) => ({
@@ -358,16 +386,20 @@ try {
           distance: hit.distance,
         })),
         fov: window.BREACH_CAM.fov,
+        bounds,
+        rightRatio: bounds.right / innerWidth,
       });
     }
     I._mouseAim = false;
     return out;
   });
-  const obscured = adsVisibility.filter((item) => item.blockers.length > 0 || item.fov >= 50);
+  const obscured = adsVisibility.filter((item) => item.blockers.length > 0 ||
+    item.fov >= 50 || !Number.isFinite(item.rightRatio) || item.rightRatio > 0.46);
   if (obscured.length) {
     console.error('ADS VISIBILITY DEBUG', JSON.stringify(adsVisibility));
     throw new Error(`ADS obstruido por el jugador: ${obscured.map((v) => v.weapon).join(', ')}`);
   }
+  const maxAdsRightRatio = Math.max(...adsVisibility.map((item) => item.rightRatio));
 
   const hipPhysical = await page.evaluate(async () => {
     const G = window.BREACH, I = window.BREACH_INPUT;
@@ -414,7 +446,7 @@ try {
     console.error('HIP RETICLE PHYSICAL DEBUG', JSON.stringify(hipPhysical));
     throw new Error(`retícula hip no sigue barrel: ${wrongHip.map((v) => v.weapon).join(', ')}`);
   }
-  console.log(`RETICLE OK · barrel ${result.errorPx.toFixed(2)} px · ADS/scope centrados y despejados · bazooka ${rocketAim.dotExpected.toFixed(5)} · 6 armas físicas`);
+  console.log(`RETICLE OK · barrel ${result.errorPx.toFixed(2)} px · ADS/scope centrados y despejados · silueta ${(maxAdsRightRatio * 100).toFixed(1)}% · bazooka ${rocketAim.dotExpected.toFixed(5)} · 6 armas físicas`);
 } finally {
   await browser?.close();
   server.kill();
