@@ -182,6 +182,24 @@ for (const weapon of ['smg', 'shotgun']) {
   }
 }
 
+// ADS cerca de geometría fuera de cover: si el arma larga cruza una pared no
+// se debe aprobar el tiro. Una pared que empieza delante del muzzle sí debe
+// recibir el impacto normal, no convertirse en un bloqueo de gatillo.
+const root = new THREE.Vector3(0, 1, 0);
+const muzzle = new THREE.Vector3(0, 1, -1);
+const forward = new THREE.Vector3(0, 0, -1);
+const crossedWall = {
+  raycastHit: () => ({ t: 0.2, collider: {} }), raycast: () => null,
+};
+check(!muzzleHasClearance(crossedWall, null, root, muzzle, forward),
+  'ADS libre permitió que root→muzzle atravesara una pared');
+const wallAhead = {
+  raycastHit: (origin) => origin.z < -0.99 ? { t: 0.12, collider: {} } : null,
+  raycast: () => null,
+};
+check(muzzleHasClearance(wallAhead, null, root, muzzle, forward),
+  'ADS libre bloqueó un impacto válido delante del muzzle');
+
 check(TUNING.weapons.smg.spreadBlind > TUNING.weapons.smg.spreadAim &&
   TUNING.weapons.shotgun.spreadBlind > TUNING.weapons.shotgun.spreadAim,
   'blindfire perdió su desventaja de precisión');

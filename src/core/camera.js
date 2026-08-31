@@ -170,7 +170,11 @@ export class ShoulderCamera {
 
   // Ray desde el centro de pantalla (para apuntar)
   aimRay() {
-    const origin = this.camera.position.clone();
+    // `camera.position` incluye el shake posicional de presentación. Usarlo
+    // como origen lógico hacía que muzzle, guía y pose intentaran perseguir
+    // ese ruido visual después de cada disparo. `pos` conserva la misma cámara
+    // colisionada, pero antes del shake: intención y retícula quedan estables.
+    const origin = this.pos.clone();
     // No leer el quaternion renderizado del frame anterior: input, simulación
     // y disparo ocurren antes de update(). La dirección se deriva del mismo
     // yaw/pitch actual que usa flatForward(), así ADS y blindfire coinciden.

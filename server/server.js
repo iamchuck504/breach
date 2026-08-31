@@ -70,6 +70,9 @@ const SMOKE_TIME = Number(process.env.SMOKE_TIME ?? WD.grenade.smokeTime);
 const VALID_STATES = new Set(['idle', 'run', 'roadie', 'dive', 'slide', 'cover_low',
   'cover_high', 'blind_over', 'blind_low_left', 'blind_low_right',
   'blind_high_left', 'blind_high_right', 'jump', 'flip', 'mantle', 'melee', 'dead']);
+const VALID_COVER_KINDS = new Set(['low', 'medium', 'high', 'railing', 'platform-edge',
+  'vehicle', 'shelter', 'truck', 'bus']);
+const VISUAL_AIM_MAX = 52 * Math.PI / 180;
 const CROUCH_STATES = new Set(['cover_low', 'blind_over', 'blind_low_left', 'blind_low_right']);
 const POSE_HISTORY_TIME = 0.75;
 const CLAIM_POSITION_TOLERANCE = 0.82;
@@ -228,7 +231,7 @@ function canJoinTeam(entity, team) {
 }
 function freshCombatState(p, spawn) {
   Object.assign(p, { x: spawn.x, z: spawn.z, y: 0, yaw: spawn.yaw, st: 'idle', aim: 0,
-    p: 0, w: 'smg', sp: 0, hp: HP, alive: true,
+    p: 0, ae: 0, cl: 0, ce: 1, ck: null, w: 'smg', sp: 0, hp: HP, alive: true,
     specialWep: null,
     ammoBudget: createAmmoBudget(),
     nades: p.bot ? 1 : WD.grenade.mag,
@@ -296,7 +299,9 @@ function relayRocket(sourceWs, shooter, msg) {
   shooter.w = 'bazooka';
   shooter.lastRocketAt = now; shooter.lastFireAt = now;
   shooter.pendingShot = null; shooter.prot = 0;
-  const packet = { t: 'rocket', rid, id: shooter.id, o, d: dir };
+  const fp = validatedFirePose(shooter, msg.fp);
+  const packet = { t: 'rocket', rid, id: shooter.id, o, d: dir,
+    ...(fp ? { fp } : {}) };
   broadcastRawExcept(sourceWs, packet);
   send(sourceWs, { t: 'rocketAck', rid, id: shooter.id, cid, o, d: dir });
   return true;
@@ -375,6 +380,22 @@ function dropWeapon(target) {
     team: target.team, mag, res, t: DROP_LIFE };
   drops.set(id, d); broadcastRaw({ t: 'dropA', id, wep: d.wep, x: d.x, z: d.z, y: d.y, team: d.team, life: DROP_LIFE });
 }
+
+function validatedFirePose(shooter, raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const st = VALID_STATES.has(String(raw.st)) && raw.st !== 'dead'
+    ? String(raw.st) : (shooter.st || 'idle');
+  const ck = VALID_COVER_KINDS.has(String(raw.ck)) ? String(raw.ck) : null;
+  return {
+    st, a: raw.a ? 1 : 0,
+    p: clamp(raw.p, -1.6, 1.6),
+    ae: clamp(raw.ae, -VISUAL_AIM_MAX, VISUAL_AIM_MAX),
+    cl: clamp(raw.cl, -1, 1),
+    ce: Number.isFinite(raw.ce) ? clamp(raw.ce, 0, 1) : 1,
+    ...(ck ? { ck } : {}),
+  };
+}
+
 function registerFire(shooter, msg, isBotFire = false) {
   if (!shooter?.alive || phase !== 'playing') return false;
   const o = vec3(msg.o), pt = vec3(msg.p); if (!o || !pt) return false;
@@ -414,8 +435,9 @@ function registerFire(shooter, msg, isBotFire = false) {
     length: shotLen, remainingDamage: rule.maxDamage, hitIds: new Set(),
   };
   shooter.prot = 0;
+  const fp = validatedFirePose(shooter, msg.fp);
   broadcastRaw({ t: 'fire', id: shooter.id, o, p: endpoint, w: weapon,
-    ...(decals?.length ? { d: decals } : {}) }); return true;
+    ...(decals?.length ? { d: decals } : {}), ...(fp ? { fp } : {}) }); return true;
 }
 
 const HEAD_RADIUS = 0.22;
@@ -804,7 +826,10 @@ wss.on('connection', (ws) => {
       startMatch(); return;
     }
     if (msg.t === 's') {
-      if (phase !== 'playing' || !me.alive) { me.st = 'idle'; me.aim = 0; me.sp = 0; return; }
+      if (phase !== 'playing' || !me.alive) {
+        me.st = 'idle'; me.aim = 0; me.ae = 0; me.cl = 0; me.ce = 1; me.ck = null;
+        me.sp = 0; return;
+      }
       if (![msg.x, msg.y, msg.z, msg.yaw].every((v) => typeof v === 'number' && Number.isFinite(v))) return;
       const next = { x: clamp(msg.x, -60, 60), z: clamp(msg.z, -60, 60), y: clamp(msg.y, 0, 20) };
       const stateNow = nowSec();
@@ -815,6 +840,10 @@ wss.on('connection', (ws) => {
       me.x = next.x; me.z = next.z; me.y = next.y; me.yaw = clamp(msg.yaw, -10, 10);
       me.st = VALID_STATES.has(String(msg.st)) && msg.st !== 'dead' ? msg.st : 'idle';
       me.aim = msg.aim ? 1 : 0; me.p = clamp(msg.p, -1.6, 1.6);
+      me.ae = clamp(msg.ae, -VISUAL_AIM_MAX, VISUAL_AIM_MAX);
+      me.cl = clamp(msg.cl, -1, 1);
+      me.ce = Number.isFinite(msg.ce) ? clamp(msg.ce, 0, 1) : 1;
+      me.ck = VALID_COVER_KINDS.has(String(msg.ck)) ? String(msg.ck) : null;
       const requestedWep = clampWep(msg.w);
       me.w = SPECIAL_WEAPONS.has(requestedWep) && me.specialWep !== requestedWep ? 'smg' : requestedWep;
       const def = WD[me.w] || WD.smg;
@@ -832,6 +861,9 @@ wss.on('connection', (ws) => {
         b.x = next.x; b.z = next.z; b.y = next.y; b.yaw = clamp(s.yaw, -10, 10);
         b.st = VALID_STATES.has(String(s.st)) && s.st !== 'dead' ? s.st : 'idle';
         b.aim = s.aim ? 1 : 0; b.p = clamp(s.p, -1.6, 1.6);
+        b.ae = clamp(s.ae, -VISUAL_AIM_MAX, VISUAL_AIM_MAX); b.cl = clamp(s.cl, -1, 1);
+        b.ce = Number.isFinite(s.ce) ? clamp(s.ce, 0, 1) : 1;
+        b.ck = VALID_COVER_KINDS.has(String(s.ck)) ? String(s.ck) : null;
         const requestedWep = clampWep(s.w);
         b.w = SPECIAL_WEAPONS.has(requestedWep) && b.specialWep !== requestedWep ? 'smg' : requestedWep;
         b.sp = clamp(s.sp, 0, 1); recordPose(b, stateNow);
@@ -925,7 +957,9 @@ setInterval(() => {
       ? Math.max(0, startAt - now) : 0,
     lives: livesState(), wins: { ...wins },
     ps: allSlots().map((p) => ({ id: p.id, x: p.x ?? 0, z: p.z ?? 0, y: p.y || 0,
-      yaw: p.yaw || 0, st: p.st || 'idle', aim: p.aim || 0, p: p.p || 0, w: p.w || 'smg',
+      yaw: p.yaw || 0, st: p.st || 'idle', aim: p.aim || 0, p: p.p || 0,
+      ae: p.ae || 0, cl: p.cl || 0, ce: Number.isFinite(p.ce) ? p.ce : 1,
+      ...(p.ck ? { ck: p.ck } : {}), w: p.w || 'smg',
       sp: p.sp || 0, hp: Math.round(p.hp), alive: p.alive,
       resp: !p.alive && p.respawnAt > now ? +(p.respawnAt - now).toFixed(2) : 0,
       rq: !p.alive && p.respawnAt > 0 ? 1 : 0,

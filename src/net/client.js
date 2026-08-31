@@ -3,6 +3,20 @@
 import { TUNING } from '../config/tuning.js';
 import { t } from '../core/i18n.js';
 
+function packedFirePose(player) {
+  if (!player) return null;
+  const anim = typeof player.animParams === 'function' ? player.animParams() : null;
+  const state = typeof player.animState === 'function' ? player.animState() : 'idle';
+  const pitch = player.cam?.pitch ?? player.aimPitch ?? 0;
+  return {
+    st: state, a: player.aim ? 1 : 0,
+    p: +pitch.toFixed(3), ae: +(anim?.aimYawErr || 0).toFixed(3),
+    cl: +(player.coverLeanAnim || 0).toFixed(2),
+    ce: +(player.coverAimExposure || 0).toFixed(2),
+    ...(player.cover?.kind ? { ck: player.cover.kind } : {}),
+  };
+}
+
 export class NetClient {
   constructor() {
     this.ws = null;
@@ -72,6 +86,9 @@ export class NetClient {
     const interval = 1 / TUNING.net.sendHz;
     if (this._sendAcc < interval) return;
     this._sendAcc %= interval;
+    const visualAimMax = TUNING.combat.visualAimMaxDeg * Math.PI / 180;
+    const aimErr = Math.max(-visualAimMax,
+      Math.min(visualAimMax, player.cameraYawError()));
     this.send({
       t: 's',
       x: +player.pos.x.toFixed(3), z: +player.pos.z.toFixed(3),
@@ -80,15 +97,28 @@ export class NetClient {
       st: player.animState(),
       aim: player.aim ? 1 : 0,
       p: +player.cam.pitch.toFixed(3),
+      ae: +aimErr.toFixed(3),
+      cl: +(player.coverLeanAnim || 0).toFixed(2),
+      ce: +(player.coverAimExposure || 0).toFixed(2),
+      ck: player.cover?.kind || null,
       w: wep.cur,
       am: wep.st.mag, ar: wep.st.reserve, // para el drop del arma al morir
       sp: +Math.min(1, player.speed / TUNING.move.roadieSpeed).toFixed(2),
     });
   }
 
-  fire(origin, point, wep, impacts = []) {
+  fire(origin, point, wep, impacts = [], player = null) {
     const pack = (v) => [+v.x.toFixed(2), +v.y.toFixed(2), +v.z.toFixed(2)];
-    this.send({ t: 'fire', o: pack(origin), p: pack(point), w: wep, d: impacts.slice(0, 8).map(pack) });
+    const fp = packedFirePose(player);
+    this.send({ t: 'fire', o: pack(origin), p: pack(point), w: wep,
+      d: impacts.slice(0, 8).map(pack), ...(fp ? { fp } : {}) });
+  }
+
+  rocket(origin, direction, cid = null, player = null, bot = null) {
+    const pack = (v) => [+v.x.toFixed(4), +v.y.toFixed(4), +v.z.toFixed(4)];
+    const fp = packedFirePose(player);
+    this.send({ t: 'rocket', o: pack(origin), d: pack(direction),
+      ...(bot ? { bot } : {}), ...(cid ? { cid } : {}), ...(fp ? { fp } : {}) });
   }
 
   hit(targetId, dmg, part, gib, point = null, meta = null) {
@@ -111,7 +141,8 @@ export class NetClient {
     this.send({ t: 'botState', bots: bots.map((b) => ({
       id: b.id, x: +b.pos.x.toFixed(3), z: +b.pos.z.toFixed(3), y: +b.y.toFixed(2),
       yaw: +b.yaw.toFixed(3), st: b.animState(), aim: b.aim ? 1 : 0,
-      p: 0, w: b.wep, sp: +Math.min(1, Math.hypot(b.velX || 0, b.velZ || 0) / TUNING.move.roadieSpeed).toFixed(2),
+      p: +(b.aimPitch || 0).toFixed(3), ae: 0, cl: 0, ce: 1,
+      w: b.wep, sp: +Math.min(1, Math.hypot(b.velX || 0, b.velZ || 0) / TUNING.move.roadieSpeed).toFixed(2),
     })) });
   }
 
@@ -124,9 +155,11 @@ export class NetClient {
     this.botState(bots);
   }
 
-  botFire(id, origin, point, wep, impacts = []) {
+  botFire(id, origin, point, wep, impacts = [], bot = null) {
     const pack = (v) => [+v.x.toFixed(2), +v.y.toFixed(2), +v.z.toFixed(2)];
-    this.send({ t: 'botFire', id, o: pack(origin), p: pack(point), w: wep, d: impacts.slice(0, 8).map(pack) });
+    const fp = packedFirePose(bot);
+    this.send({ t: 'botFire', id, o: pack(origin), p: pack(point), w: wep,
+      d: impacts.slice(0, 8).map(pack), ...(fp ? { fp } : {}) });
   }
 
   botHit(id, targetId, dmg, part, gib, point = null, meta = null) {

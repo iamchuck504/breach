@@ -374,9 +374,8 @@ export class HUD {
     this.el.hitmarker.classList.add('pop');
   }
 
-  // La retícula nunca abandona el centro. barrelXY solo comunica que
-  // existe una obstrucción entre muzzle y objetivo; mover la cruz a ese contacto
-  // provocaba saltos grandes al rozar vehículos, barandales o cover cercano.
+  // ADS usa el centro óptico. Hip/blindfire recibe la proyección física del
+  // barrel porque su cañón puede estar fuera de esa línea central.
   reticle(aiming, barrelXY, aimInfo = null) {
     this.el.crosshair.classList.toggle('aim', aiming);
     this.el.crosshair.classList.toggle('blocked', !!(aiming && barrelXY?.blocked));
@@ -389,8 +388,8 @@ export class HUD {
     }
     if (!aiming && barrelXY) {
       this.el.barrel.classList.add('on');
-      this.el.barrel.style.left = '50%';
-      this.el.barrel.style.top = '50%';
+      this.el.barrel.style.left = barrelXY.x + 'px';
+      this.el.barrel.style.top = barrelXY.y + 'px';
     } else {
       this.el.barrel.classList.remove('on');
     }

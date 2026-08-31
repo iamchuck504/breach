@@ -59,9 +59,13 @@ export function muzzleHasClearance(world, face, weaponRoot, muzzle, fireDir) {
   // Una salida corta basta para detectar que el muzzle sigue detrás/dentro de
   // la cobertura. Obstáculos más lejanos son impactos válidos, no bloqueos del
   // gatillo: allí sí se consume munición y se muestra el decal correspondiente.
+  // Fuera de cover solo importa que el arma no haya cruzado una pared entre
+  // su raíz y el muzzle. Una pared delante del muzzle es un impacto válido:
+  // el tiro debe salir, consumir munición y dejar su marca allí.
+  if (!face?.collider) return true;
   const outHit = detailedHit(world, muzzle, fireDir, 0.32);
   if (!outHit) return true;
-  return !!face?.collider && outHit.collider !== face.collider;
+  return outHit.collider !== face.collider;
 }
 
 export function segmentsHaveClearance(world, segments) {

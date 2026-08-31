@@ -126,11 +126,16 @@ try {
   await wait(80);
 
   const rocketP = b.next('rocket', (m) => m.id === aw.id);
-  a.send({ t: 'rocket', o: [2.8, 1.25, 0], d: [0, 0, -1] });
+  a.send({ t: 'rocket', o: [2.8, 1.25, 0], d: [0, 0, -1],
+    fp: { st: 'idle', a: 1, p: 0.28, ae: 0.1, cl: 0, ce: 1 } });
   const rocket = await rocketP;
   check('el otro cliente recibe el vuelo de la bazooka',
     rocket.id === aw.id && Math.abs(Math.hypot(...rocket.d) - 1) < 0.001,
     JSON.stringify(rocket));
+  check('el vuelo conserva la pose visual de disparo de la bazooka',
+    rocket.fp?.a === 1 && Math.abs(rocket.fp.p - 0.28) < 0.001 &&
+      Math.abs(rocket.fp.ae - 0.1) < 0.001,
+    JSON.stringify(rocket.fp));
   await wait(120);
   check('el tirador no recibe un cohete duplicado', a.count('rocket', (m) => m.id === aw.id) === 0);
 

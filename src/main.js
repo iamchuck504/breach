@@ -14,6 +14,7 @@ import { RemotePlayer } from './player/remote.js';
 import { Dummies } from './player/practice.js';
 import { Weapons } from './combat/weapons.js';
 import { resolveShot, resolveGuidedShot, applySpread, applyPelletPattern } from './combat/ballistics.js';
+import { muzzleHasClearance } from './combat/cover-fire.js';
 import { damageFalloff, rocketSplashDamage } from './combat/damage.js';
 import {
   deathImpactPoint, isSniperHeadshotDeath, rocketDeathLevel,
@@ -1875,7 +1876,8 @@ function setupOnlineBots(roster) {
     effects, audio, hud, humans: onlineHumanTargets,
     playing: () => G.onlinePhase === 'playing',
     stepSound,
-    botFire: (bot, origin, point, wep, impacts) => G.net?.botFire(bot.id, origin, point, wep, impacts),
+    botFire: (bot, origin, point, wep, impacts) =>
+      G.net?.botFire(bot.id, origin, point, wep, impacts, bot),
     botHit: (bot, targetId, dmg, part, gib, point, meta) =>
       G.net?.botHit(bot.id, targetId, dmg, part, gib, point, meta),
     botNade: (bot, origin, velocity, cid) => G.net?.send({
@@ -1883,11 +1885,8 @@ function setupOnlineBots(roster) {
       o: [origin.x, origin.y, origin.z], v: [velocity.x, velocity.y, velocity.z],
       ...(cid ? { cid } : {}),
     }),
-    botRocket: (bot, origin, dir, cid) => G.net?.send({
-      t: 'rocket', bot: bot.id,
-      o: [origin.x, origin.y, origin.z], d: [dir.x, dir.y, dir.z],
-      ...(cid ? { cid } : {}),
-    }),
+    botRocket: (bot, origin, dir, cid) =>
+      G.net?.rocket(origin, dir, cid, bot, bot.id),
     claimBotSpecial: (bot) => G.net?.send({ t: 'takeSpecial', bot: bot.id }),
   }, {
     external: true, playerTeam: G.team, rounds: G.onlineSettings.rounds, lives: G.onlineSettings.lives,
@@ -2076,6 +2075,8 @@ function bindNet(net) {
     const okVec = (v) => Array.isArray(v) && v.length === 3 && v.every((n) => typeof n === 'number' && isFinite(n));
     if (!okVec(m.o) || !okVec(m.p)) return;
     const o = new THREE.Vector3(...m.o), p = new THREE.Vector3(...m.p);
+    const r = G.remotes.get(m.id);
+    r?.applyFirePose(m.fp, m.w === 'melee' ? null : m.w);
     // un melee ajeno no es un disparo: la animación viaja por el estado y el
     // resultado por 'death'; sin trazadora, flash ni sonido de bala
     if (m.w === 'melee') return;
@@ -2100,8 +2101,6 @@ function bindNet(net) {
     effects.muzzleFlash(o, m.w === 'shotgun' || !!TUNING.weapons[m.w]?.special);
     const remoteShot = { position: o };
     audio.gun(m.w, remoteShot);
-    const r = G.remotes.get(m.id);
-    if (r) r.firing = 0.45;
   });
   net.on('correction', (m) => {
     if (!alive() || !G.player || ![m.x, m.y, m.z].every(Number.isFinite)) return;
@@ -2181,6 +2180,7 @@ function bindNet(net) {
     const okVec = (v) => Array.isArray(v) && v.length === 3 && v.every((n) => typeof n === 'number' && isFinite(n));
     if (!okVec(m.o) || !okVec(m.d) || typeof m.rid !== 'string') return;
     const source = G.remotes.get(m.id) || G.onlineBots?.botById?.(m.id);
+    source?.applyFirePose?.(m.fp, 'bazooka');
     rockets.fire(
       { x: m.o[0], y: m.o[1], z: m.o[2] },
       new THREE.Vector3(m.d[0], m.d[1], m.d[2]).normalize(),
@@ -2596,14 +2596,42 @@ function staticHitDistance(origin, dir, maxDist) {
     world.raycast(origin, dir, maxDist) ?? maxDist;
 }
 
+function barrelDirection(out = new THREE.Vector3()) {
+  G.rig.root.updateWorldMatrix(true, true);
+  return G.rig.gunForward(out).normalize();
+}
+
 function currentFireDirection(muzzle, maxRange = 80) {
+  if (!G.player.aim) return barrelDirection(new THREE.Vector3());
   const ray = shoulderCam.aimRay();
   const guide = resolveShot(world, currentTargets(), ray.origin, ray.dir, maxRange, null);
   return _v3.copy(guide.point).sub(muzzle).normalize();
 }
 
-// La retícula nunca abandona el centro. Este estado solo comunica que existe
-// una obstrucción física entre muzzle y el punto central elegido por cámara.
+// Hip fire y blindfire no comparten la intención óptica de ADS: proyectamos el
+// primer contacto del rayo que sale físicamente del cañón. No hay offsets fijos
+// y la marca se adapta a arma, pose, cover, ángulo y distancia.
+function barrelReticleXY() {
+  const p = G.player, def = G.weapons?.def;
+  if (!p || p.aim || !def) return null;
+  G.rig.root.updateWorldMatrix(true, true);
+  const muzzle = G.rig.muzzleWorld(_v1);
+  const dir = barrelDirection(_v2);
+  const range = def.range > 0 ? def.range : 60;
+  const hit = resolveShot(world, currentTargets(), muzzle, dir, range, null);
+  camera.updateMatrixWorld(true);
+  const viewPoint = _v3.copy(hit.point).applyMatrix4(camera.matrixWorldInverse);
+  if (!Number.isFinite(viewPoint.z) || viewPoint.z >= -0.001) return null;
+  const ndc = _v2.copy(hit.point).project(camera);
+  if (!Number.isFinite(ndc.x) || !Number.isFinite(ndc.y)) return null;
+  return {
+    x: (ndc.x * 0.5 + 0.5) * innerWidth,
+    y: (-ndc.y * 0.5 + 0.5) * innerHeight,
+  };
+}
+
+// En ADS la cruz sí permanece en el centro; este estado comunica únicamente
+// que una obstrucción física inmediata gana frente al objetivo óptico.
 function guidedReticleState(maxRange) {
   G.rig.root.updateWorldMatrix(true, true);
   const muzzle = G.rig.muzzleWorld(_v1).clone();
@@ -2613,6 +2641,18 @@ function guidedReticleState(maxRange) {
   if (!hit.blocked) return null;
 
   return { blocked: true };
+}
+
+function precisionAimPoseReady(wantsAim, wantsFire) {
+  if (!wantsAim || !wantsFire) return true;
+  const ray = shoulderCam.aimRay();
+  if (!G.rig?.precisionAimAlignment?.(ray.origin, ray.dir).ready) return false;
+  const p = G.player;
+  G.rig.root.updateWorldMatrix(true, true);
+  const weaponRoot = G.rig.activeGun.getWorldPosition(_v1);
+  const muzzle = G.rig.muzzleWorld(_v2);
+  const coverFace = p?.state === 'cover' ? p.cover : null;
+  return muzzleHasClearance(world, coverFace, weaponRoot, muzzle, ray.dir);
 }
 
 function coverPoseReady(wantsAim, wantsFire) {
@@ -2837,7 +2877,9 @@ function throwSmoke() {
   const d = TUNING.weapons.grenade;
   G.rig.setTransform(p.pos.x, p.pos.z, p.yaw, p.y);
   const muzzle = G.rig.muzzleWorld(_v1);
-  const dir = currentFireDirection(muzzle, 60).clone();
+  const dir = p.aim
+    ? currentFireDirection(muzzle, 60).clone()
+    : barrelDirection(new THREE.Vector3());
   const o = { x: muzzle.x, y: muzzle.y, z: muzzle.z };
   const v = {
     x: dir.x * d.throwSpeed,
@@ -2931,7 +2973,7 @@ function resolveMelee() {
       victimTeam = r?.team || b.team;
       (r?.rig || b?.rig)?.hitReact?.(best.dot < 0.75 ? Math.sign(best.dx) : 0, 1, 'melee');
       // el golpe viaja como disparo validable de corto alcance + su claim
-      G.net.fire(_v1, point, 'melee', []);
+      G.net.fire(_v1, point, 'melee', [], G.player);
       G.net.hit(tg.id, dmg, 'body', false, point);
     }
   }
@@ -2973,31 +3015,23 @@ function fireShot() {
   // el muzzle evita lanzar el tracer desde la pose espacial anterior.
   G.rig.setTransform(G.player.pos.x, G.player.pos.z, G.player.yaw, G.player.y);
   const muzzle = G.rig.muzzleWorld(_v1).clone();
-  const ray = shoulderCam.aimRay();
-  const baseDir = ray.dir.clone();
-  // Regla global: el centro de cámara elige el objetivo en hip, blindfire,
-  // ADS y scope. La bala sigue naciendo en el muzzle, de modo que una pared
-  // entre arma y objetivo continúa bloqueándola físicamente.
-  const cameraOrigin = ray.origin.clone();
   const origin = muzzle.clone();
+  // Una única fuente física gobierna el disparo: el eje actual del cañón.
+  // En ADS la cámara ya orientó y centró ESA pose, y el gate de precisión no
+  // permite consumir el click antes de que la alineación termine. Por tanto
+  // no hace falta reconciliar ni doblar el rayo después de salir del muzzle.
+  const baseDir = barrelDirection(new THREE.Vector3());
 
   // bazooka: proyectil REAL, sin hitscan — el cohete hace el daño al explotar
   if (def.projectile) {
-    // La cámara elige el punto que percibe el jugador, pero el proyectil nace
-    // físicamente en el muzzle. Dirigirlo hacia ese punto elimina el paralaje
-    // de ADS sin convertir la bazooka en hitscan: paredes intermedias todavía
-    // detonan el cohete durante su vuelo normal.
-    const projectileDir = currentFireDirection(muzzle, def.range);
+    // El tubo ya fue alineado físicamente por la pose ADS; el cohete conserva
+    // exactamente ese eje y sigue chocando durante su vuelo normal.
+    const projectileDir = baseDir;
     const cid = G.mode === 'online' ? `p:${++G.rocketSeq}` : null;
     rockets.fire({ x: muzzle.x, y: muzzle.y, z: muzzle.z }, projectileDir,
       true, null, cid, G.mode === 'online');
     // replicar el proyectil: los demás clientes lo ven volar y explotar
-    G.net?.send({
-      t: 'rocket',
-      o: [muzzle.x, muzzle.y, muzzle.z],
-      d: [projectileDir.x, projectileDir.y, projectileDir.z],
-      ...(cid ? { cid } : {}),
-    });
+    G.net?.rocket(muzzle, projectileDir, cid, G.player);
     if (G.spawnProt > 0) { G.spawnProt = 0; hud.hint(t('msg.protectionBroken'), 900); }
     effects.muzzleFlash(muzzle, true);
     audio.gun(w.cur);
@@ -3019,8 +3053,7 @@ function fireShot() {
       // El scope promete exactamente su punto. Fuera del scope (incluido
       // hip/blindfire del sniper) se conserva la dispersión configurada.
       : scoped ? baseDir.clone() : applySpread(baseDir, spread);
-    const hit = resolveGuidedShot(world, targets, cameraOrigin, origin,
-      dir, def.range, null);
+    const hit = resolveShot(world, targets, origin, dir, def.range, null);
     anyPoint = hit.point;
     effects.tracer(muzzle, hit.point, scoped && w.cur === 'sniper');
     if (hit.kind === 'world') {
@@ -3116,7 +3149,7 @@ function fireShot() {
   if (G.net && anyPoint) {
     // WebSocket conserva orden: registrar primero el disparo validable y luego
     // sus claims de daño. Antes los hits llegaban al server sin disparo asociado.
-    G.net.fire(muzzle, anyPoint, w.cur, worldImpacts);
+    G.net.fire(muzzle, anyPoint, w.cur, worldImpacts, G.player);
     for (const c of onlineClaims) {
       G.net.hit(c.id, c.dmg, c.part, c.gib, c.point, { pellets: c.pellets });
     }
@@ -3157,10 +3190,9 @@ function updateReticle() {
     return;
   }
 
-  // Hip fire y blindfire usan el mismo centro fijo que ADS. El estado de
-  // obstrucción puede cambiar, pero la posición de la retícula jamás lo hace.
+  // Sin ADS, la marca representa la trayectoria física actual del barrel.
   hud.sniperScope(false);
-  hud.reticle(false, { centered: true, ...guidedReticleState(G.weapons.def.range) });
+  hud.reticle(false, barrelReticleXY());
 }
 
 // ---------- loop principal ----------
@@ -3231,7 +3263,8 @@ function simStep(dt) {
   // debe poder representarla visualmente antes de emitir el proyectil.
   const aligned = p.fireAligned();
   const wantsFire = input.fireHeld || input.firePressed || G.fireBuffer > 0;
-  let canFire = stateOk && aligned && coverPoseReady(input.aimHeld, wantsFire);
+  let canFire = stateOk && aligned && coverPoseReady(input.aimHeld, wantsFire) &&
+    precisionAimPoseReady(input.aimHeld, wantsFire);
   // cualquier click que no pueda salir YA (roadie, cuerpo girando, cooldown,
   // dive/slide o recarga) queda bufereado — y el buffer dura AL MENOS
   // lo que falta de cooldown/recarga, para que el tiro encolado nunca se pierda
@@ -3325,7 +3358,8 @@ function simStep(dt) {
   // este mismo paso. Revalidar evita añadir un frame artificial de latencia.
   const stateOkAfter = !p.dead && p.state !== 'dive' && p.state !== 'slide' &&
     p.state !== 'roadie' && p.state !== 'mantle' && p.state !== 'melee' && input.anyDevice;
-  canFire = stateOkAfter && p.fireAligned() && coverPoseReady(p.aim, wantsFire);
+  canFire = stateOkAfter && p.fireAligned() && coverPoseReady(p.aim, wantsFire) &&
+    precisionAimPoseReady(p.aim, wantsFire);
   const fired = p.dead ? false
     : G.weapons.update(dt, input.fireHeld, input.firePressed || G.fireBuffer > 0, canFire);
   // Tras la primera inserción desde 0, conservar margen para que cover/arma
@@ -3651,8 +3685,14 @@ function frame(now) {
     G.rig.root.visible = true;
     G.rig.setProtected(G.spawnProt > 0);
     G.rig.setTransform(G.player.pos.x, G.player.pos.z, G.player.yaw, G.player.y);
+    const localAnim = G.player.animParams();
+    if (localAnim.aim) {
+      const aimLine = shoulderCam.aimRay();
+      localAnim.aimLineOrigin = aimLine.origin;
+      localAnim.aimLineDir = aimLine.dir;
+    }
     G.rig.update(dt, {
-      ...G.player.animParams(),
+      ...localAnim,
       swapping: G.weapons.swapping,
       throwT: G.throwT,
       throwTotal: TUNING.weapons.grenade.throwTime,

@@ -214,16 +214,22 @@ try {
     !duringSwap.scope && !duringSwap.dom && duringSwap.fov > 20.2,
     JSON.stringify(duringSwap));
 
-  await page.waitForTimeout(650);
-  await page.evaluate(() => window.BREACH.weapons.startSwap('sniper'));
-  await page.waitForTimeout(850);
+  await page.waitForFunction(() => !window.BREACH.weapons.swapping,
+    null, { timeout: 1800 }).catch(() => {});
+  const returnSwapStarted = await page.evaluate(() =>
+    window.BREACH.weapons.startSwap('sniper'));
+  await page.waitForFunction(() => {
+    const G = window.BREACH;
+    return G.weapons.cur === 'sniper' && G.scopeActive && window.BREACH_CAM.fov < 22;
+  }, null, { timeout: 1500 }).catch(() => {});
   const scopeRecovered = await page.evaluate(() => ({
     cur: window.BREACH.weapons.cur,
     scope: window.BREACH.scopeActive,
     fov: window.BREACH_CAM.fov,
   }));
   check('volver al sniper con Aim mantenido recupera el scope limpio',
-    scopeRecovered.cur === 'sniper' && scopeRecovered.scope && scopeRecovered.fov < 22,
+    returnSwapStarted && scopeRecovered.cur === 'sniper' &&
+      scopeRecovered.scope && scopeRecovered.fov < 22,
     JSON.stringify(scopeRecovered));
 
   // Melee tiene prioridad visual: la cámara no puede conservar el scope aunque

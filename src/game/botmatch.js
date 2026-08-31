@@ -126,7 +126,7 @@ export class Bot {
     this.protT = TUNING.combat.spawnProtection; // invulnerable al nacer
     this.rig.setWeapon('smg');
     this.rig.setVisible(true);
-    this.netAnim = 'idle'; this.aim = false;
+    this.netAnim = 'idle'; this.aim = false; this.aimPitch = 0;
   }
 
   animState() { return this.alive ? (this.netAnim || 'idle') : 'dead'; }
@@ -634,6 +634,20 @@ export class Bot {
       animOverride = 'melee';
     }
 
+    // Preparar el pitch ANTES de cualquier _fireAt de este frame. Antes se
+    // actualizaba después del disparo, por lo que el primer tracer a un blanco
+    // nuevo podía subir/bajar mientras el cañón aún se veía horizontal.
+    const intendsAim = this.meleeT <= 0 && !!enemy && (
+      this.state === 'engage' || this.state === 'hold' ||
+      (this.state === 'rush' && dist < 12) ||
+      (this.state === 'cover' && this.coverPhase === 'peek')
+    );
+    const desiredAimPitch = intendsAim
+      ? Math.atan2((enemy.y ?? 0) + 1.18 - (this.y + 1.35),
+        Math.max(0.01, Math.hypot(enemy.x - this.pos.x, enemy.z - this.pos.z)))
+      : 0;
+    this.aimPitch += (desiredAimPitch - this.aimPitch) * (1 - Math.exp(-12 * dt));
+
     if (this.meleeT > 0) {
       // el golpe manda: saltar el resto de estados este frame
     } else if (this.state === 'engage' && enemy) {
@@ -959,7 +973,7 @@ export class Bot {
       state: anim,
       speed: Math.min(1, this.speed / TUNING.move.roadieSpeed),
       aim: this.aim,
-      aimPitch: 0,
+      aimPitch: this.aimPitch,
       firing: this.burstT > 0 || this.muzzleT > 0,
       swapping: this.swapAnim > 0,
       meleePhase: anim === 'melee'

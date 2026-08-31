@@ -2,6 +2,8 @@
 // primer disparo; la guía central de gameplay se valida en check-reticle.
 import * as THREE from 'three';
 import { Rig } from '../src/player/rig.js';
+import { RemotePlayer } from '../src/player/remote.js';
+import { TUNING } from '../src/config/tuning.js';
 
 const failures = [];
 const check = (ok, msg) => { if (!ok) failures.push(msg); };
@@ -9,10 +11,34 @@ const weapons = ['pistol', 'smg', 'shotgun', 'sniper', 'bazooka'];
 const scene = new THREE.Scene();
 const poses = new Map();
 
-function params(aim, pitch = 0, firing = false) {
+// Replica el eje lógico que ShoulderCamera alcanza después de asentarse en
+// ADS. La prueba no puede inventar un punto conveniente para cada arma: todas
+// deben llevar físicamente su muzzle al mismo rayo que dibuja la cámara.
+function precisionLine(pitch = 0, side = 1, yaw = 0) {
+  const cp = Math.cos(pitch), sp = Math.sin(pitch);
+  const cy = Math.cos(yaw), sy = Math.sin(yaw);
+  const back = new THREE.Vector3(sy * cp, -sp, cy * cp);
+  const right = new THREE.Vector3(cy, 0, -sy);
+  const origin = new THREE.Vector3(0, TUNING.cam.aimHeight * 0.92, 0)
+    .addScaledVector(back, TUNING.cam.aimDist)
+    .addScaledVector(right, TUNING.cam.aimShoulder * side);
+  origin.y += 0.12;
+  const dir = new THREE.Vector3(-sy * cp, sp, -cy * cp).normalize();
+  return { origin, dir };
+}
+
+function params(aim, pitch = 0, firing = false, opts = {}) {
+  const side = opts.side ?? 1;
+  const line = aim ? precisionLine(pitch, side, opts.yaw ?? 0) : null;
   return {
-    state: 'idle', speed: 0, aim, aimPitch: pitch, aimYawErr: 0,
+    state: opts.state ?? 'idle', speed: 0, aim, aimPitch: pitch,
+    aimYawErr: opts.aimYawErr ?? 0,
     twist: 0, firing, groundPitch: 0,
+    coverLean: opts.coverLean ?? 0,
+    coverAimExposure: opts.coverAimExposure ?? 1,
+    coverKind: opts.coverKind,
+    aimLineOrigin: line?.origin,
+    aimLineDir: line?.dir,
   };
 }
 
@@ -53,17 +79,54 @@ for (const weapon of weapons) {
   // Un solo frame de transición no puede teletransportar el arma. La
   // orientación converge después a la cámara y conserva muzzle como origen.
   const muzzleBefore = rig.muzzleWorld(new THREE.Vector3()).clone();
-  rig.update(1 / 60, params(true, 0.25));
+  const transitionParams = params(true, 0.25);
+  rig.update(1 / 60, transitionParams);
   const muzzleAfter = rig.muzzleWorld(new THREE.Vector3()).clone();
-  check(muzzleBefore.distanceTo(muzzleAfter) < 0.24,
+  check(muzzleBefore.distanceTo(muzzleAfter) < 0.10,
     `${weapon}: snap al entrar a ADS (${muzzleBefore.distanceTo(muzzleAfter)} m)`);
+  const earlyAlignment = rig.precisionAimAlignment(
+    transitionParams.aimLineOrigin, transitionParams.aimLineDir);
+  check(!earlyAlignment.ready,
+    `${weapon}: ADS permitió precisión antes de terminar la transición`);
 
   for (const pitch of [-0.32, 0, 0.34]) {
-    settle(rig, params(true, pitch));
+    const aimParams = params(true, pitch);
+    settle(rig, aimParams, 90);
     const dir = rig.gunForward(new THREE.Vector3()).normalize();
-    check(dir.dot(expectedDir(pitch)) > 0.994,
+    check(dir.dot(expectedDir(pitch)) > 0.999,
       `${weapon}: cañón ADS no acompaña pitch ${pitch} (${dir.dot(expectedDir(pitch))})`);
+    const alignment = rig.precisionAimAlignment(
+      aimParams.aimLineOrigin, aimParams.aimLineDir);
+    check(alignment.ready,
+      `${weapon}: ADS no asentó en pitch ${pitch} ` +
+      `(offset=${alignment.offset.toFixed(4)}m, ` +
+      `angle=${THREE.MathUtils.radToDeg(alignment.angle).toFixed(3)}°)`);
   }
+
+  // Las dos orillas de cover cambian el hombro de cámara. El arma debe seguir
+  // el rayo correspondiente sin conservar el roll de la pose anterior ni
+  // limitarse a trasladar el muzzle dejando el cañón cruzado.
+  for (const side of [1, -1]) {
+    for (const pitch of [-0.28, 0, 0.3]) {
+      const coverParams = params(true, pitch, false, {
+        state: 'cover_high', side, coverLean: side,
+        coverKind: 'high', coverAimExposure: 1,
+      });
+      settle(rig, coverParams, 100);
+      const alignment = rig.precisionAimAlignment(
+        coverParams.aimLineOrigin, coverParams.aimLineDir);
+      check(alignment.ready,
+        `${weapon}: cover ${side > 0 ? 'derecho' : 'izquierdo'} ` +
+        `no alineó en pitch ${pitch} ` +
+        `(offset=${alignment.offset.toFixed(4)}m, ` +
+        `angle=${THREE.MathUtils.radToDeg(alignment.angle).toFixed(3)}°)`);
+    }
+  }
+
+  // Guardar la pose neutral, no el último lean, para confirmar que cada arma
+  // conserva una postura de precisión propia aunque comparta la línea óptica.
+  settle(rig, params(true, 0), 90);
+  poses.set(weapon, rig.gunMount.position.clone());
 
   const gun = rig.activeGun;
   const rightHand = rig.armR.hand.getWorldPosition(new THREE.Vector3());
@@ -76,20 +139,56 @@ for (const weapon of weapons) {
   check(leftHand.distanceTo(leftGrip) < 0.15,
     `${weapon}: mano izquierda fuera del apoyo ADS (${leftHand.distanceTo(leftGrip)} m)`);
 
-  poses.set(weapon, rig.gunMount.position.clone());
   rig.dispose(scene);
 }
 
 // Las armas no comparten una pose genérica: compacta, larga y pesada deben
 // ocupar posiciones de hombro/manos claramente distintas.
 for (const [a, b] of [['pistol', 'smg'], ['smg', 'shotgun'], ['sniper', 'bazooka']]) {
-  check(poses.get(a).distanceTo(poses.get(b)) > 0.035,
+  // Al quedar físicamente colineales, dos armas largas pueden converger en
+  // posición; tres centímetros siguen separando la pose sin desalinear muzzle.
+  check(poses.get(a).distanceTo(poses.get(b)) > 0.03,
     `${a}/${b}: offsets ADS indistinguibles`);
 }
+
+// Un cliente observador reconstruye la línea óptica desde el snapshot, sin
+// tener acceso a la cámara del tirador. Debe llegar a la misma alineación en
+// cover izquierdo con pitch y yaw relativos no nulos.
+const remote = new RemotePlayer(scene, 'remote-test', null, 'blue');
+remote.x = 2; remote.z = -3; remote.y = 0; remote.yaw = 0.45;
+remote.st = 'cover_high'; remote.aim = true; remote.pitch = 0.27;
+remote.aimErr = 0.11; remote.coverLean = -1; remote.coverExposure = 1;
+remote.coverKind = 'high';
+for (let i = 0; i < 120; i++) remote.update(1 / 60);
+const remoteAlignment = remote.rig.precisionAimAlignment(
+  remote.aimLineOrigin, remote.aimLineDir);
+check(remoteAlignment.ready,
+  `remoto: pose ADS no coincide con snapshot ` +
+  `(offset=${remoteAlignment.offset.toFixed(4)}m, ` +
+  `angle=${THREE.MathUtils.radToDeg(remoteAlignment.angle).toFixed(3)}°)`);
+remote.dispose(scene);
+
+// Compatibilidad con servidores anteriores: un evento sin el snapshot `fp`
+// puede reproducir flash/arma, pero nunca debe congelar la interpolación de
+// pose durante una ráfaga completa.
+const legacyRemote = new RemotePlayer(scene, 'legacy-remote', null, 'blue');
+legacyRemote.applyFirePose(null, 'smg');
+check((legacyRemote.firePoseT ?? 0) === 0,
+  'remoto legacy: evento sin fire-pose congeló la interpolación');
+check(legacyRemote.firing > 0,
+  'remoto legacy: evento sin fire-pose perdió el feedback de disparo');
+legacyRemote.dispose(scene);
+
+const leftFireRemote = new RemotePlayer(scene, 'left-fire-remote', null, 'blue');
+leftFireRemote.applyFirePose({ st: 'cover_high', a: 1, p: 0.1, ae: 0,
+  cl: -1, ce: 1, ck: 'high' }, 'sniper');
+check(leftFireRemote.aimSide === -1,
+  'remoto: fire-pose de cover izquierdo conservó el hombro derecho');
+leftFireRemote.dispose(scene);
 
 if (failures.length) {
   console.error('FIRE DIRECTION ERRORS:');
   failures.forEach((f) => console.error(` - ${f}`));
   process.exit(1);
 }
-console.log('FIRE DIRECTION OK · eje visual estable · 5 poses · pitch · IK · transición');
+console.log('FIRE DIRECTION OK · eje físico ADS · 5 poses · ambos hombros · pitch · IK · remoto');

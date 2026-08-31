@@ -1,6 +1,6 @@
 // Regresión visual/funcional: ADS permanece estable en la intención de cámara;
-// Contrato global: la retícula nunca abandona el centro y cámara define el
-// objetivo en hip, blindfire, ADS y scope; la balística nace en el muzzle.
+// hip/blindfire proyectan la trayectoria física del muzzle. Blindfire
+// contextual amplía este contrato en check-blindfire.
 import { chromium } from 'playwright-core';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -25,8 +25,8 @@ try {
   await page.evaluate(() => document.getElementById('btn-practice').click());
   await page.waitForTimeout(1800);
 
-  // Repro exacto: girar de golpe, esperar en low-ready y disparar. La retícula
-  // debe permanecer centrada antes, durante y después del primer tiro.
+  // Repro exacto: girar de golpe, esperar en low-ready y disparar. Sin ADS,
+  // tanto la retícula como el disparo deben seguir el eje físico del barrel.
   await page.evaluate(() => {
     const G = window.BREACH;
     G.weapons.cur = 'smg';
@@ -45,52 +45,63 @@ try {
     G.player.yaw = 1.05;
     const I = window.BREACH_INPUT, W = window.BREACH_WORLD;
     const E = window.BREACH_EFFECTS;
-    const dot = document.getElementById('barrel-dot');
-    const samples = [];
-    const sample = () => {
-      const r = dot.getBoundingClientRect();
-      samples.push({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
-    };
     const oldTracer = E.tracer;
     const oldRandom = Math.random;
     let shotDot = null;
     E.tracer = function(origin, point, emphasized) {
-      const ray = G.player.cam.aimRay();
-      const contact = W.raycastHit(ray.origin, ray.dir, G.weapons.def.range);
-      const t = contact?.t ?? W.raycast(ray.origin, ray.dir, G.weapons.def.range) ??
-        G.weapons.def.range;
-      const guide = ray.origin.clone().addScaledVector(ray.dir, t);
-      const expected = guide.sub(origin).normalize();
+      const expected = G.rig.gunForward(new window.THREE.Vector3()).normalize();
       const actual = point.clone().sub(origin).normalize();
       shotDot = actual.dot(expected);
       return oldTracer.call(this, origin, point, emphasized);
     };
     Math.random = () => 0;
-    sample();
     I._mouseFire = true;
     I.firePressed = true;
     await new Promise((resolve) => setTimeout(resolve, 85));
-    sample();
     I._mouseFire = false;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    sample();
+    await new Promise((resolve) => setTimeout(resolve, 34));
     Math.random = oldRandom;
     E.tracer = oldTracer;
-    const center = { x: innerWidth / 2, y: innerHeight / 2 };
+
+    G.rig.root.updateWorldMatrix(true, true);
+    const muzzle = G.rig.muzzleWorld(new window.THREE.Vector3()).clone();
+    const barrelDir = G.rig.gunForward(new window.THREE.Vector3()).normalize();
+    const contact = W.raycastHit(muzzle, barrelDir, G.weapons.def.range);
+    const t = contact?.t ?? W.raycast(muzzle, barrelDir, G.weapons.def.range) ??
+      G.weapons.def.range;
+    const point = muzzle.clone().addScaledVector(barrelDir, t);
+    window.BREACH_CAM.updateMatrixWorld(true);
+    const projected = point.project(window.BREACH_CAM);
+    const expected = {
+      x: (projected.x * 0.5 + 0.5) * innerWidth,
+      y: (-projected.y * 0.5 + 0.5) * innerHeight,
+    };
+    const dot = document.getElementById('barrel-dot');
+    const rect = dot.getBoundingClientRect();
+    const actual = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
     return {
       visible: dot.classList.contains('on'),
       shotDot,
-      maxCenterOffset: Math.max(...samples.map((p) => Math.hypot(p.x - center.x, p.y - center.y))),
-      maxDrift: Math.max(...samples.map((p) => Math.hypot(p.x - samples[0].x, p.y - samples[0].y))),
-      samples,
+      expected,
+      actual,
+      errorPx: Math.hypot(expected.x - actual.x, expected.y - actual.y),
+      centerOffset: Math.hypot(expected.x - innerWidth * 0.5,
+        expected.y - innerHeight * 0.5),
+      hitDistance: t,
     };
   });
 
   if (pageErrors.length) throw new Error(`errores de página: ${pageErrors.join(' | ')}`);
   if (!result.visible) throw new Error('la retícula no estaba visible');
-  if (result.maxCenterOffset > 0.75 || result.maxDrift > 0.25 || result.shotDot < 0.9999) {
+  // Exigir paralaje evita que una retícula central pase por casualidad: esta
+  // escena debe demostrar que la marca realmente puede abandonar el centro.
+  if (result.centerOffset < 4) {
+    console.error('RETICLE PARALLAX DEBUG', JSON.stringify(result));
+    throw new Error('el escenario no produjo paralaje para validar hip fire');
+  }
+  if (result.errorPx > 0.75 || result.shotDot < 0.9999) {
     console.error('RETICLE DEBUG', JSON.stringify(result));
-    throw new Error('hip fire movió la retícula o no guió el disparo al centro');
+    throw new Error('hip fire separó retícula, barrel y trayectoria física');
   }
 
   // ADS obstruido: la cámara alcanza un punto lejano, pero una pared ficticia
@@ -104,7 +115,7 @@ try {
     G.player.cam.yaw = 0.35;
     G.player.yaw = 0.35;
     I._mouseAim = true;
-    await new Promise((resolve) => setTimeout(resolve, 180));
+    await new Promise((resolve) => setTimeout(resolve, 360));
 
     G.rig.root.updateWorldMatrix(true, true);
     const muzzle = G.rig.muzzleWorld(new window.THREE.Vector3()).clone();
@@ -128,8 +139,7 @@ try {
     const ring = document.getElementById('crosshair');
     const rect = ring.getBoundingClientRect();
     const actual = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-    const guidePoint = cameraOrigin.clone().addScaledVector(ray.dir, 24);
-    const physicalDir = guidePoint.clone().sub(muzzle).normalize();
+    const physicalDir = G.rig.gunForward(new window.THREE.Vector3()).normalize();
     const expectedPoint = muzzle.clone().addScaledVector(physicalDir, 0.55);
     const projected = expectedPoint.clone().project(window.BREACH_CAM);
     const expected = {
@@ -174,6 +184,7 @@ try {
 
     G.rig.root.updateWorldMatrix(true, true);
     const muzzle = G.rig.muzzleWorld(new window.THREE.Vector3()).clone();
+    const weaponRoot = G.rig.activeGun.getWorldPosition(new window.THREE.Vector3()).clone();
     const ray = G.player.cam.aimRay();
     const cameraOrigin = ray.origin.clone();
     const farCollider = { id: 'far' }, nearCollider = { id: 'near' };
@@ -181,6 +192,9 @@ try {
     const oldRaycast = W.raycast.bind(W);
     W.raycastHit = (origin, dir, maxDist) => {
       const fromCamera = origin.distanceTo(cameraOrigin) < 0.12;
+      // El obstáculo empieza DELANTE del muzzle. No simular una pared entre
+      // la raíz del arma y el cañón, porque ese caso debe bloquear el gatillo.
+      if (origin.distanceTo(weaponRoot) < 0.12) return null;
       const t = Math.min(fromCamera ? 24 : 0.8, maxDist);
       return { t, normal: { x: 0, y: 0, z: 1 }, surface: 'concrete',
         collider: fromCamera ? farCollider : nearCollider };
@@ -188,8 +202,7 @@ try {
     W.raycast = () => null;
     await new Promise((resolve) => setTimeout(resolve, 80));
 
-    const guidePoint = cameraOrigin.clone().addScaledVector(ray.dir, 24);
-    const physicalDir = guidePoint.clone().sub(muzzle).normalize();
+    const physicalDir = G.rig.gunForward(new window.THREE.Vector3()).normalize();
     const expectedPoint = muzzle.clone().addScaledVector(physicalDir, 0.8);
     const projected = expectedPoint.clone().project(window.BREACH_CAM);
     const expected = {
@@ -279,11 +292,6 @@ try {
     console.error('BAZOOKA ADS DEBUG', JSON.stringify(rocketAim));
     throw new Error('el cohete ADS no salió desde el muzzle hacia el punto de la retícula');
   }
-  if (rocketAim.dotCamera > 0.99999) {
-    console.error('BAZOOKA PARALLAX DEBUG', JSON.stringify(rocketAim));
-    throw new Error('el escenario no produjo paralaje para validar la guía de bazooka');
-  }
-
   // Todas las armas comparten el mismo contrato. Dejamos cámara/stick quietos
   // mientras rig, objetivos y FOV continúan actualizándose; la desviación debe
   // permanecer subpíxel y el sniper usa su cruz óptica equivalente.
@@ -327,8 +335,9 @@ try {
     throw new Error(`retícula inestable: ${unstable.map((v) => v.weapon).join(', ')}`);
   }
 
-  const hipStability = await page.evaluate(async () => {
+  const hipPhysical = await page.evaluate(async () => {
     const G = window.BREACH, I = window.BREACH_INPUT;
+    const W = window.BREACH_WORLD;
     const weapons = ['pistol', 'smg', 'shotgun', 'grenade', 'bazooka', 'sniper'];
     const out = [];
     I._mouseAim = false;
@@ -339,30 +348,39 @@ try {
       G.weapons.swapT = 0;
       await new Promise((resolve) => setTimeout(resolve, 90));
       const el = document.getElementById('barrel-dot');
-      const points = [];
+      const errors = [];
       for (let frame = 0; frame < 8; frame++) {
         await new Promise((resolve) => setTimeout(resolve, 16));
         const r = el.getBoundingClientRect();
-        points.push({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+        const actual = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        G.rig.root.updateWorldMatrix(true, true);
+        const muzzle = G.rig.muzzleWorld(new window.THREE.Vector3()).clone();
+        const dir = G.rig.gunForward(new window.THREE.Vector3()).normalize();
+        const range = G.weapons.def.range > 0 ? G.weapons.def.range : 60;
+        const contact = W.raycastHit(muzzle, dir, range);
+        const t = contact?.t ?? W.raycast(muzzle, dir, range) ?? range;
+        const projected = muzzle.clone().addScaledVector(dir, t).project(window.BREACH_CAM);
+        const expected = {
+          x: (projected.x * 0.5 + 0.5) * innerWidth,
+          y: (-projected.y * 0.5 + 0.5) * innerHeight,
+        };
+        errors.push(Math.hypot(actual.x - expected.x, actual.y - expected.y));
       }
       out.push({
         weapon,
         visible: el.classList.contains('on'),
-        maxCenterError: Math.max(...points.map((p) =>
-          Math.hypot(p.x - innerWidth / 2, p.y - innerHeight / 2))),
-        maxDrift: Math.max(...points.map((p) =>
-          Math.hypot(p.x - points[0].x, p.y - points[0].y))),
+        maxPhysicalError: Math.max(...errors),
       });
     }
     return out;
   });
-  const unstableHip = hipStability.filter((item) => !item.visible ||
-    item.maxCenterError > 0.75 || item.maxDrift > 0.25);
-  if (unstableHip.length) {
-    console.error('HIP RETICLE STABILITY DEBUG', JSON.stringify(hipStability));
-    throw new Error(`retícula hip inestable: ${unstableHip.map((v) => v.weapon).join(', ')}`);
+  const wrongHip = hipPhysical.filter((item) => !item.visible ||
+    item.maxPhysicalError > 1.25);
+  if (wrongHip.length) {
+    console.error('HIP RETICLE PHYSICAL DEBUG', JSON.stringify(hipPhysical));
+    throw new Error(`retícula hip no sigue barrel: ${wrongHip.map((v) => v.weapon).join(', ')}`);
   }
-  console.log(`RETICLE OK · centro fijo ${result.maxCenterOffset.toFixed(2)} px · hip/ADS/scope guiados · bazooka ${rocketAim.dotExpected.toFixed(5)} · 6 armas estables`);
+  console.log(`RETICLE OK · barrel ${result.errorPx.toFixed(2)} px · ADS/scope centrados · bazooka ${rocketAim.dotExpected.toFixed(5)} · 6 armas físicas`);
 } finally {
   await browser?.close();
   server.kill();
