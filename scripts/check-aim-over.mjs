@@ -293,9 +293,12 @@ const apagado = await page.evaluate(async () => {
   TUNING.aimOver.enabled = 0; // apaga SOLO el acomodo visual del arma
   await new Promise((r) => setTimeout(r, 700));
   const lift = G.aimOver.lift;
-  let tracerPoint = null;
+  let tracerPoint = null, tracerOrigin = null;
   const oldTracer = E.tracer;
-  E.tracer = function (o, p2, em) { tracerPoint = p2.clone(); return oldTracer.call(this, o, p2, em); };
+  E.tracer = function (o, p2, em) {
+    tracerOrigin = o.clone(); tracerPoint = p2.clone();
+    return oldTracer.call(this, o, p2, em);
+  };
   const magBefore = G.weapons.st.mag;
   I._mouseFire = true; I.firePressed = true;
   await new Promise((r) => setTimeout(r, 90));
@@ -303,15 +306,30 @@ const apagado = await page.evaluate(async () => {
   await new Promise((r) => setTimeout(r, 120));
   E.tracer = oldTracer;
   TUNING.aimOver.enabled = 1;
+  // el TRAZO visual tampoco puede cruzar el borde: con el arma abajo (sin
+  // acomodo) el tracer se pliega al eje óptico en vez de atravesar la caja
+  let tracerClean = null;
+  if (tracerOrigin && tracerPoint) {
+    const W = window.BREACH_WORLD;
+    const d = tracerPoint.clone().sub(tracerOrigin);
+    const len = d.length();
+    d.multiplyScalar(1 / len);
+    const t = W.raycastHit(tracerOrigin, d, len - 0.2)?.t ??
+      W.raycast(tracerOrigin, d, len - 0.2) ?? (len - 0.2);
+    tracerClean = t >= len - 0.21;
+  }
   return {
     lift, fired: G.weapons.st.mag < magBefore,
-    shotZ: tracerPoint?.z ?? null,
+    shotZ: tracerPoint?.z ?? null, tracerClean,
+    tracerY: tracerOrigin ? +tracerOrigin.y.toFixed(2) : null,
   };
 });
 check('kill switch visual: sin alzada del arma, el DAÑO sigue el eje óptico',
   apagado.lift < 0.03 && apagado.fired &&
   apagado.shotZ !== null && apagado.shotZ < 10,
   `lift=${apagado.lift?.toFixed(3)} shotZ=${apagado.shotZ?.toFixed(1)}`);
+check('el TRAZO visual no atraviesa el borde (se pliega al eje)',
+  apagado.tracerClean === true, `origenY=${apagado.tracerY}`);
 
 // ---------------------------------------------------------------------------
 // 4) HIPFIRE intacto: sin ADS no hay alzada ni bloqueo, el eje físico manda

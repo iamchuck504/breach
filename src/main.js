@@ -3240,7 +3240,22 @@ function fireShot() {
       : scoped ? baseDir.clone() : applySpread(baseDir, spread);
     const hit = resolveShot(world, targets, damageOrigin, dir, def.range, null);
     anyPoint = hit.point;
-    effects.tracer(muzzle, hit.point, scoped && w.cur === 'sniper');
+    // TRACER estilo Gears: sale del cañón — pero si ese segmento visual
+    // cruzaría el borde que la bala real (eje óptico) libró, el trazo se
+    // pliega al punto del eje a la altura del arma. La "impresión de que la
+    // bala atraviesa la esquina" era exactamente esta línea cosmética.
+    let tracerFrom = muzzle;
+    if (aiming) {
+      const segLen = _v2.copy(hit.point).sub(muzzle).length();
+      if (segLen > 0.4) {
+        _v2.multiplyScalar(1 / segLen);
+        if (staticHitDistance(muzzle, _v2, segLen - 0.15) < segLen - 0.16) {
+          const tAxis = Math.max(0, _v2.copy(muzzle).sub(damageOrigin).dot(baseDir));
+          tracerFrom = damageOrigin.clone().addScaledVector(baseDir, tAxis);
+        }
+      }
+    }
+    effects.tracer(tracerFrom, hit.point, scoped && w.cur === 'sniper');
     if (hit.kind === 'world') {
       effects.impact(hit.point, hit.normal, hit.surface, {
         origin: damageOrigin,
