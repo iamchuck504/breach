@@ -68,26 +68,44 @@ function calleSpecs() {
     make(0, -34.5, 9, 2.5, HIGH, 'high', { visual: false }),
     make(-6.1, -33.4, 2.4, 0.9, LOW, 'low', { visual: false }),
     make(6.1, -33.4, 2.4, 0.9, LOW, 'low', { visual: false }),
-    // Los vehículos conservan una base LOW para cover/mantle. La cabina se
-    // añade debajo como collider sólido sin caras de cover: así los disparos
-    // no atraviesan el techo, pero tampoco convertimos el auto completo en
-    // una caja invisible de 1.5–2 m sobre capó y maletero.
-    make(-2.5, -28, 2.02, 4.45, LOW, 'low', { visual: false }),
-    make(-2.5, -28.05, 1.78, 2.82, 2.05, 'solid', { visual: false, mirror: true }),
-    make(6.5, -21, 2.02, 4.45, LOW, 'low', { visual: false }),
-    make(6.5, -21.08, 1.78, 2.34, 1.52, 'solid', { visual: false, mirror: true }),
-    make(-6.5, -16, 2.02, 4.45, LOW, 'low', { visual: false }),
-    make(-6.5, -16.08, 1.78, 2.34, 1.52, 'solid', { visual: false, mirror: true }),
-    make(3, -10.5, 2.02, 4.45, LOW, 'low', { visual: false }),
-    make(3, -10.58, 1.78, 2.34, 1.52, 'solid', { visual: false, mirror: true }),
-    make(-3, -5.5, 4.45, 2.02, LOW, 'low', { visual: false }),
-    make(-3.08, -5.5, 2.34, 1.78, 1.52, 'solid', { visual: false, mirror: true }),
     make(-1.2, -8.7, 3.2, 0.9, MID, 'mid', { visual: false }),
     make(-6.5, -1.5, 2.4, 7, HIGH, 'high', { visual: false }),
     make(-15.15, -8, 2.5, 2.2, LOW, 'low', { visual: false }),
     make(14.35, -8.5, 1.3, 0.75, LOW, 'low', { visual: false }),
     make(3.6, -2.2, 2.4, 0.9, LOW, 'low', { visual: false }),
   ];
+
+  // Un solo AABB alto convertía parabrisas y medallón inclinados en una pared
+  // invisible. La base LOW sigue siendo la misma cobertura táctica, mientras
+  // tres cajas sólidas y progresivamente estrechas aproximan la silueta real
+  // de la cabina sin crear nuevas caras de cover.
+  const addVehicle = (x, z, { rotated = false, suv = false } = {}) => {
+    const swap = (w, d) => rotated ? [d, w] : [w, d];
+    const [bodyW, bodyD] = swap(2.02, 4.45);
+    out.push(make(x, z, bodyW, bodyD, LOW, 'low', { visual: false }));
+    const tiers = suv
+      ? [
+        [1.86, 2.82, 1.30],
+        [1.76, 2.24, 1.72],
+        [1.58, 1.56, 2.05],
+      ]
+      : [
+        [1.86, 2.14, 1.16],
+        [1.78, 1.64, 1.39],
+        [1.66, 1.28, 1.52],
+      ];
+    for (const [width, length, height] of tiers) {
+      const [w, d] = swap(width, length);
+      out.push(make(x, z, w, d, height, 'solid', {
+        visual: false, mirror: true,
+      }));
+    }
+  };
+  addVehicle(-2.5, -28, { suv: true });
+  addVehicle(6.5, -21);
+  addVehicle(-6.5, -16);
+  addVehicle(3, -10.5);
+  addVehicle(-3, -5.5, { rotated: true });
 
   // Un kiosco abierto no puede compartir el cubo HIGH que ocupaba toda su
   // huella. Se modelan únicamente respaldo, laterales, postes y mostrador;
