@@ -295,8 +295,8 @@ const linkedMove = await page.evaluate(() => {
   };
 });
 check('mover vehículo clonado desplaza visual + collider, sin copia estática',
-  // Asset + cuerpo LOW + cabina física sin cover.
-  linkedMove.found && linkedMove.selected === 3 &&
+  // Asset + cuerpo LOW + dos pisos físicos (silueta medida del SUV).
+  linkedMove.found && linkedMove.selected === 4 &&
   (linkedMove.before.x !== linkedMove.after.x || linkedMove.before.z !== linkedMove.after.z) &&
   linkedMove.visualAtNewPosition &&
   linkedMove.colliderAtNewPosition && !linkedMove.staleVisual,
@@ -405,7 +405,7 @@ const solidStreetProps = await page.evaluate(() => {
   let linked = 0; let nonCover = 0; let cover = 0; let blocked = 0; let openFronts = 0;
   for (const asset of assets) {
     const boxes = ed.map.objects.filter((o) => o.link && o.link === asset.link && o.id !== asset.id);
-    const expected = asset.p === 'urban:busShelter' ? 3 : 1;
+    const expected = asset.p === 'urban:busShelter' ? 4 : 1;
     if (boxes.length === expected) linked++;
     nonCover += boxes.filter((o) => o.cover === false && o.visual === false).length;
     cover += boxes.filter((o) => o.cover !== false && o.visual === false).length;
@@ -425,12 +425,14 @@ const solidStreetProps = await page.evaluate(() => {
   return { assets: assets.length, linked, nonCover, cover, blocked, openFronts,
     coverFaces: W.faces.length };
 });
-check('postes/hidrantes colisionan; paradas son cover en U con frente abierto',
+check('postes/hidrantes colisionan; paradas selladas por su banca interior',
   solidStreetProps.assets === 20 && solidStreetProps.linked === 20 &&
-  solidStreetProps.nonCover === 18 && solidStreetProps.cover === 6 &&
-  solidStreetProps.blocked === 24 && solidStreetProps.openFronts === 2 &&
-  // Los kioscos abiertos aportan caras únicamente en sus piezas reales.
-  solidStreetProps.coverFaces === 208,
+  solidStreetProps.nonCover === 20 && solidStreetProps.cover === 6 &&
+  // El interior del GLB (banca+vidrios) se selló en la auditoría de
+  // hitboxes: las balas se colaban entre panel y panel, y la navegación ya
+  // estaba bloqueada por la banca. openFronts 0 es intencional.
+  solidStreetProps.blocked === 26 && solidStreetProps.openFronts === 0 &&
+  solidStreetProps.coverFaces === 216,
   JSON.stringify(solidStreetProps));
 
 const buildingDuplicate = await page.evaluate(() => {
@@ -505,7 +507,7 @@ const migratedV1Clone = await page.evaluate(() => {
 check('clon v1 agrega las 16 pieles y 14 edificios editables faltantes',
   migratedV1Clone.existingAfter === migratedV1Clone.existingBefore + 14 &&
   migratedV1Clone.procedural === 16 && migratedV1Clone.linkedProcedural === 16 &&
-  migratedV1Clone.version === 4,
+  migratedV1Clone.version === 5,
   JSON.stringify(migratedV1Clone));
 
 const migratedV2Clone = await page.evaluate(() => {
@@ -523,7 +525,7 @@ const migratedV2Clone = await page.evaluate(() => {
   const linkedPhysical = migratedAssets.filter((asset) => {
     const boxes = ed.map.objects.filter((o) =>
       o.id !== asset.id && o.link && o.link === asset.link && o.visual === false);
-    return boxes.length === (asset.p === 'urban:busShelter' ? 3 : 1);
+    return boxes.length === (asset.p === 'urban:busShelter' ? 4 : 1);
   });
   return {
     version: ed.map.decorCaptureVersion,
@@ -533,7 +535,7 @@ const migratedV2Clone = await page.evaluate(() => {
   };
 });
 check('clon v2 recibe colisión de props y edificios sin recrearlo',
-  migratedV2Clone.version === 4 && migratedV2Clone.buildings === 14 &&
+  migratedV2Clone.version === 5 && migratedV2Clone.buildings === 14 &&
   migratedV2Clone.assets === 20 && migratedV2Clone.linkedPhysical === 20,
   JSON.stringify(migratedV2Clone));
 
@@ -565,7 +567,8 @@ const migratedV3Clone = await page.evaluate(() => {
     const boxes = ed.map.objects.filter((o) => o.id !== asset.id && o.link === asset.link);
     if (asset.p === 'urban:streetlight') {
       if (boxes.length === 1 && Math.abs(Math.abs(boxes[0].x - asset.x) - 0.88) < 0.03) correct++;
-    } else if (boxes.length === 3 && boxes.every((o) => o.cover !== false)) correct++;
+    } else if (boxes.length === 4 &&
+      boxes.filter((o) => o.cover !== false).length === 3) correct++;
   }
   return {
     version: ed.map.decorCaptureVersion,
@@ -574,7 +577,7 @@ const migratedV3Clone = await page.evaluate(() => {
   };
 });
 check('clon v3 reemplaza colliders viejos sin duplicar edificios',
-  migratedV3Clone.version === 4 && migratedV3Clone.buildings === 14 &&
+  migratedV3Clone.version === 5 && migratedV3Clone.buildings === 14 &&
   migratedV3Clone.assets === 18 && migratedV3Clone.correct === 18,
   JSON.stringify(migratedV3Clone));
 

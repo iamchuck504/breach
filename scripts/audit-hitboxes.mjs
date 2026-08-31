@@ -1,0 +1,196 @@
+// AUDITORÍA de hitboxes: compara la silueta VISUAL real (raycast Three.js
+// contra los meshes del mapa) con la geometría FÍSICA (colliders AABB +
+// segmentos). Dispara rejillas de rayos horizontales alrededor de cada
+// collider y reporta AGUJEROS (lo visible no para la bala) y FANTASMAS
+// (pared invisible sin nada que ver). Además, un barrido top-down detecta
+// volumen visual jugable SIN ningún collider debajo.
+//   node scripts/audit-hitboxes.mjs [mapa]      (default: calle)
+import { chromium } from 'playwright-core';
+import { spawn } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { clearClip } from './lib-clip.mjs';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const root = path.join(__dirname, '..');
+const CHROME = process.env.CHROME_PATH ||
+  'C:\\Users\\iamch\\AppData\\Local\\ms-playwright\\chromium-1228\\chrome-win64\\chrome.exe';
+const LAYOUT = process.argv[2] || 'calle';
+
+const server = spawn(process.execPath, [path.join(root, 'node_modules', 'vite', 'bin', 'vite.js'),
+  '--host', '127.0.0.1', '--port', '8799', '--strictPort'], { stdio: 'ignore' });
+await new Promise((r) => setTimeout(r, 900));
+
+const browser = await chromium.launch({ executablePath: CHROME, headless: true });
+const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+page.on('pageerror', (e) => console.log('PAGEERROR:', e.message));
+
+await page.goto('http://localhost:8799/?nolock=1', { waitUntil: 'networkidle' });
+await page.evaluate(() => document.getElementById('btn-enter')?.click());
+await page.waitForSelector('#splash.off', { state: 'attached' });
+await page.evaluate(async (layout) => {
+  window.BREACH.mapChoice = layout;
+  document.getElementById('btn-practice').click();
+}, LAYOUT);
+await page.waitForTimeout(2600);
+
+const report = await page.evaluate(async (layout) => {
+  const W = window.BREACH_WORLD, T = window.THREE;
+  const G = window.BREACH;
+  for (const d of G.dummies?.list ?? []) { d.alive = false; d.respawnT = 9999; }
+  await new Promise((r) => setTimeout(r, 300));
+
+  // ---------- raycast VISUAL (meshes reales, sin suelo/overlays) ----------
+  const caster = new T.Raycaster();
+  caster.far = 500;
+  caster.camera = window.BREACH_CAM; // los Sprite.raycast exigen cámara
+  const skip = (obj) => {
+    for (let o = obj; o; o = o.parent) {
+      if (o.name === 'editor-overlay') return true;
+    }
+    return false;
+  };
+  // suelo/planos horizontales gigantes irrelevantes con rayos horizontales
+  const visualHit = (origin, dir, maxDist) => {
+    caster.set(origin, dir);
+    caster.far = maxDist;
+    const hits = caster.intersectObjects(W.mapGroup.children, true);
+    for (const h of hits) {
+      if (h.distance < 0.02) continue;
+      if (!h.object.isMesh && !h.object.isSprite) continue;
+      if (h.object.isSprite) continue;
+      if (skip(h.object)) continue;
+      // planos rasantes al rayo (suelos/marcas) no cuentan
+      if (h.face && Math.abs(h.face.normal.clone()
+        .transformDirection(h.object.matrixWorld).dot(dir)) < 0.08) continue;
+      return h;
+    }
+    return null;
+  };
+  const physHit = (origin, dir, maxDist) =>
+    W.raycastHit(origin, dir, maxDist)?.t ?? W.raycast(origin, dir, maxDist) ?? null;
+
+  // ---------- 1) rejillas alrededor de cada collider ----------
+  const boxes = W.colliders.map((c) => ({ ...c }));
+  const findings = [];
+  const origin = new T.Vector3(), dir = new T.Vector3();
+  for (let bi = 0; bi < boxes.length; bi++) {
+    const b = boxes[bi];
+    const w = b.maxx - b.minx, d2 = b.maxz - b.minz;
+    if (w > 12 || d2 > 12) continue; // muros perimetrales/escudos: aparte
+    const cx = (b.minx + b.maxx) / 2, cz = (b.minz + b.maxz) / 2;
+    // altura JUGABLE: techos/toldos por encima de 2.3 no reciben tiros útiles
+    const top = Math.min(b.h + 0.5, 2.3);
+    let holes = 0, ghosts = 0, rays = 0;
+    const examples = [];
+    // 4 direcciones: rayos entrando hacia la caja
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const span = (dx !== 0 ? d2 : w) + 1.2;
+      const dist = 3.0 + (dx !== 0 ? w : d2) / 2;
+      for (let y = 0.18; y <= top; y += 0.14) {
+        for (let u = -span / 2; u <= span / 2; u += 0.16) {
+          const ox = cx - dx * dist + (dz !== 0 ? u : 0);
+          const oz = cz - dz * dist + (dx !== 0 ? u : 0);
+          origin.set(ox, y, oz);
+          dir.set(dx, 0, dz);
+          const maxDist = dist * 2;
+          const v = visualHit(origin, dir, maxDist);
+          const p = physHit(origin, dir, maxDist);
+          rays++;
+          const vt = v ? v.distance : null;
+          if (vt !== null && (p === null || p > vt + 0.30)) {
+            holes++;
+            if (examples.length < 3) {
+              examples.push({
+                at: [+(ox + dx * vt).toFixed(2), +y.toFixed(2), +(oz + dz * vt).toFixed(2)],
+                mesh: v.object.name || v.object.parent?.name || '?',
+                miss: +(p === null ? 99 : p - vt).toFixed(2),
+              });
+            }
+          } else if (p !== null && (vt === null || vt > p + 0.30)) {
+            ghosts++;
+          }
+        }
+      }
+    }
+    if (holes + ghosts > 0) {
+      findings.push({
+        box: { x: +cx.toFixed(1), z: +cz.toFixed(1), w: +w.toFixed(2), d: +d2.toFixed(2), h: b.h },
+        rays, holes, ghosts,
+        holePct: +(100 * holes / rays).toFixed(1),
+        ghostPct: +(100 * ghosts / rays).toFixed(1),
+        examples,
+      });
+    }
+  }
+  findings.sort((a, b2) => (b2.holes + b2.ghosts) - (a.holes + a.ghosts));
+
+  // ---------- 2) volumen visual SIN collider (top-down) ----------
+  const down = new T.Vector3(0, -1, 0);
+  const orphan = [];
+  const step = 0.6;
+  for (let x = -W.fx + 0.5; x < W.fx; x += step) {
+    for (let z = -W.fz + 0.5; z < W.fz; z += step) {
+      origin.set(x, 3.4, z);
+      caster.set(origin, down);
+      caster.far = 3.3;
+      const hits = caster.intersectObjects(W.mapGroup.children, true);
+      let topY = null, name = '';
+      for (const h of hits) {
+        if (!h.object.isMesh || skip(h.object)) continue;
+        const y = 3.4 - h.distance;
+        if (y > 0.32 && y < 3.0) { topY = y; name = h.object.name || h.object.parent?.name || '?'; }
+        break;
+      }
+      if (topY === null) continue;
+      // ¿hay collider/segmento en esta celda a esa altura?
+      const p = { x, z };
+      const inBox = W.colliders.some((c) => x > c.minx - 0.05 && x < c.maxx + 0.05 &&
+        z > c.minz - 0.05 && z < c.maxz + 0.05 && c.h > 0.3);
+      const nearSeg = (W.segmentColliders ?? []).some((s) => {
+        const dx = s.b.x - s.a.x, dz = s.b.z - s.a.z;
+        const len = Math.hypot(dx, dz) || 1;
+        const t = Math.max(0, Math.min(1, ((x - s.a.x) * dx + (z - s.a.z) * dz) / (len * len)));
+        const px = s.a.x + dx * t, pz = s.a.z + dz * t;
+        return Math.hypot(x - px, z - pz) < 0.5;
+      });
+      const onZone = (W.surfaceZones ?? []).length > 0 &&
+        W.groundHeight({ x, z }, 0.3, 3) > 0.3;
+      if (!inBox && !nearSeg && !onZone) {
+        orphan.push({ x: +x.toFixed(1), z: +z.toFixed(1), topY: +topY.toFixed(2), name });
+      }
+    }
+  }
+  // agrupar huérfanos contiguos para leerlos
+  const groups = [];
+  for (const o of orphan) {
+    const g = groups.find((gr) => Math.hypot(gr.x - o.x, gr.z - o.z) < 2.2);
+    if (g) { g.n++; g.maxY = Math.max(g.maxY, o.topY); if (!g.names.includes(o.name)) g.names.push(o.name); }
+    else groups.push({ x: o.x, z: o.z, n: 1, maxY: o.topY, names: [o.name] });
+  }
+  groups.sort((a, b2) => b2.n - a.n);
+
+  return {
+    layout, colliders: boxes.length,
+    findings: findings.slice(0, 24),
+    totalFindings: findings.length,
+    orphanGroups: groups.slice(0, 20),
+    totalOrphans: orphan.length,
+  };
+}, LAYOUT);
+
+console.log(`=== AUDIT ${report.layout} · ${report.colliders} colliders ===`);
+console.log(`\n-- Discrepancias por collider (${report.totalFindings}) --`);
+for (const f of report.findings) {
+  console.log(`caja(${f.box.x},${f.box.z} ${f.box.w}x${f.box.d} h${f.box.h}) ` +
+    `AGUJEROS ${f.holes}/${f.rays} (${f.holePct}%) fantasmas ${f.ghosts} (${f.ghostPct}%)`);
+  for (const e of f.examples) console.log(`   · ${e.mesh} @ [${e.at}] miss=${e.miss}`);
+}
+console.log(`\n-- Volumen visual SIN collider (${report.totalOrphans} celdas) --`);
+for (const g of report.orphanGroups) {
+  console.log(`(${g.x},${g.z}) x${g.n} altoMax=${g.maxY} · ${g.names.slice(0, 3).join(', ')}`);
+}
+
+await browser.close();
+server.kill();
+await clearClip();

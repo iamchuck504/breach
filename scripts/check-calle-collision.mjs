@@ -8,21 +8,22 @@ const hit = (origin, direction, distance) => firstMapIntersection('calle',
   { x: direction[0], y: direction[1], z: direction[2] }, distance);
 
 // El cover base permanece LOW, mientras niveles sólidos sin cover aproximan
-// únicamente la cabina. Esto evita disparos a través del techo sin inventar
-// una pared rectangular sobre capó, parabrisas o maletero.
+// la silueta MEDIDA del mesh (auditoría de hitboxes): cuerpo completo hasta
+// el cinturón, cabina baja y techo — sin dejar pasar balas por defensas ni
+// inventar paredes rectangulares sobre el parabrisas.
 const calle = collisionBoxesFor('calle');
 const sedanBody = calle.find((b) => b.x === 6.5 && b.z === -21 && b.h === BLOCK.LOW);
 const sedanCabins = calle.filter((b) => b.x === 6.5 && b.z === -21 &&
-  b.h > BLOCK.LOW && b.h < BLOCK.MID);
+  b.style === 'solid');
 assert(sedanBody && sedanCabins.length === 3,
-  'sedán debe conservar cuerpo LOW y tres niveles físicos de cabina');
-assert(sedanCabins.every((b) => b.style === 'solid'),
-  'cabina no debe crear caras de cover falsas');
+  'sedán debe conservar cuerpo LOW y tres niveles físicos (cuerpo/cabina/techo)');
 assert(sedanCabins.every((b) => b.x === sedanBody.x && b.z === sedanBody.z),
   'todos los niveles deben permanecer enlazados al centro editable del auto');
 const sedanTiers = [...sedanCabins].sort((a, b) => a.h - b.h);
 assert(sedanTiers[0].d > sedanTiers[1].d && sedanTiers[1].d > sedanTiers[2].d,
-  'cabina debe estrecharse siguiendo parabrisas y vidrio trasero');
+  'los niveles deben estrecharse siguiendo parabrisas y vidrio trasero');
+assert(sedanBody.w >= 2.2 && sedanBody.d >= 4.7,
+  'el cuerpo LOW debe cubrir el mesh medido (2.26x4.76): sin balas por las defensas');
 assert.notEqual(hit([4.8, 1.35, -21.08], [1, 0, 0], 3.4), null,
   'un tiro a través de la cabina del sedán debe bloquearse');
 assert.equal(hit([4.8, 1.35, -21.88], [1, 0, 0], 3.4), null,
@@ -41,9 +42,9 @@ assert.equal(hit([-4.05, 1.80, -26.00], [1, 0, 0], 3.1), null,
 
 const rotatedBody = calle.find((b) => b.x === -3 && b.z === -5.5 && b.h === BLOCK.LOW);
 const rotatedCabins = calle.filter((b) => b.x === -3 && b.z === -5.5 &&
-  b.h > BLOCK.LOW && b.h < BLOCK.MID).sort((a, b) => a.h - b.h);
+  b.style === 'solid').sort((a, b) => a.h - b.h);
 assert(rotatedBody && rotatedCabins.length === 3,
-  'el sedán transversal debe usar la misma cabina escalonada');
+  'el sedán transversal debe usar la misma silueta escalonada');
 assert(rotatedBody.w > rotatedBody.d &&
   rotatedCabins[0].w > rotatedCabins[1].w && rotatedCabins[1].w > rotatedCabins[2].w,
   'al rotar el sedán, la pendiente debe rotar con su silueta');

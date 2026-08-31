@@ -44,9 +44,16 @@ const azoteas = freeze([
   make(11.5, -22.8, 3.8, 3.8, LOW, 'glass'),
   make(-12.2, -22.1, 5.6, 1.1, MID, 'hut'),
   make(-26.3, -31.5, 6, 4, LOW, 'ac'),
+  // AUDITORÍA de hitboxes: las tapas/rejillas visuales de AC, vents y la
+  // caseta MID sobresalen 10-15cm de su caja — un tiro rasante por encima
+  // atravesaba la tapa visible. Tapas 'solid' (sin cover: no son bloques
+  // jugables, la regla LOW/MID/HIGH no aplica, como las cabinas de autos).
+  make(-26.3, -31.5, 5.9, 3.9, 1.26, 'ac', { visual: false, cover: false }),
   make(26, -31.5, 5.5, 2.6, MID, 'hut'),
+  make(26, -31.5, 5.4, 2.5, 2.06, 'hut', { visual: false, cover: false }),
   make(-27, -23.5, 1.4, 5, LOW, 'vent'),
   make(27, -23.2, 4, 1.4, LOW, 'vent'),
+  make(27, -23.2, 3.9, 1.3, 1.26, 'vent', { visual: false, cover: false }),
   make(-20.25, -15.75, 2.8, 2.8, HIGH, 'hut'),
   make(-25, -6.8, 2.4, 6.2, MID, 'hut'),
   make(-25, -6.8, 1.7, 1.7, HIGH, 'hut', { visual: false }),
@@ -63,36 +70,44 @@ function calleSpecs() {
   const out = [
     make(0, -42.4, 36, 0.8, HIGH, 'wall', { mirror: false, visual: false }),
     make(0, 42.4, 36, 0.8, HIGH, 'wall', { mirror: false, visual: false }),
-    make(-17.4, 0, 0.8, 86, HIGH, 'wall', { mirror: false }),
-    make(17.4, 0, 0.8, 86, HIGH, 'wall', { mirror: false }),
-    make(0, -34.5, 9, 2.5, HIGH, 'high', { visual: false }),
+    // AUDITORÍA de hitboxes: las fachadas laterales empiezan en x ±16.15 —
+    // el muro en ±17.4 dejaba 0.85m de calle DENTRO del edificio visual
+    // (se caminaba y disparaba dentro de la fachada, decals flotando).
+    make(-16.55, 0, 0.8, 86, HIGH, 'wall', { mirror: false }),
+    make(16.55, 0, 0.8, 86, HIGH, 'wall', { mirror: false }),
+    // BUS atravesado (escudo de spawn): medido 9.35x3.06 con morro/cola
+    // bajos que sobresalían del torso — las balas pasaban por las puntas.
+    make(0, -34.5, 9.2, 2.92, HIGH, 'high', { visual: false }),
+    make(0, -34.5, 9.35, 3.06, LOW, 'low', { visual: false }),
     make(-6.1, -33.4, 2.4, 0.9, LOW, 'low', { visual: false }),
     make(6.1, -33.4, 2.4, 0.9, LOW, 'low', { visual: false }),
     make(-1.2, -8.7, 3.2, 0.9, MID, 'mid', { visual: false }),
-    make(-6.5, -1.5, 2.4, 7, HIGH, 'high', { visual: false }),
-    make(-15.15, -8, 2.5, 2.2, LOW, 'low', { visual: false }),
+    make(-6.5, -1.5, 3.0, 7.15, HIGH, 'high', { visual: false }),
+    make(-15.15, -8, 2.5, 2.5, LOW, 'low', { visual: false }),
     make(14.35, -8.5, 1.3, 0.75, LOW, 'low', { visual: false }),
     make(3.6, -2.2, 2.4, 0.9, LOW, 'low', { visual: false }),
   ];
 
-  // Un solo AABB alto convertía parabrisas y medallón inclinados en una pared
-  // invisible. La base LOW sigue siendo la misma cobertura táctica, mientras
-  // tres cajas sólidas y progresivamente estrechas aproximan la silueta real
-  // de la cabina sin crear nuevas caras de cover.
+  // VEHÍCULOS con perfiles MEDIDOS contra los meshes reales (auditoría de
+  // hitboxes): el sedán procedural mide 2.26x4.76 de cuerpo (la base vieja
+  // 2.02x4.45 dejaba pasar balas por defensas y costados) y el SUV GLB
+  // lleva capó/portón ALTOS a lo largo de todo el cuerpo (los pisos cortos
+  // centrados dejaban pasar tiros por el morro y la cola, decals en la
+  // fachada de la panadería a través del auto). La base LOW conserva el
+  // cover táctico; los pisos 'solid' no crean caras nuevas.
   const addVehicle = (x, z, { rotated = false, suv = false } = {}) => {
     const swap = (w, d) => rotated ? [d, w] : [w, d];
-    const [bodyW, bodyD] = swap(2.02, 4.45);
+    const [bodyW, bodyD] = swap(suv ? 1.74 : 2.26, suv ? 4.5 : 4.76);
     out.push(make(x, z, bodyW, bodyD, LOW, 'low', { visual: false }));
     const tiers = suv
       ? [
-        [1.86, 2.82, 1.30],
-        [1.76, 2.24, 1.72],
-        [1.58, 1.56, 2.05],
+        [2.06, 4.5, 1.5],   // capó/portón/espejos: alto en TODO el largo
+        [1.72, 2.0, 2.0],   // techo (corto: el portón cae en pendiente)
       ]
       : [
-        [1.86, 2.14, 1.16],
-        [1.78, 1.64, 1.39],
-        [1.66, 1.28, 1.52],
+        [2.26, 4.76, 1.0],  // cuerpo completo hasta el cinturón
+        [2.08, 2.5, 1.3],   // cabina baja (parabrisas/medallón en pendiente)
+        [2.0, 1.34, 1.57],  // techo
       ];
     for (const [width, length, height] of tiers) {
       const [w, d] = swap(width, length);
@@ -110,29 +125,35 @@ function calleSpecs() {
   // Un kiosco abierto no puede compartir el cubo HIGH que ocupaba toda su
   // huella. Se modelan únicamente respaldo, laterales, postes y mostrador;
   // el hueco de servicio permanece físicamente transitable y visible.
+  // Kioscos: huella MEDIDA contra el mesh (news 1.93x2.31, hotdog 1.83x2.21,
+  // centro corrido 0.19 hacia atrás) — el visual sobresalía del spec y las
+  // balas entraban por los costados. El hueco de servicio sigue transitable.
   const addKiosk = (x, z, w, d, toward, decorLink) => {
     const frontZ = z + toward * (d / 2 - 0.034);
     const backZ = z - toward * (d / 2 - 0.055);
-    const sideZ = z - toward * d * 0.20;
+    // costados casi completos (el panel lateral del kiosco corre a lo largo;
+    // solo el frente queda abierto como hueco de servicio)
+    const sideZ = z - toward * d * 0.06;
     const linked = { visual: false, mirror: false, decorLink };
     out.push(make(x, backZ, w - 0.10, 0.11, 2.30, 'shelter', linked));
     for (const side of [-1, 1]) {
       out.push(make(x + side * (w / 2 - 0.05), sideZ,
-        0.10, d * 0.58, 2.28, 'shelter', linked));
+        0.10, d * 0.8, 2.28, 'shelter', linked));
       out.push(make(x + side * (w / 2 - 0.055), frontZ,
         0.14, 0.14, 2.46, 'solid', linked));
     }
     out.push(make(x, frontZ, w - 0.16, 0.18, LOW, 'low', linked));
   };
-  addKiosk(-14.35, -29, 1.75, 1.75, 1, 'kiosk:news:south-left');
-  addKiosk(14.35, 29, 1.75, 1.75, -1, 'kiosk:news:north-right');
-  addKiosk(14.35, -26, 1.65, 1.65, 1, 'kiosk:hotdog:south-right');
-  addKiosk(-14.35, 26, 1.65, 1.65, -1, 'kiosk:hotdog:north-left');
+  addKiosk(-14.35, -28.81, 1.93, 2.31, 1, 'kiosk:news:south-left');
+  addKiosk(14.35, 28.81, 1.93, 2.31, -1, 'kiosk:news:north-right');
+  addKiosk(14.35, -25.81, 1.83, 2.21, 1, 'kiosk:hotdog:south-right');
+  addKiosk(-14.35, 25.81, 1.83, 2.21, -1, 'kiosk:hotdog:north-left');
   for (const z of [-35, -25, -15, -5, 5, 15, 25, 35]) {
-    out.push(make(-12.6, z, 0.5, 0.5, 6.2, 'solid', {
+    // poste real ~0.3: el 0.5 anterior era pared invisible alrededor
+    out.push(make(-12.6, z, 0.34, 0.34, 6.2, 'solid', {
       mirror: false, decorLink: `streetlight:left:${z}`,
     }));
-    out.push(make(12.6, z, 0.5, 0.5, 6.2, 'solid', {
+    out.push(make(12.6, z, 0.34, 0.34, 6.2, 'solid', {
       mirror: false, decorLink: `streetlight:right:${z}`,
     }));
   }
@@ -142,16 +163,25 @@ function calleSpecs() {
   out.push(make(12.45, 11, 0.46, 0.46, 0.68, 'solid', {
     mirror: false, decorLink: 'hydrant:right',
   }));
+  // Parada de bus: el GLB real ocupa x 13.72..14.98 (los costados del spec
+  // arrancaban en 13.88 — 16cm de marquesina/lateral penetrables y decals
+  // clavados 0.9m adentro). Frente abierto intacto (cover en U).
   for (const [side, z] of [[1, -37], [-1, 37]]) {
     const decorLink = `busShelter:${side > 0 ? 'right' : 'left'}`;
-    out.push(make(side * 14.88, z, 0.2, 3.34, 2.45, 'shelter', {
+    out.push(make(side * 14.88, z, 0.2, 3.53, 2.45, 'shelter', {
       mirror: false, decorLink,
     }));
-    for (const dz of [-1.67, 1.67]) {
-      out.push(make(side * 14.43, z + dz, 1.1, 0.18, 2.45, 'shelter', {
+    for (const dz of [-1.6, 1.6]) {
+      out.push(make(side * 14.35, z + dz, 1.26, 0.5, 2.45, 'shelter', {
         mirror: false, decorLink,
       }));
     }
+    // interior del GLB (banca con respaldo + paneles de vidrio a varias
+    // alturas): sellado como bloque — la navegación ya estaba bloqueada por
+    // la banca y las balas se colaban entre panel y panel
+    out.push(make(side * 14.38, z, 1.2, 3.1, 2.45, 'solid', {
+      mirror: false, decorLink,
+    }));
   }
   return freeze(out);
 }

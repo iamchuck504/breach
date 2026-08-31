@@ -106,16 +106,23 @@ export class MapEditor {
   // adjunta su carrocería; el usuario no tiene que borrar ni volver a clonar.
   _upgradeBaseDecor() {
     const previousVersion = this.map?.decorCaptureVersion ?? 0;
-    if (!this.map?.base || previousVersion >= 4) return false;
+    if (!this.map?.base || previousVersion >= 5) return false;
     const template = mapFromSnapshot(this.map.base, this.world.snapshotLayout(this.map.base));
     const isBox = (o) => paletteById(o.p)?.t === 'box';
-    const revisedPhysics = new Set(['urban:streetlight', 'urban:busShelter']);
-    const physicalAssets = new Set(['urban:streetlight', 'urban:fireHydrant', 'urban:busShelter']);
+    // v5 (auditoría de hitboxes 2026-08-31): la física de vehículos, bus,
+    // kioscos, paradas y farolas se re-derivó de las siluetas MEDIDAS de los
+    // meshes — todo clon anterior reemplaza esas cajas por las nuevas.
+    const revisedPhysics = new Set(['urban:streetlight', 'urban:busShelter',
+      'urban:suvMinivan', 'street:vehicle', 'street:truck', 'street:bus',
+      'street:kiosk']);
+    const physicalAssets = new Set(['urban:streetlight', 'urban:fireHydrant',
+      'urban:busShelter', 'urban:suvMinivan', 'street:vehicle', 'street:truck',
+      'street:bus', 'street:kiosk']);
 
-    // v3 tenía una caja en el pivot equivocado del poste y una sola caja
-    // cerrada para la parada. Quitarlas antes de importar la física v4 evita
-    // dejar colliders fantasma en clones que el usuario ya había guardado.
-    if (previousVersion === 3) {
+    // Quitar las cajas viejas de las familias revisadas antes de importar la
+    // física nueva evita colliders fantasma en clones ya guardados (v3 tenía
+    // además el pivot del poste equivocado y la parada cerrada de una pieza).
+    {
       const assets = this.map.objects.filter((o) => o.baseDecor && revisedPhysics.has(o.p));
       const obsoleteLinks = new Set(assets.map((o) => o.link).filter(Boolean));
       this.map.objects = this.map.objects.filter((o) =>
@@ -200,7 +207,7 @@ export class MapEditor {
       this.map.objects.push(copy);
     }
     this.map.decorCaptured = true;
-    this.map.decorCaptureVersion = 4;
+    this.map.decorCaptureVersion = 5;
     return true;
   }
 
