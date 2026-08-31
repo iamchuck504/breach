@@ -94,9 +94,12 @@ try {
       const contact = W.raycastHit(muzzle, barrelDir, G.weapons.def.range);
       const t = contact?.t ?? W.raycast(muzzle, barrelDir, G.weapons.def.range) ??
         G.weapons.def.range;
-      const point = muzzle.clone().addScaledVector(barrelDir, t);
+      const range = G.weapons.def.range;
+      const point = muzzle.clone().addScaledVector(barrelDir, Math.min(range, 32));
+      const contactPoint = muzzle.clone().addScaledVector(barrelDir, t);
       window.BREACH_CAM.updateMatrixWorld(true);
       const projected = point.project(window.BREACH_CAM);
+      const contactProjected = contactPoint.project(window.BREACH_CAM);
       const expected = {
         x: (projected.x * 0.5 + 0.5) * innerWidth,
         y: (-projected.y * 0.5 + 0.5) * innerHeight,
@@ -104,6 +107,11 @@ try {
       const dot = document.getElementById('barrel-dot');
       const rect = dot.getBoundingClientRect();
       const actual = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      const contactScreen = {
+        x: (contactProjected.x * 0.5 + 0.5) * innerWidth,
+        y: (-contactProjected.y * 0.5 + 0.5) * innerHeight,
+      };
+      const ringRadius = Number(document.getElementById('barrel-ring').getAttribute('r'));
       return {
         weapon: G.weapons.cur,
         mag: G.weapons.st.mag,
@@ -113,6 +121,8 @@ try {
         exposure: G.player.blindPoseExposure,
         reticleVisible: dot.classList.contains('on'),
         reticleError: Math.hypot(expected.x - actual.x, expected.y - actual.y),
+        footprintOverflow: Math.hypot(contactScreen.x - actual.x,
+          contactScreen.y - actual.y) - ringRadius,
         centerOffset: Math.hypot(expected.x - innerWidth * 0.5,
           expected.y - innerHeight * 0.5),
         hitDistance: t,
@@ -143,11 +153,29 @@ try {
     I._mouseAim = true; I._mouseFire = true; I.firePressed = true;
   });
   await page.waitForTimeout(430);
-  const aimed = await page.evaluate(() => ({
-    mag: window.BREACH.weapons.state.smg.mag,
-    aim: window.BREACH.player.aim,
-    mode: window.BREACH.player.blindMode,
-  }));
+  const aimed = await page.evaluate(() => {
+    const G = window.BREACH;
+    G.rig.root.updateWorldMatrix(true, true);
+    const muzzle = G.rig.muzzleWorld(new window.THREE.Vector3()).clone();
+    const root = G.rig.gunMount.getWorldPosition(new window.THREE.Vector3()).clone();
+    const ray = G.player.cam.aimRay();
+    const along = muzzle.clone().sub(ray.origin).dot(ray.dir);
+    const opticalError = ray.origin.clone().addScaledVector(ray.dir, along)
+      .distanceTo(muzzle);
+    const barrel = muzzle.clone().sub(root);
+    const barrelHit = window.BREACH_WORLD.raycastHit(root, barrel.clone().normalize(),
+      barrel.length());
+    return {
+      mag: G.weapons.state.smg.mag,
+      aim: G.player.aim,
+      mode: G.player.blindMode,
+      anim: G.player.animState(),
+      coverAimExposure: G.player.coverAimExposure,
+      opticalError,
+      barrelHit: barrelHit ? { t: barrelHit.t,
+        own: barrelHit.collider === G.player.cover?.collider } : null,
+    };
+  });
   await page.evaluate(() => { window.BREACH_INPUT._mouseAim = false; });
   const beforeBlind = aimed.mag;
   await page.waitForTimeout(430);
@@ -162,7 +190,8 @@ try {
     if (results[key].mag >= results[key].initialMag) {
       fail.push(`${key} no disparó (${JSON.stringify(results[key])})`);
     }
-    if (!results[key].reticleVisible || results[key].reticleError > 1.25) {
+    if (!results[key].reticleVisible || results[key].reticleError > 1.25 ||
+        results[key].footprintOverflow > 2) {
       fail.push(`${key} retícula no coincide con trayectoria (${JSON.stringify(results[key])})`);
     }
     if (results[key].centerOffset < 2) {
@@ -173,7 +202,8 @@ try {
     if (result.mag >= result.initialMag) {
       fail.push(`${weapon} no disparó en blindfire (${JSON.stringify(result)})`);
     }
-    if (!result.reticleVisible || result.reticleError > 1.25) {
+    if (!result.reticleVisible || result.reticleError > 1.25 ||
+        result.footprintOverflow > 2) {
       fail.push(`${weapon} retícula blindfire incorrecta (${JSON.stringify(result)})`);
     }
     if (result.centerOffset < 2) {

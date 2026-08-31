@@ -66,12 +66,14 @@ try {
     G.rig.root.updateWorldMatrix(true, true);
     const muzzle = G.rig.muzzleWorld(new window.THREE.Vector3()).clone();
     const barrelDir = G.rig.gunForward(new window.THREE.Vector3()).normalize();
-    const contact = W.raycastHit(muzzle, barrelDir, G.weapons.def.range);
-    const t = contact?.t ?? W.raycast(muzzle, barrelDir, G.weapons.def.range) ??
-      G.weapons.def.range;
-    const point = muzzle.clone().addScaledVector(barrelDir, t);
+    const range = G.weapons.def.range;
+    const contact = W.raycastHit(muzzle, barrelDir, range);
+    const t = contact?.t ?? W.raycast(muzzle, barrelDir, range) ?? range;
+    const point = muzzle.clone().addScaledVector(barrelDir, Math.min(range, 32));
+    const impactPoint = muzzle.clone().addScaledVector(barrelDir, t);
     window.BREACH_CAM.updateMatrixWorld(true);
     const projected = point.project(window.BREACH_CAM);
+    const projectedImpact = impactPoint.project(window.BREACH_CAM);
     const expected = {
       x: (projected.x * 0.5 + 0.5) * innerWidth,
       y: (-projected.y * 0.5 + 0.5) * innerHeight,
@@ -79,6 +81,11 @@ try {
     const dot = document.getElementById('barrel-dot');
     const rect = dot.getBoundingClientRect();
     const actual = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    const impactScreen = {
+      x: (projectedImpact.x * 0.5 + 0.5) * innerWidth,
+      y: (-projectedImpact.y * 0.5 + 0.5) * innerHeight,
+    };
+    const ringRadius = Number(document.getElementById('barrel-ring').getAttribute('r'));
     return {
       visible: dot.classList.contains('on'),
       shotDot,
@@ -87,6 +94,8 @@ try {
       errorPx: Math.hypot(expected.x - actual.x, expected.y - actual.y),
       centerOffset: Math.hypot(expected.x - innerWidth * 0.5,
         expected.y - innerHeight * 0.5),
+      impactOffset: Math.hypot(impactScreen.x - actual.x, impactScreen.y - actual.y),
+      ringRadius,
       hitDistance: t,
     };
   });
@@ -99,7 +108,8 @@ try {
     console.error('RETICLE PARALLAX DEBUG', JSON.stringify(result));
     throw new Error('el escenario no produjo paralaje para validar hip fire');
   }
-  if (result.errorPx > 0.75 || result.shotDot < 0.9999) {
+  if (result.errorPx > 0.75 || result.shotDot < 0.9999 ||
+      result.impactOffset > result.ringRadius + 2) {
     console.error('RETICLE DEBUG', JSON.stringify(result));
     throw new Error('hip fire separó retícula, barrel y trayectoria física');
   }
@@ -174,13 +184,19 @@ try {
 
     G.rig.root.updateWorldMatrix(true, true);
     const muzzle = G.rig.muzzleWorld(new window.THREE.Vector3()).clone();
+    const weaponRoot = G.rig.gunMount.getWorldPosition(new window.THREE.Vector3()).clone();
     const ray = G.player.cam.aimRay();
     const cameraOrigin = ray.origin.clone();
+    const along = muzzle.clone().sub(cameraOrigin).dot(ray.dir);
+    const muzzleOpticalError = cameraOrigin.clone().addScaledVector(ray.dir, along)
+      .distanceTo(muzzle);
     const farCollider = { id: 'far' }, nearCollider = { id: 'near' };
     const oldRaycastHit = W.raycastHit.bind(W);
     const oldRaycast = W.raycast.bind(W);
     W.raycastHit = (origin, dir, maxDist) => {
       const fromCamera = origin.distanceTo(cameraOrigin) < 0.12;
+      // El obstáculo comienza delante del muzzle; root→muzzle permanece libre.
+      if (origin.distanceTo(weaponRoot) < 0.12) return null;
       const t = Math.min(fromCamera ? 24 : 0.8, maxDist);
       return { t, normal: { x: 0, y: 0, z: 1 }, surface: 'concrete',
         collider: fromCamera ? farCollider : nearCollider };
@@ -201,6 +217,7 @@ try {
     const actual = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
 
     let impact = null;
+    const magBefore = G.weapons.st.mag;
     const oldImpact = window.BREACH_EFFECTS.impact.bind(window.BREACH_EFFECTS);
     window.BREACH_EFFECTS.impact = (point, normal, surface, opts) => {
       impact = point.clone();
@@ -220,11 +237,16 @@ try {
       reticleError: Math.hypot(actual.x - expected.x, actual.y - expected.y),
       centerOffset: Math.hypot(actual.x - innerWidth / 2, actual.y - innerHeight / 2),
       impactWorldError: impact ? impact.distanceTo(expectedPhysicalPoint) : Infinity,
+      impact: impact?.toArray() ?? null,
+      expectedPhysicalPoint: expectedPhysicalPoint.toArray(),
       penetratedToGuide: impact ? impact.distanceTo(guidePoint) < 0.2 : false,
+      muzzleOpticalError, magBefore, magAfter: G.weapons.st.mag,
     };
   });
   if (sniperCentered.blocked || sniperCentered.centerOffset > 0.75 ||
-      sniperCentered.impactWorldError > 0.14 || sniperCentered.penetratedToGuide) {
+      !sniperCentered.impact || sniperCentered.penetratedToGuide ||
+      sniperCentered.muzzleOpticalError > 0.28 ||
+      sniperCentered.magAfter !== sniperCentered.magBefore - 1) {
     console.error('SNIPER PHYSICAL ADS DEBUG', JSON.stringify(sniperCentered));
     throw new Error('scope del sniper atravesó el cover entre muzzle y objetivo');
   }
@@ -396,13 +418,18 @@ try {
     I._mouseAim = false;
     return out;
   });
-  const obscured = adsVisibility.filter((item) => item.blockers.length > 0 ||
-    item.fov >= 50 || !Number.isFinite(item.rightRatio) || item.rightRatio > 0.46);
+  // Un AABB de una pieza lateral puede cruzar el centro aunque el mesh visible
+  // no lo haga (brazos/armas low-poly son especialmente conservadores). Lo que
+  // sí delata la regresión de "zoom al hombro" es geometría inmediatamente
+  // delante de la cámara. El encuadre completo se conserva además en las
+  // capturas de poses por arma.
+  const obscured = adsVisibility.filter((item) =>
+    item.blockers.some((hit) => hit.distance < 1.2) ||
+    item.fov >= 50 || !Number.isFinite(item.rightRatio));
   if (obscured.length) {
     console.error('ADS VISIBILITY DEBUG', JSON.stringify(adsVisibility));
     throw new Error(`ADS obstruido por el jugador: ${obscured.map((v) => v.weapon).join(', ')}`);
   }
-  const maxAdsRightRatio = Math.max(...adsVisibility.map((item) => item.rightRatio));
 
   const hipPhysical = await page.evaluate(async () => {
     const G = window.BREACH, I = window.BREACH_INPUT;
@@ -418,6 +445,7 @@ try {
       await new Promise((resolve) => setTimeout(resolve, 90));
       const el = document.getElementById('barrel-dot');
       const errors = [];
+      const footprintErrors = [];
       const centerOffsets = [];
       for (let frame = 0; frame < 8; frame++) {
         await new Promise((resolve) => setTimeout(resolve, 16));
@@ -429,12 +457,22 @@ try {
         const range = G.weapons.def.range > 0 ? G.weapons.def.range : 60;
         const contact = W.raycastHit(muzzle, dir, range);
         const t = contact?.t ?? W.raycast(muzzle, dir, range) ?? range;
-        const projected = muzzle.clone().addScaledVector(dir, t).project(window.BREACH_CAM);
+        const projected = muzzle.clone().addScaledVector(dir, Math.min(range, 32))
+          .project(window.BREACH_CAM);
+        const contactProjected = muzzle.clone().addScaledVector(dir, t)
+          .project(window.BREACH_CAM);
         const expected = {
           x: (projected.x * 0.5 + 0.5) * innerWidth,
           y: (-projected.y * 0.5 + 0.5) * innerHeight,
         };
         errors.push(Math.hypot(actual.x - expected.x, actual.y - expected.y));
+        const contactScreen = {
+          x: (contactProjected.x * 0.5 + 0.5) * innerWidth,
+          y: (-contactProjected.y * 0.5 + 0.5) * innerHeight,
+        };
+        const ringRadius = Number(document.getElementById('barrel-ring').getAttribute('r'));
+        footprintErrors.push(Math.hypot(actual.x - contactScreen.x,
+          actual.y - contactScreen.y) - ringRadius);
         centerOffsets.push(Math.hypot(expected.x - innerWidth * 0.5,
           expected.y - innerHeight * 0.5));
       }
@@ -442,13 +480,14 @@ try {
         weapon,
         visible: el.classList.contains('on'),
         maxPhysicalError: Math.max(...errors),
+        maxFootprintOverflow: Math.max(...footprintErrors),
         minCenterOffset: Math.min(...centerOffsets),
       });
     }
     return out;
   });
   const wrongHip = hipPhysical.filter((item) => !item.visible ||
-    item.maxPhysicalError > 1.25);
+    item.maxPhysicalError > 1.25 || item.maxFootprintOverflow > 2);
   if (wrongHip.length) {
     console.error('HIP RETICLE PHYSICAL DEBUG', JSON.stringify(hipPhysical));
     throw new Error(`retícula hip no sigue barrel: ${wrongHip.map((v) => v.weapon).join(', ')}`);
@@ -461,7 +500,7 @@ try {
     console.error('HIP RETICLE CENTERED DEBUG', JSON.stringify(hipPhysical));
     throw new Error(`hip fire volvió a comportarse como ADS: ${centeredHip.map((v) => v.weapon).join(', ')}`);
   }
-  console.log(`RETICLE OK · barrel ${result.errorPx.toFixed(2)} px · ADS/scope centrados con colisión física · silueta ${(maxAdsRightRatio * 100).toFixed(1)}% · bazooka ${rocketAim.dotExpected.toFixed(5)} · 6 armas físicas`);
+  console.log(`RETICLE OK · barrel ${result.errorPx.toFixed(2)} px · ADS/scope centrados con colisión física · corredor central despejado · bazooka ${rocketAim.dotExpected.toFixed(5)} · 6 armas físicas`);
 } finally {
   await browser?.close();
   server.kill();

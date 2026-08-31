@@ -47,7 +47,8 @@ function detailedHit(world, origin, dir, maxDist) {
   return t !== null ? { t, collider: null } : null;
 }
 
-export function muzzleHasClearance(world, face, weaponRoot, muzzle, fireDir) {
+export function muzzleHasClearance(world, face, weaponRoot, muzzle, fireDir,
+  spreadDeg = 0) {
   const barrel = muzzle.clone().sub(weaponRoot);
   const barrelLen = barrel.length();
   if (barrelLen > 0.001) {
@@ -57,15 +58,30 @@ export function muzzleHasClearance(world, face, weaponRoot, muzzle, fireDir) {
   }
 
   // Una salida corta basta para detectar que el muzzle sigue detrás/dentro de
-  // la cobertura. Obstáculos más lejanos son impactos válidos, no bloqueos del
-  // gatillo: allí sí se consume munición y se muestra el decal correspondiente.
+  // SU cobertura. No comprobamos solo el eje: los bordes del cono evitan que
+  // la marca central pase limpia mientras un disparo con spread corta la
+  // esquina inmediata. Obstáculos ajenos siguen siendo impactos válidos.
   // Fuera de cover solo importa que el arma no haya cruzado una pared entre
   // su raíz y el muzzle. Una pared delante del muzzle es un impacto válido:
   // el tiro debe salir, consumir munición y dejar su marca allí.
   if (!face?.collider) return true;
-  const outHit = detailedHit(world, muzzle, fireDir, 0.32);
-  if (!outHit) return true;
-  return outHit.collider !== face.collider;
+  const directions = [fireDir.clone().normalize()];
+  const spread = Math.tan(Math.max(0, spreadDeg) * Math.PI / 180);
+  if (spread > 0.0001) {
+    const referenceUp = Math.abs(fireDir.y) > 0.9
+      ? fireDir.clone().set(1, 0, 0)
+      : fireDir.clone().set(0, 1, 0);
+    const side = fireDir.clone().cross(referenceUp).normalize();
+    const up = side.clone().cross(fireDir).normalize();
+    for (const axis of [side, up]) for (const sign of [-1, 1]) {
+      directions.push(fireDir.clone().addScaledVector(axis, spread * sign).normalize());
+    }
+  }
+  for (const dir of directions) {
+    const outHit = detailedHit(world, muzzle, dir, 0.78);
+    if (outHit?.collider === face.collider) return false;
+  }
+  return true;
 }
 
 export function segmentsHaveClearance(world, segments) {

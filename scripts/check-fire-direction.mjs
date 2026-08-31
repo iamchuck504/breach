@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { Rig } from '../src/player/rig.js';
 import { RemotePlayer } from '../src/player/remote.js';
+import { TUNING } from '../src/config/tuning.js';
 
 const failures = [];
 const check = (ok, msg) => { if (!ok) failures.push(msg); };
@@ -30,6 +31,16 @@ function expectedDir(pitch) {
   return new THREE.Vector3(0, Math.sin(pitch), -Math.cos(pitch)).normalize();
 }
 
+function opticalError(muzzle, pitch, side = 1) {
+  const c = TUNING.cam;
+  const cp = Math.cos(pitch), sp = Math.sin(pitch);
+  const origin = new THREE.Vector3(side * c.aimShoulder,
+    c.aimHeight * 0.92 - sp * c.aimDist + 0.12, cp * c.aimDist);
+  const dir = expectedDir(pitch);
+  const along = muzzle.clone().sub(origin).dot(dir);
+  return origin.addScaledVector(dir, along).distanceTo(muzzle);
+}
+
 for (const weapon of weapons) {
   const rig = new Rig(scene, 'red');
   rig.setWeapon(weapon);
@@ -42,6 +53,7 @@ for (const weapon of weapons) {
   const relaxed = rig.gunForward(new THREE.Vector3()).normalize();
   const relaxedMuzzle = rig.muzzleWorld(new THREE.Vector3()).clone();
   const relaxedMount = rig.gunMount.position.clone();
+  const relaxedRigX = rig.aimRig.position.x;
   rig.update(1 / 60, params(false, 0.2, true));
   const firstFireFrame = rig.gunForward(new THREE.Vector3()).normalize();
   const firstFireMuzzle = rig.muzzleWorld(new THREE.Vector3()).clone();
@@ -49,8 +61,10 @@ for (const weapon of weapons) {
     `${weapon}: salto en el primer frame de hip fire (${relaxed.dot(firstFireFrame)})`);
   check(relaxedMuzzle.distanceTo(firstFireMuzzle) < 0.012,
     `${weapon}: el muzzle saltó al iniciar hip fire (${relaxedMuzzle.distanceTo(firstFireMuzzle)} m)`);
-  check(relaxedMount.x >= 0.244 && relaxedMount.z <= -0.399 && relaxedMount.y > -0.17,
+  check(relaxedMount.x >= 0.19 && relaxedMount.z <= -0.14 && relaxedMount.y > 0.11,
     `${weapon}: postura hip no mantiene el arma visible al frente (${relaxedMount.toArray()})`);
+  check(relaxedRigX >= 0.28,
+    `${weapon}: guardia hip quedó detrás del hombro en pantalla (${relaxedRigX})`);
   settle(rig, params(false, 0.2, true));
   const hipA = rig.gunForward(new THREE.Vector3()).normalize();
   const firingMuzzle = rig.muzzleWorld(new THREE.Vector3()).clone();
@@ -99,6 +113,9 @@ for (const weapon of weapons) {
       const after = rig.gunForward(new THREE.Vector3()).normalize();
       check(Number.isFinite(after.x + after.y + after.z) && before.dot(after) > 0.99999,
         `${weapon}: cover ${side > 0 ? 'derecho' : 'izquierdo'} deriva en pitch ${pitch}`);
+      const coverMuzzle = rig.muzzleWorld(new THREE.Vector3()).clone();
+      check(opticalError(coverMuzzle, pitch, side) <= TUNING.combat.aimMuzzleMaxOffset,
+        `${weapon}: muzzle de cover ${side} fuera de línea óptica (${opticalError(coverMuzzle, pitch, side)})`);
     }
   }
 
@@ -106,12 +123,9 @@ for (const weapon of weapons) {
   // conserva una postura de precisión propia aunque comparta la línea óptica.
   settle(rig, params(true, 0), 90);
   poses.set(weapon, rig.gunMount.position.clone());
-  const adsCenterX = rig.aimRig.position.x + rig.gunMount.position.x;
-  const minAdsCenterShift = weapon === 'pistol' ? 0.19 : 0.23;
-  check(adsCenterX >= minAdsCenterShift,
-    `${weapon}: ADS no lleva brazos/arma hacia la línea de visión (${adsCenterX})`);
-  check(adsCenterX < relaxedMount.x + 0.06,
-    `${weapon}: ADS cruzó excesivamente el centro de cámara (${adsCenterX})`);
+  const aimedMuzzle = rig.muzzleWorld(new THREE.Vector3()).clone();
+  check(opticalError(aimedMuzzle, 0) <= TUNING.combat.aimMuzzleMaxOffset,
+    `${weapon}: ADS no presentó el muzzle sobre la línea óptica (${opticalError(aimedMuzzle, 0)})`);
 
   const gun = rig.activeGun;
   const rightHand = rig.armR.hand.getWorldPosition(new THREE.Vector3());

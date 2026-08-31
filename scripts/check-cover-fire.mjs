@@ -200,6 +200,21 @@ const wallAhead = {
 check(muzzleHasClearance(wallAhead, null, root, muzzle, forward),
   'ADS libre bloqueó un impacto válido delante del muzzle');
 
+// El eje central puede librar el borde y aun así un extremo del cono tocar la
+// cobertura propia. El gatillo debe esperar a que salga el cono completo; un
+// collider ajeno delante del arma sigue siendo un impacto normal.
+const ownCover = {};
+const coneEdgeWorld = {
+  raycastHit: (origin, dir) => origin.z < -0.99 && dir.y < -0.04
+    ? { t: 0.55, collider: ownCover } : null,
+  raycast: () => null,
+};
+check(!muzzleHasClearance(coneEdgeWorld, { collider: ownCover }, root, muzzle,
+  forward, 8), 'blindfire permitió que el borde del cono cortara su propio cover');
+const foreignCover = {};
+check(muzzleHasClearance(coneEdgeWorld, { collider: foreignCover }, root, muzzle,
+  forward, 8), 'un obstáculo ajeno delante del muzzle bloqueó el gatillo');
+
 check(TUNING.weapons.smg.spreadBlind > TUNING.weapons.smg.spreadAim &&
   TUNING.weapons.shotgun.spreadBlind > TUNING.weapons.shotgun.spreadAim,
   'blindfire perdió su desventaja de precisión');
