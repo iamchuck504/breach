@@ -204,29 +204,31 @@ try {
       impact = point.clone();
       return oldImpact(point, normal, surface, opts);
     };
-    // Este stub crea un cover que tapa el cañón A CUALQUIER ALTURA: el
-    // aim-over no puede librarlo y el gatillo RESPONDE IGUAL — la bala nace
-    // en el muzzle y el primer contacto físico (el cover a 0.8m) la para.
-    // El punto esperado se calcula con el ORIGEN REAL capturado del tracer.
-    let shotOrigin = null;
+    // MODELO GEARS: el daño viaja por el EJE ÓPTICO desde la proyección del
+    // pecho sobre el rayo de mira. El stub tapa ese rayo a 0.8m del origen
+    // de daño: la bala pega ahí — la retícula jamás concede penetración.
+    let fired = false;
     const oldTracer = window.BREACH_EFFECTS.tracer;
     window.BREACH_EFFECTS.tracer = function (o, p2, em) {
-      shotOrigin = shotOrigin ?? o.clone();
+      fired = true;
       return oldTracer.call(this, o, p2, em);
     };
     const magBefore = G.weapons.st.mag;
     I._mouseFire = true;
     I.firePressed = true;
-    for (let i = 0; i < 20 && !shotOrigin; i++) {
+    for (let i = 0; i < 20 && !fired; i++) {
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
     I._mouseFire = false;
     I._mouseAim = false;
     window.BREACH_EFFECTS.tracer = oldTracer;
-    const expectedPhysicalPoint = shotOrigin
-      ? shotOrigin.clone().addScaledVector(
-        guidePoint.clone().sub(shotOrigin).normalize(), 0.8)
-      : null;
+    // réplica del origen de daño: proyección del pecho al rayo de mira
+    const chest = new window.THREE.Vector3(
+      G.player.pos.x, (G.player.y ?? 0) + 1.3, G.player.pos.z);
+    const tChest = Math.max(0, chest.sub(cameraOrigin).dot(ray.dir));
+    const damageOrigin = cameraOrigin.clone().addScaledVector(ray.dir, tChest);
+    const expectedPhysicalPoint = damageOrigin.clone().addScaledVector(
+      guidePoint.clone().sub(damageOrigin).normalize(), 0.8);
     window.BREACH_EFFECTS.impact = oldImpact;
     W.raycastHit = oldRaycastHit;
     W.raycast = oldRaycast;

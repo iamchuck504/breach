@@ -254,16 +254,15 @@ check('TORTURA: cero balas estampadas (círculo lejos, bala cerca) en 4s de barr
   JSON.stringify(tortura));
 
 // ---------------------------------------------------------------------------
-// 2) GEOMETRÍA IMPOSIBLE (ni el tope libra, forzado con maxLift 0.05): el
-//    gatillo RESPONDE IGUAL — dispara y pega lo que físicamente hay. Jamás
-//    se niega, jamás atraviesa, jamás toca la retícula.
+// 2) SIN ATRAVESAR: un muro alto que también tapa la VISTA — el círculo
+//    apunta al muro y la bala pega el muro (la retícula es veraz, jamás
+//    concede wall penetration). El gatillo responde igual.
 // ---------------------------------------------------------------------------
-const imposible = await page.evaluate(async () => {
-  const G = window.BREACH, I = window.BREACH_INPUT, E = window.BREACH_EFFECTS;
-  const TUNING = (await import('/src/config/tuning.js')).TUNING;
-  TUNING.aimOver.maxLift = -1; // escalera vacía: NADA libra (imposible real)
-  await new Promise((r) => setTimeout(r, 700));
-  const lift = G.aimOver.lift;
+const muro = await page.evaluate(async () => {
+  const G = window.BREACH, W = window.BREACH_WORLD, I = window.BREACH_INPUT;
+  const E = window.BREACH_EFFECTS;
+  W.colliders[W.colliders.length - 1].h = 2.6; // ahora tapa cuerpo Y cámara
+  await new Promise((r) => setTimeout(r, 400));
   let tracerPoint = null;
   const oldTracer = E.tracer;
   E.tracer = function (o, p2, em) { tracerPoint = tracerPoint ?? p2.clone(); return oldTracer.call(this, o, p2, em); };
@@ -273,16 +272,17 @@ const imposible = await page.evaluate(async () => {
   I._mouseFire = false;
   await new Promise((r) => setTimeout(r, 150));
   E.tracer = oldTracer;
+  W.colliders[W.colliders.length - 1].h = 1.28; // restaurar para las fases siguientes
   return {
-    lift, magBefore, magAfter: G.weapons.st.mag,
+    magBefore, magAfter: G.weapons.st.mag,
     shotZ: tracerPoint?.z ?? null,
     crossBlocked: document.getElementById('crosshair').classList.contains('blocked'),
   };
 });
-check('geometría imposible: el gatillo RESPONDE igual (física honesta)',
-  imposible.magAfter < imposible.magBefore && imposible.shotZ !== null &&
-  Math.abs(imposible.shotZ - 12.3) < 0.8 && !imposible.crossBlocked,
-  JSON.stringify(imposible));
+check('muro que tapa la vista: la bala pega el muro (veraz, sin atravesar)',
+  muro.magAfter < muro.magBefore && muro.shotZ !== null &&
+  Math.abs(muro.shotZ - 12.3) < 0.8 && !muro.crossBlocked,
+  JSON.stringify(muro));
 
 // ---------------------------------------------------------------------------
 // 3) KILL SWITCH en vivo: enabled=0 restaura el comportamiento anterior
@@ -290,8 +290,7 @@ check('geometría imposible: el gatillo RESPONDE igual (física honesta)',
 const apagado = await page.evaluate(async () => {
   const G = window.BREACH, I = window.BREACH_INPUT, E = window.BREACH_EFFECTS;
   const TUNING = (await import('/src/config/tuning.js')).TUNING;
-  TUNING.aimOver.enabled = 0;
-  TUNING.aimOver.maxLift = 0.34; // restaurar el tope tocado en la fase 2
+  TUNING.aimOver.enabled = 0; // apaga SOLO el acomodo visual del arma
   await new Promise((r) => setTimeout(r, 700));
   const lift = G.aimOver.lift;
   let tracerPoint = null;
@@ -309,9 +308,9 @@ const apagado = await page.evaluate(async () => {
     shotZ: tracerPoint?.z ?? null,
   };
 });
-check('kill switch: sin alzada, el tiro vuelve a pegar en la caja',
+check('kill switch visual: sin alzada del arma, el DAÑO sigue el eje óptico',
   apagado.lift < 0.03 && apagado.fired &&
-  apagado.shotZ !== null && Math.abs(apagado.shotZ - 12.3) < 0.8,
+  apagado.shotZ !== null && apagado.shotZ < 10,
   `lift=${apagado.lift?.toFixed(3)} shotZ=${apagado.shotZ?.toFixed(1)}`);
 
 // ---------------------------------------------------------------------------

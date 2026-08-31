@@ -13,7 +13,7 @@ import { Controller, PLAYER_R } from './player/controller.js';
 import { RemotePlayer } from './player/remote.js';
 import { Dummies } from './player/practice.js';
 import { Weapons } from './combat/weapons.js';
-import { resolveShot, resolveGuidedShot, applySpread, applyPelletPattern } from './combat/ballistics.js';
+import { resolveShot, applySpread, applyPelletPattern } from './combat/ballistics.js';
 import { damageFalloff, rocketSplashDamage } from './combat/damage.js';
 import {
   deathImpactPoint, isSniperHeadshotDeath, rocketDeathLevel,
@@ -3213,11 +3213,20 @@ function fireShot() {
   }
 
   const targets = currentTargets();
-  // red final: si el tiro va a estamparse a quemarropa con el círculo
-  // prometiendo lejos, el origen se alza/arrima AHORA al punto que libra
+  // MODELO GEARS (pedido explícito de Chuck): en ADS el DAÑO viaja por el
+  // EJE ÓPTICO — la retícula es la verdad absoluta y el cañón solo emite
+  // los efectos (tracer/flash), igual que en Gears of War. El origen NO es
+  // la cámara (retrasada sobre el hombro) sino su proyección al plano del
+  // personaje, a la altura del pecho: no se dispara "desde los ojos" —
+  // nada que tape TU CUERPO se atraviesa, y asomar solo la cámara por una
+  // esquina no da tiro. El aim-over queda como acomodo VISUAL del arma
+  // (que el cañón no se vea enterrado en el parapeto al disparar).
+  let damageOrigin = origin;
   if (aiming) {
     adsAdjustFireOrigin(targets, cameraOrigin, baseDir, muzzle, def.range, def);
-    origin.copy(muzzle);
+    const tChest = Math.max(0, _v2.set(G.player.pos.x, (G.player.y ?? 0) + 1.3,
+      G.player.pos.z).sub(cameraOrigin).dot(ray.dir));
+    damageOrigin = cameraOrigin.clone().addScaledVector(ray.dir, tChest);
   }
   const dmgByTarget = new Map();
   let anyPoint = null;
@@ -3229,17 +3238,12 @@ function fireShot() {
       // El scope promete exactamente su punto. Fuera del scope (incluido
       // hip/blindfire del sniper) se conserva la dispersión configurada.
       : scoped ? baseDir.clone() : applySpread(baseDir, spread);
-    // La cámara elige el punto deseado, pero la bala siempre nace en el muzzle.
-    // Si algo ocupa el segmento físico hacia ese punto, ese primer contacto
-    // detiene el tiro: la retícula nunca concede wall penetration.
-    const hit = aiming
-      ? resolveGuidedShot(world, targets, cameraOrigin, origin, dir, def.range, null)
-      : resolveShot(world, targets, origin, dir, def.range, null);
+    const hit = resolveShot(world, targets, damageOrigin, dir, def.range, null);
     anyPoint = hit.point;
     effects.tracer(muzzle, hit.point, scoped && w.cur === 'sniper');
     if (hit.kind === 'world') {
       effects.impact(hit.point, hit.normal, hit.surface, {
-        origin,
+        origin: damageOrigin,
         emphasized: scoped && w.cur === 'sniper',
       });
       audio.impact(hit.point, hit.surface);
@@ -3330,7 +3334,9 @@ function fireShot() {
   if (G.net && anyPoint) {
     // WebSocket conserva orden: registrar primero el disparo validable y luego
     // sus claims de daño. Antes los hits llegaban al server sin disparo asociado.
-    G.net.fire(muzzle, anyPoint, w.cur, worldImpacts, G.player);
+    // el origen reportado es el del DAÑO (eje óptico en ADS): el server
+    // valida LOS/decals/endpoint con exactamente la misma línea del tiro
+    G.net.fire(damageOrigin, anyPoint, w.cur, worldImpacts, G.player);
     for (const c of onlineClaims) {
       G.net.hit(c.id, c.dmg, c.part, c.gib, c.point, { pellets: c.pellets });
     }
