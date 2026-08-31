@@ -3234,8 +3234,8 @@ function simStep(dt) {
   const stateOk = !p.dead && p.state !== 'dive' && p.state !== 'slide' &&
     p.state !== 'roadie' && p.state !== 'mantle' && p.state !== 'melee' && input.anyDevice;
   // Un giro grande se resuelve como rotación progresiva y buffer de disparo.
-  // ADS y blindfire usan el mismo criterio: la cámara manda, pero el cañón
-  // debe poder representarla visualmente antes de emitir el proyectil.
+  // La espera de giro solo evita disparar mientras el cuerpo sigue rotando.
+  // No redefine la trayectoria: ADS usa cámara; hip/blindfire usan cañón.
   const aligned = p.fireAligned();
   const wantsFire = input.fireHeld || input.firePressed || G.fireBuffer > 0;
   let canFire = stateOk && aligned && coverPoseReady(input.aimHeld, wantsFire);

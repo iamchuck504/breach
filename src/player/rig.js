@@ -1563,9 +1563,10 @@ export class Rig {
         R(this.legR.hip, 0, 0, -0.1 + lean * 0.12);
       }
     } else if (p.state !== 'dead') {
-      // Hipfire/blindfire: el eje del arma permanece preparado y estable aun
-      // antes del click. La posición puede seguir siendo low-ready, pero su
-      // dirección no cambia de un eje decorativo a otro al disparar.
+      // Sin ADS no existe intención óptica central. El cañón conserva la pose
+      // física de hip/blindfire y la HUD proyecta ese eje real. Mantener una
+      // sola orientación antes/durante el disparo evita el antiguo salto sin
+      // convertir hip fire en ADS oculto.
       const yawErr = p.aimYawErr ?? 0;
       if (p.state.startsWith('blind_')) {
         const parentPitch = p.state.startsWith('blind_low_') ? -0.42
@@ -1583,8 +1584,11 @@ export class Rig {
       } else if (p.state !== 'roadie' && p.state !== 'flip' && p.state !== 'mantle' &&
                  p.state !== 'melee') {
         // (roadie, flip, mantle y melee fijan su propio aimRig dentro del switch)
-        set(this.aimRig.rotation, 'x', pitch - rootRotX - this.torso.rotation.x);
-        set(this.aimRig.rotation, 'y', yawErr - this.torso.rotation.y);
+        // Low-ready acompaña solo parte del pitch y permanece ligado al cuerpo.
+        // No cambia al apretar fire: muzzle, retícula y primer tiro ya estaban
+        // alineados con esta misma trayectoria física en el frame anterior.
+        set(this.aimRig.rotation, 'x', pitch * 0.85);
+        set(this.aimRig.rotation, 'y', 0);
       }
       // el roll del lean de ADS no debe quedarse pegado en hipfire
       set(this.aimRig.rotation, 'z', 0);

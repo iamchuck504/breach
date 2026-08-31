@@ -165,6 +165,9 @@ try {
     if (!results[key].reticleVisible || results[key].reticleError > 1.25) {
       fail.push(`${key} retícula no coincide con trayectoria (${JSON.stringify(results[key])})`);
     }
+    if (results[key].centerOffset < 2) {
+      fail.push(`${key} colapsó la trayectoria física al centro óptico (${JSON.stringify(results[key])})`);
+    }
   }
   for (const [weapon, result] of Object.entries(weaponResults)) {
     if (result.mag >= result.initialMag) {
@@ -172,6 +175,9 @@ try {
     }
     if (!result.reticleVisible || result.reticleError > 1.25) {
       fail.push(`${weapon} retícula blindfire incorrecta (${JSON.stringify(result)})`);
+    }
+    if (result.centerOffset < 2) {
+      fail.push(`${weapon} blindfire quedó centrado como ADS (${JSON.stringify(result)})`);
     }
   }
   if (results.highCenter.mag !== 50 || results.highCenter.mode !== null) {

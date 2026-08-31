@@ -415,6 +415,7 @@ try {
       await new Promise((resolve) => setTimeout(resolve, 90));
       const el = document.getElementById('barrel-dot');
       const errors = [];
+      const centerOffsets = [];
       for (let frame = 0; frame < 8; frame++) {
         await new Promise((resolve) => setTimeout(resolve, 16));
         const r = el.getBoundingClientRect();
@@ -431,11 +432,14 @@ try {
           y: (-projected.y * 0.5 + 0.5) * innerHeight,
         };
         errors.push(Math.hypot(actual.x - expected.x, actual.y - expected.y));
+        centerOffsets.push(Math.hypot(expected.x - innerWidth * 0.5,
+          expected.y - innerHeight * 0.5));
       }
       out.push({
         weapon,
         visible: el.classList.contains('on'),
         maxPhysicalError: Math.max(...errors),
+        minCenterOffset: Math.min(...centerOffsets),
       });
     }
     return out;
@@ -445,6 +449,14 @@ try {
   if (wrongHip.length) {
     console.error('HIP RETICLE PHYSICAL DEBUG', JSON.stringify(hipPhysical));
     throw new Error(`retícula hip no sigue barrel: ${wrongHip.map((v) => v.weapon).join(', ')}`);
+  }
+  // Con el pitch de este escenario, una pose hip realmente física no puede
+  // coincidir con el centro óptico. Esto detecta el error sutil de orientar el
+  // propio barrel a cámara y después declarar que la retícula "sigue barrel".
+  const centeredHip = hipPhysical.filter((item) => item.minCenterOffset < 4);
+  if (centeredHip.length) {
+    console.error('HIP RETICLE CENTERED DEBUG', JSON.stringify(hipPhysical));
+    throw new Error(`hip fire volvió a comportarse como ADS: ${centeredHip.map((v) => v.weapon).join(', ')}`);
   }
   console.log(`RETICLE OK · barrel ${result.errorPx.toFixed(2)} px · ADS/scope centrados y despejados · silueta ${(maxAdsRightRatio * 100).toFixed(1)}% · bazooka ${rocketAim.dotExpected.toFixed(5)} · 6 armas físicas`);
 } finally {
