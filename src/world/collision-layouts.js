@@ -32,6 +32,29 @@ const fortaleza = freeze([
   make(-8.5, -1.5, 2.4, 2.4, LOW, 'low'),
   make(0, 0, 1.8, 1.8, HIGH, 'high', { mirror: false, top: 0xffb075 }),
   make(-5.5, 0.6, 0.9, 2.4, LOW, 'low'),
+  // AUDITORÍA de hitboxes: decoración MEDIDA sin física (el espejo crea el
+  // par). Antorchas junto a los muros N/S y rocas/derrubio al pie de los
+  // muros — las balas atravesaban el dibujo visible.
+  make(-10.3, 25.9, 0.7, 0.7, 1.62, 'low', { visual: false, cover: false }),
+  make(-10.4, 25.75, 1.8, 1.5, 0.5, 'low', { visual: false, cover: false }),
+  make(-19.75, -18.2, 1.5, 1.9, 0.84, 'low', { visual: false, cover: false }),
+  make(-20.35, -6.7, 1.7, 1.7, 0.84, 'low', { visual: false, cover: false }),
+  // pilastra del muro este (medida: x 20.4-20.6, z ±2.3, alto 2.5) — solo
+  // existe en el lado este, sin espejo
+  make(20.7, 0, 0.7, 4.7, 2.5, 'low',
+    { visual: false, cover: false, mirror: false }),
+  make(-20.1, -22.4, 1.2, 2.8, 0.64, 'low', { visual: false, cover: false }),
+  make(-20.1, -15, 1.0, 0.8, 0.6, 'low', { visual: false, cover: false }),
+  make(-19.65, 3.6, 1.2, 1.3, 0.54, 'low', { visual: false, cover: false }),
+  make(20.1, 2.7, 1.2, 1.2, 0.54, 'low', { visual: false, cover: false }),
+  make(19.95, -3.6, 1.1, 1.2, 0.54, 'low', { visual: false, cover: false }),
+  make(19.8, -18.3, 1.6, 2.1, 0.56, 'low', { visual: false, cover: false }),
+  make(20.2, -2, 1.3, 1.5, 0.62, 'low', { visual: false, cover: false }),
+  make(-20.05, 9.7, 1.1, 1.7, 0.46, 'low', { visual: false, cover: false }),
+  make(18.2, -10.6, 0.8, 0.8, 0.45, 'low', { visual: false, cover: false }),
+  make(-6.4, 25.45, 1.9, 1.9, 0.58, 'low', { visual: false, cover: false }),
+  make(-12.85, -25.5, 1.6, 1.7, 0.46, 'low', { visual: false, cover: false }),
+  make(-15.2, -15.8, 0.8, 0.8, 0.5, 'low', { visual: false, cover: false }),
 ]);
 
 const azoteas = freeze([
@@ -41,6 +64,7 @@ const azoteas = freeze([
   make(31.9, 0, 0.8, 82, HIGH, 'wall', { mirror: false }),
   make(0, -31.35, 8, 1.2, HIGH, 'hut'),
   make(-8.2, -27.7, 4, 2.2, LOW, 'ac'),
+  make(-8.2, -27.7, 3.9, 2.1, 1.18, 'ac', { visual: false, cover: false }),
   make(11.5, -22.8, 3.8, 3.8, LOW, 'glass'),
   make(-12.2, -22.1, 5.6, 1.1, MID, 'hut'),
   make(-26.3, -31.5, 6, 4, LOW, 'ac'),
@@ -50,20 +74,38 @@ const azoteas = freeze([
   // jugables, la regla LOW/MID/HIGH no aplica, como las cabinas de autos).
   make(-26.3, -31.5, 5.9, 3.9, 1.26, 'ac', { visual: false, cover: false }),
   make(26, -31.5, 5.5, 2.6, MID, 'hut'),
-  make(26, -31.5, 5.4, 2.5, 2.06, 'hut', { visual: false, cover: false }),
+  // techo medido a 2.52: el cap 2.06 dejaba pasar tiros a 2.1-2.3
+  make(26, -31.5, 5.4, 2.5, 2.30, 'hut', { visual: false, cover: false }),
   make(-27, -23.5, 1.4, 5, LOW, 'vent'),
+  // ducto largo MEDIDO por bandas: labio perimetral a 1.16, lomo central
+  // 0.6 de ancho a 1.34 y ramal transversal en T (4.0x0.4 a 1.45)
+  make(-27, -23.5, 1.44, 5.04, 1.18, 'vent', { visual: false, cover: false }),
+  make(-27, -23.5, 0.64, 4.94, 1.36, 'vent', { visual: false, cover: false }),
+  make(-27, -23.5, 4.05, 0.45, 1.46, 'vent', { visual: false, cover: false }),
+  // tapas finales del ducto: suben a ~1.34 en todo el ancho de las puntas
+  make(-27, -25.78, 1.42, 0.52, 1.36, 'vent', { visual: false, cover: false }),
+  make(-27, -21.22, 1.42, 0.52, 1.36, 'vent', { visual: false, cover: false }),
   make(27, -23.2, 4, 1.4, LOW, 'vent'),
-  make(27, -23.2, 3.9, 1.3, 1.26, 'vent', { visual: false, cover: false }),
+  make(27, -23.2, 4.02, 1.42, 1.32, 'vent', { visual: false, cover: false }),
   make(-20.25, -15.75, 2.8, 2.8, HIGH, 'hut'),
   make(-25, -6.8, 2.4, 6.2, MID, 'hut'),
-  make(-25, -6.8, 1.7, 1.7, HIGH, 'hut', { visual: false }),
+  // torre de la caseta MEDIDA: 2.0x5.55 hasta 4.38 (la caja 1.7x1.7 dejaba
+  // el resto de la torre como agujero a y2.0+)
+  make(-25, -6.8, 2.0, 5.55, HIGH, 'hut', { visual: false }),
   make(-2, -15.6, 5.5, 2.5, LOW, 'ac'),
+  make(-2, -15.6, 5.4, 2.4, 1.22, 'ac', { visual: false, cover: false }),
   make(-4, -9.5, 3.6, 1.4, LOW, 'ac', { visual: false }),
   make(18, -14, 1.1, 5.2, HIGH, 'hut'),
   make(25.2, -17.2, 1.1, 3, LOW, 'vent'),
   make(27.2, -7.2, 3, 1.1, LOW, 'vent'),
   make(9.6, -4.3, 4.2, 1.1, MID, 'hut'),
   make(-9.3, -5.2, 3, 2.6, LOW, 'ac'),
+  make(-9.3, -5.2, 2.9, 2.5, 1.18, 'ac', { visual: false, cover: false }),
+  // tubería decorativa al pie de los muros oeste/sur (cilindros medidos a
+  // y0.4): las balas rastreras atravesaban el dibujo. El espejo crea las
+  // tiras de los muros este/norte.
+  make(-31, -14.45, 0.6, 16.5, 0.42, 'vent', { visual: false, cover: false }),
+  make(-12.4, -39.5, 15.6, 0.6, 0.42, 'vent', { visual: false, cover: false }),
 ]);
 
 function calleSpecs() {
@@ -84,7 +126,17 @@ function calleSpecs() {
     make(-1.2, -8.7, 3.2, 0.9, MID, 'mid', { visual: false }),
     make(-6.5, -1.5, 3.0, 7.15, HIGH, 'high', { visual: false }),
     make(-15.15, -8, 2.5, 2.5, LOW, 'low', { visual: false }),
+    // arbusto de la jardinera: sobresale de la caja LOW hasta ~1.45
+    make(-15.15, -8, 2.2, 2.2, 1.45, 'low', { visual: false, cover: false }),
     make(14.35, -8.5, 1.3, 0.75, LOW, 'low', { visual: false }),
+    // toldo del carrito de café (vuela sobre el puesto): silueta completa
+    // sólida — el carrito es chico y un voladizo no se puede representar
+    make(14.35, -8.5, 1.9, 1.34, 1.86, 'low', { visual: false, cover: false }),
+    // techo del toldo (losa plana medida a y2.15, 1.44x0.88 centrada) con
+    // el letrero COFFEE colgando del borde — mirror explícito: el estilo
+    // 'solid' de Calle trae mirror:false por defecto en el cliente
+    make(14.35, -8.5, 1.5, 1.0, 2.2, 'solid',
+      { visual: false, cover: false, mirror: true }),
     make(3.6, -2.2, 2.4, 0.9, LOW, 'low', { visual: false }),
   ];
 
@@ -111,13 +163,13 @@ function calleSpecs() {
     };
     if (suv) {
       tier(1.74, 4.5, LOW, 0, 'low', { mirror: true });   // cuerpo/capó bajo
-      tier(2.06, 2.6, 1.5, -0.65);  // cuerpo alto+espejos (mitad trasera medida)
+      tier(2.06, 2.85, 1.5, -0.57); // cuerpo alto+espejos (mitad trasera medida)
       tier(1.72, 2.0, 2.0, -0.6);   // cabina/techo
     } else {
-      tier(2.26, 4.76, LOW, 0, 'low', { mirror: true });  // cuerpo completo
-      tier(2.26, 4.76, 1.0, 0);     // cinturón (full: medido a y0.95)
-      tier(2.08, 2.1, 1.3, 0);      // cabina baja (2.07 medida, centrada)
-      tier(2.0, 1.34, 1.57, 0);     // techo
+      tier(2.32, 4.76, LOW, 0, 'low', { mirror: true });  // cuerpo completo
+      tier(2.32, 4.76, 1.0, 0);     // cinturón (full: medido a y0.95)
+      tier(2.24, 2.2, 1.47, 0.15);  // espejos+cabina/pilares (descentrada)
+      tier(2.0, 1.34, 1.57, 0.15);  // techo
     }
   };
   addVehicle(-2.5, -28, { suv: true });
@@ -132,26 +184,38 @@ function calleSpecs() {
   // Kioscos: huella MEDIDA contra el mesh (news 1.93x2.31, hotdog 1.83x2.21,
   // centro corrido 0.19 hacia atrás) — el visual sobresalía del spec y las
   // balas entraban por los costados. El hueco de servicio sigue transitable.
-  const addKiosk = (x, z, w, d, toward, decorLink) => {
+  const addKiosk = (x, z, w, d, toward, decorLink, { tallCounter = false } = {}) => {
     const frontZ = z + toward * (d / 2 - 0.034);
     const backZ = z - toward * (d / 2 - 0.055);
-    // costados casi completos (el panel lateral del kiosco corre a lo largo;
-    // solo el frente queda abierto como hueco de servicio)
-    const sideZ = z - toward * d * 0.06;
     const linked = { visual: false, mirror: false, decorLink };
-    out.push(make(x, backZ, w - 0.10, 0.11, 2.30, 'shelter', linked));
+    // paneles con grosor que cubre el VUELO del toldo (2.14-2.28): las
+    // cajas nacen del suelo, un voladizo puro no se puede representar
+    out.push(make(x, backZ, w - 0.10, 0.30, 2.30, 'shelter', linked));
+    // paneles laterales COMPLETOS (medido: el vidrio corre todo el largo y
+    // cubre las esquinas/postes) — el hueco de servicio es solo la ventana
+    // frontal sobre el mostrador
     for (const side of [-1, 1]) {
-      out.push(make(x + side * (w / 2 - 0.05), sideZ,
-        0.10, d * 0.8, 2.28, 'shelter', linked));
-      out.push(make(x + side * (w / 2 - 0.055), frontZ,
-        0.14, 0.14, 2.46, 'solid', linked));
+      out.push(make(x + side * (w / 2 - 0.05), z,
+        0.28, d * 0.94, 2.30, 'shelter', linked));
     }
     out.push(make(x, frontZ, w - 0.16, 0.18, LOW, 'low', linked));
+    if (tallCounter) {
+      // el hotdog lleva plancha/equipo sobre el mostrador hasta ~1.6
+      // (medido ~0.4 hacia adentro del frente); el news mantiene la
+      // ventana de servicio abierta a altura de pecho
+      out.push(make(x, frontZ - toward * 0.3, w - 0.16, 0.78, 1.62, 'solid', linked));
+    }
   };
   addKiosk(-14.35, -28.81, 1.93, 2.31, 1, 'kiosk:news:south-left');
   addKiosk(14.35, 28.81, 1.93, 2.31, -1, 'kiosk:news:north-right');
-  addKiosk(14.35, -25.81, 1.83, 2.21, 1, 'kiosk:hotdog:south-right');
-  addKiosk(-14.35, 25.81, 1.83, 2.21, -1, 'kiosk:hotdog:north-left');
+  addKiosk(14.35, -25.81, 1.83, 2.21, 1, 'kiosk:hotdog:south-right', { tallCounter: true });
+  addKiosk(-14.35, 25.81, 1.83, 2.21, -1, 'kiosk:hotdog:north-left', { tallCounter: true });
+  // carteles de pie junto a cada kiosco (medidos): no tenían NINGUNA física
+  // (mirror explícito: crea el par de los kioscos del lado norte)
+  out.push(make(-15.13, -28.1, 0.4, 0.26, 2.3, 'solid',
+    { visual: false, mirror: true }));
+  out.push(make(13.62, -25.15, 0.4, 0.26, 2.3, 'solid',
+    { visual: false, mirror: true }));
   for (const z of [-35, -25, -15, -5, 5, 15, 25, 35]) {
     // poste real medido: 0.2 de grosor con cara en ±12.69 — más grueso era
     // pared invisible y los decals del borde se suprimían por caer en aire

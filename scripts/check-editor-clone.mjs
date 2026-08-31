@@ -392,7 +392,9 @@ check('flecha mueve divisor Jersey visible + collider como una unidad',
   proceduralMove.after.x === proceduralMove.before.x + 1 &&
   proceduralMove.visual?.x === proceduralMove.after.x &&
   proceduralMove.visual?.z === proceduralMove.after.z &&
-  proceduralMove.unlinkedBoxes === 2 && proceduralMove.intentionalInvisibleEnds === 2,
+  // 6 sin enlace: 2 topes del divisor + 4 props medidos sin asset (toldo y
+  // letrero del carrito de café y carteles de kiosco, con sus espejos)
+  proceduralMove.unlinkedBoxes === 6 && proceduralMove.intentionalInvisibleEnds === 2,
   JSON.stringify(proceduralMove));
 
 const solidStreetProps = await page.evaluate(() => {
@@ -507,7 +509,7 @@ const migratedV1Clone = await page.evaluate(() => {
 check('clon v1 agrega las 16 pieles y 14 edificios editables faltantes',
   migratedV1Clone.existingAfter === migratedV1Clone.existingBefore + 14 &&
   migratedV1Clone.procedural === 16 && migratedV1Clone.linkedProcedural === 16 &&
-  migratedV1Clone.version === 5,
+  migratedV1Clone.version === 6,
   JSON.stringify(migratedV1Clone));
 
 const migratedV2Clone = await page.evaluate(() => {
@@ -535,7 +537,7 @@ const migratedV2Clone = await page.evaluate(() => {
   };
 });
 check('clon v2 recibe colisión de props y edificios sin recrearlo',
-  migratedV2Clone.version === 5 && migratedV2Clone.buildings === 14 &&
+  migratedV2Clone.version === 6 && migratedV2Clone.buildings === 14 &&
   migratedV2Clone.assets === 20 && migratedV2Clone.linkedPhysical === 20,
   JSON.stringify(migratedV2Clone));
 
@@ -577,7 +579,7 @@ const migratedV3Clone = await page.evaluate(() => {
   };
 });
 check('clon v3 reemplaza colliders viejos sin duplicar edificios',
-  migratedV3Clone.version === 5 && migratedV3Clone.buildings === 14 &&
+  migratedV3Clone.version === 6 && migratedV3Clone.buildings === 14 &&
   migratedV3Clone.assets === 18 && migratedV3Clone.correct === 18,
   JSON.stringify(migratedV3Clone));
 

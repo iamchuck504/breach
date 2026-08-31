@@ -106,12 +106,14 @@ export class MapEditor {
   // adjunta su carrocería; el usuario no tiene que borrar ni volver a clonar.
   _upgradeBaseDecor() {
     const previousVersion = this.map?.decorCaptureVersion ?? 0;
-    if (!this.map?.base || previousVersion >= 5) return false;
+    if (!this.map?.base || previousVersion >= 6) return false;
     const template = mapFromSnapshot(this.map.base, this.world.snapshotLayout(this.map.base));
     const isBox = (o) => paletteById(o.p)?.t === 'box';
-    // v5 (auditoría de hitboxes 2026-08-31): la física de vehículos, bus,
+    // v5/v6 (auditoría de hitboxes 2026-08-31): la física de vehículos, bus,
     // kioscos, paradas y farolas se re-derivó de las siluetas MEDIDAS de los
-    // meshes — todo clon anterior reemplaza esas cajas por las nuevas.
+    // meshes (v6 afina kioscos con paneles completos + repisa del hotdog y
+    // vehículos con pisos desplazados) — todo clon anterior reemplaza esas
+    // cajas por las nuevas.
     const revisedPhysics = new Set(['urban:streetlight', 'urban:busShelter',
       'urban:suvMinivan', 'street:vehicle', 'street:truck', 'street:bus',
       'street:kiosk']);
@@ -207,7 +209,7 @@ export class MapEditor {
       this.map.objects.push(copy);
     }
     this.map.decorCaptured = true;
-    this.map.decorCaptureVersion = 5;
+    this.map.decorCaptureVersion = 6;
     return true;
   }
 

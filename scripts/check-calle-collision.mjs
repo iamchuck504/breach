@@ -12,24 +12,24 @@ const hit = (origin, direction, distance) => firstMapIntersection('calle',
 // el cinturón, cabina baja y techo — sin dejar pasar balas por defensas ni
 // inventar paredes rectangulares sobre el parabrisas.
 const calle = collisionBoxesFor('calle');
-const sedanBody = calle.find((b) => b.x === 6.5 && b.z === -21 && b.h === BLOCK.LOW);
-const sedanCabins = calle.filter((b) => b.x === 6.5 && b.z === -21 &&
-  b.style === 'solid');
+const nearSedan = (b) => b.x === 6.5 && Math.abs(b.z - -21) < 0.4;
+const sedanBody = calle.find((b) => nearSedan(b) && b.h === BLOCK.LOW);
+const sedanCabins = calle.filter((b) => nearSedan(b) && b.style === 'solid');
 assert(sedanBody && sedanCabins.length === 3,
-  'sedán debe conservar cuerpo LOW y tres niveles físicos (cuerpo/cabina/techo)');
-assert(sedanCabins.every((b) => b.x === sedanBody.x && b.z === sedanBody.z),
-  'todos los niveles deben permanecer enlazados al centro editable del auto');
+  'sedán debe conservar cuerpo LOW y tres niveles físicos (cinturón/pilares/techo)');
 const sedanTiers = [...sedanCabins].sort((a, b) => a.h - b.h);
 assert(sedanTiers[0].d > sedanTiers[1].d && sedanTiers[1].d > sedanTiers[2].d,
   'los niveles deben estrecharse siguiendo parabrisas y vidrio trasero');
 assert(sedanBody.w >= 2.2 && sedanBody.d >= 4.7,
-  'el cuerpo LOW debe cubrir el mesh medido (2.26x4.76): sin balas por las defensas');
+  'el cuerpo LOW debe cubrir el mesh medido (2.32x4.76): sin balas por las defensas');
 assert.notEqual(hit([4.8, 1.35, -21.08], [1, 0, 0], 3.4), null,
   'un tiro a través de la cabina del sedán debe bloquearse');
-assert.equal(hit([4.8, 1.35, -21.88], [1, 0, 0], 3.4), null,
-  'la pendiente del parabrisas no debe conservar una esquina invisible');
-assert.equal(hit([4.8, 1.46, -21.70], [1, 0, 0], 3.4), null,
-  'la caja del techo no debe sobresalir sobre el parabrisas');
+assert.equal(hit([4.8, 1.35, -22.2], [1, 0, 0], 3.4), null,
+  'detrás del vidrio trasero, sobre el cinturón, el tiro pasa limpio');
+assert.notEqual(hit([4.8, 1.52, -20.9], [1, 0, 0], 3.4), null,
+  'el techo del sedán detiene el tiro');
+assert.equal(hit([4.8, 1.52, -21.8], [1, 0, 0], 3.4), null,
+  'sobre los pilares, fuera del techo, el tiro pasa');
 assert.equal(hit([4.8, 1.35, -19.15], [1, 0, 0], 3.4), null,
   'un tiro por encima del capó no debe chocar con una caja alta invisible');
 
@@ -47,8 +47,9 @@ assert.equal(hit([-4.05, 1.35, -26.40], [1, 0, 0], 3.1), null,
 assert.notEqual(hit([-4.05, 1.35, -28.50], [1, 0, 0], 3.1), null,
   'el cuerpo alto trasero del SUV sí detiene el tiro');
 
-const rotatedBody = calle.find((b) => b.x === -3 && b.z === -5.5 && b.h === BLOCK.LOW);
-const rotatedCabins = calle.filter((b) => b.x === -3 && b.z === -5.5 &&
+const nearRot = (b) => Math.abs(b.x - -3) < 0.4 && b.z === -5.5;
+const rotatedBody = calle.find((b) => nearRot(b) && b.h === BLOCK.LOW);
+const rotatedCabins = calle.filter((b) => nearRot(b) &&
   b.style === 'solid').sort((a, b) => a.h - b.h);
 assert(rotatedBody && rotatedCabins.length === 3,
   'el sedán transversal debe usar la misma silueta escalonada');
@@ -66,10 +67,15 @@ assert.notEqual(hit([-14.35, 1.40, -27.45], [0, 0, -1], 2.6), null,
 assert.notEqual(hit([-14.35, 0.75, -27.45], [0, 0, -1], 1.2), null,
   'el mostrador LOW del kiosco debe bloquear');
 
-// El carrito visual y el collider comparten ahora el mismo tope LOW.
+// Regla de Chuck ("sólido dentro de su dibujo"): el toldo del carrito ES
+// dibujo visible, así que ahora sí detiene balas — la silueta completa del
+// carrito es sólida hasta 1.86 (las cajas nacen del suelo: un voladizo puro
+// no se puede representar sin tapar lo de abajo).
 assert.notEqual(hit([14.35, 1.05, -9.8], [0, 0, 1], 2.6), null,
   'la base del carrito de café debe recibir impactos hasta LOW');
-assert.equal(hit([14.35, 1.20, -9.8], [0, 0, 1], 2.6), null,
-  'el toldo ligero del carrito no debe convertirse en cover invisible');
+assert.notEqual(hit([14.35, 1.60, -9.8], [0, 0, 1], 2.6), null,
+  'el toldo visible del carrito debe detener balas (sólido dentro del dibujo)');
+assert.equal(hit([14.35, 2.25, -9.8], [0, 0, 1], 2.6), null,
+  'por encima del techo del toldo (2.2) el tiro pasa limpio');
 
 console.log('CALLE COLLISION OK · vehículos por silueta · kioscos abiertos · coffee LOW');
