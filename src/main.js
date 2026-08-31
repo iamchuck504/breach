@@ -1605,6 +1605,7 @@ function startBots(lobby = G.lobby || defaultLocalLobby()) {
   world.setLayout(config.map);
   audio.setAmbience(config.map);
   G.mode = 'bots';
+  G.weapons.infinite = false; // la munición infinita es SOLO de práctica
   const localSlot = lobby.players.find((p) => p.id === 'player') || lobby.players[0];
   spawnLocal(localSlot.team, world.spawns[localSlot.team][0]);
   G.selfHp = TUNING.combat.hp;
@@ -1814,10 +1815,14 @@ function startPractice({ fullscreen = true } = {}) {
   world.setLayout(G.mapChoice); // mapa elegido en el menú
   audio.setAmbience(G.mapChoice);
   G.mode = 'practice';
+  // campo de tiro: munición infinita para TODO el arsenal (reserva eterna,
+  // granadas que se reponen, sniper/bazooka recargables sin fin)
+  G.weapons.infinite = true;
   spawnLocal('red', world.spawns.red[1]);
   G.dummies = new Dummies(scene, world);
   G.crates = new AmmoCrates(scene, false, world.cratePos ?? undefined);
-  // en práctica el pedestal especial siempre ofrece el sniper (probar tiro)
+  // el pedestal arranca con el sniper y, al tomarlo, reaparece alternando
+  // sniper↔bazooka: ambas especiales se prueban sin reiniciar
   if (world.specialSpot) { G.specialRound = 1; spawnSpecialForRound(); }
   hud.showMenu(false);
   showControls(false);
@@ -1901,7 +1906,9 @@ function setupOnlineBots(roster) {
 function setupOnlineMatch(m) {
   const net = G.net; if (!net) return;
   teardown({ keepNet: true, keepLobby: true });
-  G.mode = 'online'; G.onlineSettings = m.settings || G.lobby.settings;
+  G.mode = 'online';
+  G.weapons.infinite = false; // la munición infinita es SOLO de práctica
+  G.onlineSettings = m.settings || G.lobby.settings;
   G.onlinePhase = m.phase || 'intro';
   G.onlineStartAt = localStartDeadline(m, INTRO_TIME + COUNTDOWN_TIME);
   G.onlineWins = m.wins || { red: 0, blue: 0 }; G.scores = m.lives || { red: G.onlineSettings.lives, blue: G.onlineSettings.lives };
@@ -3386,7 +3393,7 @@ function simStep(dt) {
   const canInterruptReload = G.weapons.reloading &&
     (input.firePressed || G.fireBuffer > 0) && G.weapons.st.mag > 0;
   const hasAmmo = (!G.weapons.reloading || canInterruptReload) &&
-    (G.weapons.st.mag > 0 || G.weapons.st.reserve > 0);
+    (G.weapons.st.mag > 0 || G.weapons.st.reserve > 0 || G.weapons.infinite);
   // pickup del arma ESPECIAL: junto al pedestal, evadir se convierte en
   // "tomar" (se consume el edge para no rodar encima) y hay que MANTENERLO
   if (specials.active && G.selfAlive && !p.dead && p.grounded &&
@@ -3407,6 +3414,9 @@ function simStep(dt) {
         } else {
           const wep = specials.take();
           const removed = G.weapons.giveSpecial(wep);
+          // práctica: el pedestal reaparece al instante con LA OTRA especial
+          // (sniper↔bazooka) — ambas se prueban sin reiniciar la sesión
+          if (G.mode === 'practice') { G.specialRound++; spawnSpecialForRound(); }
           audio.reloadDone();
           hud.hint(t('msg.specialTaken', {
             weapon: t(TUNING.weapons[wep].nameKey),

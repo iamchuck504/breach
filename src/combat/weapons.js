@@ -21,6 +21,10 @@ export class Weapons {
     this.reloadInterrupted = false; // evento de un frame para audio/animación
     this.reloadInserted = 0; // cartuchos insertados físicamente este frame
     this._reloadInterruptPending = false;
+    // PRÁCTICA: munición infinita — la reserva nunca baja (recargas eternas,
+    // especiales incluidas) y la granada no se agota. Lo setea main por modo;
+    // reset() no lo toca para sobrevivir a los respawns.
+    this.infinite = false;
   }
 
   _freshState(k) {
@@ -150,7 +154,8 @@ export class Weapons {
   startReload() {
     const s = this.st, d = this.def;
     if (d.thrown) return false; // la granada no recarga
-    if (s.reload > 0 || this.swapT > 0 || s.mag >= d.mag || s.reserve <= 0) return false;
+    if (s.reload > 0 || this.swapT > 0 || s.mag >= d.mag ||
+        (!this.infinite && s.reserve <= 0)) return false;
     s.reload = d.reloadTime;
     return true;
   }
@@ -182,7 +187,8 @@ export class Weapons {
     for (const k of this.slots) this.state[k].cd = Math.max(0, this.state[k].cd - dt);
 
     // auto-recarga al quedarse sin balas (sin esperar otro click)
-    if (s.mag === 0 && s.reload === 0 && this.swapT === 0 && s.reserve > 0 && !d.thrown) {
+    if (s.mag === 0 && s.reload === 0 && this.swapT === 0 &&
+        (this.infinite || s.reserve > 0) && !d.thrown) {
       this.startReload();
     }
 
@@ -218,16 +224,17 @@ export class Weapons {
       if (d.perShell) {
         // La escopeta confirma munición al cerrar cada ciclo de inserción. El
         // carry conserva el tiempo sobrante sin regalar cartuchos al iniciar.
-        while (s.reload <= 0 && s.mag < d.mag && s.reserve > 0) {
+        while (s.reload <= 0 && s.mag < d.mag && (this.infinite || s.reserve > 0)) {
           s.mag++;
-          s.reserve--;
+          if (!this.infinite) s.reserve--;
           this.reloadInserted++;
-          if (s.mag < d.mag && s.reserve > 0) s.reload += d.reloadTime;
+          if (s.mag < d.mag && (this.infinite || s.reserve > 0)) s.reload += d.reloadTime;
           else s.reload = 0;
         }
       } else if (s.reload <= 0) {
-        const take = Math.min(d.mag - s.mag, s.reserve);
-        s.mag += take; s.reserve -= take;
+        const take = Math.min(d.mag - s.mag, this.infinite ? d.mag : s.reserve);
+        s.mag += take;
+        if (!this.infinite) s.reserve -= take;
         s.reload = 0;
       }
       return false;
@@ -239,6 +246,8 @@ export class Weapons {
     if (!trigger || !canFire || s.cd > 0) return false;
     if (s.mag <= 0) return false; // seco total (la auto-recarga ya corrió arriba)
     s.mag--;
+    // la granada no recarga: en práctica se repone sola al lanzarla
+    if (this.infinite && d.thrown) s.mag = d.mag;
     s.cd = 60 / d.rpm;
     return true;
   }
