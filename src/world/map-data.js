@@ -260,7 +260,11 @@ export function mapFromSnapshot(layout, snap, name = null) {
     // una parada usa tres cajas para formar una U abierta. Enlazar todas las
     // cajas cercanas permite mover/duplicar el asset y su física como unidad.
     const linkRadius = p === 'urban:streetlight' ? 1.15
-      : p === 'urban:busShelter' ? 2.05 : 0.12;
+      : p === 'urban:busShelter' ? 2.05
+      // vehículos: la cabina del SUV lleva cajas DESPLAZADAS hasta 0.65 del
+      // centro (silueta asimétrica) — el radio corto las dejaba sin enlazar
+      : (p === 'urban:suvMinivan' || p === 'street:vehicle' || p === 'street:truck') ? 1.0
+      : 0.12;
     const colliders = objects.filter((o) => o.visual === false && !o.link &&
       (d.decorLink ? o._decorLink === d.decorLink
         : Math.hypot(o.x - object.x, o.z - object.z) < linkRadius));

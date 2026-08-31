@@ -39,6 +39,13 @@ assert.equal(hit([-4.05, 1.80, -26.95], [1, 0, 0], 3.1), null,
   'el nivel superior del SUV no debe flotar fuera de su techo');
 assert.equal(hit([-4.05, 1.80, -26.00], [1, 0, 0], 3.1), null,
   'el capó del SUV no debe heredar la altura completa de la cabina');
+// El caso reportado por Chuck: disparar POR ENCIMA del capó a alguien del
+// otro lado. El capó es bajo (solo el cuerpo LOW): a la altura del pecho el
+// tiro debe pasar limpio; sobre la mitad trasera (cuerpo alto) sí bloquea.
+assert.equal(hit([-4.05, 1.35, -26.40], [1, 0, 0], 3.1), null,
+  'por encima del capó del SUV el tiro debe pasar (sin pared invisible)');
+assert.notEqual(hit([-4.05, 1.35, -28.50], [1, 0, 0], 3.1), null,
+  'el cuerpo alto trasero del SUV sí detiene el tiro');
 
 const rotatedBody = calle.find((b) => b.x === -3 && b.z === -5.5 && b.h === BLOCK.LOW);
 const rotatedCabins = calle.filter((b) => b.x === -3 && b.z === -5.5 &&

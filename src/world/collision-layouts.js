@@ -95,25 +95,29 @@ function calleSpecs() {
   // centrados dejaban pasar tiros por el morro y la cola, decals en la
   // fachada de la panadería a través del auto). La base LOW conserva el
   // cover táctico; los pisos 'solid' no crean caras nuevas.
+  // Los pisos altos llevan OFFSET longitudinal donde la silueta es
+  // asimétrica (la cabina del SUV vive en la mitad trasera: un piso alto a
+  // lo largo de todo el auto era una pared invisible sobre el capó — no se
+  // podía dañar a alguien parado detrás). El espejo de make() invierte el
+  // offset automáticamente, así la orientación del auto espejado cuadra.
   const addVehicle = (x, z, { rotated = false, suv = false } = {}) => {
     const swap = (w, d) => rotated ? [d, w] : [w, d];
-    const [bodyW, bodyD] = swap(suv ? 1.74 : 2.26, suv ? 4.5 : 4.76);
-    out.push(make(x, z, bodyW, bodyD, LOW, 'low', { visual: false }));
-    const tiers = suv
-      ? [
-        [2.06, 4.5, 1.5],   // capó/portón/espejos: alto en TODO el largo
-        [1.72, 2.0, 2.0],   // techo (corto: el portón cae en pendiente)
-      ]
-      : [
-        [2.26, 4.76, 1.0],  // cuerpo completo hasta el cinturón
-        [2.08, 2.5, 1.3],   // cabina baja (parabrisas/medallón en pendiente)
-        [2.0, 1.34, 1.57],  // techo
-      ];
-    for (const [width, length, height] of tiers) {
+    const tier = (width, length, height, shift, style = 'solid', extra = {}) => {
       const [w, d] = swap(width, length);
-      out.push(make(x, z, w, d, height, 'solid', {
-        visual: false, mirror: true,
+      const [ox, oz] = rotated ? [shift, 0] : [0, shift];
+      out.push(make(x + ox, z + oz, w, d, height, style, {
+        visual: false, mirror: true, ...extra,
       }));
+    };
+    if (suv) {
+      tier(1.74, 4.5, LOW, 0, 'low', { mirror: true });   // cuerpo/capó bajo
+      tier(2.06, 2.6, 1.5, -0.65);  // cuerpo alto+espejos (mitad trasera medida)
+      tier(1.72, 2.0, 2.0, -0.6);   // cabina/techo
+    } else {
+      tier(2.26, 4.76, LOW, 0, 'low', { mirror: true });  // cuerpo completo
+      tier(2.26, 4.76, 1.0, 0);     // cinturón (full: medido a y0.95)
+      tier(2.08, 2.1, 1.3, 0);      // cabina baja (2.07 medida, centrada)
+      tier(2.0, 1.34, 1.57, 0);     // techo
     }
   };
   addVehicle(-2.5, -28, { suv: true });
