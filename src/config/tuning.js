@@ -76,10 +76,10 @@ export const TUNING = {
     shoulder: 0.82,       // desplazamiento lateral sobre el hombro derecho
     height: 1.62, dist: 2.7,
     roadieHeight: 1.62, roadieDist: 2.7, // = cámara normal: correr NO mueve la cámara
-    // ADS coloca la cámara detrás del hombro/cañón, no casi un metro a su
-    // derecha. Así la pose física puede llevar el muzzle a la línea óptica sin
-    // estirar los brazos ni fabricar una trayectoria diagonal hacia la cruz.
-    aimShoulder: 0.38, aimHeight: 1.50, aimDist: 1.8,
+    // ADS acerca y cierra el FOV, pero conserva una vista limpia por encima
+    // del hombro. El muzzle NO tiene que ocupar la línea óptica de cámara:
+    // sale de su posición física y converge al punto elegido por la retícula.
+    aimShoulder: 0.88, aimHeight: 1.58, aimDist: 1.8,
     coverDist: 3.0,
     shakeRoadie: 0,       // sin shake al correr (0 = apagado)
     shakeFire: 0.35,      // kick al disparar

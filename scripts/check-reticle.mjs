@@ -139,8 +139,9 @@ try {
     const ring = document.getElementById('crosshair');
     const rect = ring.getBoundingClientRect();
     const actual = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-    const physicalDir = G.rig.gunForward(new window.THREE.Vector3()).normalize();
-    const expectedPoint = muzzle.clone().addScaledVector(physicalDir, 0.55);
+    const guidePoint = cameraOrigin.clone().addScaledVector(ray.dir, 24);
+    const guidedDir = guidePoint.sub(muzzle).normalize();
+    const expectedPoint = muzzle.clone().addScaledVector(guidedDir, 0.55);
     const projected = expectedPoint.clone().project(window.BREACH_CAM);
     const expected = {
       x: (projected.x * 0.5 + 0.5) * innerWidth,
@@ -202,8 +203,9 @@ try {
     W.raycast = () => null;
     await new Promise((resolve) => setTimeout(resolve, 80));
 
-    const physicalDir = G.rig.gunForward(new window.THREE.Vector3()).normalize();
-    const expectedPoint = muzzle.clone().addScaledVector(physicalDir, 0.8);
+    const guidePoint = cameraOrigin.clone().addScaledVector(ray.dir, 24);
+    const guidedDir = guidePoint.sub(muzzle).normalize();
+    const expectedPoint = muzzle.clone().addScaledVector(guidedDir, 0.8);
     const projected = expectedPoint.clone().project(window.BREACH_CAM);
     const expected = {
       x: (projected.x * 0.5 + 0.5) * innerWidth,
@@ -335,6 +337,55 @@ try {
     throw new Error(`retícula inestable: ${unstable.map((v) => v.weapon).join(', ')}`);
   }
 
+  // Contrato visual de tercera persona: al apuntar, la cámara puede acercar y
+  // reducir FOV, pero su línea central nunca puede atravesar hombro, cabeza,
+  // brazos ni arma del jugador local. Este caso evita repetir una ADS
+  // técnicamente alineada pero visualmente inutilizable.
+  const adsVisibility = await page.evaluate(async () => {
+    const G = window.BREACH, I = window.BREACH_INPUT;
+    const weapons = ['pistol', 'smg', 'shotgun', 'bazooka', 'sniper'];
+    const out = [];
+    I._mouseAim = true;
+    G.player.state = 'idle';
+    G.player.cover = null;
+    G.player.cam.pitch = -0.04;
+    for (const weapon of weapons) {
+      if ((weapon === 'bazooka' || weapon === 'sniper') && !G.weapons.hasWeapon(weapon)) {
+        G.weapons.giveSpecial(weapon);
+      } else G.weapons.cur = weapon;
+      G.weapons.swapT = 0;
+      await new Promise((resolve) => setTimeout(resolve, 240));
+      G.rig.root.updateWorldMatrix(true, true);
+      const ray = G.player.cam.aimRay();
+      const caster = new window.THREE.Raycaster(ray.origin, ray.dir, 0.025, 2.8);
+      const hits = caster.intersectObject(G.rig.root, true).filter((hit) => {
+        const material = hit.object.material;
+        if (!hit.object.visible || material?.visible === false || material?.opacity === 0) return false;
+        let node = hit.object;
+        while (node) {
+          if (node === G.rig.nameTag) return false;
+          node = node.parent;
+        }
+        return true;
+      });
+      out.push({
+        weapon,
+        blockers: hits.slice(0, 4).map((hit) => ({
+          name: hit.object.name || hit.object.type,
+          distance: hit.distance,
+        })),
+        fov: window.BREACH_CAM.fov,
+      });
+    }
+    I._mouseAim = false;
+    return out;
+  });
+  const obscured = adsVisibility.filter((item) => item.blockers.length > 0 || item.fov >= 50);
+  if (obscured.length) {
+    console.error('ADS VISIBILITY DEBUG', JSON.stringify(adsVisibility));
+    throw new Error(`ADS obstruido por el jugador: ${obscured.map((v) => v.weapon).join(', ')}`);
+  }
+
   const hipPhysical = await page.evaluate(async () => {
     const G = window.BREACH, I = window.BREACH_INPUT;
     const W = window.BREACH_WORLD;
@@ -380,7 +431,7 @@ try {
     console.error('HIP RETICLE PHYSICAL DEBUG', JSON.stringify(hipPhysical));
     throw new Error(`retícula hip no sigue barrel: ${wrongHip.map((v) => v.weapon).join(', ')}`);
   }
-  console.log(`RETICLE OK · barrel ${result.errorPx.toFixed(2)} px · ADS/scope centrados · bazooka ${rocketAim.dotExpected.toFixed(5)} · 6 armas físicas`);
+  console.log(`RETICLE OK · barrel ${result.errorPx.toFixed(2)} px · ADS/scope centrados y despejados · bazooka ${rocketAim.dotExpected.toFixed(5)} · 6 armas físicas`);
 } finally {
   await browser?.close();
   server.kill();

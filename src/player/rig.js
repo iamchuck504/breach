@@ -486,21 +486,12 @@ export const WEAPON_SCALES = {
 export const EQUIPPED_WEAPON_VISUAL_SCALE = 0.8;
 
 const ADS_WEAPON_POSES = Object.freeze({
-  // X aproxima cada arma a su hombro natural; Y coloca el muzzle a la altura
-  // óptica. El ajuste fino contra la línea real de cámara ocurre después del
-  // damping, por lo que estos siguen siendo offsets de pose, no de balística.
-  pistol:  { damp: 23, mount: [0.33, 0.262, -0.42], torsoPitch: -0.07, head: 0.30,
-    shoulders: [[-0.19, 0.06, -0.13], [0.35, 0.03, -0.02]] },
-  smg:     { damp: 20, mount: [0.35, 0.313, -0.08], torsoPitch: -0.12, head: 0.25,
-    shoulders: [[-0.20, 0.05, -0.14], [0.35, 0.04, -0.03]] },
-  shotgun: { damp: 19, mount: [0.36, 0.246, 0.02], torsoPitch: -0.15, head: 0.22,
-    shoulders: [[-0.18, 0.06, -0.16], [0.35, 0.04, -0.04]] },
-  sniper:  { damp: 22, mount: [0.38, 0.271, 0.02], torsoPitch: -0.17, head: 0.18,
-    shoulders: [[-0.16, 0.08, -0.18], [0.35, 0.05, -0.04]] },
-  bazooka: { damp: 18, mount: [0.40, 0.300, 0.03], torsoPitch: -0.19, head: 0.13,
-    shoulders: [[-0.19, 0.09, -0.12], [0.36, 0.07, -0.02]] },
-  grenade: { damp: 21, mount: [0.34, 0.270, -0.38], torsoPitch: -0.09, head: 0.28,
-    shoulders: [[-0.24, 0.03, -0.06], [0.35, 0.03, -0.02]] },
+  pistol:  { damp: 18, mount: [0.045, 0.10, -0.42], torsoPitch: -0.07, head: 0.30 },
+  smg:     { damp: 16, mount: [0.10, 0.055, -0.08], torsoPitch: -0.12, head: 0.25 },
+  shotgun: { damp: 15, mount: [0.11, 0.045, 0.02], torsoPitch: -0.15, head: 0.22 },
+  sniper:  { damp: 16, mount: [0.12, 0.085, 0.02], torsoPitch: -0.17, head: 0.18 },
+  bazooka: { damp: 14, mount: [0.17, 0.15, 0.03], torsoPitch: -0.19, head: 0.13 },
+  grenade: { damp: 17, mount: [0.06, 0.08, -0.38], torsoPitch: -0.09, head: 0.28 },
 });
 
 export function applyEquippedWeaponVisualScale(group, weapon) {
@@ -553,13 +544,6 @@ const IK_M = new THREE.Matrix4(), IK_Q = new THREE.Quaternion(), IK_QE = new THR
 const IK_BQ = new THREE.Quaternion();
 const AXIS_X = new THREE.Vector3(1, 0, 0);
 const TMP_A = new THREE.Vector3(), TMP_B = new THREE.Vector3();
-const ADS_MUZZLE = new THREE.Vector3(), ADS_CLOSEST = new THREE.Vector3();
-const ADS_DELTA = new THREE.Vector3(), ADS_DIR = new THREE.Vector3();
-const ADS_PREV_MOUNT = new THREE.Vector3();
-const ADS_FORWARD = new THREE.Vector3();
-const ADS_Q = new THREE.Quaternion(), ADS_CORRECTION_Q = new THREE.Quaternion();
-const ADS_WORLD_Q = new THREE.Quaternion(), ADS_PARENT_Q = new THREE.Quaternion();
-const ADS_LOCAL_Q = new THREE.Quaternion();
 const RAG_P = { x: 0, z: 0 }; // punto mutable para la colisión del cadáver
 const clamp01 = (v) => Math.min(1, Math.max(-1, v));
 
@@ -717,8 +701,6 @@ export class Rig {
     this._deadT = 0;
     this._meleeT = 0;
     this._hitReact = null;
-    this._aimPoseBlend = 0;
-    this._precisionAimActive = false;
     this.rag = null; // estado del ragdoll de muerte
     this.groundFn = null;  // (x,z,y)->alturaSuelo — lo inyecta quien tiene el world
     this.collideFn = null; // (p,y)->muta p fuera de los AABBs (colisión del cadáver)
@@ -1188,31 +1170,6 @@ export class Rig {
     return out.set(0, 0, -1).applyQuaternion(q);
   }
 
-  // La pose de precisión debe estar físicamente asentada antes de consumir el
-  // disparo. Se mide el muzzle contra el rayo óptico real y también el eje del
-  // cañón; no basta con que el cuerpo haya terminado de girar.
-  precisionAimAlignment(origin, direction) {
-    if (!origin || !direction || !this._precisionAimActive) {
-      return { ready: false, offset: Infinity, angle: Math.PI };
-    }
-    ADS_DIR.copy(direction);
-    if (ADS_DIR.lengthSq() < 1e-8) return { ready: false, offset: Infinity, angle: Math.PI };
-    ADS_DIR.normalize();
-    this.muzzleWorld(ADS_MUZZLE);
-    const along = Math.max(0, ADS_DELTA.copy(ADS_MUZZLE).sub(origin).dot(ADS_DIR));
-    ADS_CLOSEST.copy(origin).addScaledVector(ADS_DIR, along);
-    const offset = ADS_MUZZLE.distanceTo(ADS_CLOSEST);
-    const dot = Math.max(-1, Math.min(1,
-      this.gunForward(ADS_DELTA).normalize().dot(ADS_DIR)));
-    const angle = Math.acos(dot);
-    return {
-      ready: this._aimPoseBlend >= 0.94 && offset <= 0.055 && angle <= THREE.MathUtils.degToRad(1.5),
-      offset,
-      angle,
-      blend: this._aimPoseBlend,
-    };
-  }
-
   kick(amount) { this._recoil = Math.min(1.2, this._recoil + amount); }
 
   // Reacción no letal independiente de la locomoción. Se suma a la pose
@@ -1232,7 +1189,7 @@ export class Rig {
   // soluciones de codo y elige la que alcanza el target con el codo
   // hacia abajo/afuera (vector polo).
   _ikArm(arm, side, target) {
-    IK_S.copy(arm.shoulder.position);
+    IK_S.set(side * 0.36, 0, 0);
     IK_V.copy(target).sub(IK_S);
     let d = IK_V.length();
     d = Math.min(L1 + L2 - 0.02, Math.max(0.12, d));
@@ -1275,7 +1232,6 @@ export class Rig {
     //   torso.x: − adelante, + atrás   |   head.x: + mirar arriba
     //   shoulder/elbow.x: + brazo hacia adelante   |   knee.x: − doblar rodilla
     const T = new Map();
-    ADS_PREV_MOUNT.copy(this.gunMount.position);
     const set = (o, k, v) => {
       let e = T.get(o);
       if (!e) { e = {}; T.set(o, e); }
@@ -1305,19 +1261,6 @@ export class Rig {
     const swing = Math.sin(ph), swing2 = Math.sin(ph + Math.PI);
     const bob = Math.abs(Math.cos(ph));
     const pitch = p.aimPitch ?? 0;
-    const aimTarget = p.aim ? 1 : 0;
-    this._aimPoseBlend += (aimTarget - this._aimPoseBlend) *
-      (1 - Math.exp(-(p.aim ? 14 : 18) * dt));
-    this._precisionAimActive = !!p.aim;
-    // Fuera de ADS los hombros regresan a su anatomía base. En precisión se
-    // adelantan/internan por arma para que el IK llegue a soporte y gatillo sin
-    // alargar brazos ni separar las manos del modelo.
-    set(this.armL.shoulder.position, 'x', -0.36);
-    set(this.armL.shoulder.position, 'y', 0);
-    set(this.armL.shoulder.position, 'z', 0);
-    set(this.armR.shoulder.position, 'x', 0.36);
-    set(this.armR.shoulder.position, 'y', 0);
-    set(this.armR.shoulder.position, 'z', 0);
 
     switch (p.state) {
       case 'roadie': {
@@ -1601,12 +1544,6 @@ export class Rig {
           p.coverAimExposure ?? 1)
         : null;
       const torsoPitch = adsPose.torsoPitch - (coverPose?.torsoLean ?? 0);
-      const [leftShoulder, rightShoulder] = adsPose.shoulders;
-      for (const [arm, pose] of [[this.armL, leftShoulder], [this.armR, rightShoulder]]) {
-        set(arm.shoulder.position, 'x', pose[0]);
-        set(arm.shoulder.position, 'y', pose[1]);
-        set(arm.shoulder.position, 'z', pose[2]);
-      }
       // Compensar inclinación de root+torso: el cañón visual conserva el pitch
       // de cámara en vez de sumar accidentalmente la postura inclinada.
       R(this.aimRig, pitch - rootRotX - torsoPitch, p.aimYawErr ?? 0, lean * 0.1);
@@ -1614,8 +1551,7 @@ export class Rig {
       R(this.head, pitch * adsPose.head, 0, lean * 0.08);
       // Pistola extendida, armas largas apoyadas y bazooka alta al hombro.
       // Cero rotación local evita que el modelo prometa otra dirección.
-      const aimSide = p.coverLean < -0.1 ? -1 : 1;
-      M(adsPose.mount[0] * aimSide, adsPose.mount[1],
+      M(adsPose.mount[0], adsPose.mount[1],
         adsPose.mount[2] - (coverPose?.gunForward ?? 0), 0, 0, 0);
       if (coverPose) {
         hipsY = coverPose.hipsY;
@@ -1740,62 +1676,6 @@ export class Rig {
     this.hips.position.x += (hipsX - this.hips.position.x) * k;
     this.hips.position.y += (hipsY - this.hips.position.y) * k;
     this.root.rotation.x += (rootRotX - this.root.rotation.x) * (1 - Math.exp(-10 * dt));
-
-    // Corrección física de pose local. Durante la primera parte de la entrada
-    // ADS mandan los offsets y el damping; cuando cámara y cuerpo ya convergen,
-    // orientamos el conjunto de brazos/arma al rayo y trasladamos TODO el arma
-    // hasta esa misma línea. Esto elimina la diagonal artificial incluso con
-    // lean y pitch combinados: muzzle, flash, manos y cañón viajan juntos.
-    if (p.aim && p.aimLineOrigin && p.aimLineDir && this._aimPoseBlend > 0.72) {
-      ADS_DIR.copy(p.aimLineDir);
-      if (ADS_DIR.lengthSq() > 1e-8) {
-        ADS_DIR.normalize();
-        // La corrección queda completamente asentada al llegar al umbral de
-        // readiness (0.94). Así jamás necesitamos "terminar" la alineación
-        // alterando la bala después del click.
-        const rawGate = Math.min(1, (this._aimPoseBlend - 0.72) / 0.22);
-        const alignK = rawGate * rawGate * (3 - 2 * rawGate);
-
-        // Torso/lean conservan su silueta, pero aimRig corrige su quaternion
-        // mundial para que -Z sea exactamente la intención óptica. Aplicar la
-        // corrección en mundo y convertirla al padre evita el error de Euler
-        // que aparecía al mezclar yaw, pitch y roll en una esquina.
-        this.root.updateWorldMatrix(true, true);
-        this.gunForward(ADS_FORWARD).normalize();
-        ADS_CORRECTION_Q.setFromUnitVectors(ADS_FORWARD, ADS_DIR);
-        this.aimRig.getWorldQuaternion(ADS_WORLD_Q);
-        ADS_WORLD_Q.premultiply(ADS_CORRECTION_Q);
-        this.aimRig.parent.getWorldQuaternion(ADS_PARENT_Q).invert();
-        ADS_LOCAL_Q.multiplyQuaternions(ADS_PARENT_Q, ADS_WORLD_Q);
-        this.aimRig.quaternion.slerp(ADS_LOCAL_Q, alignK);
-        this.root.updateWorldMatrix(true, true);
-
-        this.muzzleWorld(ADS_MUZZLE);
-        const along = Math.max(0,
-          ADS_DELTA.copy(ADS_MUZZLE).sub(p.aimLineOrigin).dot(ADS_DIR));
-        ADS_CLOSEST.copy(p.aimLineOrigin).addScaledVector(ADS_DIR, along);
-        ADS_DELTA.copy(ADS_CLOSEST).sub(ADS_MUZZLE);
-        const maxCorrection = 0.28;
-        if (ADS_DELTA.length() > maxCorrection) ADS_DELTA.setLength(maxCorrection);
-        this.aimRig.getWorldQuaternion(ADS_Q).invert();
-        ADS_DELTA.applyQuaternion(ADS_Q);
-        this.gunMount.position.addScaledVector(ADS_DELTA, alignK);
-        this.root.updateWorldMatrix(true, true);
-      }
-    }
-
-    // La entrada a precisión desplaza físicamente arma y manos, pero nunca en
-    // un único salto grande. El gate de disparo espera la alineación real, de
-    // modo que limitar estos primeros pasos no requiere corregir la bala.
-    if (p.aim && this._aimPoseBlend < 0.985) {
-      ADS_DELTA.copy(this.gunMount.position).sub(ADS_PREV_MOUNT);
-      const maxStep = Math.min(0.09, Math.max(0.02, 4.5 * dt));
-      if (ADS_DELTA.length() > maxStep) {
-        ADS_DELTA.setLength(maxStep);
-        this.gunMount.position.copy(ADS_PREV_MOUNT).add(ADS_DELTA);
-        this.root.updateWorldMatrix(true, true);
-      }
-    }
 
     // vuelta en el aire alrededor de la cadera: eje según la dirección
     // ('z' = giro lateral Matrix, 'x' = backflip/frontflip)

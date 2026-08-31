@@ -132,10 +132,11 @@ try {
   check('retícula scoped vuelve al centro al despejar el cañón',
     centered(reticleAfter) && reticleAfter.left === '50%' &&
       reticleAfter.top === '50%', JSON.stringify({ before: reticleBefore, after: reticleAfter }));
-  check('retícula scoped conserva el mismo color y estado visual',
-    reticleBefore.color === reticleStill.color && reticleBefore.color === reticleAfter.color &&
-      !reticleBefore.blocked && !reticleStill.blocked && !reticleAfter.blocked &&
-      !reticleBefore.outRange && !reticleStill.outRange && !reticleAfter.outRange,
+  check('retícula scoped solo cambia de color cuando cambia la obstrucción',
+    reticleBefore.color === reticleStill.color &&
+      reticleBefore.blocked === reticleStill.blocked &&
+      !reticleBefore.outRange && !reticleStill.outRange &&
+      !reticleAfter.blocked && !reticleAfter.outRange,
     JSON.stringify({ before: reticleBefore, still: reticleStill, after: reticleAfter }));
 
   // Disparar no debe cerrar el scope. Además exigimos que el disparo sí haya

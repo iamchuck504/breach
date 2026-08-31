@@ -14,7 +14,6 @@ import { RemotePlayer } from './player/remote.js';
 import { Dummies } from './player/practice.js';
 import { Weapons } from './combat/weapons.js';
 import { resolveShot, resolveGuidedShot, applySpread, applyPelletPattern } from './combat/ballistics.js';
-import { muzzleHasClearance } from './combat/cover-fire.js';
 import { damageFalloff, rocketSplashDamage } from './combat/damage.js';
 import {
   deathImpactPoint, isSniperHeadshotDeath, rocketDeathLevel,
@@ -2643,18 +2642,6 @@ function guidedReticleState(maxRange) {
   return { blocked: true };
 }
 
-function precisionAimPoseReady(wantsAim, wantsFire) {
-  if (!wantsAim || !wantsFire) return true;
-  const ray = shoulderCam.aimRay();
-  if (!G.rig?.precisionAimAlignment?.(ray.origin, ray.dir).ready) return false;
-  const p = G.player;
-  G.rig.root.updateWorldMatrix(true, true);
-  const weaponRoot = G.rig.activeGun.getWorldPosition(_v1);
-  const muzzle = G.rig.muzzleWorld(_v2);
-  const coverFace = p?.state === 'cover' ? p.cover : null;
-  return muzzleHasClearance(world, coverFace, weaponRoot, muzzle, ray.dir);
-}
-
 function coverPoseReady(wantsAim, wantsFire) {
   const p = G.player;
   if (!p || p.state !== 'cover' || !p.cover) return true;
@@ -3016,17 +3003,17 @@ function fireShot() {
   G.rig.setTransform(G.player.pos.x, G.player.pos.z, G.player.yaw, G.player.y);
   const muzzle = G.rig.muzzleWorld(_v1).clone();
   const origin = muzzle.clone();
-  // Una única fuente física gobierna el disparo: el eje actual del cañón.
-  // En ADS la cámara ya orientó y centró ESA pose, y el gate de precisión no
-  // permite consumir el click antes de que la alineación termine. Por tanto
-  // no hace falta reconciliar ni doblar el rayo después de salir del muzzle.
-  const baseDir = barrelDirection(new THREE.Vector3());
+  const ray = shoulderCam.aimRay();
+  const cameraOrigin = ray.origin.clone();
+  // ADS usa la intención óptica central; hip/blindfire conservan el eje físico.
+  // En ambos casos el origen balístico sigue siendo el muzzle.
+  const baseDir = aiming ? ray.dir.clone() : barrelDirection(new THREE.Vector3());
 
   // bazooka: proyectil REAL, sin hitscan — el cohete hace el daño al explotar
   if (def.projectile) {
-    // El tubo ya fue alineado físicamente por la pose ADS; el cohete conserva
-    // exactamente ese eje y sigue chocando durante su vuelo normal.
-    const projectileDir = baseDir;
+    const projectileDir = aiming
+      ? currentFireDirection(muzzle, def.range)
+      : baseDir;
     const cid = G.mode === 'online' ? `p:${++G.rocketSeq}` : null;
     rockets.fire({ x: muzzle.x, y: muzzle.y, z: muzzle.z }, projectileDir,
       true, null, cid, G.mode === 'online');
@@ -3053,7 +3040,9 @@ function fireShot() {
       // El scope promete exactamente su punto. Fuera del scope (incluido
       // hip/blindfire del sniper) se conserva la dispersión configurada.
       : scoped ? baseDir.clone() : applySpread(baseDir, spread);
-    const hit = resolveShot(world, targets, origin, dir, def.range, null);
+    const hit = aiming
+      ? resolveGuidedShot(world, targets, cameraOrigin, origin, dir, def.range, null)
+      : resolveShot(world, targets, origin, dir, def.range, null);
     anyPoint = hit.point;
     effects.tracer(muzzle, hit.point, scoped && w.cur === 'sniper');
     if (hit.kind === 'world') {
@@ -3263,8 +3252,7 @@ function simStep(dt) {
   // debe poder representarla visualmente antes de emitir el proyectil.
   const aligned = p.fireAligned();
   const wantsFire = input.fireHeld || input.firePressed || G.fireBuffer > 0;
-  let canFire = stateOk && aligned && coverPoseReady(input.aimHeld, wantsFire) &&
-    precisionAimPoseReady(input.aimHeld, wantsFire);
+  let canFire = stateOk && aligned && coverPoseReady(input.aimHeld, wantsFire);
   // cualquier click que no pueda salir YA (roadie, cuerpo girando, cooldown,
   // dive/slide o recarga) queda bufereado — y el buffer dura AL MENOS
   // lo que falta de cooldown/recarga, para que el tiro encolado nunca se pierda
@@ -3358,8 +3346,7 @@ function simStep(dt) {
   // este mismo paso. Revalidar evita añadir un frame artificial de latencia.
   const stateOkAfter = !p.dead && p.state !== 'dive' && p.state !== 'slide' &&
     p.state !== 'roadie' && p.state !== 'mantle' && p.state !== 'melee' && input.anyDevice;
-  canFire = stateOkAfter && p.fireAligned() && coverPoseReady(p.aim, wantsFire) &&
-    precisionAimPoseReady(p.aim, wantsFire);
+  canFire = stateOkAfter && p.fireAligned() && coverPoseReady(p.aim, wantsFire);
   const fired = p.dead ? false
     : G.weapons.update(dt, input.fireHeld, input.firePressed || G.fireBuffer > 0, canFire);
   // Tras la primera inserción desde 0, conservar margen para que cover/arma
@@ -3686,11 +3673,6 @@ function frame(now) {
     G.rig.setProtected(G.spawnProt > 0);
     G.rig.setTransform(G.player.pos.x, G.player.pos.z, G.player.yaw, G.player.y);
     const localAnim = G.player.animParams();
-    if (localAnim.aim) {
-      const aimLine = shoulderCam.aimRay();
-      localAnim.aimLineOrigin = aimLine.origin;
-      localAnim.aimLineDir = aimLine.dir;
-    }
     G.rig.update(dt, {
       ...localAnim,
       swapping: G.weapons.swapping,
