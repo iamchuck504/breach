@@ -2681,9 +2681,12 @@ function updateAimOver(dt) {
     const def = G.weapons.def;
     const range = def.range > 0 ? def.range : 60;
     const ray = shoulderCam.aimRay();
-    // punto que promete el círculo (solo geometría: la obstrucción es del mundo)
-    const guideT = Math.min(staticHitDistance(ray.origin, ray.dir, range), range);
-    const guide = _ao1.copy(ray.origin).addScaledVector(ray.dir, guideT);
+    // punto que promete el círculo, CON personajes: el tiro real apunta al
+    // enemigo/dummy si lo hay, y esa línea pasa por otro sitio que la del
+    // mundo desnudo — detectar contra un guide distinto dejaba escapar
+    // estampados al apuntar a alguien asomado tras un bloque
+    const guideHit = resolveShot(world, currentTargets(), ray.origin, ray.dir, range, null);
+    const guide = _ao1.copy(guideHit.point);
     G.rig.root.updateWorldMatrix(true, true);
     const muzzle = G.rig.muzzleWorld(_ao2);
 
@@ -3109,6 +3112,35 @@ function sniperScopeActive() {
     !G.spectator.active && !matchControlsLocked() && !menuIsOpen());
 }
 
+// RED FINAL anti-estampado (ADS): se evalúa DENTRO del disparo, con el
+// muzzle y el RAYO DEFINITIVO de este tiro (spread incluido) — ninguna
+// predicción por frames puede cerrarlo del todo: la pose cambia entre
+// decisión y disparo, el guide del tiro incluye personajes y 0.9° de
+// dispersión bastan para morder un borde que el rayo central libra. Si la
+// bala va a estamparse en el mundo a quemarropa mientras el CÍRCULO promete
+// un punto mucho más lejano, el tiro se cancela: la bala vuelve al cargador
+// y el click reintenta solo en cuanto el aim-over acomode el arma. El kill
+// switch (enabled=0) lo apaga.
+function adsFinalShotBlocked(targets, cameraOrigin, baseDir, muzzle, shotDir, range) {
+  if (!TUNING.aimOver.enabled) return false;
+  // lo que el círculo (rayo central) promete a este tiro
+  const promised = resolveShot(world, targets, cameraOrigin, baseDir, range, null);
+  const promisedLen = _v2.copy(promised.point).sub(muzzle).length();
+  if (promisedLen < 1.2) return false; // mirando algo pegado: bloqueo legítimo
+  const near = Math.min(TUNING.aimOver.nearDist, promisedLen - 0.6);
+  if (near <= 0.1) return false;
+  return staticHitDistance(muzzle, shotDir, near) < near - 1e-3;
+}
+
+// Bala de vuelta al cargador + click en espera: el jugador percibe lo mismo
+// que el holdFire (el arma aún no dispara), sin flash, sonido ni red.
+function refundBlockedShot() {
+  const s = G.weapons.st;
+  s.mag = Math.min(G.weapons.def.mag, s.mag + 1);
+  s.cd = 0;
+  G.fireBuffer = Math.max(G.fireBuffer, 0.3);
+}
+
 function fireShot() {
   const w = G.weapons, def = w.def;
   const aiming = G.player.aim;
@@ -3129,9 +3161,15 @@ function fireShot() {
 
   // bazooka: proyectil REAL, sin hitscan — el cohete hace el daño al explotar
   if (def.projectile) {
-    const projectileDir = aiming
-      ? currentFireDirection(muzzle, def.range)
-      : baseDir;
+    let projectileDir = baseDir;
+    if (aiming) {
+      const targets = currentTargets();
+      const guide = resolveShot(world, targets, cameraOrigin, ray.dir,
+        def.range, null);
+      projectileDir = _v3.copy(guide.point).sub(muzzle).normalize().clone();
+      if (adsFinalShotBlocked(targets, cameraOrigin, ray.dir, muzzle,
+          projectileDir, def.range)) { refundBlockedShot(); return; }
+    }
     const cid = G.mode === 'online' ? `p:${++G.rocketSeq}` : null;
     rockets.fire({ x: muzzle.x, y: muzzle.y, z: muzzle.z }, projectileDir,
       true, null, cid, G.mode === 'online');
@@ -3148,6 +3186,14 @@ function fireShot() {
   }
 
   const targets = currentTargets();
+  // red final (escopeta): el rayo CENTRAL no puede estamparse; los pellets
+  // extremos del cono que muerden un borde son dispersión legítima. Las
+  // armas de UN proyectil se validan dentro del loop con su rayo definitivo.
+  if (aiming && def.pellets > 1 &&
+      adsFinalShotBlocked(targets, cameraOrigin, baseDir, muzzle, baseDir, def.range)) {
+    refundBlockedShot();
+    return;
+  }
   const dmgByTarget = new Map();
   let anyPoint = null;
   const worldImpacts = [];
@@ -3158,6 +3204,12 @@ function fireShot() {
       // El scope promete exactamente su punto. Fuera del scope (incluido
       // hip/blindfire del sniper) se conserva la dispersión configurada.
       : scoped ? baseDir.clone() : applySpread(baseDir, spread);
+    // red final (un proyectil): validar el rayo DEFINITIVO, spread incluido
+    if (aiming && def.pellets === 1 &&
+        adsFinalShotBlocked(targets, cameraOrigin, baseDir, muzzle, dir, def.range)) {
+      refundBlockedShot();
+      return;
+    }
     // La cámara elige el punto deseado, pero la bala siempre nace en el muzzle.
     // Si algo ocupa el segmento físico hacia ese punto, ese primer contacto
     // detiene el tiro: la retícula nunca concede wall penetration.

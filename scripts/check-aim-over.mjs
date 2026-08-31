@@ -175,6 +175,58 @@ for (const wep of ['pistol', 'shotgun']) {
 await page.evaluate(() => { window.BREACH.weapons.cur = 'smg'; window.BREACH.weapons.st.mag = 50; });
 
 // ---------------------------------------------------------------------------
+// 1e) TORTURA (la prueba que importa): 4s de fuego sostenido + spam de clicks
+//     con la mira BARRIENDO el borde sin parar, y un dummy vivo detrás del
+//     bloque (el guide del tiro incluye personajes). El contrato absoluto:
+//     CERO impactos de mundo a quemarropa en ADS.
+// ---------------------------------------------------------------------------
+const tortura = await page.evaluate(async () => {
+  const G = window.BREACH, I = window.BREACH_INPUT, E = window.BREACH_EFFECTS;
+  // dummy vivo asomado tras la caja
+  const d = G.dummies.list[0];
+  d.alive = true; d.x = 14; d.z = 6; d.respawnT = 9999;
+  G.weapons.cur = 'smg';
+  G.weapons.st.mag = 50; G.weapons.st.reserve = 999; G.weapons.st.cd = 0;
+  let nearSlams = 0, shots = 0, legitClose = 0;
+  const W = window.BREACH_WORLD, V3 = window.THREE.Vector3;
+  const oldTracer = E.tracer;
+  // BUG = la bala pega CERCA mientras el círculo prometía LEJOS. Pegar la
+  // caja cuando el círculo apunta A la caja es veraz (no cuenta).
+  E.tracer = function (o, p2, em) {
+    shots++;
+    const shotDist = p2.distanceTo(o);
+    if (shotDist < 3) {
+      // misma fuente que fireShot: aimRay (cámara colisionada, SIN shake)
+      const ray = G.player.cam.aimRay();
+      const camDist = W.raycastHit(ray.origin, ray.dir, 60)?.t ??
+        W.raycast(ray.origin, ray.dir, 60) ?? 60;
+      if (camDist > shotDist + 1.8) nearSlams++;
+      else legitClose++;
+    }
+    return oldTracer.call(this, o, p2, em);
+  };
+  I._mouseAim = true; I._mouseFire = true;
+  for (let i = 0; i < 40; i++) {
+    const t = i * 0.1;
+    G.player.cam.pitch = -0.03 + Math.sin(t * 2.4) * 0.09;
+    G.player.cam.yaw = Math.sin(t * 1.7) * 0.14;
+    I.firePressed = true; // spam de click además del fuego sostenido
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  I._mouseFire = false;
+  await new Promise((r) => setTimeout(r, 250));
+  E.tracer = oldTracer;
+  d.alive = false;
+  G.player.cam.pitch = -0.02; G.player.cam.yaw = 0;
+  G.weapons.st.reserve = 150;
+  await new Promise((r) => setTimeout(r, 400));
+  return { nearSlams, shots, legitClose };
+});
+check('TORTURA: cero balas estampadas (círculo lejos, bala cerca) en 4s de barrido+spam',
+  tortura.nearSlams === 0 && tortura.shots > 10,
+  JSON.stringify(tortura));
+
+// ---------------------------------------------------------------------------
 // 2) BLOQUEO TOTAL (salvaguarda): con maxLift 0.34 ≈ paralaje cámara-arma,
 //    casi toda vista libre es alcanzable — geometría "cámara libra pero ni el
 //    tope libra" es exótica. Se fuerza bajando el tope EN VIVO (mismo knob

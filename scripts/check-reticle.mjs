@@ -216,19 +216,28 @@ try {
     const heldFire = { impact, mag: G.weapons.st.mag };
     // Con el kill switch apagado se conserva el contrato físico clásico: la
     // bala nace en el muzzle y el primer contacto (el cover a 0.8m) la para.
+    // El click retenido quedó en G.fireBuffer, así que el tiro sale SOLO en
+    // cuanto el aim-over deja de retener — se espera ese disparo automático
+    // y el punto esperado se calcula con el ORIGEN REAL capturado del tracer
+    // (comparar contra un muzzle previo era sensible al timing de la pose).
     const TUNING = (await import('/src/config/tuning.js')).TUNING;
+    let shotOrigin = null;
+    const oldTracer = window.BREACH_EFFECTS.tracer;
+    window.BREACH_EFFECTS.tracer = function (o, p2, em) {
+      shotOrigin = shotOrigin ?? o.clone();
+      return oldTracer.call(this, o, p2, em);
+    };
     TUNING.aimOver.enabled = 0;
-    await new Promise((resolve) => setTimeout(resolve, 450));
-    G.rig.root.updateWorldMatrix(true, true);
-    const muzzleNow = G.rig.muzzleWorld(new window.THREE.Vector3()).clone();
-    const expectedPhysicalPoint = muzzleNow.clone().addScaledVector(
-      guidePoint.clone().sub(muzzleNow).normalize(), 0.8);
-    I._mouseFire = true;
-    I.firePressed = true;
-    await new Promise((resolve) => setTimeout(resolve, 90));
-    I._mouseFire = false;
+    for (let i = 0; i < 60 && !shotOrigin; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
     I._mouseAim = false;
     TUNING.aimOver.enabled = 1;
+    window.BREACH_EFFECTS.tracer = oldTracer;
+    const expectedPhysicalPoint = shotOrigin
+      ? shotOrigin.clone().addScaledVector(
+        guidePoint.clone().sub(shotOrigin).normalize(), 0.8)
+      : null;
     window.BREACH_EFFECTS.impact = oldImpact;
     W.raycastHit = oldRaycastHit;
     W.raycast = oldRaycast;
@@ -240,7 +249,8 @@ try {
       heldImpact: heldFire.impact !== null,
       reticleError: Math.hypot(actual.x - expected.x, actual.y - expected.y),
       centerOffset: Math.hypot(actual.x - innerWidth / 2, actual.y - innerHeight / 2),
-      impactWorldError: impact ? impact.distanceTo(expectedPhysicalPoint) : Infinity,
+      impactWorldError: impact && expectedPhysicalPoint
+        ? impact.distanceTo(expectedPhysicalPoint) : Infinity,
       penetratedToGuide: impact ? impact.distanceTo(guidePoint) < 0.2 : false,
     };
   });
