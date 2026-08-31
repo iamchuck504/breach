@@ -82,6 +82,34 @@ export function resolveShot(world, targets, origin, dir, maxRange, excludeId = n
   return hit;
 }
 
+// ADS/zoom tiene dos responsabilidades distintas: la cámara elige el objetivo
+// y el cañón emite la bala. Primero resolvemos el punto central visible desde
+// cámara; después trazamos desde el muzzle hacia ese punto. El primer contacto
+// físico del segundo rayo siempre gana, de modo que una pared, cover, vehículo
+// o barandal entre arma y objetivo jamás se atraviesa por paralaje.
+export function resolveGuidedShot(world, targets, cameraOrigin, ballisticOrigin,
+  cameraDir, maxRange, excludeId = null) {
+  const guide = resolveShot(world, targets, cameraOrigin, cameraDir, maxRange, excludeId);
+  const dir = guide.point.clone().sub(ballisticOrigin);
+  const len = dir.length();
+  if (len <= 0.001) return { ...guide, guidePoint: guide.point.clone(), blocked: false };
+  dir.multiplyScalar(1 / len);
+  const physical = resolveShot(world, targets, ballisticOrigin, dir,
+    Math.min(maxRange, len + 0.05), excludeId);
+
+  const samePlayer = guide.kind === 'player' && physical.kind === 'player' &&
+    guide.id === physical.id;
+  const sameOpenRay = guide.kind === 'none' && physical.kind === 'none';
+  const sameWorldPoint = guide.kind === 'world' && physical.kind === 'world' &&
+    physical.point.distanceTo(guide.point) <= 0.08;
+  return {
+    ...physical,
+    guidePoint: guide.point.clone(),
+    blocked: !samePlayer && !sameOpenRay && !sameWorldPoint &&
+      physical.point.distanceTo(guide.point) > 0.08,
+  };
+}
+
 // Aplica dispersión cónica (grados) a una dirección
 export function applySpread(dir, spreadDeg) {
   const s = (spreadDeg * Math.PI / 180);

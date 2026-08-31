@@ -13,7 +13,7 @@ import { Controller, PLAYER_R } from './player/controller.js';
 import { RemotePlayer } from './player/remote.js';
 import { Dummies } from './player/practice.js';
 import { Weapons } from './combat/weapons.js';
-import { resolveShot, applySpread, applyPelletPattern } from './combat/ballistics.js';
+import { resolveShot, resolveGuidedShot, applySpread, applyPelletPattern } from './combat/ballistics.js';
 import { damageFalloff, rocketSplashDamage } from './combat/damage.js';
 import {
   deathImpactPoint, isSniperHeadshotDeath, rocketDeathLevel,
@@ -3027,11 +3027,11 @@ function fireShot() {
       // El scope promete exactamente su punto. Fuera del scope (incluido
       // hip/blindfire del sniper) se conserva la dispersión configurada.
       : scoped ? baseDir.clone() : applySpread(baseDir, spread);
-    // ADS es una promesa estricta de pantalla: el rayo central decide el hit.
-    // El muzzle permanece como origen visual de flash/tracer, pero ninguna
-    // segunda consulta desde el arma puede desviar el impacto fuera de la cruz.
+    // La cámara elige el punto deseado, pero la bala siempre nace en el muzzle.
+    // Si algo ocupa el segmento físico hacia ese punto, ese primer contacto
+    // detiene el tiro: la retícula nunca concede wall penetration.
     const hit = aiming
-      ? resolveShot(world, targets, cameraOrigin, dir, def.range, null)
+      ? resolveGuidedShot(world, targets, cameraOrigin, origin, dir, def.range, null)
       : resolveShot(world, targets, origin, dir, def.range, null);
     anyPoint = hit.point;
     effects.tracer(muzzle, hit.point, scoped && w.cur === 'sniper');
@@ -3145,15 +3145,15 @@ function updateReticle() {
   if (!canShow) { hud.reticle(false, null); hud.sniperScope(false); return; }
 
   if (p.aim) {
-    // ADS es siempre la intención central de cámara. No existe corrección de
-    // paralaje ni estado de obstrucción del muzzle que mueva o recoloree la cruz.
+    // ADS permanece ópticamente centrado y visualmente estable. La colisión
+    // física se resuelve al disparar, sin mover o recolorear la retícula.
     const def = G.weapons.def;
     const ringPx = Math.tan(def.spreadAim * Math.PI / 180) /
       Math.tan(camera.fov * Math.PI / 360) * (innerHeight / 2);
     const ray = shoulderCam.aimRay();
     if (scoped) {
       hud.reticle(false, null);
-      hud.sniperScope(true, null);
+      hud.sniperScope(true);
       return;
     }
     const guideT = staticHitDistance(ray.origin, ray.dir, 200);

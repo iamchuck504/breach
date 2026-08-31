@@ -486,12 +486,15 @@ export const WEAPON_SCALES = {
 export const EQUIPPED_WEAPON_VISUAL_SCALE = 0.8;
 
 const ADS_WEAPON_POSES = Object.freeze({
-  pistol:  { damp: 18, mount: [0.045, 0.10, -0.42], torsoPitch: -0.07, head: 0.30 },
-  smg:     { damp: 16, mount: [0.10, 0.055, -0.08], torsoPitch: -0.12, head: 0.25 },
-  shotgun: { damp: 15, mount: [0.11, 0.045, 0.02], torsoPitch: -0.15, head: 0.22 },
-  sniper:  { damp: 14, mount: [0.12, 0.085, 0.02], torsoPitch: -0.17, head: 0.18 },
-  bazooka: { damp: 12.5, mount: [0.17, 0.15, 0.03], torsoPitch: -0.19, head: 0.13 },
-  grenade: { damp: 17, mount: [0.06, 0.08, -0.38], torsoPitch: -0.09, head: 0.28 },
+  // ADS no se obtiene acercando la cámara a la espalda. Cada pose desplaza
+  // físicamente arma y manos desde el low-ready lateral hacia la línea de
+  // visión, manteniendo la cámara sobre el hombro con espacio libre delante.
+  pistol:  { damp: 18, center: 0.15, mount: [0.045, 0.10, -0.42], torsoPitch: -0.07, head: 0.30 },
+  smg:     { damp: 16, center: 0.14, mount: [0.10, 0.055, -0.10], torsoPitch: -0.12, head: 0.25 },
+  shotgun: { damp: 13.5, center: 0.15, mount: [0.11, 0.045, 0.00], torsoPitch: -0.15, head: 0.22 },
+  sniper:  { damp: 12.5, center: 0.16, mount: [0.12, 0.085, 0.00], torsoPitch: -0.17, head: 0.18 },
+  bazooka: { damp: 12.5, center: 0.10, mount: [0.17, 0.15, 0.02], torsoPitch: -0.19, head: 0.13 },
+  grenade: { damp: 17, center: 0.12, mount: [0.06, 0.08, -0.38], torsoPitch: -0.09, head: 0.28 },
 });
 
 export function applyEquippedWeaponVisualScale(group, weapon) {
@@ -1535,6 +1538,10 @@ export class Rig {
       const adsPose = ADS_WEAPON_POSES[this._wep] ?? ADS_WEAPON_POSES.smg;
       damp = adsPose.damp;
       leftOnGun = true;
+      // Trasladar el conjunto completo (hombros, brazos y arma), no solo el
+      // gunMount. Así el gesto se acerca a la línea óptica sin estirar el IK
+      // ni separar las manos de grip/forend.
+      aimRigX = adsPose.center;
       const lean = p.coverLean ?? 0; // asomarse en la orilla de pared alta
       const coverPose = p.state === 'cover_low'
         ? coverAimPose({ kind: p.coverKind, h: 1.1 }, pitch,

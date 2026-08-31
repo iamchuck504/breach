@@ -106,6 +106,12 @@ for (const weapon of weapons) {
   // conserva una postura de precisión propia aunque comparta la línea óptica.
   settle(rig, params(true, 0), 90);
   poses.set(weapon, rig.gunMount.position.clone());
+  const adsCenterX = rig.aimRig.position.x + rig.gunMount.position.x;
+  const minAdsCenterShift = weapon === 'pistol' ? 0.19 : 0.23;
+  check(adsCenterX >= minAdsCenterShift,
+    `${weapon}: ADS no lleva brazos/arma hacia la línea de visión (${adsCenterX})`);
+  check(adsCenterX < relaxedMount.x + 0.06,
+    `${weapon}: ADS cruzó excesivamente el centro de cámara (${adsCenterX})`);
 
   const gun = rig.activeGun;
   const rightHand = rig.armR.hand.getWorldPosition(new THREE.Vector3());

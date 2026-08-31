@@ -378,8 +378,8 @@ export class HUD {
   // barrel porque su cañón puede estar fuera de esa línea central.
   reticle(aiming, barrelXY, aimInfo = null) {
     this.el.crosshair.classList.toggle('aim', aiming);
-    // ADS nunca hereda estados de obstrucción del muzzle: la marca central es
-    // la autoridad del hit y no puede cambiar de color por paralaje.
+    // ADS siempre usa el mismo estado óptico. La geometría física decide el
+    // impacto, pero no hace que la cruz salte o cambie de color entre frames.
     this.el.crosshair.classList.remove('blocked');
     if (aiming && aimInfo) {
       this.el.crossRing.setAttribute('r', Math.max(5, aimInfo.r).toFixed(1));

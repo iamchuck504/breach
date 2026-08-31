@@ -104,8 +104,8 @@ try {
     throw new Error('hip fire separó retícula, barrel y trayectoria física');
   }
 
-  // ADS estricto: una pared ficticia situada solo delante del muzzle no puede
-  // mover, recolorear ni bloquear la retícula central.
+  // ADS físico: una pared situada solo delante del muzzle no mueve ni cambia
+  // la cruz, pero sí debe ganar frente al fondo visible cuando se dispara.
   const ads = await page.evaluate(async () => {
     const G = window.BREACH;
     const W = window.BREACH_WORLD;
@@ -150,11 +150,11 @@ try {
   });
   if (!ads.visible || ads.blocked || ads.centerOffset > 0.75) {
     console.error('ADS RETICLE DEBUG', JSON.stringify(ads));
-    throw new Error('la retícula ADS reaccionó a una obstrucción exclusiva del muzzle');
+    throw new Error('ADS movió o recoloreó la retícula ante una obstrucción del muzzle');
   }
 
-  // Sniper scoped: aunque un segundo rayo desde el cañón encontraría cover, la
-  // cruz y el impacto permanecen exactamente en el rayo central de cámara.
+  // Sniper scoped: la cruz permanece centrada, pero el cover delante del cañón
+  // recibe el impacto. Ver el fondo desde cámara nunca concede penetración.
   const sniperCentered = await page.evaluate(async () => {
     const G = window.BREACH, W = window.BREACH_WORLD, I = window.BREACH_INPUT;
     if (!G.weapons.hasWeapon('sniper')) G.weapons.giveSpecial('sniper');
@@ -188,8 +188,10 @@ try {
     W.raycast = () => null;
     await new Promise((resolve) => setTimeout(resolve, 80));
 
-    const expectedPoint = cameraOrigin.clone().addScaledVector(ray.dir, 24);
-    const projected = expectedPoint.clone().project(window.BREACH_CAM);
+    const guidePoint = cameraOrigin.clone().addScaledVector(ray.dir, 24);
+    const expectedPhysicalPoint = muzzle.clone().addScaledVector(
+      guidePoint.clone().sub(muzzle).normalize(), 0.8);
+    const projected = guidePoint.clone().project(window.BREACH_CAM);
     const expected = {
       x: (projected.x * 0.5 + 0.5) * innerWidth,
       y: (-projected.y * 0.5 + 0.5) * innerHeight,
@@ -217,13 +219,14 @@ try {
       blocked: el.classList.contains('blocked'),
       reticleError: Math.hypot(actual.x - expected.x, actual.y - expected.y),
       centerOffset: Math.hypot(actual.x - innerWidth / 2, actual.y - innerHeight / 2),
-      impactWorldError: impact ? impact.distanceTo(expectedPoint) : Infinity,
+      impactWorldError: impact ? impact.distanceTo(expectedPhysicalPoint) : Infinity,
+      penetratedToGuide: impact ? impact.distanceTo(guidePoint) < 0.2 : false,
     };
   });
   if (sniperCentered.blocked || sniperCentered.centerOffset > 0.75 ||
-      sniperCentered.impactWorldError > 0.14) {
-    console.error('SNIPER CENTERED RETICLE DEBUG', JSON.stringify(sniperCentered));
-    throw new Error('scope del sniper abandonó el impacto indicado por la retícula central');
+      sniperCentered.impactWorldError > 0.14 || sniperCentered.penetratedToGuide) {
+    console.error('SNIPER PHYSICAL ADS DEBUG', JSON.stringify(sniperCentered));
+    throw new Error('scope del sniper atravesó el cover entre muzzle y objetivo');
   }
 
   // Bazooka ADS: la cámara define el punto deseado y el cohete sale desde el
@@ -458,7 +461,7 @@ try {
     console.error('HIP RETICLE CENTERED DEBUG', JSON.stringify(hipPhysical));
     throw new Error(`hip fire volvió a comportarse como ADS: ${centeredHip.map((v) => v.weapon).join(', ')}`);
   }
-  console.log(`RETICLE OK · barrel ${result.errorPx.toFixed(2)} px · ADS/scope centrados y despejados · silueta ${(maxAdsRightRatio * 100).toFixed(1)}% · bazooka ${rocketAim.dotExpected.toFixed(5)} · 6 armas físicas`);
+  console.log(`RETICLE OK · barrel ${result.errorPx.toFixed(2)} px · ADS/scope centrados con colisión física · silueta ${(maxAdsRightRatio * 100).toFixed(1)}% · bazooka ${rocketAim.dotExpected.toFixed(5)} · 6 armas físicas`);
 } finally {
   await browser?.close();
   server.kill();
