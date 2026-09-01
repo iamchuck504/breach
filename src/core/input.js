@@ -3,7 +3,6 @@
 // toggle F9 persistido en localStorage.
 import { BINDS, PAD_DPAD_SLOTS } from './bindings.js';
 import { PadInput } from './gamepad.js';
-import { TouchInput } from './touch.js';
 
 export class Input {
   constructor(canvas) {
@@ -43,15 +42,6 @@ export class Input {
     // Chromium headless SIN lock concedido pone un ClipCursor REAL en Windows
     // y confina el mouse físico de quien esté usando la máquina
     this.lockDisabled = new URLSearchParams(location.search).has('nolock');
-    // ?paddebug=1: overlay de diagnóstico de controles — muestra lo que la
-    // Gamepad API expone (id/mapping/ejes/botones) y qué pad eligió el
-    // juego. Para depurar en vivo un control que "no funciona".
-    if (new URLSearchParams(location.search).has('paddebug')) this._padDebug();
-    if (new URLSearchParams(location.search).has('hidcal')) this._hidCalibrate();
-    // controles táctiles (smartphones/tablets): pad sintético + mirada por
-    // arrastre — DESPUÉS de fijar lockDisabled (el modo táctil lo fuerza)
-    this.touch = new TouchInput(this, canvas);
-    this.pad.touch = this.touch;
     this.onToggleTuning = null;
     this.onToggleMute = null;
     this.onEscape = null;
@@ -254,118 +244,6 @@ export class Input {
 
   // Flancos: consumir tras CADA paso de simulación (evita doble-evade si un
   // frame de render ejecuta dos pasos de física)
-  // Overlay ?paddebug=1: estado crudo de la Gamepad API + selección del
-  // juego, refrescado 4 veces por segundo. Solo diagnóstico, cero gameplay.
-  _padDebug() {
-    const el = document.createElement('pre');
-    el.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:9999;' +
-      'background:rgba(6,10,14,.88);color:#9fe8ff;font:11px/1.45 monospace;' +
-      'padding:10px 12px;border:1px solid #2b4a5a;border-radius:6px;' +
-      'max-width:640px;white-space:pre-wrap;pointer-events:none;';
-    document.body.appendChild(el);
-    setInterval(() => {
-      const raw = navigator.getGamepads ? navigator.getGamepads() : [];
-      const lines = [];
-      let n = 0;
-      for (const g of Array.from(raw || [])) {
-        if (!g) continue;
-        n++;
-        const axes = (g.axes || []).map((a) => (+a).toFixed(2)).join(' ');
-        const btns = (g.buttons || [])
-          .map((b, i) => (b && (b.pressed || b.value > 0.4) ? i : null))
-          .filter((i) => i !== null).join(',');
-        lines.push(`[${g.index}] "${g.id}"`);
-        lines.push(`    mapping=${g.mapping || '(vacío)'} conectado=${g.connected}`);
-        lines.push(`    ejes: ${axes || '(ninguno)'}`);
-        lines.push(`    botones activos: ${btns || '-'}`);
-      }
-      if (!n) lines.push('Gamepad API: SIN pads (presiona un botón del control)');
-      lines.push('---');
-      lines.push(`juego: elegido idx=${this.pad?._idx ?? '-'} ` +
-        `conectado=${!!this.pad?.connected} id=${this.pad?.info?.id ?? '-'}`);
-      lines.push(`move=${(+(this.pad?.moveX ?? 0)).toFixed(2)},` +
-        `${(+(this.pad?.moveZ ?? 0)).toFixed(2)} ` +
-        `cam=${(+(this.pad?.camX ?? 0)).toFixed(2)},` +
-        `${(+(this.pad?.camY ?? 0)).toFixed(2)} ` +
-        `fire=${!!this.pad?.fireHeld} aim=${!!this.pad?.aimHeld}`);
-      el.textContent = lines.join('\n');
-    }, 250);
-  }
-
-  // ?hidcal=1: calibrador del mando PlayStation EN EL NAVEGADOR DEL JUGADOR
-  // (los reportes HID solo fluyen ahí). Guía por fases, registra qué bytes
-  // de cada reporte varían y deja el resultado listo para COPIAR.
-  _hidCalibrate() {
-    const el = document.createElement('div');
-    el.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#101820f2;' +
-      'color:#bfe8ff;font:18px monospace;padding:26px;overflow:auto;';
-    el.innerHTML = '<h2>CALIBRACIÓN DEL MANDO PS</h2>' +
-      '<button id="hidcal-go" style="font:22px monospace;padding:14px 24px;cursor:pointer">' +
-      '1. CLICK AQUÍ → 2. elige tu mando en la lista</button>' +
-      '<div id="hidcal-phase" style="font-size:32px;color:#ffd37a;margin:16px 0"></div>' +
-      '<button id="hidcal-copy" style="display:none;font:18px monospace;padding:10px 18px;' +
-      'cursor:pointer">COPIAR RESULTADOS</button>' +
-      '<pre id="hidcal-log" style="font-size:12px;white-space:pre-wrap"></pre>';
-    document.body.appendChild(el);
-    const log = document.getElementById('hidcal-log');
-    document.getElementById('hidcal-go').onclick = async () => {
-      try {
-        const devs = await navigator.hid.requestDevice({ filters: [{ vendorId: 0x054c }] });
-        if (!devs.length) { log.textContent = 'cancelado'; return; }
-        const results = [];
-        const stats = { map: null };
-        for (const d of devs) {
-          try { if (!d.opened) await d.open(); } catch { continue; }
-          d.oninputreport = (e) => {
-            if (!stats.map) return;
-            const key = `id=0x${e.reportId.toString(16)} len=${e.data.byteLength}`;
-            let s = stats.map.get(key);
-            if (!s) {
-              s = { n: 0, min: new Array(e.data.byteLength).fill(255),
-                max: new Array(e.data.byteLength).fill(0) };
-              stats.map.set(key, s);
-            }
-            s.n++;
-            for (let i = 0; i < e.data.byteLength; i++) {
-              const v = e.data.getUint8(i);
-              if (v < s.min[i]) s.min[i] = v;
-              if (v > s.max[i]) s.max[i] = v;
-            }
-          };
-        }
-        const phases = [
-          ['NO TOQUES NADA', 5000], ['STICK IZQUIERDO: círculos', 6000],
-          ['STICK DERECHO: círculos', 6000], ['R2 a fondo varias veces', 5000],
-          ['L2 a fondo varias veces', 5000], ['CRUZ (X) varias veces', 5000],
-          ['R1 varias veces', 5000], ['D-PAD ARRIBA varias veces', 5000],
-        ];
-        const phaseEl = document.getElementById('hidcal-phase');
-        for (const [name, ms] of phases) {
-          phaseEl.textContent = '→ ' + name;
-          stats.map = new Map();
-          await new Promise((r) => setTimeout(r, ms));
-          const out = [];
-          for (const [key, s] of stats.map) {
-            const varying = [];
-            for (let i = 0; i < s.min.length; i++) {
-              if (s.max[i] - s.min[i] > 8) varying.push(`${i}:${s.min[i]}-${s.max[i]}`);
-            }
-            out.push({ key, n: s.n, varying });
-          }
-          results.push({ phase: name, out });
-          log.textContent = results.map((r) => JSON.stringify(r)).join('\n');
-        }
-        phaseEl.textContent = '¡LISTO! copia los resultados y pégalos en el chat';
-        const copyBtn = document.getElementById('hidcal-copy');
-        copyBtn.style.display = 'inline-block';
-        copyBtn.onclick = () => {
-          navigator.clipboard.writeText(JSON.stringify(results));
-          copyBtn.textContent = '¡COPIADO!';
-        };
-      } catch (err) { log.textContent = `ERROR ${err.name}: ${err.message}`; }
-    };
-  }
-
   consumeEdges() {
     this.firePressed = false;
     this.evadePressed = false;

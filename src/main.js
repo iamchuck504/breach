@@ -980,30 +980,6 @@ input.onInvertChanged = (inv) => {
 const kbRows = document.getElementById('kb-rows');
 const padRows = document.getElementById('pad-rows');
 const padStatus = document.getElementById('pad-status');
-// Modo DIRECTO para mandos PlayStation (WebHID): inmune a que Steam deje el
-// control en su modo extendido (síntoma: botones sí, sticks congelados).
-const btnHidPad = document.getElementById('btn-hidpad');
-const refreshHidPad = () => {
-  if (!input.pad.hid?.supported()) { btnHidPad.style.display = 'none'; return; }
-  const on = input.pad.hid.connected();
-  btnHidPad.textContent = input.pad.hid.noData
-    ? 'PS DIRECT: NO DATA (STEAM/OS BLOCKS IT) · CLICK TO DISABLE'
-    : on
-      ? 'PS DIRECT MODE: ON · CLICK TO DISABLE'
-      : 'PS CONTROLLER NOT WORKING? · ENABLE DIRECT MODE';
-  btnHidPad.classList.toggle('primary', on && !input.pad.hid.noData);
-};
-btnHidPad.addEventListener('click', async () => {
-  if (input.pad.hid.connected()) {
-    input.pad.hid.disconnect();
-  } else {
-    const ok = await input.pad.hid.requestConnect();
-    hud.hint(ok ? 'PS DIRECT MODE ON' : 'SELECT YOUR CONTROLLER IN THE BROWSER LIST', 2200);
-  }
-  refreshHidPad();
-});
-if (input.pad.hid) input.pad.hid.onStatus = refreshHidPad;
-refreshHidPad();
 const slMouse = document.getElementById('sl-mouse');
 const slMouseV = document.getElementById('sl-mouse-v');
 const slPad = document.getElementById('sl-pad');
@@ -3854,15 +3830,6 @@ function frame(now) {
   } else if (vHover) {
     vHover.classList.remove('vhover');
     vHover = null;
-  }
-  // Aviso del secuestro de Steam (mando Sony con botones vivos y sticks
-  // muertos): es un límite del SO — lo único útil es DECIRLO al jugador.
-  if (input.pad.sonyFrozen?.() && !G._steamFrozenWarnAt) {
-    G._steamFrozenWarnAt = performance.now();
-    hud.hint('⚠ STEAM CAPTURÓ EL MANDO (sticks muertos) — CIERRA STEAM O DESACTIVA SU SOPORTE PLAYSTATION', 5200);
-  } else if (!input.pad.sonyFrozen?.() && G._steamFrozenWarnAt &&
-      performance.now() - G._steamFrozenWarnAt > 30000) {
-    G._steamFrozenWarnAt = 0; // episodio nuevo → podrá avisar otra vez
   }
   if (input.pad.connected !== padWasConnected) {
     padWasConnected = input.pad.connected;
