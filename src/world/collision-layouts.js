@@ -247,27 +247,23 @@ function calleSpecs() {
   out.push(make(12.45, 11, 0.46, 0.46, 0.68, 'solid', {
     mirror: false, decorLink: 'hydrant:right',
   }));
-  // Parada de bus FIEL al GLB (queja de Chuck: el interior sellado como
-  // bloque impedía hasta PEGARSE a la marquesina). Piezas medidas: panel
-  // trasero fino, dos paneles laterales de vidrio (0.9 de fondo, 0.12 de
-  // grosor — el vidrio es dibujo y detiene balas), y la banca real
-  // (0.4x1.6 en la mitad norte). El interior queda TRANSITABLE; el techo
-  // (2.09-2.5) es voladizo exento y el bordillo de 0.2 va sin física para
-  // no bloquear la entrada (regla de guijarros).
+  // Parada de bus FIEL al GLB y ROTADA 180° (pedidos de Chuck: el interior
+  // sellado impedía pegarse, y la banca daba la espalda a la calle). El GLB
+  // real es una vitrina: vidrio continuo hasta y1.8 por un lado, el otro
+  // COMPLETAMENTE abierto (no hay panel trasero — el "panel" que se midió
+  // era el borde bajo del techo inclinado). Rotada, el vidrio da al muro y
+  // la abertura con la banca (0.4x1.6) mira a la calle. Interior
+  // TRANSITABLE; techo voladizo y bordillo 0.2 sin física.
   for (const [side, z] of [[1, -37], [-1, 37]]) {
     const decorLink = `busShelter:${side > 0 ? 'right' : 'left'}`;
     const linked = { mirror: false, decorLink };
-    out.push(make(side * 14.84, z, 0.18, 3.53, 2.28, 'shelter', linked));
-    // vidrio FRONTAL medido: plano continuo en x 13.88 hasta y1.8 (la
-    // marquesina es una vitrina; el vidrio es dibujo y detiene balas, pero
-    // FINO — de 1.8 a 2.09 el frente queda abierto de verdad)
-    out.push(make(side * 13.92, z, 0.1, 3.2, 1.8, 'shelter', {
+    out.push(make(side * 14.78, z, 0.1, 3.2, 1.8, 'shelter', {
       ...linked, cover: false,
     }));
     for (const dz of [-1.6, 1.6]) {
-      out.push(make(side * 14.34, z + dz, 0.9, 0.12, 2.28, 'shelter', linked));
+      out.push(make(side * 14.36, z + dz, 0.9, 0.12, 2.28, 'shelter', linked));
     }
-    out.push(make(side * 14.28, z + side * 0.5, 0.4, 1.6, 0.56, 'solid', {
+    out.push(make(side * 14.42, z - side * 0.5, 0.4, 1.6, 0.56, 'solid', {
       ...linked, cover: false,
     }));
   }

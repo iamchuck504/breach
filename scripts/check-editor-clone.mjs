@@ -408,7 +408,7 @@ const solidStreetProps = await page.evaluate(() => {
   let linked = 0; let nonCover = 0; let cover = 0; let blocked = 0; let openFronts = 0;
   for (const asset of assets) {
     const boxes = ed.map.objects.filter((o) => o.link && o.link === asset.link && o.id !== asset.id);
-    const expected = asset.p === 'urban:busShelter' ? 5 : 1;
+    const expected = asset.p === 'urban:busShelter' ? 4 : 1;
     if (boxes.length === expected) linked++;
     nonCover += boxes.filter((o) => o.cover === false && o.visual === false).length;
     cover += boxes.filter((o) => o.cover !== false && o.visual === false).length;
@@ -428,14 +428,14 @@ const solidStreetProps = await page.evaluate(() => {
   return { assets: assets.length, linked, nonCover, cover, blocked, openFronts,
     coverFaces: W.faces.length };
 });
-check('postes/hidrantes colisionan; paradas por piezas con vidrio frontal',
+check('postes/hidrantes colisionan; paradas abiertas a la calle',
   solidStreetProps.assets === 20 && solidStreetProps.linked === 20 &&
-  solidStreetProps.nonCover === 22 && solidStreetProps.cover === 6 &&
-  // Parada FIEL al GLB (queja de Chuck): interior transitable, banca real
-  // y vidrio frontal fino — el punto de prueba del "frente" (a 0.72 del
-  // centro) sigue topando el vidrio, por eso openFronts 0 se mantiene.
-  solidStreetProps.blocked === 28 && solidStreetProps.openFronts === 0 &&
-  solidStreetProps.coverFaces === 216,
+  solidStreetProps.nonCover === 22 && solidStreetProps.cover === 4 &&
+  // Parada FIEL al GLB y ROTADA (pedidos de Chuck): vidrio hacia el muro,
+  // abertura y banca hacia la calle — el punto de prueba del frente entra
+  // libre (openFronts 2 es el comportamiento DESEADO).
+  solidStreetProps.blocked === 26 && solidStreetProps.openFronts === 2 &&
+  solidStreetProps.coverFaces === 208,
   JSON.stringify(solidStreetProps));
 
 const buildingDuplicate = await page.evaluate(() => {
@@ -510,7 +510,7 @@ const migratedV1Clone = await page.evaluate(() => {
 check('clon v1 agrega las 16 pieles y 14 edificios editables faltantes',
   migratedV1Clone.existingAfter === migratedV1Clone.existingBefore + 14 &&
   migratedV1Clone.procedural === 16 && migratedV1Clone.linkedProcedural === 16 &&
-  migratedV1Clone.version === 8,
+  migratedV1Clone.version === 9,
   JSON.stringify(migratedV1Clone));
 
 const migratedV2Clone = await page.evaluate(() => {
@@ -528,7 +528,7 @@ const migratedV2Clone = await page.evaluate(() => {
   const linkedPhysical = migratedAssets.filter((asset) => {
     const boxes = ed.map.objects.filter((o) =>
       o.id !== asset.id && o.link && o.link === asset.link && o.visual === false);
-    return boxes.length === (asset.p === 'urban:busShelter' ? 5 : 1);
+    return boxes.length === (asset.p === 'urban:busShelter' ? 4 : 1);
   });
   return {
     version: ed.map.decorCaptureVersion,
@@ -538,7 +538,7 @@ const migratedV2Clone = await page.evaluate(() => {
   };
 });
 check('clon v2 recibe colisión de props y edificios sin recrearlo',
-  migratedV2Clone.version === 8 && migratedV2Clone.buildings === 14 &&
+  migratedV2Clone.version === 9 && migratedV2Clone.buildings === 14 &&
   migratedV2Clone.assets === 20 && migratedV2Clone.linkedPhysical === 20,
   JSON.stringify(migratedV2Clone));
 
@@ -570,8 +570,8 @@ const migratedV3Clone = await page.evaluate(() => {
     const boxes = ed.map.objects.filter((o) => o.id !== asset.id && o.link === asset.link);
     if (asset.p === 'urban:streetlight') {
       if (boxes.length === 1 && Math.abs(Math.abs(boxes[0].x - asset.x) - 0.88) < 0.03) correct++;
-    } else if (boxes.length === 5 &&
-      boxes.filter((o) => o.cover !== false).length === 3) correct++;
+    } else if (boxes.length === 4 &&
+      boxes.filter((o) => o.cover !== false).length === 2) correct++;
   }
   return {
     version: ed.map.decorCaptureVersion,
@@ -580,7 +580,7 @@ const migratedV3Clone = await page.evaluate(() => {
   };
 });
 check('clon v3 reemplaza colliders viejos sin duplicar edificios',
-  migratedV3Clone.version === 8 && migratedV3Clone.buildings === 14 &&
+  migratedV3Clone.version === 9 && migratedV3Clone.buildings === 14 &&
   migratedV3Clone.assets === 18 && migratedV3Clone.correct === 18,
   JSON.stringify(migratedV3Clone));
 

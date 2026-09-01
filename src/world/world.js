@@ -2829,11 +2829,12 @@ export class World {
     this._addStreetBus(0, -34.5, Math.PI / 2, 0);
     this._addStreetBus(0, 34.5, -Math.PI / 2, 1);
     // Dos paradas explican que los autobuses cerraban una ruta urbana real.
-    // Respaldo y laterales son cover; el frente de la banca queda accesible.
+    // Rotadas 180° (pedido de Chuck): la vitrina de vidrio da al MURO y la
+    // abertura con la banca mira a la CALLE — quien espera ve pasar el bus.
     this._addUrbanAsset('busShelter', 14.35, -37.0,
-      { scale: 0.84, rotation: Math.PI / 2, decorLink: 'busShelter:right' });
+      { scale: 0.84, rotation: -Math.PI / 2, decorLink: 'busShelter:right' });
     this._addUrbanAsset('busShelter', -14.35, 37.0,
-      { scale: 0.84, rotation: -Math.PI / 2, decorLink: 'busShelter:left' });
+      { scale: 0.84, rotation: Math.PI / 2, decorLink: 'busShelter:left' });
     // Vehículos del operativo de emergencia: conservan posición, orientación
     // y collider; colores/insignias distintos explican por qué están allí.
     this._addStreetTruck(-6.5, -1.5, 0, 0x53666b, 0);
