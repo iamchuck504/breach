@@ -2942,13 +2942,15 @@ export class World {
     // continuo de fachadas nocturnas corre DETRÁS de toda la línea de
     // edificios en cada lado: cualquier separación entre módulos muestra
     // ciudad, nunca cielo vacío. Sin física (vive fuera de los límites).
+    // MÁS BAJO que el edificio más bajo (9.35): solo se ve POR los huecos —
+    // jamás asoma sobre los techos como "edificios extra" (2ª queja).
     {
       const alleyBackMat = new THREE.MeshBasicMaterial({
-        map: this._tex('windows', 24, 3.4), color: 0x2b3339,
+        map: this._tex('windows', 24, 2.6), color: 0x232a30,
       });
       for (const side of [-1, 1]) {
-        const backdrop = new THREE.Mesh(new THREE.PlaneGeometry(86, 12.5), alleyBackMat);
-        backdrop.position.set(side * (this.fx + 5.0), 6.25, 0);
+        const backdrop = new THREE.Mesh(new THREE.PlaneGeometry(86, 9.2), alleyBackMat);
+        backdrop.position.set(side * (this.fx + 5.0), 4.6, 0);
         backdrop.rotation.y = side > 0 ? -Math.PI / 2 : Math.PI / 2;
         this.mapGroup.add(backdrop);
       }
