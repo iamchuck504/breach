@@ -1930,22 +1930,27 @@ export class World {
       [-1.28, 0.28], [-1.28, 2.72], [-1.18, 2.82], [3.30, 2.82],
       [3.40, 2.72], [3.40, 0.28],
     ], S.width, cargoMat, 0.035);
+    // El quiebre del morro baja a 1.14 (antes 1.52): el plano inclinado del
+    // frente es GRANDE, como un cab-over real — el parabrisas lo cubre casi
+    // entero (queja de Chuck: el vidrio delantero se veía como una ranura).
     this._addVehicleProfile(group, [
-      [-S.length / 2, 0.24], [-S.length / 2, 1.52], [-3.22, 2.15],
+      [-S.length / 2, 0.24], [-S.length / 2, 1.14], [-3.22, 2.15],
       [-2.94, 2.46], [-1.62, 2.46], [-1.28, 2.14], [-1.28, 0.24],
     ], S.width - 0.04, cabMat, 0.045);
 
-    // Parabrisas alineado con el perfil real de la cabina. El marco y el
-    // vidrio comparten trapecio, como en los sedanes, y no flotan como planos.
+    // Parabrisas a lo alto del morro inclinado. El marco y el vidrio
+    // comparten trapecio, como en los sedanes, y no flotan como planos.
     panel([
-      [-1.06, 1.18, -3.515], [-0.98, 2.25, -3.205],
-      [0.98, 2.25, -3.205], [1.06, 1.18, -3.515],
+      [-1.10, 1.20, -3.535], [-1.00, 2.24, -3.225],
+      [1.00, 2.24, -3.225], [1.10, 1.20, -3.535],
     ], trimMat, 3);
     panel([
-      [-0.99, 1.25, -3.523], [-0.91, 2.18, -3.213],
-      [0.91, 2.18, -3.213], [0.99, 1.25, -3.523],
+      [-1.03, 1.27, -3.545], [-0.93, 2.17, -3.235],
+      [0.93, 2.17, -3.235], [1.03, 1.27, -3.545],
     ], glassMat, 4);
-    add(0.035, 0.92, 0.025, 0, 1.72, -3.37, trimMat, -0.28);
+    for (const wx of [-0.52, 0.5]) {
+      add(0.035, 0.74, 0.025, wx, 1.60, -3.45, trimMat, -0.29);
+    }
 
     for (const side of [-1, 1]) {
       const skinX = side * (S.width / 2 + 0.068);
