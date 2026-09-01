@@ -4,7 +4,10 @@
 // collider y reporta AGUJEROS (lo visible no para la bala) y FANTASMAS
 // (pared invisible sin nada que ver). Además, un barrido top-down detecta
 // volumen visual jugable SIN ningún collider debajo.
-//   node scripts/audit-hitboxes.mjs [mapa]      (default: calle)
+//   node scripts/audit-hitboxes.mjs [mapa] [tolerancia]
+//   (default: calle 0.30 — tolerancia en metros para contar
+//   agujero/fantasma; 0.15 sirve como diagnóstico fino de "no me puedo
+//   pegar al objeto", con ruido esperable en siluetas curvas)
 import { chromium } from 'playwright-core';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -15,6 +18,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
 import { CHROME } from './lib-chrome.mjs';
 const LAYOUT = process.argv[2] || 'calle';
+const TOL = Number(process.argv[3]) || 0.30;
 
 const server = spawn(process.execPath, [path.join(root, 'node_modules', 'vite', 'bin', 'vite.js'),
   '--host', '127.0.0.1', '--port', '8799', '--strictPort'], { stdio: 'ignore' });
@@ -33,7 +37,7 @@ await page.evaluate(async (layout) => {
 }, LAYOUT);
 await page.waitForTimeout(2600);
 
-const report = await page.evaluate(async (layout) => {
+const report = await page.evaluate(async ([layout, TOL]) => {
   const W = window.BREACH_WORLD, T = window.THREE;
   const G = window.BREACH;
   for (const d of G.dummies?.list ?? []) { d.alive = false; d.respawnT = 9999; }
@@ -114,9 +118,9 @@ const report = await page.evaluate(async (layout) => {
             return hx > b.minx - 0.4 && hx < b.maxx + 0.4 &&
               hz > b.minz - 0.4 && hz < b.maxz + 0.4;
           };
-          const ghostHere = p !== null && (vt === null || vt > p + 0.30) &&
+          const ghostHere = p !== null && (vt === null || vt > p + TOL) &&
             (ph.collider === b || (ph.collider === null && inCell(p)));
-          let holeHere = vt !== null && (p === null || p > vt + 0.30) && inCell(vt);
+          let holeHere = vt !== null && (p === null || p > vt + TOL) && inCell(vt);
           // VOLADIZOS COLGANTES (letreros/banners que cuelgan de un alero,
           // por encima de la cabeza): si bajo el punto impactado hay AIRE
           // (ningún mesh en los 0.55m inferiores), una caja desde el suelo
@@ -207,6 +211,7 @@ const report = await page.evaluate(async (layout) => {
       caster.far = 3.3;
       const hits = caster.intersectObjects(W.mapGroup.children, true);
       let topY = null, name = '';
+      let hasLowVisual = false;
       for (const h of hits) {
         if (!h.object.isMesh || skip(h.object)) continue;
         // marcas pintadas (roofMark, hazard) son planos transparentes sin
@@ -215,9 +220,18 @@ const report = await page.evaluate(async (layout) => {
           ? h.object.material[0] : h.object.material;
         if (mat?.transparent) continue;
         const y = 3.4 - h.distance;
-        if (y > 0.32 && y < 3.0) { topY = y; name = h.object.name || h.object.parent?.name || '?'; }
-        break;
+        if (topY === null) {
+          if (y > 0.32 && y < 3.0) { topY = y; name = h.object.name || h.object.parent?.name || '?'; }
+          else break;
+          continue;
+        }
+        // ¿hay dibujo POR DEBAJO del primer techo? (para distinguir un
+        // objeto macizo de un techo hueco transitable)
+        if (y > 0.1 && y < 2.05) { hasLowVisual = true; break; }
       }
+      // techos huecos de marquesinas/kioscos (tope <=2.3 pero interior
+      // vacío): voladizo transitable, no exige collider
+      if (topY !== null && topY > 2.02 && !hasLowVisual) topY = null;
       if (topY === null) continue;
       // ¿hay collider/segmento en esta celda a esa altura?
       const p = { x, z };
@@ -253,7 +267,7 @@ const report = await page.evaluate(async (layout) => {
     orphanGroups: groups.slice(0, 20),
     totalOrphans: orphan.length,
   };
-}, LAYOUT);
+}, [LAYOUT, TOL]);
 
 console.log(`=== AUDIT ${report.layout} · ${report.colliders} colliders ===`);
 console.log(`\n-- Discrepancias por collider (${report.totalFindings}) --`);

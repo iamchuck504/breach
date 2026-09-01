@@ -247,24 +247,28 @@ function calleSpecs() {
   out.push(make(12.45, 11, 0.46, 0.46, 0.68, 'solid', {
     mirror: false, decorLink: 'hydrant:right',
   }));
-  // Parada de bus: el GLB real ocupa x 13.72..14.98 (los costados del spec
-  // arrancaban en 13.88 — 16cm de marquesina/lateral penetrables y decals
-  // clavados 0.9m adentro). Frente abierto intacto (cover en U).
+  // Parada de bus FIEL al GLB (queja de Chuck: el interior sellado como
+  // bloque impedía hasta PEGARSE a la marquesina). Piezas medidas: panel
+  // trasero fino, dos paneles laterales de vidrio (0.9 de fondo, 0.12 de
+  // grosor — el vidrio es dibujo y detiene balas), y la banca real
+  // (0.4x1.6 en la mitad norte). El interior queda TRANSITABLE; el techo
+  // (2.09-2.5) es voladizo exento y el bordillo de 0.2 va sin física para
+  // no bloquear la entrada (regla de guijarros).
   for (const [side, z] of [[1, -37], [-1, 37]]) {
     const decorLink = `busShelter:${side > 0 ? 'right' : 'left'}`;
-    out.push(make(side * 14.88, z, 0.2, 3.53, 2.45, 'shelter', {
-      mirror: false, decorLink,
+    const linked = { mirror: false, decorLink };
+    out.push(make(side * 14.84, z, 0.18, 3.53, 2.28, 'shelter', linked));
+    // vidrio FRONTAL medido: plano continuo en x 13.88 hasta y1.8 (la
+    // marquesina es una vitrina; el vidrio es dibujo y detiene balas, pero
+    // FINO — de 1.8 a 2.09 el frente queda abierto de verdad)
+    out.push(make(side * 13.92, z, 0.1, 3.2, 1.8, 'shelter', {
+      ...linked, cover: false,
     }));
     for (const dz of [-1.6, 1.6]) {
-      out.push(make(side * 14.35, z + dz, 1.26, 0.5, 2.45, 'shelter', {
-        mirror: false, decorLink,
-      }));
+      out.push(make(side * 14.34, z + dz, 0.9, 0.12, 2.28, 'shelter', linked));
     }
-    // interior del GLB (banca con respaldo + paneles de vidrio a varias
-    // alturas): sellado como bloque — la navegación ya estaba bloqueada por
-    // la banca y las balas se colaban entre panel y panel
-    out.push(make(side * 14.38, z, 1.2, 3.1, 2.45, 'solid', {
-      mirror: false, decorLink,
+    out.push(make(side * 14.28, z + side * 0.5, 0.4, 1.6, 0.56, 'solid', {
+      ...linked, cover: false,
     }));
   }
   return freeze(out);
