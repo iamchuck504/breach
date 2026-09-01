@@ -980,6 +980,28 @@ input.onInvertChanged = (inv) => {
 const kbRows = document.getElementById('kb-rows');
 const padRows = document.getElementById('pad-rows');
 const padStatus = document.getElementById('pad-status');
+// Modo DIRECTO para mandos PlayStation (WebHID): inmune a que Steam deje el
+// control en su modo extendido (síntoma: botones sí, sticks congelados).
+const btnHidPad = document.getElementById('btn-hidpad');
+const refreshHidPad = () => {
+  if (!input.pad.hid?.supported()) { btnHidPad.style.display = 'none'; return; }
+  const on = input.pad.hid.connected();
+  btnHidPad.textContent = on
+    ? 'PS DIRECT MODE: ON · CLICK TO DISABLE'
+    : 'PS CONTROLLER NOT WORKING? · ENABLE DIRECT MODE';
+  btnHidPad.classList.toggle('primary', on);
+};
+btnHidPad.addEventListener('click', async () => {
+  if (input.pad.hid.connected()) {
+    input.pad.hid.disconnect();
+  } else {
+    const ok = await input.pad.hid.requestConnect();
+    hud.hint(ok ? 'PS DIRECT MODE ON' : 'SELECT YOUR CONTROLLER IN THE BROWSER LIST', 2200);
+  }
+  refreshHidPad();
+});
+if (input.pad.hid) input.pad.hid.onStatus = refreshHidPad;
+refreshHidPad();
 const slMouse = document.getElementById('sl-mouse');
 const slMouseV = document.getElementById('sl-mouse-v');
 const slPad = document.getElementById('sl-pad');

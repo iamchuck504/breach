@@ -1,6 +1,7 @@
 // Gamepad API: stick izq mover, stick der cámara (curva cuadrática + deadzone),
 // gatillos analógicos, vibración. A mantenida = correr.
 import { BINDS } from './bindings.js';
+import { HidPad } from './pad-hid.js';
 
 const DEADZONE = 0.16;
 const SWITCH_AXIS = 0.28;
@@ -17,7 +18,10 @@ function padPriority(gp) {
   // DInput sin normalizar y botones/ejes duplicados.
   const steamVirtual = /steam.*(virtual|input)|virtual.*steam|\b(vigem|vjoy|x360ce|rewasd)\b/.test(id);
   const standard = gp?.mapping === 'standard';
-  return (standard ? 20 : 0) + (steamVirtual ? 8 : 0) +
+  // El pad WebHID lee el control DIRECTO: cuando está activo gana siempre
+  // sobre el mismo dispositivo visto (roto) por la Gamepad API.
+  const webhid = id.includes('breach webhid');
+  return (standard ? 20 : 0) + (steamVirtual ? 8 : 0) + (webhid ? 30 : 0) +
     (/xinput|xbox 360|xbox one/.test(id) ? 3 : 0);
 }
 
@@ -49,11 +53,17 @@ export class PadInput {
     this._evadeHeldT = 0;
     this._gp = null;
     this._samples = new Map();
+    this.hid = new HidPad();
+    this.hid.autoConnect?.();
   }
 
   poll(dt) {
     const raw = navigator.getGamepads ? navigator.getGamepads() : [];
     const pads = Array.from(raw || []).filter((g) => g && g.connected !== false);
+    // Mando PlayStation por WebHID (lectura directa, inmune a que Steam
+    // cambie el modo de reporte): entra al MISMO pipeline que cualquier pad.
+    const hidGp = this.hid?.gamepad?.();
+    if (hidGp) pads.push(hidGp);
     const live = new Set(pads.map((g, slot) => Number.isInteger(g.index) ? g.index : slot));
     for (const index of this._samples.keys()) if (!live.has(index)) this._samples.delete(index);
 
