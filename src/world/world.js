@@ -2817,6 +2817,38 @@ export class World {
       addStreetBuilding(1, -z, span, h, right[0], right[1], variant, right[2]);
     }
 
+    // MEDIANERAS: los módulos quedan PEGADOS (queja de Chuck: la rendija
+    // entre edificios era un hoyo feo con el telón asomando). Cada gap se
+    // rellena con un volumen de ladrillo AL RAS del plano de fachada y a la
+    // altura del vecino más bajo — pared continua, sin física nueva (el
+    // muro invisible ya corre por delante de todo este plano).
+    {
+      const seamBrickMat = new THREE.MeshStandardMaterial({
+        color: 0x8a7466, map: this._tex('urbanBrickDark', 1.1, 5.2),
+        bumpMap: this._detailTex('urbanBrickDark', 1.1, 5.2), bumpScale: 0.028,
+        roughness: 0.88, metalness: 0.02,
+      });
+      const seamRoofMat = new THREE.MeshStandardMaterial({
+        color: 0x4d423c, roughness: 0.94, metalness: 0.01,
+      });
+      for (let i = 0; i < blocks.length - 1; i++) {
+        const endA = blocks[i][0] + blocks[i][1] / 2;
+        const startB = blocks[i + 1][0] - blocks[i + 1][1] / 2;
+        const gapC = (endA + startB) / 2;
+        const gapW = Math.max(0.2, startB - endA) + 0.26;
+        const hSeam = Math.min(blocks[i][2], blocks[i + 1][2]);
+        for (const side of [-1, 1]) {
+          const seam = new THREE.Mesh(
+            new THREE.BoxGeometry(4.65, hSeam, gapW),
+            [seamBrickMat, seamBrickMat, seamRoofMat, seamRoofMat, seamBrickMat, seamBrickMat],
+          );
+          seam.position.set(side * (this.fx + 2.195), hSeam / 2, side > 0 ? -gapC : gapC);
+          seam.castShadow = true; seam.receiveShadow = true;
+          this.mapGroup.add(seam);
+        }
+      }
+    }
+
     // Perspectiva exterior: la colisión termina en ±fz, pero asfalto, aceras
     // y cuatro módulos de fachada continúan en cada dirección. Todo se agrupa
     // en instancias y se oscurece con la distancia, de modo que la avenida
