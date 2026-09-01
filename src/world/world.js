@@ -2932,6 +2932,113 @@ export class World {
       }
     }
 
+    // MOBILIARIO URBANO de acera (pedido de Chuck): parquímetros, buzón,
+    // cabina telefónica, cajas de periódicos, botes de basura y bancas.
+    // Cada pieza vive espejada en ambos lados y su física (en
+    // collision-layouts) coincide 1:1 con el dibujo — sin paredes
+    // invisibles ni volúmenes penetrables; los decals siempre encuentran
+    // superficie visual real.
+    {
+      const steelMat = new THREE.MeshStandardMaterial({ color: 0x5a6167, metalness: 0.62, roughness: 0.40 });
+      const darkSteelMat = new THREE.MeshStandardMaterial({ color: 0x30363b, metalness: 0.55, roughness: 0.48 });
+      const mailMat = new THREE.MeshStandardMaterial({
+        color: 0x2c4a75, map: this._tex('vehicleWear', 0.8, 0.8),
+        metalness: 0.42, roughness: 0.50,
+      });
+      const boothMat = new THREE.MeshStandardMaterial({ color: 0x37474e, metalness: 0.50, roughness: 0.44 });
+      const boothGlassMat = new THREE.MeshStandardMaterial({
+        color: 0x9db4c2, map: this._tex('vehicleGlass', 1, 1),
+        emissive: 0x9db8c8, emissiveIntensity: 0.30,
+        emissiveMap: this._tex('vehicleGlass', 1, 1),
+        metalness: 0.58, roughness: 0.14,
+      });
+      const meterFaceMat = new THREE.MeshBasicMaterial({ color: 0xd8b76a });
+      const phoneSignMat = new THREE.MeshBasicMaterial({ color: 0x8fd0e8 });
+      const binMat = new THREE.MeshStandardMaterial({
+        color: 0x4a5450, map: this._tex('vehicleWear', 0.7, 0.7),
+        metalness: 0.35, roughness: 0.62,
+      });
+      const woodMat = new THREE.MeshStandardMaterial({ color: 0x6d5138, roughness: 0.78 });
+      const standColors = [0xc65745, 0x4f7891, 0xd9b44a];
+
+      // cada elemento se coloca en (x,z) del lado este y espejado a (-x,-z)
+      const eachSide = (x, z, build) => {
+        for (const s of [1, -1]) {
+          const g = new THREE.Group();
+          g.position.set(s * x, 0, s * z);
+          if (s < 0) g.rotation.y = Math.PI;
+          build(g);
+          g.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+          this.mapGroup.add(g);
+        }
+      };
+      const box = (g, w, h, d, px, py, pz, mat) => {
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+        mesh.position.set(px, py, pz); g.add(mesh); return mesh;
+      };
+
+      // parquímetros en el borde de la acera, junto a los autos estacionados
+      for (const mz of [13.4, 16.6, 18.4]) {
+        eachSide(12.45, mz, (g) => {
+          const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.05, 1.02, 8), steelMat);
+          pole.position.y = 0.51; g.add(pole);
+          box(g, 0.20, 0.30, 0.11, 0, 1.14, 0, darkSteelMat);
+          box(g, 0.13, 0.10, 0.115, 0, 1.19, 0, meterFaceMat);
+        });
+      }
+      // buzón de correos (macizo, tapa curva insinuada con dos volúmenes)
+      eachSide(13.0, 12.2, (g) => {
+        box(g, 0.60, 0.78, 0.50, 0, 0.55, 0, mailMat);
+        box(g, 0.60, 0.18, 0.42, 0, 0.99, 0, mailMat);
+        box(g, 0.46, 0.05, 0.06, 0, 0.86, -0.255, darkSteelMat);
+        for (const lx of [-0.22, 0.22]) box(g, 0.07, 0.34, 0.07, lx, 0.17, 0, darkSteelMat);
+      });
+      // cabina telefónica cerrada (vitrina: el vidrio es dibujo y detiene)
+      eachSide(14.9, 18.5, (g) => {
+        for (const [cx, cz] of [[-0.42, -0.42], [0.42, -0.42], [-0.42, 0.42], [0.42, 0.42]]) {
+          box(g, 0.10, 2.26, 0.10, cx, 1.13, cz, boothMat);
+        }
+        box(g, 0.98, 0.14, 0.98, 0, 2.30, 0, boothMat);
+        box(g, 0.94, 0.30, 0.94, 0, 0.15, 0, boothMat);
+        for (const [w2, d2, px, pz] of [
+          [0.78, 0.05, 0, -0.44], [0.78, 0.05, 0, 0.44],
+          [0.05, 0.78, -0.44, 0], [0.05, 0.78, 0.44, 0],
+        ]) box(g, w2, 1.92, d2, px, 1.28, pz, boothGlassMat);
+        box(g, 0.72, 0.24, 0.06, 0, 2.10, -0.475, phoneSignMat);
+      });
+      // fila de cajas dispensadoras de periódicos
+      eachSide(12.9, -18.1, (g) => {
+        [-0.62, 0, 0.62].forEach((dz, i) => {
+          const mat = new THREE.MeshStandardMaterial({
+            color: standColors[i], metalness: 0.30, roughness: 0.58,
+          });
+          box(g, 0.40, 0.72, 0.44, 0, 0.60, dz, mat);
+          box(g, 0.03, 0.30, 0.34, -0.20, 0.72, dz, darkSteelMat);
+          for (const lx2 of [-0.14, 0.14]) box(g, 0.06, 0.24, 0.38, lx2, 0.12, dz, darkSteelMat);
+        });
+      });
+      // botes de basura públicos
+      for (const [bx, bz] of [[12.85, -13.6], [14.6, 5.6]]) {
+        eachSide(bx, bz, (g) => {
+          const body2 = new THREE.Mesh(new THREE.CylinderGeometry(0.27, 0.24, 0.86, 10), binMat);
+          body2.position.y = 0.43; g.add(body2);
+          const ring = new THREE.Mesh(new THREE.CylinderGeometry(0.285, 0.285, 0.07, 10), darkSteelMat);
+          ring.position.y = 0.88; g.add(ring);
+        });
+      }
+      // bancas de acera contra la fachada, mirando a la calle
+      for (const [nx, nz] of [[14.85, -20.5], [14.85, 24.2]]) {
+        eachSide(nx, nz, (g) => {
+          for (const dz of [-0.78, 0.78]) box(g, 0.52, 0.07, 0.09, 0, 0.42, dz, darkSteelMat);
+          for (const dz of [-0.78, 0.78]) box(g, 0.46, 0.36, 0.07, 0, 0.20, dz, darkSteelMat);
+          for (const ox of [-0.17, -0.03, 0.11]) box(g, 0.12, 0.05, 1.80, ox, 0.47, 0, woodMat);
+          for (const oy of [0.66, 0.80]) box(g, 0.05, 0.10, 1.80, 0.28, oy, 0, woodMat);
+          box(g, 0.06, 0.52, 0.08, 0.26, 0.62, -0.78, darkSteelMat);
+          box(g, 0.06, 0.52, 0.08, 0.26, 0.62, 0.78, darkSteelMat);
+        });
+      }
+    }
+
     // Autos inutilizados: landmark de vehículo y cover bajo predecible.
     for (const [x, z, rot, color, variant] of [
       [-2.5, -28, 0, 0x5a6470, 0], [2.5, 28, Math.PI, 0x5a6470, 0],

@@ -237,6 +237,25 @@ function calleSpecs() {
     { visual: false, mirror: true }));
   out.push(make(13.62, -25.15, 0.4, 0.26, 2.3, 'solid',
     { visual: false, mirror: true }));
+  // MOBILIARIO URBANO (dibujado en _decorCalle con estas mismas medidas):
+  // física 1:1 con cada pieza — parquímetros, buzón, cabina telefónica,
+  // cajas de periódicos, botes y bancas. Todo cover:false (props chicos)
+  // y mirror explícito (el decor se espeja a (-x,-z)).
+  const propOpts = { mirror: true, cover: false };
+  for (const mz of [13.4, 16.6, 18.4]) {
+    out.push(make(12.45, mz, 0.18, 0.14, 1.30, 'solid', propOpts));
+  }
+  out.push(make(13.0, 12.2, 0.60, 0.56, 1.08, 'solid', propOpts));   // buzón
+  out.push(make(14.9, 18.5, 0.96, 0.96, 2.37, 'solid', propOpts));   // cabina
+  for (const nz of [-18.72, -18.1, -17.48]) {
+    out.push(make(12.9, nz, 0.42, 0.46, 0.98, 'solid', propOpts));   // periódicos
+  }
+  out.push(make(12.85, -13.6, 0.56, 0.56, 0.95, 'solid', propOpts)); // bote
+  out.push(make(14.6, 5.6, 0.56, 0.56, 0.95, 'solid', propOpts));    // bote
+  for (const nz of [-20.5, 24.2]) {
+    out.push(make(14.82, nz, 0.48, 1.82, 0.51, 'solid', propOpts));  // banca asiento
+    out.push(make(15.13, nz, 0.10, 1.82, 0.86, 'solid', propOpts));  // banca respaldo
+  }
   for (const z of [-35, -25, -15, -5, 5, 15, 25, 35]) {
     // poste real medido: 0.2 de grosor con cara en ±12.69 — más grueso era
     // pared invisible y los decals del borde se suprimían por caer en aire
