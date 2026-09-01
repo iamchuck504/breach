@@ -2937,6 +2937,23 @@ export class World {
       }
     }
 
+    // TELÓN de manzana trasera (queja de Chuck: entre módulos de edificios
+    // quedaban gaps por los que se veía el void del fin del mundo). Un plano
+    // continuo de fachadas nocturnas corre DETRÁS de toda la línea de
+    // edificios en cada lado: cualquier separación entre módulos muestra
+    // ciudad, nunca cielo vacío. Sin física (vive fuera de los límites).
+    {
+      const alleyBackMat = new THREE.MeshBasicMaterial({
+        map: this._tex('windows', 24, 3.4), color: 0x2b3339,
+      });
+      for (const side of [-1, 1]) {
+        const backdrop = new THREE.Mesh(new THREE.PlaneGeometry(86, 12.5), alleyBackMat);
+        backdrop.position.set(side * (this.fx + 5.0), 6.25, 0);
+        backdrop.rotation.y = side > 0 ? -Math.PI / 2 : Math.PI / 2;
+        this.mapGroup.add(backdrop);
+      }
+    }
+
     // MOBILIARIO URBANO de acera (pedido de Chuck): parquímetros, buzón,
     // cabina telefónica, cajas de periódicos, botes de basura y bancas.
     // Cada pieza vive espejada en ambos lados y su física (en
