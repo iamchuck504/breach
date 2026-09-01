@@ -5,6 +5,7 @@ import { BINDS } from './bindings.js';
 const DEADZONE = 0.16;
 const SWITCH_AXIS = 0.28;
 const SWITCH_DELTA = 0.055;
+const SUSTAINED_AXIS = 0.52;
 
 const buttonDown = (b, threshold = 0.5) =>
   !!b && (b.pressed || Number(b.value || 0) > threshold);
@@ -14,7 +15,7 @@ function padPriority(gp) {
   // Steam Input suele publicar un pad virtual estándar además del dispositivo
   // físico. Si ambos emiten el mismo gesto, consumir el virtual evita layouts
   // DInput sin normalizar y botones/ejes duplicados.
-  const steamVirtual = /steam.*(virtual|input)|virtual.*steam/.test(id);
+  const steamVirtual = /steam.*(virtual|input)|virtual.*steam|\b(vigem|vjoy|x360ce|rewasd)\b/.test(id);
   const standard = gp?.mapping === 'standard';
   return (standard ? 20 : 0) + (steamVirtual ? 8 : 0) +
     (/xinput|xbox 360|xbox one/.test(id) ? 3 : 0);
@@ -24,6 +25,11 @@ function snapshot(gp) {
   const axes = Array.from(gp?.axes || [], (v) => Number.isFinite(v) ? v : 0);
   const buttons = Array.from(gp?.buttons || [], (b) => buttonDown(b));
   return { axes, buttons };
+}
+
+function padIdentity(gp, index) {
+  return `${index}|${String(gp?.id || '')}|${gp?.mapping || ''}|` +
+    `${gp?.axes?.length || 0}|${gp?.buttons?.length || 0}`;
 }
 
 function axisAt(s, i) { return Number(s?.axes?.[i] || 0); }
@@ -57,11 +63,17 @@ export class PadInput {
     let gp = pads.find((g, slot) =>
       (Number.isInteger(g.index) ? g.index : slot) === this._idx) || null;
     let best = null;
+    let currentActivity = null;
     for (let slot = 0; slot < pads.length; slot++) {
       const g = pads[slot];
       const index = Number.isInteger(g.index) ? g.index : slot;
       const now = snapshot(g);
-      const prev = this._samples.get(index);
+      const identity = padIdentity(g, index);
+      const stored = this._samples.get(index);
+      // Steam puede reemplazar el dispositivo que ocupa un índice sin dejar
+      // un frame vacío. No compares el virtual nuevo contra el snapshot del
+      // pad anterior o su primera entrada puede desaparecer.
+      const prev = stored?.identity === identity ? stored : null;
       let buttonEdges = 0, heldButtons = 0;
       for (let i = 0; i < now.buttons.length; i++) {
         if (now.buttons[i]) {
@@ -82,19 +94,36 @@ export class PadInput {
           axisDelta = Math.max(axisDelta, Math.abs(axisAt(now, i) - axisAt(prev, i)));
         }
       }
+      const axisEverChanged = !!prev?.axisEverChanged || axisDelta >= SWITCH_DELTA;
       const freshAxis = stickMag >= SWITCH_AXIS &&
         (prev ? axisDelta >= SWITCH_DELTA : g.mapping === 'standard');
+      // Caso real de Steam Input: el pad físico gana el primer gesto, pero el
+      // virtual ya conserva el stick inclinado. Aunque no haya un NUEVO delta
+      // en el frame siguiente, esa entrada sostenida debe poder tomar control.
+      // Para DInput no estándar exigimos haber observado un cambio primero;
+      // así gatillos/axes fantasma clavados en -1 no secuestran la selección.
+      const sustainedAxis = stickMag >= SUSTAINED_AXIS &&
+        (g.mapping === 'standard' || axisEverChanged);
       const fresh = buttonEdges > 0 || freshAxis;
-      const score = buttonEdges * 100 + (freshAxis ? 40 + stickMag * 10 : 0) +
-        Math.min(heldButtons, 4) + padPriority(g);
-      if (fresh && (!best || score > best.score)) best = { g, index, score };
-      this._samples.set(index, now);
+      const heldInput = heldButtons > 0 || sustainedAxis;
+      const score = buttonEdges * 200 + (freshAxis ? 80 : 0) +
+        Math.min(heldButtons, 4) * 30 +
+        (sustainedAxis ? 45 + stickMag * 20 : 0) + padPriority(g) +
+        (index === this._idx ? 6 : 0);
+      const activity = { g, index, score, fresh, heldInput };
+      if (index === this._idx) currentActivity = activity;
+      if ((fresh || heldInput) && (!best || score > best.score)) best = activity;
+      this._samples.set(index, { ...now, identity, axisEverChanged });
     }
 
     // El último pad usado es pegajoso. Solo una entrada NUEVA cambia de pad;
     // si Steam abre en medio de la partida, su virtual toma control en el
     // primer botón/movimiento y no hace falta recargar la página.
-    if (best && (!gp || best.index !== this._idx)) gp = best.g;
+    if (best && best.index !== this._idx) {
+      const currentEngaged = !!currentActivity?.heldInput;
+      if (!gp || !currentEngaged || best.fresh ||
+          best.score > (currentActivity?.score || 0) + 12) gp = best.g;
+    }
     if (!gp && pads.length) {
       gp = [...pads].sort((a, b) => padPriority(b) - padPriority(a))[0];
     }

@@ -42,6 +42,10 @@ export class Input {
     // Chromium headless SIN lock concedido pone un ClipCursor REAL en Windows
     // y confina el mouse físico de quien esté usando la máquina
     this.lockDisabled = new URLSearchParams(location.search).has('nolock');
+    // ?paddebug=1: overlay de diagnóstico de controles — muestra lo que la
+    // Gamepad API expone (id/mapping/ejes/botones) y qué pad eligió el
+    // juego. Para depurar en vivo un control que "no funciona".
+    if (new URLSearchParams(location.search).has('paddebug')) this._padDebug();
     this.onToggleTuning = null;
     this.onToggleMute = null;
     this.onEscape = null;
@@ -244,6 +248,44 @@ export class Input {
 
   // Flancos: consumir tras CADA paso de simulación (evita doble-evade si un
   // frame de render ejecuta dos pasos de física)
+  // Overlay ?paddebug=1: estado crudo de la Gamepad API + selección del
+  // juego, refrescado 4 veces por segundo. Solo diagnóstico, cero gameplay.
+  _padDebug() {
+    const el = document.createElement('pre');
+    el.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:9999;' +
+      'background:rgba(6,10,14,.88);color:#9fe8ff;font:11px/1.45 monospace;' +
+      'padding:10px 12px;border:1px solid #2b4a5a;border-radius:6px;' +
+      'max-width:640px;white-space:pre-wrap;pointer-events:none;';
+    document.body.appendChild(el);
+    setInterval(() => {
+      const raw = navigator.getGamepads ? navigator.getGamepads() : [];
+      const lines = [];
+      let n = 0;
+      for (const g of Array.from(raw || [])) {
+        if (!g) continue;
+        n++;
+        const axes = (g.axes || []).map((a) => (+a).toFixed(2)).join(' ');
+        const btns = (g.buttons || [])
+          .map((b, i) => (b && (b.pressed || b.value > 0.4) ? i : null))
+          .filter((i) => i !== null).join(',');
+        lines.push(`[${g.index}] "${g.id}"`);
+        lines.push(`    mapping=${g.mapping || '(vacío)'} conectado=${g.connected}`);
+        lines.push(`    ejes: ${axes || '(ninguno)'}`);
+        lines.push(`    botones activos: ${btns || '-'}`);
+      }
+      if (!n) lines.push('Gamepad API: SIN pads (presiona un botón del control)');
+      lines.push('---');
+      lines.push(`juego: elegido idx=${this.pad?._idx ?? '-'} ` +
+        `conectado=${!!this.pad?.connected} id=${this.pad?.info?.id ?? '-'}`);
+      lines.push(`move=${(+(this.pad?.moveX ?? 0)).toFixed(2)},` +
+        `${(+(this.pad?.moveZ ?? 0)).toFixed(2)} ` +
+        `cam=${(+(this.pad?.camX ?? 0)).toFixed(2)},` +
+        `${(+(this.pad?.camY ?? 0)).toFixed(2)} ` +
+        `fire=${!!this.pad?.fireHeld} aim=${!!this.pad?.aimHeld}`);
+      el.textContent = lines.join('\n');
+    }, 250);
+  }
+
   consumeEdges() {
     this.firePressed = false;
     this.evadePressed = false;

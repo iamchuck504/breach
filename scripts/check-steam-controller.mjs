@@ -73,4 +73,32 @@ exposed = [physical];
 input.poll(1 / 60);
 check(input._idx === 3 && input.moveX < -0.65, 'no recuperó el pad físico al cerrar Steam');
 
-console.log('STEAM CONTROLLER OK · virtual prioritario · hot-swap · índices dispersos · sin fantasma/duplicados');
+// Repro que faltaba: físico y virtual aparecen juntos. Un botón del físico
+// gana el primer frame mientras el stick virtual ya está inclinado; al soltar
+// ese botón, Steam mantiene el axis sin producir otro delta. El pad virtual
+// sostenido debe tomar control sin exigir neutral/reload.
+const split = new PadInput();
+const physicalFirst = pad('Xbox One Controller', 5);
+const disguisedSteam = pad('Xbox 360 Controller (XInput STANDARD GAMEPAD)', 8);
+press(physicalFirst, 0, true);
+disguisedSteam.axes[1] = -0.9;
+exposed = [physicalFirst, null, disguisedSteam];
+split.poll(1 / 60);
+check(split._idx === 5 && split.justPressed.has(0),
+  'el gesto inicial del físico no fue reconocido');
+press(physicalFirst, 0, false);
+split.poll(1 / 60);
+check(split._idx === 8 && split.moveZ > 0.8,
+  `stick sostenido de Steam no recuperó control (${split._idx}, ${split.moveZ})`);
+
+// Steam reutiliza índices al reconectar. La identidad nueva no puede heredar
+// muestras viejas que oculten su primer flanco.
+const reused = pad('Steam Input Virtual Controller', 8);
+exposed = [reused];
+split.poll(1 / 60);
+press(reused, 1, true);
+split.poll(1 / 60);
+check(split._idx === 8 && split.justPressed.has(1),
+  'pad reemplazado en el mismo índice perdió su primer botón');
+
+console.log('STEAM CONTROLLER OK · virtual prioritario · input sostenido · hot-swap · índices dispersos');
