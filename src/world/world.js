@@ -2809,6 +2809,58 @@ export class World {
       }
     }
 
+    // PARED URBANA en los cierres norte/sur (pedido de Chuck): el corte
+    // físico en ±fz+0.4 era invisible y la avenida parecía seguir de largo.
+    // Un muro de ladrillo con pilastras, cornisa y portón de servicio
+    // cerrado explica el límite; la continuación sigue asomando por encima.
+    {
+      const wallBrickMat = new THREE.MeshStandardMaterial({
+        color: 0x8d8177, map: this._tex('urbanBrickDark', 9.5, 1.6),
+        bumpMap: this._detailTex('urbanBrickDark', 9.5, 1.6), bumpScale: 0.03,
+        roughness: 0.88, metalness: 0.02,
+      });
+      const wallStoneMat = new THREE.MeshStandardMaterial({ color: 0x7c766e, roughness: 0.84 });
+      const wallGateMat = new THREE.MeshStandardMaterial({
+        color: 0x4d5356, map: this._tex('shopShutter', 3.2, 1.6),
+        bumpMap: this._detailTex('shopShutter', 3.2, 1.6), bumpScale: 0.012,
+        metalness: 0.46, roughness: 0.56,
+      });
+      const wallHazardMat = new THREE.MeshBasicMaterial({
+        map: this._tex('hazard', 4, 1), color: 0xc79a55,
+      });
+      const wallLampMat = new THREE.MeshBasicMaterial({ color: 0xffc47a });
+      for (const dir of [-1, 1]) {
+        const wz = dir * (this.fz + 0.4);
+        const toward = -dir; // hacia la avenida
+        const body = new THREE.Mesh(new THREE.BoxGeometry(34.6, 4.4, 0.7), wallBrickMat);
+        body.position.set(0, 2.2, wz); body.castShadow = true; body.receiveShadow = true;
+        this.mapGroup.add(body);
+        const cap = new THREE.Mesh(new THREE.BoxGeometry(35.2, 0.24, 0.95), wallStoneMat);
+        cap.position.set(0, 4.52, wz); cap.castShadow = true; this.mapGroup.add(cap);
+        for (const px of [-14.5, -8.7, 8.7, 14.5]) {
+          const pier = new THREE.Mesh(new THREE.BoxGeometry(1.0, 4.75, 0.95), wallStoneMat);
+          pier.position.set(px, 2.37, wz); pier.castShadow = true; this.mapGroup.add(pier);
+        }
+        // portón de servicio cerrado al centro, con marco, viga y baliza
+        const gate = new THREE.Mesh(new THREE.PlaneGeometry(6.2, 3.5), wallGateMat);
+        gate.position.set(0, 1.75, wz + toward * 0.37);
+        gate.rotation.y = dir > 0 ? Math.PI : 0; this.mapGroup.add(gate);
+        for (const gx of [-3.35, 3.35]) {
+          const jamb = new THREE.Mesh(new THREE.BoxGeometry(0.5, 4.1, 0.92), wallStoneMat);
+          jamb.position.set(gx, 2.05, wz); jamb.castShadow = true; this.mapGroup.add(jamb);
+        }
+        const lintel = new THREE.Mesh(new THREE.BoxGeometry(7.3, 0.55, 0.92), wallStoneMat);
+        lintel.position.set(0, 3.9, wz); lintel.castShadow = true; this.mapGroup.add(lintel);
+        const stripe = new THREE.Mesh(new THREE.PlaneGeometry(6.2, 0.3), wallHazardMat);
+        stripe.position.set(0, 3.42, wz + toward * 0.38);
+        stripe.rotation.y = dir > 0 ? Math.PI : 0; this.mapGroup.add(stripe);
+        for (const lx of [-2.6, 2.6]) {
+          const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.1, 0.12), wallLampMat);
+          lamp.position.set(lx, 4.06, wz + toward * 0.5); this.mapGroup.add(lamp);
+        }
+      }
+    }
+
     // Autos inutilizados: landmark de vehículo y cover bajo predecible.
     for (const [x, z, rot, color, variant] of [
       [-2.5, -28, 0, 0x5a6470, 0], [2.5, 28, Math.PI, 0x5a6470, 0],

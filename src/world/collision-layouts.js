@@ -112,6 +112,12 @@ function calleSpecs() {
   const out = [
     make(0, -42.4, 36, 0.8, HIGH, 'wall', { mirror: false, visual: false }),
     make(0, 42.4, 36, 0.8, HIGH, 'wall', { mirror: false, visual: false }),
+    // la PARED URBANA visible de los cierres sube a 4.75 (ladrillo+cornisa):
+    // sólido hasta arriba para que ningún tiro con pitch alto la atraviese
+    make(0, -42.4, 35.4, 0.96, 4.75, 'solid',
+      { mirror: false, visual: false, cover: false }),
+    make(0, 42.4, 35.4, 0.96, 4.75, 'solid',
+      { mirror: false, visual: false, cover: false }),
     // AUDITORÍA de hitboxes: las fachadas laterales empiezan en x ±16.15 —
     // el muro en ±17.4 dejaba 0.85m de calle DENTRO del edificio visual
     // (se caminaba y disparaba dentro de la fachada, decals flotando).

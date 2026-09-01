@@ -392,10 +392,11 @@ check('flecha mueve divisor Jersey visible + collider como una unidad',
   proceduralMove.after.x === proceduralMove.before.x + 1 &&
   proceduralMove.visual?.x === proceduralMove.after.x &&
   proceduralMove.visual?.z === proceduralMove.after.z &&
-  // 14 sin enlace: 2 topes del divisor + props medidos sin asset (piezas
-  // del carrito de café — labio/máquina/postes — y carteles de kiosco,
-  // con sus espejos)
-  proceduralMove.unlinkedBoxes === 16 && proceduralMove.intentionalInvisibleEnds === 2,
+  // 18 sin enlace: topes del divisor, piezas medidas del carrito de café
+  // (labio/máquina/postes) y carteles de kiosco con sus espejos, y las 2
+  // cajas altas de la PARED URBANA de los cierres norte/sur (que también
+  // cuentan como extremos invisibles intencionales: 4)
+  proceduralMove.unlinkedBoxes === 18 && proceduralMove.intentionalInvisibleEnds === 4,
   JSON.stringify(proceduralMove));
 
 const solidStreetProps = await page.evaluate(() => {
