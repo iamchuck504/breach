@@ -3,6 +3,7 @@
 // toggle F9 persistido en localStorage.
 import { BINDS, PAD_DPAD_SLOTS } from './bindings.js';
 import { PadInput } from './gamepad.js';
+import { TouchInput } from './touch.js';
 
 export class Input {
   constructor(canvas) {
@@ -46,6 +47,10 @@ export class Input {
     // Gamepad API expone (id/mapping/ejes/botones) y qué pad eligió el
     // juego. Para depurar en vivo un control que "no funciona".
     if (new URLSearchParams(location.search).has('paddebug')) this._padDebug();
+    // controles táctiles (smartphones/tablets): pad sintético + mirada por
+    // arrastre — DESPUÉS de fijar lockDisabled (el modo táctil lo fuerza)
+    this.touch = new TouchInput(this, canvas);
+    this.pad.touch = this.touch;
     this.onToggleTuning = null;
     this.onToggleMute = null;
     this.onEscape = null;

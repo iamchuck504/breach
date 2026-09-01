@@ -21,8 +21,9 @@ function padPriority(gp) {
   // El pad WebHID lee el control DIRECTO: cuando está activo gana siempre
   // sobre el mismo dispositivo visto (roto) por la Gamepad API.
   const webhid = id.includes('breach webhid');
+  const touch = id.includes('breach touch');
   return (standard ? 20 : 0) + (steamVirtual ? 8 : 0) + (webhid ? 30 : 0) +
-    (/xinput|xbox 360|xbox one/.test(id) ? 3 : 0);
+    (touch ? 26 : 0) + (/xinput|xbox 360|xbox one/.test(id) ? 3 : 0);
 }
 
 function snapshot(gp) {
@@ -64,6 +65,9 @@ export class PadInput {
     // cambie el modo de reporte): entra al MISMO pipeline que cualquier pad.
     const hidGp = this.hid?.gamepad?.();
     if (hidGp) pads.push(hidGp);
+    // Controles táctiles (smartphones/tablets): otro pad sintético más.
+    const touchGp = this.touch?.gamepad?.();
+    if (touchGp) pads.push(touchGp);
     const live = new Set(pads.map((g, slot) => Number.isInteger(g.index) ? g.index : slot));
     for (const index of this._samples.keys()) if (!live.has(index)) this._samples.delete(index);
 
