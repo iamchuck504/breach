@@ -79,6 +79,16 @@ export class HidPad {
     } catch { return false; }
     this.device = device;
     device.oninputreport = (e) => this._report(e);
+    // MEDIDO (Chromium y Brave, con Steam abierto): el dispositivo abre
+    // pero Steam retiene el flujo de reportes a nivel de SO — cero datos.
+    // Detectarlo y decirlo con honestidad en la UI.
+    this.noData = false;
+    setTimeout(() => {
+      if (this.device === device && !this._lastReport) {
+        this.noData = true;
+        this.onStatus?.();
+      }
+    }, 3000);
     navigator.hid.addEventListener?.('disconnect', (e) => {
       if (e.device === this.device) { this.device = null; this._lastReport = 0; this.onStatus?.(); }
     });

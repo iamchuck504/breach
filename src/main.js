@@ -986,10 +986,12 @@ const btnHidPad = document.getElementById('btn-hidpad');
 const refreshHidPad = () => {
   if (!input.pad.hid?.supported()) { btnHidPad.style.display = 'none'; return; }
   const on = input.pad.hid.connected();
-  btnHidPad.textContent = on
-    ? 'PS DIRECT MODE: ON · CLICK TO DISABLE'
-    : 'PS CONTROLLER NOT WORKING? · ENABLE DIRECT MODE';
-  btnHidPad.classList.toggle('primary', on);
+  btnHidPad.textContent = input.pad.hid.noData
+    ? 'PS DIRECT: NO DATA (STEAM/OS BLOCKS IT) · CLICK TO DISABLE'
+    : on
+      ? 'PS DIRECT MODE: ON · CLICK TO DISABLE'
+      : 'PS CONTROLLER NOT WORKING? · ENABLE DIRECT MODE';
+  btnHidPad.classList.toggle('primary', on && !input.pad.hid.noData);
 };
 btnHidPad.addEventListener('click', async () => {
   if (input.pad.hid.connected()) {
@@ -3852,6 +3854,15 @@ function frame(now) {
   } else if (vHover) {
     vHover.classList.remove('vhover');
     vHover = null;
+  }
+  // Aviso del secuestro de Steam (mando Sony con botones vivos y sticks
+  // muertos): es un límite del SO — lo único útil es DECIRLO al jugador.
+  if (input.pad.sonyFrozen?.() && !G._steamFrozenWarnAt) {
+    G._steamFrozenWarnAt = performance.now();
+    hud.hint('⚠ STEAM CAPTURÓ EL MANDO (sticks muertos) — CIERRA STEAM O DESACTIVA SU SOPORTE PLAYSTATION', 5200);
+  } else if (!input.pad.sonyFrozen?.() && G._steamFrozenWarnAt &&
+      performance.now() - G._steamFrozenWarnAt > 30000) {
+    G._steamFrozenWarnAt = 0; // episodio nuevo → podrá avisar otra vez
   }
   if (input.pad.connected !== padWasConnected) {
     padWasConnected = input.pad.connected;

@@ -74,6 +74,9 @@ export class PadInput {
       if (prev && ax.some((v, i) => Math.abs(v - prev[i]) > 0.02)) {
         this._sonyAliveAt = performance.now();
       }
+      if (Array.from(sonyApi.buttons || []).some((b) => buttonDown(b, 0.3))) {
+        this._sonyButtonAt = performance.now();
+      }
     }
     const apiAlive = this._sonyAliveAt && performance.now() - this._sonyAliveAt < 2500;
     const hidGp = apiAlive ? null : this.hid?.gamepad?.();
@@ -189,6 +192,15 @@ export class PadInput {
     this.fireHeld = now.has(BINDS.pad.fire);
     this.aimHeld = now.has(BINDS.pad.aim);
     this.sprintHeld = now.has(BINDS.pad.sprint); // botón dedicado (default L3)
+  }
+
+  // Firma MEDIDA de "Steam capturó el mando Sony": los botones siguen
+  // llegando (RawInput) pero los EJES están congelados — el modo extendido
+  // de Steam cambió el formato y el navegador ya no lo entiende.
+  sonyFrozen() {
+    const now = performance.now();
+    return !!this._sonyButtonAt && now - this._sonyButtonAt < 5000 &&
+      (!this._sonyAliveAt || now - this._sonyAliveAt > 5000);
   }
 
   _reset() {
