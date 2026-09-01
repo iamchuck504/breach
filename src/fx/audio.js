@@ -127,7 +127,8 @@ export class Audio {
     if (this._samplesReq) return this._samplesReady || Promise.resolve();
     this._samplesReq = true;
     const jobs = [];
-    for (const [k, url] of [['smg', 'audio/smg.mp3'], ['shotgun', 'audio/shotgun.mp3']]) {
+    for (const [k, url] of [['smg', 'audio/smg.mp3'], ['shotgun', 'audio/shotgun.mp3'],
+      ['sniper', 'audio/sniper.mp3']]) {
       jobs.push(fetch(url)
         .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.arrayBuffer(); })
         .then((ab) => this.ctx.decodeAudioData(ab))
@@ -509,6 +510,9 @@ export class Audio {
   // francotirador: crack violento con cola grave (eco de cañón largo)
   sniper(options = null) {
     const remote = !!options?.position;
+    // sample real (Elevenlabs de Chuck): crack + eco de cañón largo
+    const gain = remote ? 0.48 : 0.55;
+    if (this._sample('sniper', gain, 0.98 + Math.random() * 0.04, options)) return;
     const out = this._eventOutput(remote ? 0.8 : 0.9, options, 'gunshot', this.combatBus || this.master);
     if (!out) return;
     this._noiseShot(0.95, 0.12, 2600, 700, 1.4, out);

@@ -24,11 +24,13 @@ await page.waitForTimeout(2000);
 const st = await page.evaluate(() => ({
   smg: +(window.BREACH_AUDIO.samples.smg?.duration ?? 0).toFixed(3),
   shotgun: +(window.BREACH_AUDIO.samples.shotgun?.duration ?? 0).toFixed(3),
+  sniper: +(window.BREACH_AUDIO.samples.sniper?.duration ?? 0).toFixed(3),
 }));
 console.log('SAMPLES:', JSON.stringify(st));
 await browser.close();
 server.kill();
 clearClip();
-const ok = st.smg > 0.2 && st.smg < 0.35 && st.shotgun > 1.2 && st.shotgun < 1.5;
+const ok = st.smg > 0.2 && st.smg < 0.35 && st.shotgun > 1.2 && st.shotgun < 1.5 &&
+  st.sniper > 2.5 && st.sniper < 3.0;
 console.log(ok ? 'AUDIO OK' : 'AUDIO FALLO');
 process.exit(ok ? 0 : 1);
