@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const CHROME = process.env.CHROME_PATH || undefined;
+import { CHROME } from './lib-chrome.mjs';
 const port = 18840 + Math.floor(Math.random() * 400);
 const server = spawn(process.execPath, [
   path.join(root, 'node_modules', 'vite', 'bin', 'vite.js'),

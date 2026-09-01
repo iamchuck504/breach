@@ -83,9 +83,11 @@ const findCollider = (label, x, z, w, d) => {
   return found;
 };
 
+// Dimensiones MEDIDAS de la auditoría de hitboxes (bus torso 9.2x2.92,
+// edificio 3.0x7.15): la silueta física sigue al mesh real.
 const actualCases = [
-  { label: 'bus', collider: findCollider('bus', 0, -34.5, 9, 2.5), axis: 'x' },
-  { label: 'camión', collider: findCollider('camión', -6.5, -1.5, 2.4, 7), axis: 'z' },
+  { label: 'bus', collider: findCollider('bus', 0, -34.5, 9.2, 2.92), axis: 'x' },
+  { label: 'camión', collider: findCollider('camión', -6.5, -1.5, 3.0, 7.15), axis: 'z' },
   { label: 'Jersey', collider: findCollider('Jersey', -6.1, -33.4, 2.4, 0.9), axis: 'x' },
 ];
 

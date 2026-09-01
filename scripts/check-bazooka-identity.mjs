@@ -11,7 +11,7 @@ import { Rockets } from '../src/game/special.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
-const CHROME = process.env.CHROME_PATH || undefined;
+import { CHROME } from './lib-chrome.mjs';
 const PORT = '8817';
 const failures = [];
 const check = (name, ok, detail = '') => {

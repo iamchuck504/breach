@@ -2,6 +2,7 @@ import { chromium } from 'playwright-core';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { CHROME } from './lib-chrome.mjs';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const server = spawn(process.execPath, [
@@ -12,7 +13,7 @@ const server = spawn(process.execPath, [
 let browser;
 try {
   await new Promise((resolve) => setTimeout(resolve, 900));
-  browser = await chromium.launch();
+  browser = await chromium.launch({ executablePath: CHROME });
   const page = await browser.newPage({ viewport: { width: 960, height: 640 } });
   const pageErrors = [];
   page.on('pageerror', (e) => pageErrors.push(e.message));

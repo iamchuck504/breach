@@ -11,7 +11,7 @@ import { clearClip } from './lib-clip.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
-const CHROME = process.env.CHROME_PATH || undefined;
+import { CHROME } from './lib-chrome.mjs';
 
 const server = spawn(process.execPath, [path.join(root, 'node_modules', 'vite', 'bin', 'vite.js'),
   '--host', '127.0.0.1', '--port', '8795', '--strictPort'], { stdio: 'ignore' });

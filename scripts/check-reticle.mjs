@@ -5,6 +5,7 @@ import { chromium } from 'playwright-core';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { CHROME } from './lib-chrome.mjs';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const server = spawn(process.execPath, [
@@ -15,7 +16,7 @@ const server = spawn(process.execPath, [
 let browser;
 try {
   await new Promise((resolve) => setTimeout(resolve, 900));
-  browser = await chromium.launch();
+  browser = await chromium.launch({ executablePath: CHROME });
   const page = await browser.newPage({ viewport: { width: 880, height: 640 } });
   const pageErrors = [];
   page.on('pageerror', (e) => pageErrors.push(e.message));
@@ -171,6 +172,19 @@ try {
     for (const d of G.dummies.list) d.alive = false;
     I._mouseAim = true;
     await new Promise((resolve) => setTimeout(resolve, 260));
+    // esperar a que el lerp de la cámara ADS se ASIENTE: el stub de abajo
+    // clasifica los rayos por cercanía a cameraOrigin (<0.12) y una cámara
+    // aún en tránsito hace que el tiro real nazca lejos del punto capturado
+    // (a fps altos el lerp exponencial sigue moviéndose cientos de ms)
+    {
+      let last = G.player.cam.aimRay().origin.clone();
+      for (let i = 0; i < 60; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        const now2 = G.player.cam.aimRay().origin.clone();
+        if (now2.distanceTo(last) < 0.004) break;
+        last = now2;
+      }
+    }
 
     G.rig.root.updateWorldMatrix(true, true);
     const muzzle = G.rig.muzzleWorld(new window.THREE.Vector3()).clone();
@@ -179,8 +193,13 @@ try {
     const farCollider = { id: 'far' }, nearCollider = { id: 'near' };
     const oldRaycastHit = W.raycastHit.bind(W);
     const oldRaycast = W.raycast.bind(W);
+    const rayLog = [];
     W.raycastHit = (origin, dir, maxDist) => {
       const fromCamera = origin.distanceTo(cameraOrigin) < 0.12;
+      if (window.__fireLog && rayLog.length < 40) {
+        rayLog.push([+origin.distanceTo(cameraOrigin).toFixed(3), +maxDist.toFixed(1),
+          fromCamera ? 'cam' : 'near']);
+      }
       const t = Math.min(fromCamera ? 24 : 0.8, maxDist);
       return { t, normal: { x: 0, y: 0, z: 1 }, surface: 'concrete',
         collider: fromCamera ? farCollider : nearCollider };
@@ -216,6 +235,7 @@ try {
       return oldTracer.call(this, o, p2, em);
     };
     const magBefore = G.weapons.st.mag;
+    window.__fireLog = true;
     I._mouseFire = true;
     I.firePressed = true;
     for (let i = 0; i < 20 && !fired; i++) {
@@ -234,6 +254,8 @@ try {
       reticleError: Math.hypot(actual.x - expected.x, actual.y - expected.y),
       centerOffset: Math.hypot(actual.x - innerWidth / 2, actual.y - innerHeight / 2),
       impactAtPromise: impact ? impact.distanceTo(guidePoint) < 0.25 : false,
+      impactDist: impact ? +impact.distanceTo(guidePoint).toFixed(3) : null,
+      rayLog,
     };
   });
   if (sniperCentered.blocked || sniperCentered.centerOffset > 0.75 || !sniperCentered.fired ||

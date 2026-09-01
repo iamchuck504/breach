@@ -9,7 +9,7 @@ import { TUNING } from '../src/config/tuning.js';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const port = 8802;
-const chrome = process.env.CHROME_PATH || undefined;
+import { CHROME as chrome } from './lib-chrome.mjs';
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
   env: { ...process.env, PORT: String(port) }, stdio: 'ignore',
 });

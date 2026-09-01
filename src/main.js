@@ -112,6 +112,7 @@ const G = {
   scopeActive: false,    // estado derivado expuesto para HUD/diagnósticos
   fireBuffer: 0,       // click de disparo pendiente mientras el cuerpo gira
   pendingShots: 0,     // tiros aprobados que esperan la pose/muzzle de este frame
+  pendingRays: [],     // promesa de la cruz capturada al aprobar cada tiro
   pendingThrows: 0,    // granadas aprobadas que esperan la pose de este frame
   aimOver: { lift: 0 },  // ADS: alzada del arma para librar bordes cercanos
   throwT: 0,           // gesto de lanzamiento en curso
@@ -1412,6 +1413,7 @@ function teardown({ keepNet = false, keepLobby = true } = {}) {
   G.player = null; // sin referencias a caras de un mapa destruido
   G.fireBuffer = 0;
   G.pendingShots = 0;
+  G.pendingRays.length = 0;
   G.pendingThrows = 0;
   G.aimOver.lift = 0;
   smoke.clear();
@@ -3179,7 +3181,9 @@ function fireShot() {
   G.rig.setTransform(G.player.pos.x, G.player.pos.z, G.player.yaw, G.player.y);
   const muzzle = G.rig.muzzleWorld(_v1).clone();
   const origin = muzzle.clone();
-  const ray = shoulderCam.aimRay();
+  // el rayo encolado al aprobar el tiro conserva la cámara del click (con el
+  // scope aún activo); recalcular aquí usaría la cámara post-salto
+  const ray = G.pendingRays.shift() ?? shoulderCam.aimRay();
   const cameraOrigin = ray.origin.clone();
   // ADS usa la intención óptica central; hip/blindfire conservan el eje físico.
   // En ambos casos el origen balístico sigue siendo el muzzle.
@@ -3433,6 +3437,7 @@ function simStep(dt) {
   if (matchControlsLocked()) {
     G.fireBuffer = 0;
     G.pendingShots = 0;
+    G.pendingRays.length = 0;
     G.pendingThrows = 0;
     G.aimOver.lift = 0;
     p.update(dt, input, false);
@@ -3583,7 +3588,16 @@ function simStep(dt) {
     if (G.weapons.def.thrown) {
       G.throwT = TUNING.weapons.grenade.throwTime;
       G.throwPending = true;
-    } else G.pendingShots++;
+    } else {
+      G.pendingShots++;
+      // Capturar la PROMESA de la cruz AHORA: el scope del sniper se apaga
+      // en cuanto el cooldown arranca (este mismo paso) y la cámara salta
+      // ANTES de que el disparo diferido lea su rayo — la bala debe viajar
+      // por el eje que la cruz prometía en el instante del click (medido:
+      // 0.44m de desvío a cualquier distancia si se recalcula tras el salto).
+      const promise = shoulderCam.aimRay();
+      G.pendingRays.push({ origin: promise.origin.clone(), dir: promise.dir.clone() });
+    }
   }
   if (G.throwT > 0) {
     G.throwT = Math.max(0, G.throwT - dt);

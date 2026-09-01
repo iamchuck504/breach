@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = 8813;
-const CHROME = process.env.CHROME_PATH || undefined;
+import { CHROME } from './lib-chrome.mjs';
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
   cwd: root,

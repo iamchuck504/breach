@@ -11,11 +11,11 @@ import { clearClip } from './lib-clip.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
-// Playwright resuelve automáticamente la revisión compatible instalada.
+// Chromium COMPLETO vía lib-chrome (el headless shell que playwright
+// resuelve solo throttlea rAF a ~3/s y rompe los timings del harness).
 // CHROME_PATH sigue permitiendo un override explícito en CI.
-const launchOptions = process.env.CHROME_PATH
-  ? { executablePath: process.env.CHROME_PATH }
-  : {};
+import { CHROME } from './lib-chrome.mjs';
+const launchOptions = CHROME ? { executablePath: CHROME } : {};
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
   env: { ...process.env, PORT: '8784' }, stdio: 'ignore',
 });

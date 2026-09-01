@@ -11,7 +11,7 @@ import { clearClip } from './lib-clip.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
-const CHROME = process.env.CHROME_PATH || undefined;
+import { CHROME } from './lib-chrome.mjs';
 
 const readClip = (label) => {
   const ps = `Add-Type -Namespace W -Name U -MemberDefinition '[DllImport("user32.dll")]public static extern bool GetClipCursor(out RECT r);public struct RECT{public int L,T,R,B;}'; $r=New-Object W.U+RECT; [W.U]::GetClipCursor([ref]$r) | Out-Null; Write-Output "$($r.L),$($r.T),$($r.R),$($r.B)"`;

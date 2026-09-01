@@ -9,7 +9,7 @@ import { clearClip } from './lib-clip.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
-const CHROME = process.env.CHROME_PATH || undefined;
+import { CHROME } from './lib-chrome.mjs';
 
 // El servidor online publica dist/, que puede pertenecer a una build anterior
 // o estar bloqueada por el sitio live. Para QA visual necesitamos renderizar

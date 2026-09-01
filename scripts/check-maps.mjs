@@ -10,7 +10,7 @@ import { clearClip } from './lib-clip.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
-const CHROME = process.env.CHROME_PATH || undefined;
+import { CHROME } from './lib-chrome.mjs';
 
 // Este sanity valida los builders fuente, no una copia posiblemente antigua
 // o bloqueada de dist/. Mantenerlo sobre Vite evita aprobar visuales/física
