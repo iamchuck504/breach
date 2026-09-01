@@ -61,7 +61,8 @@ try {
   });
 
   const fail = [];
-  if (!prepared.audioPrepared || prepared.audio.join(',') !== 'shotgun,smg') fail.push('audio no preparado');
+  if (!prepared.audioPrepared ||
+      prepared.audio.join(',') !== 'pistol,shotgun,smg,sniper') fail.push('audio no preparado');
   if (!prepared.audioBuses) fail.push('buses espaciales de audio no preparados');
   if (!prepared.effectsPrepared || prepared.transient !== 0) fail.push('efectos no limpiados');
   if (prepared.tracersFree !== 32 || prepared.flashesFree.some((n) => n !== 16)) fail.push('pool incompleto');

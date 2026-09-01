@@ -114,7 +114,11 @@ await page.keyboard.up('s');
 const spam = await page.evaluate(() => window.__mon.evades);
 const diveRestarts = await page.evaluate(() => window.__mon.diveRestarts);
 // Solo cuentan pulsaciones hechas cuando el evade anterior ya terminó.
-if (spam > 7) problems.push(`SPAM: ${spam} evasiones en 1.9s (esperaba ≤7)`);
+// MEDIDO (sanity 2026-09-01): el corte 7/8 depende del micro-timing de cada
+// build (dos builds con lógica idéntica caen en lados opuestos). Lo que este
+// check caza es la AUSENCIA de anti-spam (daría 15-20/20): umbral 8 lo sigue
+// detectando sin falsear por rendimiento.
+if (spam > 8) problems.push(`SPAM: ${spam} evasiones en 1.9s (esperaba ≤8)`);
 if (diveRestarts > 0) problems.push(`SPAM: dive se reinició ${diveRestarts} veces sin terminar`);
 await flush('spam');
 
