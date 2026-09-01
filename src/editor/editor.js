@@ -106,7 +106,7 @@ export class MapEditor {
   // adjunta su carrocería; el usuario no tiene que borrar ni volver a clonar.
   _upgradeBaseDecor() {
     const previousVersion = this.map?.decorCaptureVersion ?? 0;
-    if (!this.map?.base || previousVersion >= 6) return false;
+    if (!this.map?.base || previousVersion >= 7) return false;
     const template = mapFromSnapshot(this.map.base, this.world.snapshotLayout(this.map.base));
     const isBox = (o) => paletteById(o.p)?.t === 'box';
     // v5/v6 (auditoría de hitboxes 2026-08-31): la física de vehículos, bus,
@@ -209,7 +209,7 @@ export class MapEditor {
       this.map.objects.push(copy);
     }
     this.map.decorCaptured = true;
-    this.map.decorCaptureVersion = 6;
+    this.map.decorCaptureVersion = 7;
     return true;
   }
 

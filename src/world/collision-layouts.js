@@ -198,32 +198,33 @@ function calleSpecs() {
   // Kioscos: huella MEDIDA contra el mesh (news 1.93x2.31, hotdog 1.83x2.21,
   // centro corrido 0.19 hacia atrás) — el visual sobresalía del spec y las
   // balas entraban por los costados. El hueco de servicio sigue transitable.
-  const addKiosk = (x, z, w, d, toward, decorLink, { tallCounter = false } = {}) => {
-    const frontZ = z + toward * (d / 2 - 0.034);
+  // Kioscos FIELES al builder addSidewalkKiosk (queja de Chuck: repisas y
+  // paneles engordados bloqueaban balas de forma invisible). Piezas 1:1 con
+  // el dibujo: respaldo 0.11, costados de vidrio SOLO el 58% trasero con
+  // 0.10 de grosor, postes de esquina, mostrador+labio a LOW y la fila de
+  // condimentos. El frente queda ABIERTO de 1.1 a ~2.2; techo/alero/letrero
+  // (>=2.18) son voladizos exentos.
+  const addKiosk = (x, z, w, d, toward, decorLink) => {
+    const frontZ = z + toward * (d / 2 + 0.026);
     const backZ = z - toward * (d / 2 - 0.055);
     const linked = { visual: false, mirror: false, decorLink };
-    // paneles con grosor que cubre el VUELO del toldo (2.14-2.28): las
-    // cajas nacen del suelo, un voladizo puro no se puede representar
-    out.push(make(x, backZ, w - 0.10, 0.30, 2.30, 'shelter', linked));
-    // paneles laterales COMPLETOS (medido: el vidrio corre todo el largo y
-    // cubre las esquinas/postes) — el hueco de servicio es solo la ventana
-    // frontal sobre el mostrador
+    out.push(make(x, backZ, w - 0.10, 0.11, 2.30, 'shelter', linked));
     for (const side of [-1, 1]) {
-      out.push(make(x + side * (w / 2 - 0.05), z,
-        0.28, d * 0.94, 2.30, 'shelter', linked));
+      out.push(make(x + side * (w / 2 - 0.05), z - toward * d * 0.20,
+        0.10, d * 0.58, 2.28, 'shelter', linked));
+      out.push(make(x + side * (w / 2 - 0.055), frontZ - toward * 0.055,
+        0.11, 0.11, 2.45, 'solid', { ...linked, cover: false }));
     }
-    out.push(make(x, frontZ, w - 0.16, 0.18, LOW, 'low', linked));
-    if (tallCounter) {
-      // el hotdog lleva plancha/equipo sobre el mostrador hasta ~1.6
-      // (medido ~0.4 hacia adentro del frente); el news mantiene la
-      // ventana de servicio abierta a altura de pecho
-      out.push(make(x, frontZ - toward * 0.3, w - 0.16, 0.78, 1.62, 'solid', linked));
-    }
+    out.push(make(x, frontZ - toward * 0.06, w - 0.16, 0.18, LOW, 'low', linked));
+    out.push(make(x, frontZ + toward * 0.11, w + 0.04, 0.38, 1.12, 'low',
+      { ...linked, cover: false }));
+    out.push(make(x, frontZ - toward * 0.01, 0.64, 0.12, 1.32, 'solid',
+      { ...linked, cover: false }));
   };
-  addKiosk(-14.35, -28.81, 1.93, 2.31, 1, 'kiosk:news:south-left');
-  addKiosk(14.35, 28.81, 1.93, 2.31, -1, 'kiosk:news:north-right');
-  addKiosk(14.35, -25.81, 1.83, 2.21, 1, 'kiosk:hotdog:south-right', { tallCounter: true });
-  addKiosk(-14.35, 25.81, 1.83, 2.21, -1, 'kiosk:hotdog:north-left', { tallCounter: true });
+  addKiosk(-14.35, -29, 1.75, 1.75, 1, 'kiosk:news:south-left');
+  addKiosk(14.35, 29, 1.75, 1.75, -1, 'kiosk:news:north-right');
+  addKiosk(14.35, -26, 1.65, 1.65, 1, 'kiosk:hotdog:south-right');
+  addKiosk(-14.35, 26, 1.65, 1.65, -1, 'kiosk:hotdog:north-left');
   // carteles de pie junto a cada kiosco (medidos): no tenían NINGUNA física
   // (mirror explícito: crea el par de los kioscos del lado norte)
   out.push(make(-15.13, -28.1, 0.4, 0.26, 2.3, 'solid',

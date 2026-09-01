@@ -299,7 +299,7 @@ export function mapFromSnapshot(layout, snap, name = null) {
     theme: layout,
     base: layout,     // decoración: el builder original corre intacto
     decorCaptured: true,
-    decorCaptureVersion: 6,
+    decorCaptureVersion: 7,
     fx: snap.fx, fz: snap.fz,
     walls: false,     // el perímetro ya viene capturado como cajas editables
     objects,
