@@ -210,6 +210,7 @@ export class World {
       urbanBrickDark: this._urbanBrickCanvas('#443d3b', '#74645e'),
       shopShutter: this._shopShutterCanvas(),
       vehicleWear: this._vehicleWearCanvas(),
+      vehicleGlass: this._vehicleGlassCanvas(),
       puddle: this._puddleCanvas(),
       tile: this._tileCanvas(false),           // azulejo de estación (Metro)
       tileTop: this._tileCanvas(true),
@@ -570,6 +571,47 @@ export class World {
       const x = Math.random() * w, y = 20 + Math.random() * 80;
       g.beginPath(); g.moveTo(x, y); g.lineTo(x + 10 + Math.random() * 28, y + (Math.random() - 0.5) * 7); g.stroke();
     }
+    return cv;
+  }
+
+  // Vidrio de vehículo "como en la vida real" (pedido de Chuck): gradiente
+  // de cielo reflejado (claro arriba, oscuro abajo), dos vetas diagonales de
+  // reflejo y sello de goma perimetral. El material tiñe y añade especular.
+  _vehicleGlassCanvas() {
+    const w = 256, h = 128;
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    const g = cv.getContext('2d');
+    const sky = g.createLinearGradient(0, 0, 0, h);
+    sky.addColorStop(0, '#5d7f91');
+    sky.addColorStop(0.34, '#2c4b5b');
+    sky.addColorStop(0.72, '#152b37');
+    sky.addColorStop(1, '#0b1a23');
+    g.fillStyle = sky; g.fillRect(0, 0, w, h);
+    // silueta tenue de la ciudad reflejada en la mitad inferior
+    for (let i = 0; i < 9; i++) {
+      const bw = 14 + Math.random() * 24;
+      const bx = (i / 9) * w + Math.random() * 10;
+      const bh = 22 + Math.random() * 34;
+      g.fillStyle = `rgba(6,13,18,${0.35 + Math.random() * 0.25})`;
+      g.fillRect(bx, h - bh, bw, bh);
+    }
+    // vetas diagonales de reflejo (la firma clásica del vidrio estilizado)
+    const streak = (x0, width, alpha) => {
+      g.fillStyle = `rgba(214,232,240,${alpha})`;
+      g.beginPath();
+      g.moveTo(x0, h); g.lineTo(x0 + h * 0.55, 0);
+      g.lineTo(x0 + h * 0.55 + width, 0); g.lineTo(x0 + width, h);
+      g.closePath(); g.fill();
+    };
+    streak(52, 26, 0.16);
+    streak(96, 10, 0.11);
+    streak(176, 16, 0.08);
+    // sello de goma perimetral
+    g.strokeStyle = 'rgba(4,8,11,.88)'; g.lineWidth = 7;
+    g.strokeRect(1.5, 1.5, w - 3, h - 3);
+    g.strokeStyle = 'rgba(150,180,195,.18)'; g.lineWidth = 2;
+    g.strokeRect(7, 7, w - 14, h - 14);
     return cv;
   }
 
@@ -1830,9 +1872,14 @@ export class World {
     const cabInsetMat = new THREE.MeshStandardMaterial({
       color: cabColor.clone().multiplyScalar(0.78), metalness: 0.38, roughness: 0.54,
     });
+    // Vidrio real: refleja el cielo (gradiente), lleva vetas de reflejo y
+    // sello de goma; el mismo mapa emite tenue para que el reflejo se LEA
+    // de noche (los StandardMaterial puros se apagaban con esta luz).
     const glassMat = new THREE.MeshStandardMaterial({
-      color: 0x102832, metalness: 0.38, roughness: 0.22,
-      emissive: 0x031017, emissiveIntensity: 0.20, side: THREE.DoubleSide,
+      color: 0x9db4c2, map: this._tex('vehicleGlass', 1, 1),
+      metalness: 0.60, roughness: 0.12,
+      emissive: 0x9db8c8, emissiveIntensity: 0.34,
+      emissiveMap: this._tex('vehicleGlass', 1, 1), side: THREE.DoubleSide,
       polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3,
     });
     const tireMat = new THREE.MeshStandardMaterial({ color: 0x030405, metalness: 0.01, roughness: 0.94 });
@@ -1855,6 +1902,16 @@ export class World {
     const panel = (pts, mat, order = 2) => {
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.Float32BufferAttribute(pts.flat(), 3));
+      // UV planar (horizontal dominante × altura): los vidrios con textura
+      // necesitan coordenadas — sin esto el mapa de reflejo no se aplica
+      const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]), zs = pts.map((p) => p[2]);
+      const spanX = Math.max(...xs) - Math.min(...xs);
+      const spanZ = Math.max(...zs) - Math.min(...zs);
+      const horiz = spanX >= spanZ ? xs : zs;
+      const h0 = Math.min(...horiz), hr = (Math.max(...horiz) - h0) || 1;
+      const y0 = Math.min(...ys), yr = (Math.max(...ys) - y0) || 1;
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute(
+        pts.flatMap((p, i) => [(horiz[i] - h0) / hr, (p[1] - y0) / yr]), 2));
       const indices = [];
       for (let i = 1; i < pts.length - 1; i++) indices.push(0, i, i + 1);
       geo.setIndex(indices); geo.computeVertexNormals();
@@ -1979,9 +2036,14 @@ export class World {
       color: variant ? 0x6d3d34 : 0x8d4f3e, metalness: 0.38, roughness: 0.54,
     });
     const lower = new THREE.MeshStandardMaterial({ color: 0x242a2f, metalness: 0.50, roughness: 0.44 });
+    // Vidrio real (mismo lenguaje que el camión): gradiente de cielo, vetas
+    // de reflejo y goma perimetral por VENTANA (cada cristal lleva su UV);
+    // el mapa emite tenue para leerse de noche.
     const glass = new THREE.MeshStandardMaterial({
-      color: 0x102c37, metalness: 0.38, roughness: 0.21,
-      emissive: 0x03121a, emissiveIntensity: 0.24, side: THREE.DoubleSide,
+      color: 0x9db4c2, map: this._tex('vehicleGlass', 1, 1),
+      metalness: 0.60, roughness: 0.12,
+      emissive: 0x9db8c8, emissiveIntensity: 0.34,
+      emissiveMap: this._tex('vehicleGlass', 1, 1), side: THREE.DoubleSide,
       polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3,
     });
     const tire = new THREE.MeshStandardMaterial({ color: 0x050607, roughness: 0.94 });
@@ -1999,6 +2061,15 @@ export class World {
     const panel = (pts, mat, order = 2) => {
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.Float32BufferAttribute(pts.flat(), 3));
+      // UV planar (horizontal dominante × altura) para el vidrio con textura
+      const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]), zs = pts.map((p) => p[2]);
+      const spanX = Math.max(...xs) - Math.min(...xs);
+      const spanZ = Math.max(...zs) - Math.min(...zs);
+      const horiz = spanX >= spanZ ? xs : zs;
+      const h0 = Math.min(...horiz), hr = (Math.max(...horiz) - h0) || 1;
+      const y0 = Math.min(...ys), yr = (Math.max(...ys) - y0) || 1;
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute(
+        pts.flatMap((p, i) => [(horiz[i] - h0) / hr, (p[1] - y0) / yr]), 2));
       const indices = [];
       for (let i = 1; i < pts.length - 1; i++) indices.push(0, i, i + 1);
       geo.setIndex(indices); geo.computeVertexNormals();
