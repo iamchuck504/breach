@@ -115,8 +115,11 @@ function calleSpecs() {
     // AUDITORÍA de hitboxes: las fachadas laterales empiezan en x ±16.15 —
     // el muro en ±17.4 dejaba 0.85m de calle DENTRO del edificio visual
     // (se caminaba y disparaba dentro de la fachada, decals flotando).
-    make(-16.55, 0, 0.8, 86, HIGH, 'wall', { mirror: false }),
-    make(16.55, 0, 0.8, 86, HIGH, 'wall', { mirror: false }),
+    // visual:false OBLIGATORIO: sin él, la caja se dibuja como una muralla
+    // gris DELANTE de todos los negocios (queja de Chuck) — los edificios
+    // reales ya son el dibujo de este plano físico.
+    make(-16.55, 0, 0.8, 86, HIGH, 'wall', { mirror: false, visual: false }),
+    make(16.55, 0, 0.8, 86, HIGH, 'wall', { mirror: false, visual: false }),
     // BUS atravesado (escudo de spawn): medido 9.35x3.06 con morro/cola
     // bajos que sobresalían del torso — las balas pasaban por las puntas.
     make(0, -34.5, 9.2, 2.92, HIGH, 'high', { visual: false }),
