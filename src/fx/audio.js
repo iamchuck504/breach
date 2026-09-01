@@ -128,7 +128,7 @@ export class Audio {
     this._samplesReq = true;
     const jobs = [];
     for (const [k, url] of [['smg', 'audio/smg.mp3'], ['shotgun', 'audio/shotgun.mp3'],
-      ['sniper', 'audio/sniper.mp3']]) {
+      ['sniper', 'audio/sniper.mp3'], ['pistol', 'audio/pistol.mp3']]) {
       jobs.push(fetch(url)
         .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.arrayBuffer(); })
         .then((ab) => this.ctx.decodeAudioData(ab))
@@ -499,9 +499,12 @@ export class Audio {
     this._noiseShot(0.85, 0.28, 1600, 220, 2, out);
     this._tone('sine', 130, 45, 0.55, 0.22, out);
   }
-  // pistola: crack seco y corto, más agudo que la SMG (sin sample: síntesis)
+  // pistola: sample real (Elevenlabs de Chuck) — pegada seca y compacta;
+  // el sintético queda de respaldo si el mp3 no carga
   pistol(options = null) {
     const remote = !!options?.position;
+    const gain = remote ? 0.36 : 0.42;
+    if (this._sample('pistol', gain, 0.97 + Math.random() * 0.06, options)) return;
     const out = this._eventOutput(remote ? 0.66 : 0.76, options, 'gunshot', this.combatBus || this.master);
     if (!out) return;
     this._noiseShot(0.5, 0.06, 4200, 1400, 1.1, out);
