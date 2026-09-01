@@ -67,15 +67,16 @@ assert.notEqual(hit([-14.35, 1.40, -27.45], [0, 0, -1], 2.6), null,
 assert.notEqual(hit([-14.35, 0.75, -27.45], [0, 0, -1], 1.2), null,
   'el mostrador LOW del kiosco debe bloquear');
 
-// Regla de Chuck ("sólido dentro de su dibujo"): el toldo del carrito ES
-// dibujo visible, así que ahora sí detiene balas — la silueta completa del
-// carrito es sólida hasta 1.86 (las cajas nacen del suelo: un voladizo puro
-// no se puede representar sin tapar lo de abajo).
+// Carrito de café por piezas (reporte de Chuck: el hueco de servicio entre
+// mostrador y toldo se VE abierto y las balas pegaban pared invisible).
+// Solo lo dibujado detiene: mostrador, máquina, postes y letrero.
 assert.notEqual(hit([14.35, 1.05, -9.8], [0, 0, 1], 2.6), null,
   'la base del carrito de café debe recibir impactos hasta LOW');
-assert.notEqual(hit([14.35, 1.60, -9.8], [0, 0, 1], 2.6), null,
-  'el toldo visible del carrito debe detener balas (sólido dentro del dibujo)');
+assert.equal(hit([14.35, 1.60, -9.8], [0, 0, 1], 2.6), null,
+  'el hueco de servicio del carrito deja pasar el tiro (no hay pared invisible)');
+assert.notEqual(hit([14.43, 1.35, -9.8], [0, 0, 1], 2.6), null,
+  'la máquina de café sobre el mostrador sí detiene el tiro');
 assert.equal(hit([14.35, 2.25, -9.8], [0, 0, 1], 2.6), null,
-  'por encima del techo del toldo (2.2) el tiro pasa limpio');
+  'por encima del carrito el tiro pasa limpio');
 
 console.log('CALLE COLLISION OK · vehículos por silueta · kioscos abiertos · coffee LOW');

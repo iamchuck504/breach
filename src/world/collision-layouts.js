@@ -128,14 +128,25 @@ function calleSpecs() {
     make(-15.15, -8, 2.5, 2.5, LOW, 'low', { visual: false }),
     // arbusto de la jardinera: sobresale de la caja LOW hasta ~1.45
     make(-15.15, -8, 2.2, 2.2, 1.45, 'low', { visual: false, cover: false }),
-    make(14.35, -8.5, 1.3, 0.75, LOW, 'low', { visual: false }),
-    // toldo del carrito de café (vuela sobre el puesto): silueta completa
-    // sólida — el carrito es chico y un voladizo no se puede representar
-    make(14.35, -8.5, 1.9, 1.34, 1.86, 'low', { visual: false, cover: false }),
-    // techo del toldo (losa plana medida a y2.15, 1.44x0.88 centrada) con
-    // el letrero COFFEE colgando del borde — mirror explícito: el estilo
-    // 'solid' de Calle trae mirror:false por defecto en el cliente
-    make(14.35, -8.5, 1.5, 1.0, 2.2, 'solid',
+    make(14.35, -8.5, 1.36, 0.78, LOW, 'low', { visual: false }),
+    // Carrito de café por PIEZAS MEDIDAS (queja de Chuck: la silueta sólida
+    // completa tapaba el hueco de servicio visible entre mostrador y toldo
+    // — pared invisible en pleno centro). Como el kiosco: solo lo dibujado
+    // detiene balas; el toldo (losa a 2.15) queda como voladizo exento.
+    make(14.35, -8.5, 1.38, 0.78, 1.21, 'low', { visual: false, cover: false }),
+    make(14.43, -8.46, 0.68, 0.26, 1.46, 'low', { visual: false, cover: false }),
+    // postes de esquina del toldo, medidos en x 13.81/14.89 (mirror
+    // explícito: el estilo 'solid' de Calle trae mirror:false en el
+    // cliente). El toldo (losa a 2.15) y el letrero COFFEE que cuelga del
+    // alero (1.86-2.15) quedan SIN física: son voladizos colgantes — una
+    // caja desde el suelo sería la pared invisible que reportó Chuck.
+    make(13.81, -8.84, 0.12, 0.12, 2.16, 'solid',
+      { visual: false, cover: false, mirror: true }),
+    make(14.89, -8.84, 0.12, 0.12, 2.16, 'solid',
+      { visual: false, cover: false, mirror: true }),
+    make(13.81, -8.2, 0.12, 0.12, 2.16, 'solid',
+      { visual: false, cover: false, mirror: true }),
+    make(14.89, -8.2, 0.12, 0.12, 2.16, 'solid',
       { visual: false, cover: false, mirror: true }),
     make(3.6, -2.2, 2.4, 0.9, LOW, 'low', { visual: false }),
   ];

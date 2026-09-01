@@ -117,6 +117,19 @@ const report = await page.evaluate(async (layout) => {
           const ghostHere = p !== null && (vt === null || vt > p + 0.30) &&
             (ph.collider === b || (ph.collider === null && inCell(p)));
           let holeHere = vt !== null && (p === null || p > vt + 0.30) && inCell(vt);
+          // VOLADIZOS COLGANTES (letreros/banners que cuelgan de un alero,
+          // por encima de la cabeza): si bajo el punto impactado hay AIRE
+          // (ningún mesh en los 0.55m inferiores), una caja desde el suelo
+          // sería una cortina invisible sobre un hueco visible — exento.
+          if (holeHere && y > 1.75) {
+            const hx = ox + dx * vt, hz = oz + dz * vt;
+            origin.set(hx + dx * 0.04, y - 0.1, hz + dz * 0.04);
+            caster.set(origin, _down);
+            caster.far = 0.55;
+            const below = caster.intersectObjects(W.mapGroup.children, true)
+              .some((th) => th.object.isMesh && !skip(th.object));
+            if (!below) holeHere = false;
+          }
           // guijarros/faldas de derrubio: si el tope visual LOCAL del punto
           // impactado queda bajo 0.52, es decoración de suelo sin física
           // (no hay prone; cubrirla bloquearía tiros legítimos a los pies)
