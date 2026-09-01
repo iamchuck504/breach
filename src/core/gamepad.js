@@ -62,8 +62,21 @@ export class PadInput {
     const raw = navigator.getGamepads ? navigator.getGamepads() : [];
     const pads = Array.from(raw || []).filter((g) => g && g.connected !== false);
     // Mando PlayStation por WebHID (lectura directa, inmune a que Steam
-    // cambie el modo de reporte): entra al MISMO pipeline que cualquier pad.
-    const hidGp = this.hid?.gamepad?.();
+    // cambie el modo de reporte): entra al MISMO pipeline que cualquier pad,
+    // PERO solo cuando hace falta — si la Gamepad API ya entrega un mando
+    // Sony con ejes VIVOS (sin Steam secuestrando), esa es la fuente sana y
+    // el HID se aparta; inyectar ambos duplicaba el mismo control físico.
+    const sonyApi = pads.find((g) => /dualsense|dualshock|054c/i.test(String(g.id || '')));
+    if (sonyApi) {
+      const ax = (sonyApi.axes || []).slice(0, 4).map((v) => +v || 0);
+      const prev = this._sonyAx;
+      this._sonyAx = ax;
+      if (prev && ax.some((v, i) => Math.abs(v - prev[i]) > 0.02)) {
+        this._sonyAliveAt = performance.now();
+      }
+    }
+    const apiAlive = this._sonyAliveAt && performance.now() - this._sonyAliveAt < 2500;
+    const hidGp = apiAlive ? null : this.hid?.gamepad?.();
     if (hidGp) pads.push(hidGp);
     // Controles táctiles (smartphones/tablets): otro pad sintético más.
     const touchGp = this.touch?.gamepad?.();

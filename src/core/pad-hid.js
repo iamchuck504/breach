@@ -26,6 +26,12 @@ export class HidPad {
     this._lastReport = 0;
     this.enabled = store?.getItem('breach.hidpad') === 'true';
     this.onStatus = null; // UI: notificación de cambios de estado
+    // WATCHDOG de sanidad: un layout de reporte distinto al esperado no
+    // debe romper el juego (leer gyro/touchpad como botones = acciones
+    // fantasma). Si el parseo produce basura sostenida, auto-suspender.
+    this.layoutBad = false;
+    this._suspect = 0;
+    this._prevAxes = null;
   }
 
   supported() { return typeof navigator !== 'undefined' && !!navigator.hid; }
@@ -80,13 +86,18 @@ export class HidPad {
     return true;
   }
 
+  _resetButtons() {
+    this._axes = [0, 0, 0, 0];
+    for (const b of this._buttons) { b.pressed = false; b.value = 0; }
+  }
+
   active() { return !!this.device && nowMs() - this._lastReport < STALE_MS; }
   connected() { return !!this.device; }
 
   // Pad sintético con forma de Gamepad estándar (o null si no hay datos
   // frescos). index alto fijo: no choca con pads reales.
   gamepad() {
-    if (!this.active()) return null;
+    if (this.layoutBad || !this.active()) return null;
     return {
       id: HID_ID, index: 31, mapping: 'standard', connected: true,
       axes: this._axes, buttons: this._buttons,
@@ -137,6 +148,23 @@ export class HidPad {
     set(14, hat === 5 || hat === 6 || hat === 7);
     set(15, hat === 1 || hat === 2 || hat === 3);
     set(16, b3 & 0x01);
+    // sanidad: >6 botones simultáneos o ejes teletransportándose entre
+    // reportes consecutivos = layout desconocido → basura sostenida suspende
+    const pressedCount = this._buttons.reduce((n, b) => n + (b.pressed ? 1 : 0), 0);
+    let jumpy = false;
+    if (this._prevAxes) {
+      for (let i = 0; i < 4; i++) {
+        if (Math.abs(this._axes[i] - this._prevAxes[i]) > 1.5) jumpy = true;
+      }
+    }
+    this._prevAxes = [...this._axes];
+    if (pressedCount > 6 || jumpy) this._suspect++;
+    else if (this._suspect > 0) this._suspect -= 0.2;
+    if (this._suspect > 25 && !this.layoutBad) {
+      this.layoutBad = true;
+      this._resetButtons();
+      this.onStatus?.();
+    }
     this._lastReport = nowMs();
   }
 }

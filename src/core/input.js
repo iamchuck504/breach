@@ -47,6 +47,7 @@ export class Input {
     // Gamepad API expone (id/mapping/ejes/botones) y qué pad eligió el
     // juego. Para depurar en vivo un control que "no funciona".
     if (new URLSearchParams(location.search).has('paddebug')) this._padDebug();
+    if (new URLSearchParams(location.search).has('hidcal')) this._hidCalibrate();
     // controles táctiles (smartphones/tablets): pad sintético + mirada por
     // arrastre — DESPUÉS de fijar lockDisabled (el modo táctil lo fuerza)
     this.touch = new TouchInput(this, canvas);
@@ -289,6 +290,80 @@ export class Input {
         `fire=${!!this.pad?.fireHeld} aim=${!!this.pad?.aimHeld}`);
       el.textContent = lines.join('\n');
     }, 250);
+  }
+
+  // ?hidcal=1: calibrador del mando PlayStation EN EL NAVEGADOR DEL JUGADOR
+  // (los reportes HID solo fluyen ahí). Guía por fases, registra qué bytes
+  // de cada reporte varían y deja el resultado listo para COPIAR.
+  _hidCalibrate() {
+    const el = document.createElement('div');
+    el.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#101820f2;' +
+      'color:#bfe8ff;font:18px monospace;padding:26px;overflow:auto;';
+    el.innerHTML = '<h2>CALIBRACIÓN DEL MANDO PS</h2>' +
+      '<button id="hidcal-go" style="font:22px monospace;padding:14px 24px;cursor:pointer">' +
+      '1. CLICK AQUÍ → 2. elige tu mando en la lista</button>' +
+      '<div id="hidcal-phase" style="font-size:32px;color:#ffd37a;margin:16px 0"></div>' +
+      '<button id="hidcal-copy" style="display:none;font:18px monospace;padding:10px 18px;' +
+      'cursor:pointer">COPIAR RESULTADOS</button>' +
+      '<pre id="hidcal-log" style="font-size:12px;white-space:pre-wrap"></pre>';
+    document.body.appendChild(el);
+    const log = document.getElementById('hidcal-log');
+    document.getElementById('hidcal-go').onclick = async () => {
+      try {
+        const devs = await navigator.hid.requestDevice({ filters: [{ vendorId: 0x054c }] });
+        if (!devs.length) { log.textContent = 'cancelado'; return; }
+        const results = [];
+        const stats = { map: null };
+        for (const d of devs) {
+          try { if (!d.opened) await d.open(); } catch { continue; }
+          d.oninputreport = (e) => {
+            if (!stats.map) return;
+            const key = `id=0x${e.reportId.toString(16)} len=${e.data.byteLength}`;
+            let s = stats.map.get(key);
+            if (!s) {
+              s = { n: 0, min: new Array(e.data.byteLength).fill(255),
+                max: new Array(e.data.byteLength).fill(0) };
+              stats.map.set(key, s);
+            }
+            s.n++;
+            for (let i = 0; i < e.data.byteLength; i++) {
+              const v = e.data.getUint8(i);
+              if (v < s.min[i]) s.min[i] = v;
+              if (v > s.max[i]) s.max[i] = v;
+            }
+          };
+        }
+        const phases = [
+          ['NO TOQUES NADA', 5000], ['STICK IZQUIERDO: círculos', 6000],
+          ['STICK DERECHO: círculos', 6000], ['R2 a fondo varias veces', 5000],
+          ['L2 a fondo varias veces', 5000], ['CRUZ (X) varias veces', 5000],
+          ['R1 varias veces', 5000], ['D-PAD ARRIBA varias veces', 5000],
+        ];
+        const phaseEl = document.getElementById('hidcal-phase');
+        for (const [name, ms] of phases) {
+          phaseEl.textContent = '→ ' + name;
+          stats.map = new Map();
+          await new Promise((r) => setTimeout(r, ms));
+          const out = [];
+          for (const [key, s] of stats.map) {
+            const varying = [];
+            for (let i = 0; i < s.min.length; i++) {
+              if (s.max[i] - s.min[i] > 8) varying.push(`${i}:${s.min[i]}-${s.max[i]}`);
+            }
+            out.push({ key, n: s.n, varying });
+          }
+          results.push({ phase: name, out });
+          log.textContent = results.map((r) => JSON.stringify(r)).join('\n');
+        }
+        phaseEl.textContent = '¡LISTO! copia los resultados y pégalos en el chat';
+        const copyBtn = document.getElementById('hidcal-copy');
+        copyBtn.style.display = 'inline-block';
+        copyBtn.onclick = () => {
+          navigator.clipboard.writeText(JSON.stringify(results));
+          copyBtn.textContent = '¡COPIADO!';
+        };
+      } catch (err) { log.textContent = `ERROR ${err.name}: ${err.message}`; }
+    };
   }
 
   consumeEdges() {
