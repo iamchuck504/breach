@@ -45,6 +45,7 @@ export function expansionBoxes() {
   for (const side of [-1,1]) {
     for (const [a,b,h] of [[-42,-20.2,9.25],[-15.8,15.8,7.3],[20.2,42,9.35]]) {
       add(side*18.85,-side*(a+b)/2,5.4,b-a,h,false,'building');
+      add(side*18.85,-side*(a+b)/2,5.4,b-a,3,true,'wall-cover');
     }
     // Closed ends stop lateral routes from reaching the spawn pockets.
     for (const dir of [-1,1]) wall(side*25.275,dir*20.6,7.45,.8);

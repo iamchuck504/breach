@@ -16,19 +16,19 @@ export function decorateCalleExpansion(world, buildings) {
     mesh.name=name;mesh.position.set(x,y,z);mesh.castShadow=mesh.receiveShadow=true;
     root.add(mesh);return mesh;
   };
-  const floor = (name,x,z,w,d,material) => {
+  const floor = (name,x,z,w,d,material,y=.026) => {
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w,d),material);
-    mesh.name=name;mesh.rotation.x=-Math.PI/2;mesh.position.set(x,.016,z);
+    mesh.name=name;mesh.rotation.x=-Math.PI/2;mesh.position.set(x,y,z);
     mesh.receiveShadow=true;root.add(mesh);
   };
   for(const side of [-1,1]) {
-    floor(side<0?'service-alley-floor':'workshop-floor',side*25.25,0,7.5,40.4,concrete);
-    for(const z of [-18,18])floor('open-street-passage',side*18.85,z,5.5,4.4,concrete);
+    floor(side<0?'service-alley-floor':'workshop-floor',side*25.25,0,7.5,40.4,concrete,.016);
+    for(const z of [-18,18])floor('open-street-passage',side*18.80,z,5.4,4.4,concrete,.016);
   }
   // Visible walls and solid outer corners exactly match their collision boxes.
   for(const b of expansionBoxes()) {
     if(b.expansionKind==='wall' || (b.expansionKind==='building'&&Math.abs(b.x)>22)) {
-      cube('district-boundary',b.x,b.h/2,b.z,b.w,b.h,b.d,brick);
+      cube('district-boundary',b.x,(b.h-.16)/2,b.z,b.w,b.h-.16,b.d,brick);
       // Coping is contained within the physical top rather than floating above.
       cube('wall-coping',b.x,b.h-.08,b.z,b.w,.16,b.d,concrete);
     }
@@ -37,7 +37,7 @@ export function decorateCalleExpansion(world, buildings) {
   const facadeInstances=new Map();
   for(const side of [-1,1])for(const z of [-30,-18,-6,6,18,30]) {
     const source=buildings.find(b=>b.userData.streetBuilding.side===side);
-    const clone=source.clone(true);clone.position.set(side*31.7,0,z);
+    const clone=source.clone(true);clone.position.set(side*31.74,0,z);
     clone.name='calle2-outer-city-building';clone.userData={streetContinuation:true};
     root.add(clone);
     clone.updateWorldMatrix(true,true);
@@ -45,7 +45,21 @@ export function decorateCalleExpansion(world, buildings) {
     // The physical brick wall supplies the ground floor.
     clone.traverse(part=>{
       if(!part.isMesh)return;
-      if(new THREE.Box3().setFromObject(part).max.y<4.1){part.visible=false;return;}
+      const bounds=new THREE.Box3().setFromObject(part);
+      if(bounds.max.y<=4.5){part.visible=false;return;}
+      // Trim crossing wall panels as well as removing entire storefronts.
+      // Otherwise their lower halves overlap the new district walls.
+      if(bounds.min.y<4.5){
+        part.geometry=part.geometry.clone();
+        const positions=part.geometry.attributes.position;
+        const inverse=part.matrixWorld.clone().invert(),v=new THREE.Vector3();
+        for(let i=0;i<positions.count;i++){
+          v.fromBufferAttribute(positions,i).applyMatrix4(part.matrixWorld);
+          v.y=Math.max(4.5,v.y);v.applyMatrix4(inverse);
+          positions.setXYZ(i,v.x,v.y,v.z);
+        }
+        positions.needsUpdate=true;part.geometry.computeBoundingBox();part.geometry.computeBoundingSphere();
+      }
       const materials=Array.isArray(part.material)?part.material:[part.material];
       const key=part.geometry.uuid+materials.map(m=>m.uuid).join(':');
       if(!facadeInstances.has(key))facadeInstances.set(key,{geometry:part.geometry,material:part.material,matrices:[]});
@@ -74,7 +88,7 @@ export function decorateCalleExpansion(world, buildings) {
   }
   for(const p of SIDE_PROPS) {
     const bodyMat=p.kind==='dumpster'?green:red;
-    cube(p.kind,p.x,p.h/2,p.z,p.w,p.h,p.d,bodyMat);
+    cube(p.kind,p.x,(p.h-.05)/2,p.z,p.w,p.h-.05,p.d,bodyMat);
     cube(p.kind+' top',p.x,p.h-.025,p.z,p.w,.05,p.d,metal);
     const faceX=p.x-Math.sign(p.x)*(p.w/2+.005);
     for(const dz of [-p.d*.3,0,p.d*.3]) {
@@ -131,7 +145,18 @@ export function decorateCalleExpansion(world, buildings) {
     floor('alley-loading-line',-25.15,z,5.4,.1,yellow);
   }
   world._addMapSign('NO THROUGH TRAFFIC',-25,2.2,-20.16,0,
-    {w:2.7,h:.5,parent:root,style:'transit',subtitle:'SERVICE ACCESS ONLY'});
-  world._addMapSign('SERVICE EXIT',25,2.2,20.16,Math.PI,
-    {w:2.7,h:.5,parent:root,style:'transit',subtitle:'RETURN TO STREET'});
+    {w:2.7,h:.5,parent:root,style:'industrial',subtitle:'SERVICE ACCESS ONLY'});
+  world._addMapSign('NO EXIT',25,2.2,20.16,Math.PI,
+    {w:2.7,h:.5,parent:root,style:'industrial',subtitle:'USE SIDE PASSAGES'});
+
+  // Wall details only: no new obstacles, blinking lights or particle spam.
+  for(const side of [-1,1])for(const z of [-6,6]){
+    const x=side*21.62;
+    cube('service-vent-frame',x,3.0,z,.10,.55,1.15,metal);
+    for(let i=0;i<5;i++)cube('service-vent-louver',x+side*.06,2.80+i*.10,z,.035,.035,1.0,black);
+    cube('wall-conduit',x,2.0,z+1.1,.055,3.7,.055,metal);
+    world._addMapSign(side<0?'DELIVERY BAY':'SERVICE BAY',x+side*.07,2.0,z,
+      side<0?-Math.PI/2:Math.PI/2,{w:1.0,h:.32,parent:root,style:'industrial',
+        subtitle:z<0?'01':'02'});
+  }
 }

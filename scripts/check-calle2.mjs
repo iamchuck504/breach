@@ -45,8 +45,16 @@ try{
     world.setLayout('calle2');
     const boxes=world.colliders.map(({minx,maxx,minz,maxz,h})=>({minx,maxx,minz,maxz,h}));
     const checks={spawnsUnchanged:spawns===JSON.stringify(world.spawns),portals:true,paths:true,
-      botRoutes:true,originalUnchanged:false,interiorSolid:true};
+      botRoutes:true,originalUnchanged:false,interiorSolid:true,wallCover:true,floorLayers:true};
+    const district=world.mapGroup.getObjectByName('calle2-service-districts');
+    const baseFloors=district.children.filter(o=>['service-alley-floor','workshop-floor'].includes(o.name));
+    const markings=district.children.filter(o=>['loading-pad','workshop-bay-line','alley-loading-line'].includes(o.name));
+    checks.floorLayers=markings.every(m=>baseFloors.every(f=>m.position.y>f.position.y+.005));
     for(const side of [-1,1]){
+      for(const z of [-13,6,13])for(const [x,dx] of [[22.25,-1],[28.3,1]]){
+        const found=world.findCover({x:side*x,z},{x:side*dx,z:0},1.2,.38);
+        checks.wallCover&&=!!found&&found.face.kind==='high';
+      }
       for(const z of [-18,18])checks.portals&&=world.navigation.clear({x:side*14,z},{x:side*25,z});
       const ray=new T.Raycaster(new T.Vector3(side*14,1.4,0),new T.Vector3(side,0,0),0,11);
       checks.interiorSolid&&=world.raycast(ray.ray.origin,ray.ray.direction,11)!==null;
