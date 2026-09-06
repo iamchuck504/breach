@@ -47,6 +47,18 @@ try{
     const checks={spawnsUnchanged:spawns===JSON.stringify(world.spawns),portals:true,paths:true,
       botRoutes:true,originalUnchanged:false,interiorSolid:true,wallCover:true,floorLayers:true,seamsClear:true};
     const buildings=world.mapGroup.children.filter(o=>o.userData.streetBuilding);
+    checks.shopIdentity=new Set(buildings.map(b=>b.userData.streetBuilding.name)).size===buildings.length;
+    checks.signClearance=true;
+    scene.updateMatrixWorld(true);
+    for(const b of buildings){
+      const sign=b.getObjectByName('street-shop-sign');
+      if(!sign){checks.signClearance=false;continue;}
+      const o=sign.localToWorld(new T.Vector3(0,0,.8));
+      const target=sign.localToWorld(new T.Vector3(0,0,0));
+      const hit=new T.Raycaster(o,target.sub(o).normalize(),0,.8).intersectObject(b,true)[0];
+      let belongs=false;for(let p=hit?.object;p;p=p.parent)if(p===sign)belongs=true;
+      checks.signClearance&&=belongs;
+    }
     checks.roofLayers=buildings.every(b=>{
       const mass=b.getObjectByName('street-building-mass'),roof=b.getObjectByName('street-building-roof');
       if(!mass||!roof)return false;

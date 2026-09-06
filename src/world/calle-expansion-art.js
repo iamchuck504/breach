@@ -99,6 +99,15 @@ export function decorateCalleExpansion(world, buildings) {
     }
     // Ground markings stay flat and leave the center lane clear.
     floor('loading-pad',p.x,p.z,p.w+.35,p.d+.35,mat(0x73603f));
+    if(p.kind==='dumpster'){
+      // Split hinged lids and catches identify the bin without enlarging it.
+      cube('bin-lid-joint',p.x,p.h+.004,p.z,.022,.008,p.d-.08,black);
+      for(const dz of [-p.d*.4,p.d*.4])cube('bin-lid-hinge',p.x,p.h+.025,p.z+dz,.20,.04,.07,metal);
+    }else{
+      cube('bench-work-mat',p.x,p.h+.008,p.z,p.w*.7,.016,p.d*.6,black);
+      cube('bench-spanner',p.x+.25,p.h+.025,p.z,.32,.018,.055,concrete);
+      cube('bench-tool-handle',p.x-.28,p.h+.035,p.z-.18,.24,.035,.06,yellow);
+    }
   }
   // Rear service doors are mounted on solid building walls, not false routes.
   for(const z of [-10,10]) {
@@ -184,10 +193,15 @@ export function decorateCalleExpansion(world, buildings) {
     const {side,z,span,variant}=b.userData.streetBuilding;
     const rot=side<0?Math.PI/2:-Math.PI/2;
     world._addMapSign(String(100+Math.round(z+42)+(side>0?1:0)),side*15.91,2.12,z+span*.19,rot,
-      {w:.36,h:.20,parent:root,style:'industrial',subtitle:''});
+      {w:.36,h:.20,parent:root,style:'utility',bg:'#323737',fg:'#ddd4b8',border:'#77756a',subtitle:''});
     if(variant===1||variant===4){
       world._addMapSign('EVACUATION',side*15.91,1.65,z+span*.19,rot,
-        {w:.55,h:.55,parent:root,style:'industrial',subtitle:'FOLLOW POLICE INSTRUCTIONS'});
+        {w:.55,h:.55,parent:root,style:'institutional',bg:'#b9aa85',fg:'#252d31',border:'#8b453a',subtitle:'FOLLOW POLICE INSTRUCTIONS'});
+    }
+    if(b.userData.streetBuilding.signStyle==='cafe'){
+      // Menu belongs to this cafe, above door traffic and beside its sign.
+      world._addMapSign('ESPRESSO',side*15.86,2.65,z+span*.19,rot,
+        {w:.60,h:.38,parent:root,style:'cafe',bg:'#3d3026',fg:'#e5d4af',border:'#967851',subtitle:'COFFEE / TEA'});
     }
   }
   for(const side of [-1,1]){
@@ -219,5 +233,6 @@ export function decorateCalleExpansion(world, buildings) {
   for(const side of [-1,1]){
     floor('vehicle-oil-stain',side*6.5,side*1.5,2.1,3.2,stain,.027);
     floor('localized-damp-pavement',side*26.5,side*4,1.5,2.5,stain,.027);
+    for(let i=0;i<3;i++)floor('service-paper-litter',side*(28.45-i*.17),side*(15+i*.30),.15,.21,mat(i%2?0x7b817a:0xa39779),.031+i*.001);
   }
 }

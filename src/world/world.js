@@ -1523,7 +1523,7 @@ export class World {
   // tiene profundidad real y el frente siempre mira hacia la calle, por lo que
   // el texto no puede aparecer espejado ni confundirse con una textura plana.
   _addStreetShopSign(text, style, x, y, z, ry = 0, {
-    w = 3.2, h = 0.56, parent = this.mapGroup,
+    w = 3.2, h = 0.56, parent = this.mapGroup, profiled = false,
   } = {}) {
     const themes = {
       pharmacy:   { bg: '#173f40', edge: '#77b9aa', fg: '#f3e7cb', accent: '#e5ad60', shape: 'round', font: 'Trebuchet MS', tag: 'PRESCRIPTIONS · WELLNESS' },
@@ -1622,8 +1622,29 @@ export class World {
     const tex = new THREE.CanvasTexture(cv);
     tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
     const group = new THREE.Group(); group.position.set(x, y, z); group.rotation.y = ry;
+    let backingGeometry=new THREE.BoxGeometry(w + 0.10, h + 0.10, 0.08);
+    if(profiled){
+      const shape=new THREE.Shape(),a=w/2+.025,b=h/2+.025;
+      if(['round','bubble','cafe'].includes(t.shape)){
+        const r=Math.min(b*.65,a*.15);
+        shape.moveTo(-a+r,-b);shape.lineTo(a-r,-b);shape.quadraticCurveTo(a,-b,a,-b+r);
+        shape.lineTo(a,b-r);shape.quadraticCurveTo(a,b,a-r,b);shape.lineTo(-a+r,b);
+        shape.quadraticCurveTo(-a,b,-a,b-r);shape.lineTo(-a,-b+r);shape.quadraticCurveTo(-a,-b,-a+r,-b);
+      }else if(t.shape==='arch'){
+        shape.moveTo(-a,-b);shape.lineTo(a,-b);shape.lineTo(a,b*.35);
+        shape.quadraticCurveTo(a,b,a*.7,b);shape.lineTo(-a*.7,b);
+        shape.quadraticCurveTo(-a,b,-a,b*.35);shape.lineTo(-a,-b);
+      }else{
+        const cut=t.shape==='cut'?.12:.025;
+        shape.moveTo(-a+cut,-b);shape.lineTo(a-cut,-b);shape.lineTo(a,-b+cut);
+        shape.lineTo(a,b-cut);shape.lineTo(a-cut,b);shape.lineTo(-a+cut,b);
+        shape.lineTo(-a,b-cut);shape.lineTo(-a,-b+cut);shape.closePath();
+      }
+      backingGeometry.dispose();backingGeometry=new THREE.ExtrudeGeometry(shape,{depth:.07,bevelEnabled:false,curveSegments:6});
+      backingGeometry.translate(0,0,-.035);
+    }
     const backing = new THREE.Mesh(
-      new THREE.BoxGeometry(w + 0.10, h + 0.10, 0.08),
+      backingGeometry,
       new THREE.MeshStandardMaterial({ color: 0x202529, metalness: 0.55, roughness: 0.42 }),
     );
     backing.castShadow = true; group.add(backing);
@@ -2725,10 +2746,10 @@ export class World {
           }
           if (row === 0 && (col + variant) % 4 === 1) {
             const ac = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.34, 0.62), stoneMat);
-            ac.position.set(faceX + toward * 0.20, y - 0.93, zi); this.mapGroup.add(ac);
+            ac.position.set(faceX + toward * 0.20, y - 0.93 + (expanded ? 0.12 : 0), zi); this.mapGroup.add(ac);
             for (const dz of [-0.19, 0, 0.19]) {
               const slit = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.18, 0.035), frameMat);
-              slit.position.set(faceX + toward * 0.36, y - 0.93, zi + dz); this.mapGroup.add(slit);
+              slit.position.set(faceX + toward * 0.36, y - 0.93 + (expanded ? 0.12 : 0), zi + dz); this.mapGroup.add(slit);
             }
           }
         }
@@ -2786,8 +2807,12 @@ export class World {
       fixture.position.set(faceX + toward * 0.43, 2.57, z - span * 0.10); this.mapGroup.add(fixture);
       // El rótulo vive delante de la cornisa y por encima del toldo: ninguna
       // pieza de fachada puede recortarlo desde los ángulos normales de juego.
-      this._addStreetShopSign(name, signStyle, faceX + toward * 0.23, 3.23, z - span * 0.10, rot,
-        { w: Math.min(3.45, span - 0.66), h: 0.56 });
+      const signSizes={pharmacy:[3.1,.54],bakery:[3.35,.76],garage:[3.5,.50],electronics:[3.15,.48],
+        hardware:[3.35,.60],barber:[2.65,.72],laundry:[2.85,.68],stationery:[2.65,.60],market:[3.55,.64],cafe:[2.45,.76]};
+      const [signW,signH]=expanded?(signSizes[signStyle]??[3.45,.56]):[3.45,.56];
+      const shopSign=this._addStreetShopSign(name, signStyle, faceX + toward * 0.23, expanded?3.30:3.23, z - span * 0.10, rot,
+        { w: Math.min(signW, span - 0.66), h: signH, profiled:expanded });
+      shopSign.name='street-shop-sign';shopSign.userData.shopStyle=signStyle;
       // Landmarks geométricos discretos que siguen funcionando cuando el
       // texto deja de ser legible. La farmacia conserva solo su rótulo.
       if (signStyle === 'garage') {
@@ -2855,6 +2880,13 @@ export class World {
     if (expanded) for (const b of blocks) {
       if (Math.abs(b[0]) === 12 || Math.abs(b[0]) === 24) b[1] = 7.6;
       if (b[0] === 0) b[1] = 15.7;
+      const names={
+        '-36':['NORTHLINE RX','DAILY BREAD'], '-24':['CEDAR PHARMACY','OVEN No. 8'],
+        '-12':['MOTOR WORKS','SIGNAL ELECTRONICS'], '0':['IRON & KEY','UNION BARBER'],
+        '12':['SPIN CYCLE','PAPER & INK'], '24':['NEIGHBOR MARKET','CORNER COFFEE'],
+        '36':['SOUTH END DELI','NIGHT OWL CAFE'],
+      };
+      [b[3][0],b[4][0]]=names[b[0]];
     }
     for (const [z, span, h, left, right, variant] of blocks) {
       addStreetBuilding(-1, z, span, h, left[0], left[1], variant, left[2]);
