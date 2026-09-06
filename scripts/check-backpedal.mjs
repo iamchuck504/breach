@@ -47,3 +47,19 @@ for (const yaw of [0, 1.2, -2.8]) {
   }
 }
 console.log('Backpedal/strafe: facing, displacement and gait pass for three camera headings, aim and sprint combinations.');
+for (const fps of [30, 60, 144]) {
+  const cam = { yaw: 0, pitch: 0, flatForward: () => ({ x: 0, z: -1 }), flatRight: () => ({ x: 1, z: 0 }) };
+  for (const sprintHeld of [false, true]) {
+    const player = new Controller(world, cam);
+    for (const x of [0, 0.7, -0.7, 0, -0.7, 0.7, 0]) {
+      const input = { sprintHeld, moveVec: () => ({ x, z: -Math.sqrt(1 - x * x) }) };
+      for (let frame = 0; frame < fps; frame++) {
+        const previous = player.yaw;
+        player.update(1 / fps, input, false);
+        const step = Math.abs(Math.atan2(Math.sin(player.yaw - previous), Math.cos(player.yaw - previous)));
+        assert.ok(step <= 240 * Math.PI / 180 / fps + 1e-9, 'no abrupt locomotion turn');
+      }
+    }
+  }
+}
+console.log('Turn-rate regression: alternating rear diagonals and straight back pass at 30/60/144 fps.');

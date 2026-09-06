@@ -93,6 +93,14 @@ export class Controller {
     this.yaw = approachAngle(this.yaw, this.cam.yaw, degPerSec * Math.PI / 180 * dt);
   }
 
+  _turnLocomotion(target, dt, response) {
+    // Exponential easing alone makes large heading changes jump on the first
+    // frame. Bound angular speed as well, including return to backpedal.
+    const delta = angleDelta(this.yaw, target);
+    const easedStep = Math.abs(delta) * (1 - Math.exp(-response * dt));
+    this.yaw = approachAngle(this.yaw, target, Math.min(easedStep, 240 * Math.PI / 180 * dt));
+  }
+
   camState() {
     if (this.dead) return { mode: 'normal' };
     if (this.aim) {
@@ -393,9 +401,9 @@ export class Controller {
           sideInput < -forwardInput * (this._straightBack ? 0.22 : 0.12);
 
         if (this.state === 'roadie') {
-          if (this._straightBack) this._turnToCamera(dt);
+          if (this._straightBack) this._turnLocomotion(this.cam.yaw, dt, M.roadieTurnLerp);
           else {
-            this.yaw = lerpAngle(this.yaw, yawFromDir(dx, dz), 1 - Math.exp(-M.roadieTurnLerp * dt));
+            this._turnLocomotion(yawFromDir(dx, dz), dt, M.roadieTurnLerp);
             const f = this.facing();
             dx = f.x * mw.mag; dz = f.z * mw.mag;
           }
@@ -405,8 +413,7 @@ export class Controller {
           // angular evita que un delta grande se convierta en un snap de 180°.
           this._turnToCamera(dt);
         } else if (hasInput) {
-          if (this._straightBack) this._turnToCamera(dt);
-          else this.yaw = lerpAngle(this.yaw, yawFromDir(dx, dz), 1 - Math.exp(-M.turnLerp * dt));
+          this._turnLocomotion(this._straightBack ? this.cam.yaw : yawFromDir(dx, dz), dt, M.turnLerp);
         } else {
           // En reposo el cuerpo y la mira siguen a la cámara.
           this.yaw = approachAngle(this.yaw, this.cam.yaw,
