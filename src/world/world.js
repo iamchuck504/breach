@@ -10,7 +10,7 @@ import { getMap, isCustomLayout, cratesOf, specialOf, spawnsOf, footprint, palet
   from './map-data.js';
 import { cloneUrbanAsset } from './urban-assets.js';
 import { HELIPAD, collisionBoxesFor, helipadSegments } from './collision-layouts.js';
-import { CALLE_2, calle2FurnitureZ, calle2VehiclePosition } from './calle-expansion.js';
+import { CALLE_2, calle2FurnitureZ, calle2VehiclePosition, calle2AccessOffset } from './calle-expansion.js';
 import { decorateCalleExpansion } from './calle-expansion-art.js';
 import { CalleNavigation } from './calle-navigation.js';
 import { calleShopDisplay } from './calle-shop-display.js';
@@ -3201,10 +3201,12 @@ export class World {
     // Dos paradas explican que los autobuses cerraban una ruta urbana real.
     // Rotadas 180° (pedido de Chuck): la vitrina de vidrio da al MURO y la
     // abertura con la banca mira a la CALLE — quien espera ve pasar el bus.
-    this._addUrbanAsset('busShelter', 14.35, -37.0,
-      { scale: 0.84, rotation: -Math.PI / 2, decorLink: 'busShelter:right' });
-    this._addUrbanAsset('busShelter', -14.35, 37.0,
-      { scale: 0.84, rotation: Math.PI / 2, decorLink: 'busShelter:left' });
+    for(const side of [1,-1]){
+      const decorLink=`busShelter:${side>0?'right':'left'}`;
+      const [dx,dz]=expanded?calle2AccessOffset(decorLink):[0,0];
+      this._addUrbanAsset('busShelter',side*14.35+dx,-side*37+dz,
+        {scale:.84,rotation:-side*Math.PI/2,decorLink});
+    }
     // Vehículos del operativo de emergencia: conservan posición, orientación
     // y collider; colores/insignias distintos explican por qué están allí.
     this._addStreetTruck(-6.5, -1.5, 0, 0x53666b, 0);
@@ -3279,6 +3281,7 @@ export class World {
     const cornerTrim = new THREE.MeshStandardMaterial({ color: 0x77716a, roughness: 0.78 });
     const paperColors = [0xc65745, 0xd9b44a, 0x4f7891, 0xd6d0bd];
     const addSidewalkKiosk = (x, z, w, d, toward, name, awningColor, decorLink) => {
+      if(expanded){const [dx,dz]=calle2AccessOffset(decorLink);x+=dx;z+=dz;}
       const kiosk = new THREE.Group();
       kiosk.position.set(x, 0, z);
       const addKioskPart = (geometry, material, px, py, pz) => {

@@ -30,6 +30,17 @@ export function calle2FurnitureZ(x,z) {
   return [12.45,12.9,14.9].includes(Math.abs(x))&&Math.abs(z)>16&&Math.abs(z)<19.1
     ? z+Math.sign(z)*4 : z;
 }
+export function calle2AccessOffset(key) {
+  if(key?.startsWith('kiosk:')){
+    const side=key.endsWith('right')?1:-1;
+    return [-side*1.05,key.includes(':hotdog:')?-side*4:0];
+  }
+  if(key?.startsWith('busShelter:')){
+    const side=key.endsWith('right')?1:-1;
+    return [-side*1.05,side*.5];
+  }
+  return [0,0];
+}
 
 export function expansionBoxes() {
   const out = [];

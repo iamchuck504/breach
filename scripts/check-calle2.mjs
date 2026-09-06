@@ -79,6 +79,9 @@ try{
     const markings=district.children.filter(o=>['loading-pad','workshop-bay-line','alley-loading-line'].includes(o.name));
     checks.floorLayers=markings.every(m=>baseFloors.every(f=>m.position.y>f.position.y+.005));
     for(const side of [-1,1]){
+      checks.storeAccess??=true;
+      for(const end of [-1,1])checks.storeAccess&&=world.navigation.clear(
+        {x:side*15,z:end*28},{x:side*15,z:end*40});
       for(const z of [-13,6,13])for(const [x,dx] of [[22.25,-1],[28.3,1]]){
         const found=world.findCover({x:side*x,z},{x:side*dx,z:0},1.2,.38);
         checks.wallCover&&=!!found&&found.face.kind==='high';
@@ -144,6 +147,7 @@ try{
       ['police',[13,2.5,-30],[8.8,.85,-26]],
       ['storefront',[11,2.1,33],[16.1,1.5,36]],
       ['closure',[8,2.1,37],[10.8,1.8,42]],
+      ['shop-access',[-15,2.1,40],[-14,1.5,29]],
       ['seam-oblique',[12,2.3,34],[16.15,5,29]],
       ['alley',[-25,2.3,-18],[-25,1.6,14]],
       ['workshop',[25,2.3,-18],[25,1.6,14]],
