@@ -1,5 +1,6 @@
 import { Color, Group, Vector3 } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { skinMaterial, attachSkinDetails } from './soldier-skins.js';
 
 // Native art is the browser default. Explicit legacy mode remains available.
 export function blenderSoldierEnabled() {
@@ -97,7 +98,8 @@ export async function attachBlenderSoldier(rig) {
     object.traverse(o => {
       if (!o.isMesh) return;
       o.material = Array.isArray(o.material)
-        ? o.material.map(m => teamMaterial(m, rig.team)) : teamMaterial(o.material, rig.team);
+        ? o.material.map(m => skinMaterial(teamMaterial(m, rig.team),rig.variant))
+        : skinMaterial(teamMaterial(o.material, rig.team),rig.variant);
       o.castShadow = true;
       o.receiveShadow = true;
       o.userData.blenderSoldier = true;
@@ -123,6 +125,7 @@ export async function attachBlenderSoldier(rig) {
     };
     collect(rig.root);
     for (const [parent, object] of replacements) parent.add(object);
+    attachSkinDetails(rig);
     rig._blenderWeaponTemplates=assets.weapons;
     for(const [key,gun] of Object.entries(rig.guns))attachBlenderWeapon(rig,gun,key);
     rig.blenderSoldier = true;

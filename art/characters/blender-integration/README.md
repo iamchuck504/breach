@@ -19,6 +19,22 @@ animation code. All body materials are opaque with depth writing enabled.
 
 ## Preserved
 
+Five cosmetic variants now use the existing selector/network IDs:
+
+| ID | Skin | Visual identity |
+| --- | --- | --- |
+| 0 | Recruit | Original approved graphite armor |
+| 1 | Sentinel | Pale ceramic, ballistic brow, unit bars |
+| 2 | Scout | Olive shell, twin rangefinder, compact radio |
+| 3 | Heavy | Warm gunmetal, twin respirator filters, ribbed chest |
+| 4 | Ghost | Dark shell, split optics, pale lower-face mask |
+
+`soldier-skins.js` changes cosmetic materials and adds joint-bound details only.
+Anatomy, joint transforms and weapon sockets remain unchanged. Team shoulders,
+knees and LEDs retain red/blue identification. No stats or abilities vary.
+Run `npm run check:skins` with Vite on port 5200 to test all ten team/skin pairs
+against their original joint/muzzle transforms and generate front/back lineups.
+
 - Blender character design, red/blue armor and helmet accents.
 - Six refined Blender weapons, equipped/stowed/dropped and special pickups.
 - Editor character references and character previews.
