@@ -24,14 +24,15 @@ Five cosmetic variants now use the existing selector/network IDs:
 | ID | Skin | Visual identity |
 | --- | --- | --- |
 | 0 | Recruit | Original approved graphite armor |
-| 1 | Sentinel | Ballistic brow, temple guards, unit bars |
-| 2 | Scout | Twin rangefinder, compact radio, utility gear |
-| 3 | Heavy | Twin respirator filters, reinforced brow, ribbed chest |
-| 4 | Ghost | Split optics, vented lower-face mask, low-profile panel |
+| 1 | Sentinel | Riot helmet, T visor, central crest, rimmed shoulder guards |
+| 2 | Scout | Flight helmet, asymmetric rangefinder, compact shoulder caps |
+| 3 | Heavy | Welding helmet, twin filters, stacked shoulder armor |
+| 4 | Ghost | Tapered mask, continuous visor, pointed shoulder plates |
 
 All five use the Recruit's exact material instances, including added details.
 There are no skin-specific palettes; gray armor, team accents and small unit
-markings remain consistent. `soldier-skins.js` adds joint-bound geometry only.
+markings remain consistent. `soldier-skins.js` replaces helmet/pauldron shells
+with joint-bound geometry; hidden original shells are excluded from outlines.
 Anatomy, joint transforms and weapon sockets remain unchanged. Team shoulders,
 knees and LEDs retain red/blue identification. No stats or abilities vary.
 Run `npm run check:skins` with Vite on port 5200 to test all ten team/skin pairs
