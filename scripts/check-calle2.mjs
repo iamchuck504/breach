@@ -5,6 +5,19 @@ import {CHROME} from './lib-chrome.mjs';
 import {expandedCollisionBoxes} from '../src/world/collision-layouts.js';
 import {MAPS,MAP_RUNTIME,normalizeLobbySettings} from '../src/game/lobby-rules.js';
 import {mapLineBlocked} from '../server/map-geometry.js';
+import {CALLE_2_VEHICLE_MOVES,calle2VehiclePosition,SIDE_PROPS} from '../src/world/calle-expansion.js';
+
+// Tactical edits remain paired and cannot silently move only a visual car.
+const tacticalBoxes=expandedCollisionBoxes('calle2');
+for(const {from,to} of CALLE_2_VEHICLE_MOVES)for(const side of [-1,1]){
+  assert.deepEqual(calle2VehiclePosition(from[0]*side,from[1]*side),to.map(v=>v*side));
+  assert(tacticalBoxes.some(b=>Math.abs((b.minx+b.maxx)/2-to[0]*side)<1e-6&&
+    Math.abs((b.minz+b.maxz)/2-to[1]*side)<1e-6&&b.h===1.1));
+}
+for(const p of SIDE_PROPS){
+  assert(Math.abs(p.z)+p.d/2<15.8,'Side cover stays outside portal mouths');
+  assert(Math.abs(p.x)-p.w/2>25+.48,'Center route retains body clearance');
+}
 
 assert(MAPS.includes('calle')&&MAPS.includes('calle2'));
 assert.equal(normalizeLobbySettings({map:'calle2'}).map,'calle2');
@@ -53,6 +66,10 @@ try{
         [{x:side*13.5,z:18},{x:side*25,z:0}],
         [{x:side*25,z:0},{x:side*13.5,z:-18}],
         [{x:side*25,z:0},{x:side*14,z:0}],
+        [{x:side*10,z:-38},{x:side*13.5,z:-18}],
+        [{x:side*10,z:38},{x:side*13.5,z:18}],
+        [{x:side*13.5,z:-18},{x:side*10,z:0}],
+        [{x:side*13.5,z:18},{x:side*10,z:0}],
       ];
       for(const [from,goal] of tasks){
         const path=world.navigation.path(from,goal);checks.paths&&=path.length>0;

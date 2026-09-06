@@ -1,7 +1,7 @@
 // Geometría jugable compartida entre World (cliente) y la autoridad online.
 // Estas cajas son la fuente única para movimiento, cover y línea de tiro.
 import { BLOCK } from './block-heights.js';
-import { expansionBoxes, calle2FurnitureZ } from './calle-expansion.js';
+import { expansionBoxes, calle2FurnitureZ, calle2VehiclePosition } from './calle-expansion.js';
 
 const { LOW, MID, HIGH } = BLOCK;
 const make = (x, z, w, d, h, style, options = {}) =>
@@ -109,7 +109,7 @@ const azoteas = freeze([
   make(-12.4, -39.5, 15.6, 0.6, 0.42, 'vent', { visual: false, cover: false }),
 ]);
 
-function calleSpecs() {
+function calleSpecs(expanded = false) {
   const out = [
     make(0, -42.4, 36, 0.8, HIGH, 'wall', { mirror: false, visual: false }),
     make(0, 42.4, 36, 0.8, HIGH, 'wall', { mirror: false, visual: false }),
@@ -174,6 +174,7 @@ function calleSpecs() {
   // podía dañar a alguien parado detrás). El espejo de make() invierte el
   // offset automáticamente, así la orientación del auto espejado cuadra.
   const addVehicle = (x, z, { rotated = false, suv = false } = {}) => {
+    if(expanded)[x,z]=calle2VehiclePosition(x,z);
     const swap = (w, d) => rotated ? [d, w] : [w, d];
     const tier = (width, length, height, shift, style = 'solid', extra = {}) => {
       const [w, d] = swap(width, length);
@@ -297,9 +298,9 @@ function calleSpecs() {
 }
 
 const calle = calleSpecs();
-// Reuse every avenue collider, replacing ONLY its two unbroken side walls.
+// Reuse avenue profiles with paired tactical placements, opening its side walls.
 const calle2 = freeze([
-  ...calle.filter(b => !(Math.abs(b.x) === 16.55 && b.z === 0 && b.d === 86))
+  ...calleSpecs(true).filter(b => !(Math.abs(b.x) === 16.55 && b.z === 0 && b.d === 86))
     .map(b=>({...b,z:calle2FurnitureZ(b.x,b.z)})),
   ...expansionBoxes(),
 ]);

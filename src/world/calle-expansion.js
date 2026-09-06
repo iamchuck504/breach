@@ -6,11 +6,26 @@ export const CALLE_2 = Object.freeze({
 
 // These props use the same dimensions for rendering and authority collision.
 export const SIDE_PROPS = Object.freeze([
-  { kind: 'dumpster', x: -27.65, z: -9, w: 1.6, d: 2.8, h: 1.1 },
-  { kind: 'dumpster', x: -27.65, z: 9, w: 1.6, d: 2.8, h: 1.1 },
-  { kind: 'bench', x: 27.65, z: -9, w: 1.6, d: 2.8, h: 1.1 },
-  { kind: 'bench', x: 27.65, z: 9, w: 1.6, d: 2.8, h: 1.1 },
+  { kind: 'dumpster', x: -27, z: -10.5, w: 2.8, d: 1.6, h: 1.1 },
+  { kind: 'dumpster', x: -27, z: 10.5, w: 2.8, d: 1.6, h: 1.1 },
+  { kind: 'bench', x: 27, z: -10.5, w: 2.8, d: 1.6, h: 1.1 },
+  { kind: 'bench', x: 27, z: 10.5, w: 2.8, d: 1.6, h: 1.1 },
 ]);
+
+// One placement source for visual vehicles AND all their collision tiers.
+// Keep the spawn shields; stage cover before the portals rather than in them.
+export const CALLE_2_VEHICLE_MOVES = Object.freeze([
+  { from: [6.5,-21], to: [8.8,-26] },
+  { from: [-6.5,-16], to: [-9.4,-22] },
+  { from: [3,-10.5], to: [4,-14] },
+  { from: [-3,-5.5], to: [-8.3,-10] },
+]);
+export function calle2VehiclePosition(x,z) {
+  for(const {from,to} of CALLE_2_VEHICLE_MOVES)for(const side of [1,-1]) {
+    if(x===from[0]*side && z===from[1]*side)return [to[0]*side,to[1]*side];
+  }
+  return [x,z];
+}
 export function calle2FurnitureZ(x,z) {
   return [12.45,12.9,14.9].includes(Math.abs(x))&&Math.abs(z)>16&&Math.abs(z)<19.1
     ? z+Math.sign(z)*4 : z;

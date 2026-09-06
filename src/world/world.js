@@ -10,7 +10,7 @@ import { getMap, isCustomLayout, cratesOf, specialOf, spawnsOf, footprint, palet
   from './map-data.js';
 import { cloneUrbanAsset } from './urban-assets.js';
 import { HELIPAD, collisionBoxesFor, helipadSegments } from './collision-layouts.js';
-import { CALLE_2, calle2FurnitureZ } from './calle-expansion.js';
+import { CALLE_2, calle2FurnitureZ, calle2VehiclePosition } from './calle-expansion.js';
 import { decorateCalleExpansion } from './calle-expansion-art.js';
 import { CalleNavigation } from './calle-navigation.js';
 
@@ -3110,13 +3110,14 @@ export class World {
     }
 
     // Autos inutilizados: landmark de vehículo y cover bajo predecible.
-    for (const [x, z, rot, color, variant] of [
+    for (let [x, z, rot, color, variant] of [
       [-2.5, -28, 0, 0x5a6470, 0], [2.5, 28, Math.PI, 0x5a6470, 0],
       [6.5, -21, 0, 0x6b6259, 1], [-6.5, 21, Math.PI, 0x6b6259, 1],
       [-6.5, -16, 0, 0x59686b, 2], [6.5, 16, Math.PI, 0x59686b, 2],
       [3, -10.5, 0, 0x815e4f, 1], [-3, 10.5, Math.PI, 0x815e4f, 1],
       [-3, -5.5, Math.PI / 2, 0x52696c, 2], [3, 5.5, -Math.PI / 2, 0x52696c, 2],
     ]) {
+      if(expanded)[x,z]=calle2VehiclePosition(x,z);
       // El SUV se usa como una variante compacta, no se estira: escala
       // uniforme 1.35 deja ancho/longitud cerca del collider LOW existente.
       const assetVehicle = variant === 0

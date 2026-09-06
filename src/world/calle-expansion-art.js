@@ -77,8 +77,8 @@ export function decorateCalleExpansion(world, buildings) {
     cube(p.kind,p.x,p.h/2,p.z,p.w,p.h,p.d,bodyMat);
     cube(p.kind+' top',p.x,p.h-.025,p.z,p.w,.05,p.d,metal);
     const faceX=p.x-Math.sign(p.x)*(p.w/2+.005);
-    for(const dz of [-.85,0,.85]) {
-      cube(p.kind==='dumpster'?'bin-panel-rib':'tool-drawer',faceX,.56,p.z+dz,.016,.73,.65,metal);
+    for(const dz of [-p.d*.3,0,p.d*.3]) {
+      cube(p.kind==='dumpster'?'bin-panel-rib':'tool-drawer',faceX,.56,p.z+dz,.016,.73,p.d*.25,metal);
       cube('handle',faceX-Math.sign(p.x)*.022,.8,p.z+dz,.035,.035,.28,black);
     }
     // Ground markings stay flat and leave the center lane clear.
