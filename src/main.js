@@ -1175,7 +1175,7 @@ function updateCharSel() {
 // Previews 3D: pose neutral sin armas para que casco, peto y proporciones se
 // lean completos. Una sola cámara/escala para las cinco variantes: el selector
 // no falsea el tamaño relativo de ningún soldado.
-function renderCharPreviews() {
+async function renderCharPreviews() {
   const pr = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   pr.setSize(176, 224);
   const ps = new THREE.Scene();
@@ -1191,15 +1191,18 @@ function renderCharPreviews() {
   pc.lookAt(0, 0.84, 0);
   for (let v = 0; v < 5; v++) {
     const r = new Rig(ps, 'red', null, v);
+    await r.visualReady;
     // Asentar piernas/torso y luego aplicar una pose de exhibición simétrica.
     for (let i = 0; i < 40; i++) r.update(1 / 30, { state: 'idle', speed: 0, aim: false, aimPitch: 0 });
-    r.gunMount.visible = false;
+    r.gunMount.visible = !!r.blenderSoldier;
     r.backMount.visible = false;
-    r.aimRig.rotation.set(0, 0, 0);
-    r.armL.shoulder.rotation.set(0, 0, -0.13);
-    r.armR.shoulder.rotation.set(0, 0, 0.13);
-    r.armL.elbow.rotation.set(0, 0, 0);
-    r.armR.elbow.rotation.set(0, 0, 0);
+    if(!r.blenderSoldier){
+      r.aimRig.rotation.set(0, 0, 0);
+      r.armL.shoulder.rotation.set(0, 0, -0.13);
+      r.armR.shoulder.rotation.set(0, 0, 0.13);
+      r.armL.elbow.rotation.set(0, 0, 0);
+      r.armR.elbow.rotation.set(0, 0, 0);
+    }
     r.root.rotation.y = -0.18;
     r.root.updateWorldMatrix(true, true);
     pr.render(ps, pc);

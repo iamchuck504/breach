@@ -12,6 +12,7 @@
     "server": "node server/server.js",
     "pretest": "npm run build",
     "check:controller": "node scripts/check-controller.mjs",
+    "check:blender": "node scripts/check-blender-soldier.mjs",
     "check:steam-controller": "node scripts/check-steam-controller.mjs",
     "check:menu-controller": "node scripts/check-menu-controller.mjs",
     "check:reload-cancel": "node scripts/check-reload-cancel.mjs",

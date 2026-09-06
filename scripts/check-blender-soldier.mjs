@@ -20,7 +20,7 @@ try {
     const { Rig } = await import('/src/player/rig.js');
     const scene = new THREE.Scene();
     const originalUrl = location.href;
-    history.replaceState(null, '', '/');
+    history.replaceState(null, '', '/?soldier=legacy');
     const reference = new Rig(scene, 'red');
     history.replaceState(null, '', originalUrl);
     const candidate = new Rig(scene, 'red');
@@ -30,7 +30,9 @@ try {
     candidate.update(0,{state:'idle',speed:0});
     const protectionRestored=candidate._outlines?.length>0&&candidate._outlines.every(o=>o.visible);
     candidate.setProtected(false);
-    let maxOrigin = 0, maxDirection = 0;
+    let maxOrigin = 0, maxDirection = 0, maxVisualMuzzle=0;
+    const visualGrips=[];
+    const reachCases=[];
     const a = new THREE.Vector3(), b = new THREE.Vector3();
     const states = ['idle','run','roadie','cover_low','cover_high','blind_over',
       'blind_high_left','blind_high_right','blind_low_left','blind_low_right',
@@ -39,23 +41,33 @@ try {
     Math.random=()=>.5; // Identical ragdoll impulses for the two rigs.
     for (const weapon of ['smg','shotgun','pistol','sniper','bazooka','grenade']) {
       reference.setWeapon(weapon);candidate.setWeapon(weapon);
+      const gun=candidate.activeGun;
+      gun.updateWorldMatrix(true,true);
+      for(const name of ['grip','forend','aimSupport']){
+        const socket=gun.userData.blenderSockets[name];
+        if(socket&&gun.userData[name])visualGrips.push({weapon,name,error:
+          gun.userData.blenderVisual.localToWorld(new THREE.Vector3().fromArray(socket)).distanceTo(gun.userData[name].getWorldPosition(new THREE.Vector3()))});
+      }
       for (const state of states) for (const aim of [false,true]) {
+        candidate.blenderMotion.maxReachError=0;
         for (let f=0;f<30;f++) {
           const p={state,aim,speed:state==='run'?.5:0,aimPitch:.25,aimYawErr:.1,
             coverLean:state==='cover_high'?.5:0,coverKind:'wall',firing:false};
           reference.update(1/60,p);candidate.update(1/60,p);
           maxOrigin=Math.max(maxOrigin,reference.muzzleWorld(a).distanceTo(candidate.muzzleWorld(b)));
           maxDirection=Math.max(maxDirection,reference.gunForward(a).distanceTo(candidate.gunForward(b)));
+          maxVisualMuzzle=Math.max(maxVisualMuzzle,gun.userData.blenderVisual.localToWorld(gun.userData.blenderMuzzle.clone()).distanceTo(candidate.muzzleWorld(a)));
         }
+        if(candidate.blenderMotion.maxReachError>.025)reachCases.push({weapon,state,aim,error:candidate.blenderMotion.maxReachError,details:candidate.blenderMotion.worstReach});
       }
     }
     Math.random=random;
     candidate.setProtected(true);candidate.setProtected(false);
     candidate.setDeathContext({weapon:'sniper',part:'head',lethal:true});
     candidate.update(1/60,{state:'dead',speed:0});
-    const hiddenHead=!candidate.head.visible;
+    const hiddenHead=!candidate.head.visible&&candidate.blenderMotion.b('head').scale.x<.001;
     candidate.update(1/60,{state:'idle',speed:0});
-    const restoredHead=candidate.head.visible;
+    const restoredHead=candidate.head.visible&&candidate.blenderMotion.b('head').scale.x===1;
     // Front and rear, same gameplay rig and actual equipped weapons.
     reference.root.visible=false;candidate.setWeapon('smg');blue.setWeapon('smg');
     for (const rig of [candidate,blue]) {
@@ -75,13 +87,18 @@ try {
       aiming:{state:'idle',aim:true,speed:0},
       running:{state:'run',aim:false,speed:.7},
       overhead:{state:'blind_over',aim:false,speed:0},
+      left:{state:'blind_high_left',aim:false,speed:0},
+      right:{state:'blind_high_right',aim:false,speed:0},
+      lowLeft:{state:'blind_low_left',aim:false,speed:0},
+      lowRight:{state:'blind_low_right',aim:false,speed:0},
     })) {
       for(let i=0;i<50;i++)for(const rig of [candidate,blue])rig.update(1/60,p);
       renderer.render(scene,camera);poses[label]=renderer.domElement.toDataURL();
     }
     const hasModel=candidate.blenderSoldier&&blue.blenderSoldier;
     candidate.dispose(scene);blue.dispose(scene);reference.dispose(scene);renderer.dispose();
-    return {hasModel,maxOrigin,maxDirection,hiddenHead,restoredHead,protectionRestored,image,poses};
+    return {hasModel,maxOrigin,maxDirection,maxVisualMuzzle,visualGrips,hiddenHead,restoredHead,protectionRestored,
+      reachCases:reachCases.sort((a,b)=>b.error-a.error).slice(0,12),image,poses};
   });
   await fs.writeFile(`${out}/front-back.png`, Buffer.from(report.image.split(',')[1], 'base64'));
   delete report.image;
@@ -89,7 +106,7 @@ try {
     await fs.writeFile(`${out}/${name}.png`,Buffer.from(data.split(',')[1],'base64'));
   delete report.poses;
   const failedPage=await browser.newPage();
-  await failedPage.route('**/soldier-blender-body.glb',route=>route.abort());
+  await failedPage.route('**/soldier-native.glb',route=>route.abort());
   await failedPage.goto('http://127.0.0.1:5200/?soldier=blender&nolock=1');
   const fallback=await failedPage.evaluate(async()=>{
     const THREE=await import('/node_modules/three/build/three.module.js');
@@ -102,5 +119,6 @@ try {
   report.failedLoadKeepsOriginal=fallback;
   console.log(JSON.stringify({ ...report, errors },null,2));
   if (!report.hasModel || !fallback || !report.protectionRestored || !report.hiddenHead || !report.restoredHead ||
-      report.maxOrigin>1e-8 || report.maxDirection>1e-8 || errors.length) process.exitCode=1;
+      report.maxOrigin>1e-8 || report.maxDirection>1e-8 || report.maxVisualMuzzle>1e-6 || report.reachCases.length || errors.length) process.exitCode=1;
+  if(report.visualGrips.some(g=>g.error>1e-6))process.exitCode=1;
 } finally { await browser.close(); }

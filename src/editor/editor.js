@@ -745,6 +745,10 @@ export class MapEditor {
       if (!entry) {
         const rig = new Rig(this.charRefGroup, 'red', null, this._charRigs.size % 5);
         rig.setWeapon('smg');
+        rig.visualReady?.then(()=>{
+          if(rig._disposed)return;
+          for(let i=0;i<40;i++)rig.update(1/30,{state:'idle',speed:0,aim:false});
+        });
         const ruler = this._buildRuler();
         this.charRefGroup.add(ruler);
         entry = { rig, ruler };

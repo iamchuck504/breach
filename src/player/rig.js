@@ -8,7 +8,7 @@
 // analítico de dos huesos — ambas manos siempre en contacto, sin poses
 // robóticas. El pitch de la cámara inclina el aimRig completo (brazos+arma).
 import * as THREE from 'three';
-import { attachBlenderSoldier, blenderSoldierEnabled } from './blender-soldier.js';
+import { attachBlenderSoldier, attachBlenderWeapon, blenderSoldierEnabled } from './blender-soldier.js';
 import { TUNING } from '../config/tuning.js';
 import { coverAimPose, coverBlindPose } from '../combat/cover-fire.js';
 import { isSniperHeadshotDeath, rocketDeathLevel } from '../combat/death-reactions.js';
@@ -1131,6 +1131,7 @@ export class Rig {
       const s = WEAPON_SCALES[wep] ?? [1.3, 1.3, 1.3];
       g.scale.set(s[0], s[1], s[2]);
       this.guns[wep] = g;
+      attachBlenderWeapon(this,g,wep);
     }
     return g;
   }
@@ -1832,6 +1833,7 @@ export class Rig {
         this._ikArm(this.armL, -1, tgt);
       }
     }
+    this.blenderMotion?.update(dt,p);
   }
 
   setTransform(x, z, yaw, y = 0) {
@@ -1859,13 +1861,17 @@ export class Rig {
     });
     const pairs = [];
     const collect = (node) => {
+      if (node.userData.blenderSourceHidden) return;
       if (node === this.gunMount || node === this.backMount || node === this.nameTag) return;
       if (node.isMesh) pairs.push(node);
       for (const c of node.children) collect(c);
     };
     collect(this.root);
     this._outlines = pairs.map((mesh) => {
-      const o = new THREE.Mesh(mesh.geometry, this._outlineMat);
+      const o = mesh.isSkinnedMesh
+        ? new THREE.SkinnedMesh(mesh.geometry,this._outlineMat)
+        : new THREE.Mesh(mesh.geometry, this._outlineMat);
+      if(mesh.isSkinnedMesh){o.bind(mesh.skeleton,mesh.bindMatrix);o.frustumCulled=false;}
       o.position.copy(mesh.position);
       o.rotation.copy(mesh.rotation);
       o.scale.copy(mesh.scale).multiplyScalar(1.05);
@@ -1877,6 +1883,7 @@ export class Rig {
 
   dispose(scene) {
     this._disposed = true;
+    this.blenderMotion?.dispose();
     this._restoreDeathVisuals();
     scene.remove(this.root);
     const geos = new Set(), mats = new Set(), maps = new Set();
