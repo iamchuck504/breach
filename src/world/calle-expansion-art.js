@@ -28,9 +28,11 @@ export function decorateCalleExpansion(world, buildings) {
   // Visible walls and solid outer corners exactly match their collision boxes.
   for(const b of expansionBoxes()) {
     if(b.expansionKind==='wall' || (b.expansionKind==='building'&&Math.abs(b.x)>22)) {
-      cube('district-boundary',b.x,(b.h-.16)/2,b.z,b.w,b.h-.16,b.d,brick);
+      // End walls own the corners; don't overlap their coping with the long wall.
+      const depth=b.expansionKind==='wall'&&b.d===42?40.4:b.d;
+      cube('district-boundary',b.x,(b.h-.16)/2,b.z,b.w,b.h-.16,depth,brick);
       // Coping is contained within the physical top rather than floating above.
-      cube('wall-coping',b.x,b.h-.08,b.z,b.w,.16,b.d,concrete);
+      cube('wall-coping',b.x,b.h-.08,b.z,b.w,.16,depth,concrete);
     }
   }
   // Existing facade modules continue behind the side routes, outside play.

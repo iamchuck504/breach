@@ -47,6 +47,12 @@ try{
     const checks={spawnsUnchanged:spawns===JSON.stringify(world.spawns),portals:true,paths:true,
       botRoutes:true,originalUnchanged:false,interiorSolid:true,wallCover:true,floorLayers:true,seamsClear:true};
     const buildings=world.mapGroup.children.filter(o=>o.userData.streetBuilding);
+    checks.roofLayers=buildings.every(b=>{
+      const mass=b.getObjectByName('street-building-mass'),roof=b.getObjectByName('street-building-roof');
+      if(!mass||!roof)return false;
+      const bodyBox=new T.Box3().setFromObject(mass),roofBox=new T.Box3().setFromObject(roof);
+      return Math.abs(bodyBox.max.y-roofBox.min.y)<1e-5&&roofBox.max.y-bodyBox.max.y>.17;
+    });
     const seams=world.mapGroup.children.filter(o=>o.name==='street-building-seam');
     checks.seamsClear=seams.length>0&&seams.every(seam=>buildings.every(building=>{
       const b=building.userData.streetBuilding;

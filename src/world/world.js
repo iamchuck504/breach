@@ -2650,13 +2650,17 @@ export class World {
       // El techo usa material liso: evita el patrón de ladrillo horizontal
       // de alta frecuencia que producía moiré al observar el mapa desde arriba.
       const massX = side * (expanded ? 18.85 : streetFX + 2.22);
-      const mass = new THREE.Mesh(new THREE.BoxGeometry(expanded ? 5.4 : 4.6, height, span),
+      const massHeight = expanded ? height - 0.18 : height;
+      const mass = new THREE.Mesh(new THREE.BoxGeometry(expanded ? 5.4 : 4.6, massHeight, span),
         [facadeMat, facadeMat, roofMat, roofMat, facadeMat, facadeMat]);
-      mass.position.set(massX, height / 2, z); mass.castShadow = true; this.mapGroup.add(mass);
+      mass.name='street-building-mass';
+      mass.position.set(massX, massHeight / 2, z); mass.castShadow = true; this.mapGroup.add(mass);
       const face = new THREE.Mesh(new THREE.PlaneGeometry(span - 0.16, height - 0.18), facadeMat);
       face.position.set(faceX, height / 2, z); face.rotation.y = rot; this.mapGroup.add(face);
-      const cap = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.18, span + 0.3), stoneMat);
-      cap.position.set(faceX - side * 0.2, height - 0.08, z); this.mapGroup.add(cap);
+      // A separate full roof slab, not a trim almost coplanar with the roof.
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(expanded ? 5.4 : 0.42, 0.18, expanded ? span : span + 0.3), stoneMat);
+      cap.name='street-building-roof';
+      cap.position.set(expanded ? massX : faceX - side * 0.2, height - (expanded ? 0.09 : 0.08), z); this.mapGroup.add(cap);
       // Cornisas dividen el local de las plantas residenciales y rompen el
       // gran rectángulo de fachada.
       for (const y of [3.02, height - 0.52]) {
