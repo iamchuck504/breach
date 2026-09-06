@@ -55,12 +55,12 @@ export function attachSkinDetails(rig){
     o.userData.blenderSoldier=true;o.userData.skinDetail=true;parent.add(o);return o;
   };
   const plate=(name,size,pos,mat=armor)=>detail(rig.head,name,size,pos,mat);
-  const lens=(name,x,y,z,r=.035)=>{
+  const lens=(name,x,y,z,r=.035,coreRatio=.34)=>{
     const housing=detail(rig.head,name,[r,r*.65,r],[x,y,z],metal,disc);
     housing.rotation.x=Math.PI/2;
     const glass=detail(rig.head,name+' glass',[r*.79,.009,r*.79],[x,y,z-r*.36],dark,disc);
     glass.rotation.x=Math.PI/2;
-    const core=detail(rig.head,name+' sensor',[r*.34,.01,r*.34],[x,y,z-r*.43],light,disc);
+    const core=detail(rig.head,name+' sensor',[r*coreRatio,.01,r*coreRatio],[x,y,z-r*.43],light,disc);
     core.rotation.x=Math.PI/2;
   };
   const shoulder=(side,size,pos,mat=team,angle=0)=>{
@@ -163,17 +163,17 @@ export function attachSkinDetails(rig){
     }
   }else if(v===3){
     // Heavy: squat, softened triangular shell and three round recessed eyes.
-    detail(rig.head,'soft triangular helmet',[.59,.385,.43],[0,.275,-.005],armor,triangle);
-    detail(rig.head,'rounded face rim',[.505,.333,.045],[0,.268,-.242],metal,triangle);
-    detail(rig.head,'black face recess',[.452,.286,.014],[0,.269,-.272],dark,triangle);
+    detail(rig.head,'soft triangular helmet',[.70,.385,.43],[0,.275,-.005],armor,triangle);
+    detail(rig.head,'rounded face rim',[.599,.333,.045],[0,.268,-.242],metal,triangle);
+    detail(rig.head,'black face recess',[.536,.286,.014],[0,.269,-.272],dark,triangle);
     plate('crown team inset',[.135,.021,.19],[0,.465,-.015],team);
-    for(const [x,y] of [[0,.350],[-.103,.261],[.103,.261]]){
-      lens('round triad optic',x,y,-.291,.035);
+    for(const [x,y] of [[0,.350],[-.122,.261],[.122,.261]]){
+      lens('round triad optic',x,y,-.291,.047,.56);
     }
     grille('lower breathing intake',0,.164,-.291,.084,.029,3);
     for(const side of [-1,1]){
-      fastener(side*.211,.224,-.267);
-      const rail=plate('temple team inset',[.021,.084,.020],[side*.214,.32,-.217],team);
+      fastener(side*.250,.224,-.267);
+      const rail=plate('temple team inset',[.021,.084,.020],[side*.254,.32,-.217],team);
       rail.rotation.z=side*.37;
     }
     for(let i=0;i<3;i++)detail(rig.torso,'breastplate rib',[.30,.022,.022],[0,.51+i*.038,-.289],metal);
