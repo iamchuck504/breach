@@ -161,4 +161,63 @@ export function decorateCalleExpansion(world, buildings) {
       side<0?-Math.PI/2:Math.PI/2,{w:1.0,h:.32,parent:root,style:'industrial',
         subtitle:z<0?'01':'02'});
   }
+
+  // A single incident ties together the two ends: closure notices and tape
+  // attached to the existing closed gates, never stretched across a route.
+  const tapeCanvas=document.createElement('canvas');tapeCanvas.width=512;tapeCanvas.height=64;
+  const tapeInk=tapeCanvas.getContext('2d');tapeInk.fillStyle='#bfa357';tapeInk.fillRect(0,0,512,64);
+  tapeInk.fillStyle='#20262b';tapeInk.font='bold 27px sans-serif';
+  tapeInk.fillText('POLICE — DO NOT CROSS',30,42);
+  const tapeTexture=new THREE.CanvasTexture(tapeCanvas);tapeTexture.colorSpace=THREE.SRGBColorSpace;
+  tapeTexture.anisotropy=4;
+  const tapeMaterial=mat(0xffffff,{map:tapeTexture});
+  for(const dir of [-1,1]){
+    for(const x of [-10.8,10.8]){
+      cube('police-closure-tape',x,1.55,dir*41.99,3.1,.10,.025,tapeMaterial);
+      world._addMapSign('POLICE LINE',x,1.95,dir*41.98,dir>0?Math.PI:0,
+        {w:1.7,h:.35,parent:root,style:'industrial',subtitle:'AREA CLOSED'});
+    }
+    // Two short paired braking traces approaching each bus; no giant decals.
+    for(const x of [-.75,.75])floor('braking-trace',x,dir*31.1,.12,1.7,mat(0x20282b),.023);
+  }
+  for(const b of buildings){
+    const {side,z,span,variant}=b.userData.streetBuilding;
+    const rot=side<0?Math.PI/2:-Math.PI/2;
+    world._addMapSign(String(100+Math.round(z+42)+(side>0?1:0)),side*15.91,2.12,z+span*.19,rot,
+      {w:.36,h:.20,parent:root,style:'industrial',subtitle:''});
+    if(variant===1||variant===4){
+      world._addMapSign('EVACUATION',side*15.91,1.65,z+span*.19,rot,
+        {w:.55,h:.55,parent:root,style:'industrial',subtitle:'FOLLOW POLICE INSTRUCTIONS'});
+    }
+  }
+  for(const side of [-1,1]){
+    // A slim abandoned case tucked against the facade, outside walking space.
+    cube('evacuation-case',side*16.0,.27,side*32,.16,.46,.58,metal);
+    cube('case-handle',side*15.99,.535,side*32,.045,.045,.18,black);
+    for(const dz of [-.22,.22])cube('case-strap',side*15.91,.27,side*32+dz,.012,.40,.025,black);
+  }
+  // Flush electrical cabinets: they stay inside the wall-side body clearance.
+  for(const side of [-1,1])for(const z of [-13,13]){
+    cube('service-electrical-cabinet',side*21.60,1.45,z,.08,.65,.46,metal);
+    cube('cabinet-warning',side*21.648,1.5,z,.008,.12,.12,yellow);
+  }
+  // Stored workshop tyres are hung on the wall, not loose trip hazards.
+  for(const z of [-7,7]){
+    const tyre=new THREE.Mesh(new THREE.TorusGeometry(.26,.095,6,12),black);
+    tyre.name='stored-workshop-tyre';tyre.rotation.y=Math.PI/2;
+    tyre.position.set(28.87,2.45,z);root.add(tyre);
+    cube('tyre-wall-hook',28.88,2.75,z,.17,.035,.05,metal);
+  }
+  // Small pavement wear patches away from painted lines. Transparent edges,
+  // depth-write off and a dedicated height prevent coplanar shimmer.
+  const stainCanvas=document.createElement('canvas');stainCanvas.width=128;stainCanvas.height=128;
+  const ink=stainCanvas.getContext('2d'),gradient=ink.createRadialGradient(64,64,10,64,64,63);
+  gradient.addColorStop(0,'rgba(15,22,24,.50)');gradient.addColorStop(1,'rgba(15,22,24,0)');
+  ink.fillStyle=gradient;ink.fillRect(0,0,128,128);
+  const stainTex=new THREE.CanvasTexture(stainCanvas);stainTex.colorSpace=THREE.SRGBColorSpace;
+  const stain=new THREE.MeshStandardMaterial({map:stainTex,transparent:true,depthWrite:false,roughness:.3,metalness:.12});
+  for(const side of [-1,1]){
+    floor('vehicle-oil-stain',side*6.5,side*1.5,2.1,3.2,stain,.027);
+    floor('localized-damp-pavement',side*26.5,side*4,1.5,2.5,stain,.027);
+  }
 }

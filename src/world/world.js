@@ -13,6 +13,7 @@ import { HELIPAD, collisionBoxesFor, helipadSegments } from './collision-layouts
 import { CALLE_2, calle2FurnitureZ, calle2VehiclePosition } from './calle-expansion.js';
 import { decorateCalleExpansion } from './calle-expansion-art.js';
 import { CalleNavigation } from './calle-navigation.js';
+import { calleShopDisplay } from './calle-shop-display.js';
 
 const FIELD_X = 15, FIELD_Z = 18; // semiancho / semilargo
 const SOLDIER_HEIGHT = 1.63;
@@ -2739,7 +2740,9 @@ export class World {
       const frontX = faceX + toward * 0.04;
       const storefrontType = variant % 3;
       if (storefrontType === 0) {
-        const display = new THREE.Mesh(new THREE.PlaneGeometry(shopW, STREET_SCALE.door - 0.12), glassMat);
+        const display = new THREE.Mesh(new THREE.PlaneGeometry(shopW, STREET_SCALE.door - 0.12),
+          expanded ? calleShopDisplay(signStyle) : glassMat);
+        display.name=expanded?'calle2-shop-display':'shop-glass';
         display.position.set(frontX, STREET_SCALE.door / 2, z - span * 0.10);
         display.rotation.y = rot; this.mapGroup.add(display);
         const kick = new THREE.Mesh(new THREE.BoxGeometry(0.10, 0.34, shopW), doorMat);
