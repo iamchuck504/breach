@@ -12,7 +12,7 @@ for (const yaw of [0, 1.2, -2.8]) {
     for (let i = 0; i < 120; i++) {
       player.update(1 / 60, input, false);
       assert.ok(Math.abs(player.yaw - yaw) < 1e-6, 'backpedal must not turn the body');
-      assert.notEqual(player.state, 'roadie', 'no backward sprint pose');
+      if (i > 10) assert.equal(player.state, sprintHeld && !aimHeld ? 'roadie' : 'run');
     }
     const f = cam.flatForward();
     assert.ok((player.pos.x - start.x) * f.x + (player.pos.z - start.z) * f.z < -1);
@@ -21,6 +21,17 @@ for (const yaw of [0, 1.2, -2.8]) {
     for (let i = 0; i < 120; i++) player.update(1 / 60, input, false);
     assert.ok(Math.abs(player.yaw - yaw) < 1e-6, 'strafe keeps facing forward');
     assert.ok(player.animParams().moveSide > 0.99);
+    for (const x of [-Math.SQRT1_2, Math.SQRT1_2]) {
+      input.moveVec = () => ({ x, z: -Math.SQRT1_2 });
+      for (let i = 0; i < 120; i++) {
+        player.update(1 / 60, input, false);
+        assert.ok(Math.abs(player.yaw - yaw) < 1e-6);
+        assert.equal(player.state, sprintHeld && !aimHeld ? 'roadie' : 'run');
+      }
+      assert.ok(player.animParams().moveForward < -0.7);
+      assert.ok(Math.abs(player.animParams().moveSide) > 0.7);
+      if (sprintHeld && !aimHeld) assert.ok(player.animParams().speed > 0.99, 'diagonal maintains sprint speed');
+    }
   }
 }
 console.log('Backpedal/strafe: facing, displacement and gait pass for three camera headings, aim and sprint combinations.');

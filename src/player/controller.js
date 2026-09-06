@@ -368,14 +368,12 @@ export class Controller {
     switch (this.state) {
       case 'idle': case 'run': case 'roadie': {
         const roadie = this.state === 'roadie';
-        const forward = this.cam.flatForward();
-        const sprintForward = mw.x * forward.x + mw.z * forward.z > 0.1;
         // Estados lógicos y visuales deben coincidir: momentum, pasos, red y
         // animación consumen este estado. Antes se podía correr a 4.8 m/s
         // permaneciendo lógicamente en idle.
-        if (roadie && (!input.sprintHeld || !hasInput || !sprintForward || input.aimHeld || firing)) {
+        if (roadie && (!input.sprintHeld || !hasInput || input.aimHeld || firing)) {
           this._setState(hasInput || this.speed > 0.4 ? 'run' : 'idle');
-        } else if (!roadie && input.sprintHeld && hasInput && sprintForward && !this.aim &&
+        } else if (!roadie && input.sprintHeld && hasInput && !input.aimHeld && !firing &&
                    this.stateT > 0.05) {
           this._setState('roadie');
         } else if (this.state === 'idle' && hasInput) {
@@ -388,11 +386,8 @@ export class Controller {
         let dx = mw.x, dz = mw.z;
 
         if (this.state === 'roadie') {
-          // giro pesado: el heading persigue al input, la velocidad va por el heading
-          const desired = yawFromDir(dx, dz);
-          this.yaw = lerpAngle(this.yaw, desired, 1 - Math.exp(-M.roadieTurnLerp * dt));
-          const f = this.facing();
-          dx = f.x; dz = f.z;
+          // Sprint preserves input direction without turning away from the view.
+          this._turnToCamera(dt);
         } else if (this.aim || firing) {
           // DISPARAR MANDA sobre correr: el cuerpo encara a la cámara aunque
           // te muevas hacia atrás o de lado (las piernas strafean). El límite

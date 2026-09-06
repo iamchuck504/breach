@@ -1274,7 +1274,8 @@ export class Rig {
     const bob = Math.abs(Math.cos(ph));
     const pitch = p.aimPitch ?? 0;
 
-    switch (p.state) {
+    const locomotionState = p.state === 'roadie' && (p.moveForward ?? 1) < 0.5 ? 'run' : p.state;
+    switch (locomotionState) {
       case 'roadie': {
         damp = 10;
         rootRotX = (p.groundPitch ?? 0) * 0.58;
@@ -1290,7 +1291,7 @@ export class Rig {
         break;
       }
       case 'run': case 'idle': default: { // default: estados desconocidos (red) caen a idle
-        const m = p.state === 'run' ? 1 : 0;
+        const m = locomotionState === 'run' ? 1 : 0;
         const forward = p.moveForward ?? 1;
         const side = p.moveSide ?? 0;
         const tw = p.twist ?? 0; // torso/cabeza giran hacia la cámara
