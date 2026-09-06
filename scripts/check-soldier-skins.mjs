@@ -22,7 +22,12 @@ try{
     }
     const joints=r=>[r.hips,r.torso,r.head,r.aimRig,r.armL.shoulder,r.armL.elbow,r.armL.hand,
       r.armR.shoulder,r.armR.elbow,r.armR.hand,r.legL.hip,r.legL.knee,r.legR.hip,r.legR.knee];
-    let maxPoseError=0,maxMuzzleError=0,opaque=true,shared=true;
+    let maxPoseError=0,maxMuzzleError=0,opaque=true,shared=true,samePalette=true;
+    const recruitMaterials={red:new Set(),blue:new Set()};
+    for(const r of rigs.filter(r=>r.variant===0))r.root.traverse(o=>{
+      if(o.userData.blenderSoldier)for(const m of Array.isArray(o.material)?o.material:[o.material])
+        recruitMaterials[r.team].add(m);
+    });
     const random=Math.random;Math.random=()=>.5;
     for(let i=0;i<rigs.length;i++){
       const r=rigs[i],old=references[i];
@@ -45,6 +50,7 @@ try{
         for(const m of Array.isArray(o.material)?o.material:[o.material]){
           opaque&&=!m.transparent&&m.opacity===1&&m.depthWrite;
           shared&&=!!m.userData.shared;
+          samePalette&&=recruitMaterials[r.team].has(m);
         }
       });
       old.root.visible=false;r.setWeapon('smg');
@@ -64,9 +70,9 @@ try{
       renderer.render(scene,cam);images[team+'-'+view]=renderer.domElement.toDataURL();
     }
     for(const r of [...rigs,...references])r.dispose(scene);renderer.dispose();
-    return {rows,maxPoseError,maxMuzzleError,opaque,shared,images};
+    return {rows,maxPoseError,maxMuzzleError,opaque,shared,samePalette,images};
   });
   for(const [name,url] of Object.entries(report.images))await fs.writeFile(`${out}/${name}.png`,Buffer.from(url.split(',')[1],'base64'));
   delete report.images;console.log(JSON.stringify({...report,errors},null,2));
-  if(report.maxPoseError>1e-8||report.maxMuzzleError>1e-8||!report.opaque||!report.shared||errors.length||new Set(report.rows.map(r=>r.name)).size!==5)process.exitCode=1;
+  if(report.maxPoseError>1e-8||report.maxMuzzleError>1e-8||!report.opaque||!report.shared||!report.samePalette||errors.length||new Set(report.rows.map(r=>r.name)).size!==5)process.exitCode=1;
 }finally{await browser.close();}
