@@ -384,18 +384,29 @@ export class Controller {
 
         const targetSpeed = (this.state === 'roadie' ? M.roadieSpeed : M.runSpeed) * (this.aim ? 0.45 : 1);
         let dx = mw.x, dz = mw.z;
+        const cameraForward = this.cam.flatForward(), cameraRight = this.cam.flatRight();
+        const forwardInput = dx * cameraForward.x + dz * cameraForward.z;
+        const sideInput = Math.abs(dx * cameraRight.x + dz * cameraRight.z);
+        // Small stick drift must not toggle a 180-degree turn. Diagonals use
+        // the original heading-following run; only straight back backpedals.
+        this._straightBack = forwardInput < -0.1 &&
+          sideInput < -forwardInput * (this._straightBack ? 0.22 : 0.12);
 
         if (this.state === 'roadie') {
-          // Sprint preserves input direction without turning away from the view.
-          this._turnToCamera(dt);
+          if (this._straightBack) this._turnToCamera(dt);
+          else {
+            this.yaw = lerpAngle(this.yaw, yawFromDir(dx, dz), 1 - Math.exp(-M.roadieTurnLerp * dt));
+            const f = this.facing();
+            dx = f.x * mw.mag; dz = f.z * mw.mag;
+          }
         } else if (this.aim || firing) {
           // DISPARAR MANDA sobre correr: el cuerpo encara a la cámara aunque
           // te muevas hacia atrás o de lado (las piernas strafean). El límite
           // angular evita que un delta grande se convierta en un snap de 180°.
           this._turnToCamera(dt);
         } else if (hasInput) {
-          // Locomotion never turns the player's back to the view.
-          this._turnToCamera(dt);
+          if (this._straightBack) this._turnToCamera(dt);
+          else this.yaw = lerpAngle(this.yaw, yawFromDir(dx, dz), 1 - Math.exp(-M.turnLerp * dt));
         } else {
           // En reposo el cuerpo y la mira siguen a la cámara.
           this.yaw = approachAngle(this.yaw, this.cam.yaw,

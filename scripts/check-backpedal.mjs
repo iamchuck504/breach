@@ -19,19 +19,31 @@ for (const yaw of [0, 1.2, -2.8]) {
     assert.ok(player.animParams().moveForward < -0.99, 'reverse stride');
     input.moveVec = () => ({ x: 1, z: 0 });
     for (let i = 0; i < 120; i++) player.update(1 / 60, input, false);
-    assert.ok(Math.abs(player.yaw - yaw) < 1e-6, 'strafe keeps facing forward');
-    assert.ok(player.animParams().moveSide > 0.99);
+    if (aimHeld) {
+      assert.ok(Math.abs(player.yaw - yaw) < 1e-6, 'aim keeps facing forward');
+      assert.ok(player.animParams().moveSide > 0.99);
+    } else assert.ok(player.animParams().moveForward > 0.99, 'free run faces travel');
     for (const x of [-Math.SQRT1_2, Math.SQRT1_2]) {
       input.moveVec = () => ({ x, z: -Math.SQRT1_2 });
       for (let i = 0; i < 120; i++) {
         player.update(1 / 60, input, false);
-        assert.ok(Math.abs(player.yaw - yaw) < 1e-6);
+        if (aimHeld) assert.ok(Math.abs(player.yaw - yaw) < 1e-6);
         assert.equal(player.state, sprintHeld && !aimHeld ? 'roadie' : 'run');
       }
-      assert.ok(player.animParams().moveForward < -0.7);
-      assert.ok(Math.abs(player.animParams().moveSide) > 0.7);
+      if (aimHeld) {
+        assert.ok(player.animParams().moveForward < -0.7);
+        assert.ok(Math.abs(player.animParams().moveSide) > 0.7);
+      } else {
+        assert.ok(player.animParams().moveForward > 0.99, 'diagonal uses forward running stride');
+        const r = cam.flatRight();
+        const expected = Math.atan2(-(f.x * -Math.SQRT1_2 + r.x * x), -(f.z * -Math.SQRT1_2 + r.z * x));
+        assert.ok(Math.abs(Math.atan2(Math.sin(player.yaw - expected), Math.cos(player.yaw - expected))) < 0.01);
+      }
       if (sprintHeld && !aimHeld) assert.ok(player.animParams().speed > 0.99, 'diagonal maintains sprint speed');
     }
+    input.moveVec = () => ({ x: 0.03, z: -1 });
+    for (let i = 0; i < 180; i++) player.update(1 / 60, input, false);
+    assert.ok(Math.abs(Math.atan2(Math.sin(player.yaw - yaw), Math.cos(player.yaw - yaw))) < 0.01, 'return to straight back tolerates stick drift');
   }
 }
 console.log('Backpedal/strafe: facing, displacement and gait pass for three camera headings, aim and sprint combinations.');
