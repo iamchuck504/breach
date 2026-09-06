@@ -69,6 +69,16 @@ try{
       for(const r of rigs){r.root.visible=r.team===team;r.root.rotation.y=view==='front'?0:Math.PI;}
       renderer.render(scene,cam);images[team+'-'+view]=renderer.domElement.toDataURL();
     }
+    const close=new T.OrthographicCamera(-2.3,2.3,.50,-.50,.01,40);
+    close.position.set(0,1.57,-8);close.lookAt(0,1.57,0);
+    renderer.setSize(2200,478);
+    for(const team of ['red','blue']){
+      for(const r of rigs){
+        r.root.visible=r.team===team;r.setTransform((2-r.variant)*.87,0,0);
+        r.backMount.visible=false;r.gunMount.visible=false;
+      }
+      renderer.render(scene,close);images[team+'-masks']=renderer.domElement.toDataURL();
+    }
     for(const r of [...rigs,...references])r.dispose(scene);renderer.dispose();
     return {rows,maxPoseError,maxMuzzleError,opaque,shared,samePalette,images};
   });
