@@ -45,7 +45,15 @@ try{
     world.setLayout('calle2');
     const boxes=world.colliders.map(({minx,maxx,minz,maxz,h})=>({minx,maxx,minz,maxz,h}));
     const checks={spawnsUnchanged:spawns===JSON.stringify(world.spawns),portals:true,paths:true,
-      botRoutes:true,originalUnchanged:false,interiorSolid:true,wallCover:true,floorLayers:true};
+      botRoutes:true,originalUnchanged:false,interiorSolid:true,wallCover:true,floorLayers:true,seamsClear:true};
+    const buildings=world.mapGroup.children.filter(o=>o.userData.streetBuilding);
+    const seams=world.mapGroup.children.filter(o=>o.name==='street-building-seam');
+    checks.seamsClear=seams.length>0&&seams.every(seam=>buildings.every(building=>{
+      const b=building.userData.streetBuilding;
+      if(Math.sign(seam.position.x)!==b.side)return true;
+      const z=b.z,half=b.span/2,s=seam.geometry.parameters.depth/2;
+      return Math.min(z+half,seam.position.z+s)-Math.max(z-half,seam.position.z-s)<1e-6;
+    }));
     const district=world.mapGroup.getObjectByName('calle2-service-districts');
     const baseFloors=district.children.filter(o=>['service-alley-floor','workshop-floor'].includes(o.name));
     const markings=district.children.filter(o=>['loading-pad','workshop-bay-line','alley-loading-line'].includes(o.name));
@@ -112,6 +120,8 @@ try{
     cam.position.set(0,88,70);cam.lookAt(0,0,0);renderer.render(scene,cam);
     images.aerial=renderer.domElement.toDataURL();scene.fog=fog;
     for(const [name,p,target] of [
+      ['seam',[9,2.3,24],[16.15,5,29]],
+      ['seam-oblique',[12,2.3,34],[16.15,5,29]],
       ['alley',[-25,2.3,-18],[-25,1.6,14]],
       ['workshop',[25,2.3,-18],[25,1.6,14]],
       ['entrance',[-10,2.4,-20],[-24,1.5,-18]],

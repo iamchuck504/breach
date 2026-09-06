@@ -2848,7 +2848,10 @@ export class World {
         const startB = blocks[i + 1][0] - blocks[i + 1][1] / 2;
         const gapC = (endA + startB) / 2;
         if (expanded && Math.abs(Math.abs(gapC) - CALLE_2.portalZ) < 0.1) continue;
-        const gapW = Math.max(0.2, startB - endA) + 0.26;
+        // Never overlap coplanar neighboring building faces: the old +.26
+        // produced two competing brick surfaces along both vertical edges.
+        const gapW = expanded ? startB - endA : Math.max(0.2, startB - endA) + 0.26;
+        if (gapW <= 0) continue;
         const hSeam = Math.min(blocks[i][2], blocks[i + 1][2]);
         for (const side of [-1, 1]) {
           const seam = new THREE.Mesh(
@@ -2856,6 +2859,7 @@ export class World {
             [seamBrickMat, seamBrickMat, seamRoofMat, seamRoofMat, seamBrickMat, seamBrickMat],
           );
           seam.position.set(side * (expanded ? 18.85 : streetFX + 2.195), hSeam / 2, side > 0 ? -gapC : gapC);
+          seam.name = 'street-building-seam';
           seam.castShadow = true; seam.receiveShadow = true;
           this.mapGroup.add(seam);
         }
