@@ -14,6 +14,11 @@ faceShape.lineTo(.5,.32);faceShape.lineTo(.38,-.22);faceShape.lineTo(0,-.5);
 faceShape.lineTo(-.38,-.22);faceShape.closePath();
 const shield=new THREE.ExtrudeGeometry(faceShape,{depth:1,steps:1,bevelEnabled:false});
 shield.translate(0,0,-.5);shield.userData.shared=true;
+const triangleShape=new THREE.Shape();
+triangleShape.moveTo(-.5,.5);triangleShape.lineTo(.5,.5);
+triangleShape.lineTo(0,-.5);triangleShape.closePath();
+const triangle=new THREE.ExtrudeGeometry(triangleShape,{depth:1,steps:1,bevelEnabled:false});
+triangle.translate(0,0,-.5);triangle.userData.shared=true;
 // Near-black sRGB finish stays black under the game's bright ambient light.
 // Shared across both teams and all four new masks; never recolor the Recruit.
 const maskBlack=new THREE.MeshStandardMaterial({name:'skin matte black',color:0x030405,
@@ -153,31 +158,17 @@ export function attachSkinDetails(rig){
       shoulder(side,[.21,.035,.23],[.045,.152,-.015],armor,-.20);
     }
   }else if(v===3){
-    // Heavy: broad welding helmet, recessed slit, twin industrial filters.
-    plate('reinforced shell',[.59,.36,.48],[0,.275,.005],armor);
-    plate('blast face',[.47,.25,.065],[0,.255,-.265],metal);
-    plate('recessed slit',[.37,.06,.018],[0,.32,-.306],dark);
-    plate('single slit optic',[.29,.018,.012],[0,.323,-.32],light);
-    plate('brow reinforcement',[.53,.066,.085],[0,.38,-.255],team);
-    for(const x of [-.21,.21])plate('face lock',[.031,.029,.018],[x,.257,-.309],dark);
-    plate('respirator',[.27,.135,.07],[0,.15,-.286],dark);
-    plate('black visor surround',[.417,.024,.017],[0,.365,-.310],dark);
-    for(const side of [-1,1]){
-      plate('black blast cheek recess',[.081,.102,.012],[side*.178,.243,-.309],dark);
-      plate('outer filter seal',[.031,.112,.046],[side*.268,.15,-.28],dark);
+    // Heavy: inverted triangular helmet, three separate triangular optics.
+    // The tapered volume replaces the old rectangular shell and filter mask.
+    detail(rig.head,'triangular helmet',[.59,.43,.43],[0,.265,-.005],armor,triangle);
+    detail(rig.head,'triangular face rim',[.55,.39,.045],[0,.268,-.242],metal,triangle);
+    detail(rig.head,'black triangular visor',[.485,.335,.014],[0,.272,-.272],dark,triangle);
+    plate('crown team inset',[.45,.023,.20],[0,.483,-.015],team);
+    for(const [x,y] of [[-.116,.365],[.116,.365],[0,.248]]){
+      detail(rig.head,'triangular optic bezel',[.116,.087,.012],[x,y,-.286],metal,triangle);
+      detail(rig.head,'triangular illuminated eye',[.086,.060,.008],[x,y+.003,-.297],light,triangle);
     }
-    for(const x of [-.19,.19]){
-      const filter=detail(rig.head,'filter housing',[.078,.065,.078],[x,.145,-.30],metal,disc);
-      filter.rotation.x=Math.PI/2;
-      for(let i=0;i<3;i++)plate('filter slot',[.087,.013,.012],[x,.122+i*.022,-.34],dark);
-      for(const dx of [-.061,.061])fastener(x+dx,.145,-.338);
-    }
-    grille('central breathing valve',0,.158,-.332,.122,.064,4);
-    plate('nose reinforcement',[.064,.069,.024],[0,.237,-.31],armor);
-    for(const side of [-1,1]){
-      plate('filter connector',[.037,.039,.042],[side*.125,.15,-.30],armor);
-      fastener(side*.214,.356,-.312);
-    }
+    for(const side of [-1,1])fastener(side*.249,.437,-.269);
     for(let i=0;i<3;i++)detail(rig.torso,'breastplate rib',[.30,.022,.022],[0,.51+i*.038,-.289],metal);
     for(const x of [-.23,.23])detail(rig.torso,'reinforcement lock',[.045,.08,.024],[x,.58,-.272],team);
     for(const side of [-1,1]){
