@@ -92,6 +92,12 @@ export function attachSkinDetails(rig){
       plate('temple team tab',[.025,.09,.018],[x,.27,-.225],team);
     }
     plate('chin guard',[.29,.052,.032],[0,.075,-.308],metal);
+    // Black face recesses use the Recruit's rubber, not a new palette.
+    for(const side of [-1,1]){
+      plate('black cheek bed',[.138,.125,.012],[side*.115,.195,-.293],dark);
+      plate('visor outer pocket',[.029,.069,.010],[side*.204,.30,-.292],dark);
+    }
+    plate('black chin insert',[.222,.026,.013],[0,.077,-.329],dark);
     for(const side of [-1,1]){
       grille('cheek intake',side*.112,.187,-.30,.076,.074,4);
       fastener(side*.184,.342,-.296);
@@ -110,7 +116,12 @@ export function attachSkinDetails(rig){
     plate('cap lip',[.56,.055,.46],[0,.426,-.025],team);
     plate('goggle band',[.50,.12,.043],[0,.29,-.254],dark);
     lens('large rangefinder',.115,.29,-.30,.078);
-    plate('small optic',[.12,.048,.034],[-.115,.29,-.283],light);
+    plate('small optic housing',[.156,.077,.038],[-.115,.29,-.283],dark);
+    plate('small optic',[.10,.023,.012],[-.115,.29,-.308],light);
+    for(const side of [-1,1]){
+      plate('flight helmet cheek pocket',[.066,.112,.022],[side*.205,.192,-.23],dark);
+      plate('black temple seal',[.027,.14,.20],[side*.266,.28,-.018],dark);
+    }
     plate('soft lower mask',[.34,.12,.32],[0,.115,-.04],dark);
     for(const x of [-.09,0,.09])plate('mask rib',[.04,.065,.022],[x,.115,-.214],metal);
     grille('compact breathing intake',0,.118,-.232,.067,.041,3);
@@ -146,6 +157,11 @@ export function attachSkinDetails(rig){
     plate('brow reinforcement',[.53,.066,.085],[0,.38,-.255],team);
     for(const x of [-.21,.21])plate('face lock',[.031,.029,.018],[x,.257,-.309],dark);
     plate('respirator',[.27,.135,.07],[0,.15,-.286],dark);
+    plate('black visor surround',[.417,.024,.017],[0,.365,-.310],dark);
+    for(const side of [-1,1]){
+      plate('black blast cheek recess',[.081,.102,.012],[side*.178,.243,-.309],dark);
+      plate('outer filter seal',[.031,.112,.046],[side*.268,.15,-.28],dark);
+    }
     for(const x of [-.19,.19]){
       const filter=detail(rig.head,'filter housing',[.078,.065,.078],[x,.145,-.30],metal,disc);
       filter.rotation.x=Math.PI/2;
@@ -172,11 +188,16 @@ export function attachSkinDetails(rig){
     plate('continuous visor',[.41,.055,.018],[0,.31,-.285],dark);
     plate('continuous optic',[.34,.012,.012],[0,.312,-.298],light);
     detail(rig.head,'jaw shield',[.27,.18,.024],[0,.144,-.284],metal,shield);
+    detail(rig.head,'black breathing inset',[.20,.119,.012],[0,.157,-.305],dark,shield);
+    for(const side of [-1,1]){
+      const pocket=plate('black angular cheek pocket',[.067,.126,.013],[side*.172,.222,-.281],dark);
+      pocket.rotation.z=-side*.32;
+    }
     for(const side of [-1,1]){
       const cheek=plate('swept cheek',[.023,.13,.019],[side*.165,.212,-.279],metal);
       cheek.rotation.z=side*-.38;
     }
-    for(const x of [-.048,0,.048])plate('jaw vent',[.014,.047,.008],[x,.16,-.301],dark);
+    for(const x of [-.048,0,.048])plate('jaw vent divider',[.008,.040,.006],[x,.16,-.315],metal);
     for(const side of [-1,1]){
       const seam=plate('cheek panel seam',[.008,.102,.007],[side*.133,.217,-.28],dark);
       seam.rotation.z=-side*.38;
