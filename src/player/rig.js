@@ -8,6 +8,7 @@
 // analítico de dos huesos — ambas manos siempre en contacto, sin poses
 // robóticas. El pitch de la cámara inclina el aimRig completo (brazos+arma).
 import * as THREE from 'three';
+import { attachBlenderSoldier, blenderSoldierEnabled } from './blender-soldier.js';
 import { TUNING } from '../config/tuning.js';
 import { coverAimPose, coverBlindPose } from '../combat/cover-fire.js';
 import { isSniperHeadshotDeath, rocketDeathLevel } from '../combat/death-reactions.js';
@@ -710,6 +711,12 @@ export class Rig {
     this._deathCtx = null; // contexto físico de la muerte (setDeathContext)
     this._corpseVisual = null; // clones de material SOLO mientras este rig está muerto
     this._deathHidden = [];   // piezas ocultas por daño fuerte; se restauran al respawn
+    if (blenderSoldierEnabled()) {
+      this.visualReady = attachBlenderSoldier(this).catch(error => {
+        console.warn('Blender soldier unavailable; keeping original avatar.', error);
+        return false;
+      });
+    }
   }
 
   // Mismo volumen craneal para las cinco variantes. Todo lo que cambia es
@@ -1231,6 +1238,7 @@ export class Rig {
 
   // p: {state, speed, aim, aimPitch, twist}
   update(dt, p) {
+    if (p.state !== 'dead' && !this.rag) this._pendingBlenderSoldier?.();
     // Convenciones (el personaje mira a -Z local):
     //   torso.x: − adelante, + atrás   |   head.x: + mirar arriba
     //   shoulder/elbow.x: + brazo hacia adelante   |   knee.x: − doblar rodilla
@@ -1868,6 +1876,7 @@ export class Rig {
   }
 
   dispose(scene) {
+    this._disposed = true;
     this._restoreDeathVisuals();
     scene.remove(this.root);
     const geos = new Set(), mats = new Set(), maps = new Set();
