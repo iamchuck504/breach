@@ -1,54 +1,51 @@
-# Blender runtime integration
+# Blender art with original game animations
 
-The approved Blender soldier and six refined weapons are the browser default
-for local players, bots and remote player rendering. `?soldier=legacy` retains
-the old visuals for comparison/recovery. No new network character ID is introduced.
+The Blender character and all six refined weapons remain the browser default.
+`?soldier=legacy` is available for comparison with the original character art.
 
-## Included artwork
+## Animation rollback — 2026-09-06
 
-- Original skinned body/skeleton from `breach-soldier-smg-cover-ready.blend`.
-- Ten approved 60 fps clips: idle, aim, walk, sprint, left/right/over cover with
-  separate aiming and blindfire studies. Guard-to-fire halves are sampled as
-  held states; movement and fixture staging offsets are removed.
-- SMG, shotgun, pistol, sniper, bazooka and grenade from
-  `breach-weapons-refined-v2.blend`, including equipped/stowed/dropped weapons
-  and the special pedestal. Team accents switch between red and blue.
-- Native anatomy, with final arm IK at the existing grip/support sockets.
-  Anatomical right holds the trigger; left supports the weapon.
+The native Blender clip adapter was removed after playtest feedback: it caused
+unnatural motion, spring-like running and skinning artifacts. The game no longer
+loads or samples `soldier-native.glb`, performs a second body IK solve, or adjusts
+the chest separately from the original animation rig.
 
-There are no approved dedicated reload, melee, evade, mantle, death or low-side
-blindfire clips in this source. Those states use the existing procedural poses
-retargeted to the new skeleton, not newly authored Blender animations.
-The older rigid-body preview asset/exporter remains as source history.
+The same approved character artwork is loaded from `soldier-blender-body.glb`
+as 19 rigid visual segments attached directly to the game's existing joints.
+These segments were exported from the approved cover-ready soldier and fitted
+to the original limb lengths. No skinning, blended root motion or new poses are
+applied. Running, aiming, cover, blindfire, reload and death use the original game
+animation code. All body materials are opaque with depth writing enabled.
 
-## Gameplay boundary
+## Preserved
 
-The adapter writes visual skeleton/meshes only. It does not move the gameplay
-root, camera, gun mount, functional muzzle, collision or hit detection. Weapon art
-is aligned to the unchanged muzzle; cover occlusion still stops bullets.
-Each client renders shared state through the same Rig; no protocol changes.
-Geometry/materials are shared; skeletons are per instance. Failed loading keeps
-the original avatar. Loading during death waits for corpse restoration.
+- Blender character design, red/blue armor and helmet accents.
+- Six refined Blender weapons, equipped/stowed/dropped and special pickups.
+- Editor character references and character previews.
+- Existing right-hand trigger / left-hand support joints.
+- Functional muzzle, flash alignment, shot direction, camera and collision.
+- Spawn protection, contextual death visibility and respawn restoration.
+- Shared geometry/material cache and safe fallback if loading fails.
+
+The native animation source/exporter remains archived, but is not active.
 
 ## Re-export
 
-Run Blender 5.2 with the approved soldier blend open:
+Character visual segments (Blender 5.2, approved soldier blend open):
 
 ```text
-blender -b /path/to/breach-soldier-smg-cover-ready.blend --python scripts/blender/export-native-runtime.py -- public/assets/characters/blender /path/to/breach-weapons-refined-v2.blend
+blender -b /path/to/breach-soldier-smg-cover-ready.blend --python scripts/blender/export-soldier-body.py -- public/assets/characters/blender
 ```
 
-The exporter uses a separate scene and never saves over either source blend.
-Source blends stay in the art workspace; only runtime GLBs are published.
+The exporter uses a separate scene and never saves over the source blend.
 
-## Verification
+## Checks
 
-With Vite on port 5200, run `npm run check:blender`. The browser test loads a real
-practice match, compares functional muzzle origin/direction against legacy across
-six weapons and movement/aim/cover/death/respawn, checks visual muzzle/grip
-alignment, arm reach, protection and loading fallback, and captures poses.
-Captures: `artifacts/blender-soldier` or `BREACH_CAPTURE_DIR`.
+With Vite on port 5200, run `npm run check:blender`. It loads a practice match
+and compares original/new joint matrices frame by frame across six weapons,
+idle/running/sprint/aim/cover/blindfire/evade/mantle/melee/death/respawn.
+It also checks opaque non-skinned body meshes, muzzle and visual grip alignment,
+protection, death restoration and loading failure. Captures are written to
+`artifacts/blender-soldier` (or `BREACH_CAPTURE_DIR`).
 
-Additional checks: fire-direction, reticle, cover-fire, sniper, bazooka,
-equipped-weapon-scale and production build. These do not replace a two-machine
-multiplayer or exhaustive clipping playtest.
+Additional checks: `check:fire-direction`, `check:reticle` and production build.

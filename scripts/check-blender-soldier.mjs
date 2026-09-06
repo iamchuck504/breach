@@ -32,7 +32,11 @@ try {
     candidate.setProtected(false);
     let maxOrigin = 0, maxDirection = 0, maxVisualMuzzle=0;
     const visualGrips=[];
-    const reachCases=[];
+    let maxPoseError=0;
+    const joints=r=>[r.root,r.hips,r.torso,r.head,r.aimRig,
+      r.armR.shoulder,r.armR.elbow,r.armR.hand,r.armL.shoulder,r.armL.elbow,r.armL.hand,
+      r.legR.hip,r.legR.knee,r.legL.hip,r.legL.knee];
+    const oldJoints=joints(reference),newJoints=joints(candidate);
     const a = new THREE.Vector3(), b = new THREE.Vector3();
     const states = ['idle','run','roadie','cover_low','cover_high','blind_over',
       'blind_high_left','blind_high_right','blind_low_left','blind_low_right',
@@ -49,7 +53,6 @@ try {
           gun.userData.blenderVisual.localToWorld(new THREE.Vector3().fromArray(socket)).distanceTo(gun.userData[name].getWorldPosition(new THREE.Vector3()))});
       }
       for (const state of states) for (const aim of [false,true]) {
-        candidate.blenderMotion.maxReachError=0;
         for (let f=0;f<30;f++) {
           const p={state,aim,speed:state==='run'?.5:0,aimPitch:.25,aimYawErr:.1,
             coverLean:state==='cover_high'?.5:0,coverKind:'wall',firing:false};
@@ -57,17 +60,25 @@ try {
           maxOrigin=Math.max(maxOrigin,reference.muzzleWorld(a).distanceTo(candidate.muzzleWorld(b)));
           maxDirection=Math.max(maxDirection,reference.gunForward(a).distanceTo(candidate.gunForward(b)));
           maxVisualMuzzle=Math.max(maxVisualMuzzle,gun.userData.blenderVisual.localToWorld(gun.userData.blenderMuzzle.clone()).distanceTo(candidate.muzzleWorld(a)));
+          for(let j=0;j<oldJoints.length;j++)for(let n=0;n<16;n++)
+            maxPoseError=Math.max(maxPoseError,Math.abs(oldJoints[j].matrixWorld.elements[n]-newJoints[j].matrixWorld.elements[n]));
         }
-        if(candidate.blenderMotion.maxReachError>.025)reachCases.push({weapon,state,aim,error:candidate.blenderMotion.maxReachError,details:candidate.blenderMotion.worstReach});
       }
     }
     Math.random=random;
     candidate.setProtected(true);candidate.setProtected(false);
     candidate.setDeathContext({weapon:'sniper',part:'head',lethal:true});
     candidate.update(1/60,{state:'dead',speed:0});
-    const hiddenHead=!candidate.head.visible&&candidate.blenderMotion.b('head').scale.x<.001;
+    const hiddenHead=!candidate.head.visible;
     candidate.update(1/60,{state:'idle',speed:0});
-    const restoredHead=candidate.head.visible&&candidate.blenderMotion.b('head').scale.x===1;
+    const restoredHead=candidate.head.visible;
+    let bodyMeshes=0,opaqueBody=true,skinnedBody=false;
+    candidate.root.traverse(o=>{
+      if(!o.userData.blenderSoldier)return;
+      bodyMeshes++;skinnedBody ||= !!o.isSkinnedMesh;
+      for(const m of Array.isArray(o.material)?o.material:[o.material])
+        opaqueBody &&= !m.transparent&&m.opacity===1&&m.depthWrite;
+    });
     // Front and rear, same gameplay rig and actual equipped weapons.
     reference.root.visible=false;candidate.setWeapon('smg');blue.setWeapon('smg');
     for (const rig of [candidate,blue]) {
@@ -98,7 +109,7 @@ try {
     const hasModel=candidate.blenderSoldier&&blue.blenderSoldier;
     candidate.dispose(scene);blue.dispose(scene);reference.dispose(scene);renderer.dispose();
     return {hasModel,maxOrigin,maxDirection,maxVisualMuzzle,visualGrips,hiddenHead,restoredHead,protectionRestored,
-      reachCases:reachCases.sort((a,b)=>b.error-a.error).slice(0,12),image,poses};
+      maxPoseError,bodyMeshes,opaqueBody,skinnedBody,image,poses};
   });
   await fs.writeFile(`${out}/front-back.png`, Buffer.from(report.image.split(',')[1], 'base64'));
   delete report.image;
@@ -106,7 +117,7 @@ try {
     await fs.writeFile(`${out}/${name}.png`,Buffer.from(data.split(',')[1],'base64'));
   delete report.poses;
   const failedPage=await browser.newPage();
-  await failedPage.route('**/soldier-native.glb',route=>route.abort());
+  await failedPage.route('**/soldier-blender-body.glb',route=>route.abort());
   await failedPage.goto('http://127.0.0.1:5200/?soldier=blender&nolock=1');
   const fallback=await failedPage.evaluate(async()=>{
     const THREE=await import('/node_modules/three/build/three.module.js');
@@ -119,6 +130,7 @@ try {
   report.failedLoadKeepsOriginal=fallback;
   console.log(JSON.stringify({ ...report, errors },null,2));
   if (!report.hasModel || !fallback || !report.protectionRestored || !report.hiddenHead || !report.restoredHead ||
-      report.maxOrigin>1e-8 || report.maxDirection>1e-8 || report.maxVisualMuzzle>1e-6 || report.reachCases.length || errors.length) process.exitCode=1;
+      report.maxOrigin>1e-8 || report.maxDirection>1e-8 || report.maxVisualMuzzle>1e-6 ||
+      report.maxPoseError>1e-8 || !report.bodyMeshes || !report.opaqueBody || report.skinnedBody || errors.length) process.exitCode=1;
   if(report.visualGrips.some(g=>g.error>1e-6))process.exitCode=1;
 } finally { await browser.close(); }

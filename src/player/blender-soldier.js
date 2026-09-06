@@ -1,6 +1,5 @@
 import { Color, Group, Vector3 } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { BlenderMotion } from './blender-motion.js';
 
 // Native art is the browser default. Explicit legacy mode remains available.
 export function blenderSoldierEnabled() {
@@ -13,7 +12,7 @@ let cachedAssets;
 const palettes = new Map();
 function loadTemplate() {
   const loader=new GLTFLoader(),base=`${import.meta.env?.BASE_URL ?? '/'}assets/characters/blender/`;
-  const names=['soldier-native','smg','shotgun','pistol','sniper','bazooka','grenade'];
+  const names=['soldier-blender-body','smg','shotgun','pistol','sniper','bazooka','grenade'];
   return template ??= Promise.all(names.map(name=>loader.loadAsync(`${base}${name}.glb`))).then(assets=>{
     for(let i=1;i<assets.length;i++){
       let valid=false;
@@ -28,6 +27,15 @@ function loadTemplate() {
     });
     return cachedAssets={body:assets[0],weapons:Object.fromEntries(names.slice(1).map((name,i)=>[name,assets[i+1].scene]))};
   });
+}
+
+function targetFor(rig, target) {
+  const [part, side] = target.split('.');
+  const arm = side === 'R' ? rig.armR : rig.armL;
+  const leg = side === 'R' ? rig.legR : rig.legL;
+  return ({ hips: rig.hips, torso: rig.torso, head: rig.head,
+    upper_arm: arm.shoulder, pauldron: arm.shoulder, forearm: arm.elbow,
+    hand: arm.hand, thigh: leg.hip, shin: leg.knee })[part];
 }
 
 function teamMaterial(source, team) {
@@ -74,22 +82,32 @@ export function attachBlenderPickup(gun,key,team='red'){
   }).catch(error=>console.warn('Keeping original pickup model:',error));
 }
 
-/** Native body/clips and weapon art; functional sockets remain authoritative. */
+/** Visual-only attachment. Never writes a pose, gun, socket or muzzle transform. */
 export async function attachBlenderSoldier(rig) {
   const assets = cachedAssets ?? await loadTemplate();
+  const scene = assets.body.scene;
   if (rig._disposed) return false;
+  const segments = scene.children.filter(o => o.userData.runtimeTarget);
+  if (segments.length !== 19 || segments.some(o => !targetFor(rig, o.userData.runtimeTarget))) {
+    throw new Error('Invalid Blender soldier segment manifest');
+  }
+  // Finish loading/validating before removing any old geometry.
+  const replacements = segments.map(source => {
+    const object = source.clone(true);
+    object.traverse(o => {
+      if (!o.isMesh) return;
+      o.material = Array.isArray(o.material)
+        ? o.material.map(m => teamMaterial(m, rig.team)) : teamMaterial(o.material, rig.team);
+      o.castShadow = true;
+      o.receiveShadow = true;
+      o.userData.blenderSoldier = true;
+    });
+    return [targetFor(rig, source.userData.runtimeTarget), object];
+  });
   // Death effects clone materials and track hidden nodes. Wait until alive so
   // swapping visuals cannot invalidate an active corpse's restoration list.
   rig._pendingBlenderSoldier = () => {
     if (rig._disposed) return;
-    rig._pendingBlenderSoldier = null;
-    let motion;
-    try {
-      motion=new BlenderMotion(rig,assets.body,m=>teamMaterial(m,rig.team));
-    } catch(error) {
-      console.warn('Keeping original soldier: invalid animation package',error);
-      return;
-    }
     const protectedState = rig._prot;
     if (rig._outlines) {
       for (const o of rig._outlines) o.removeFromParent();
@@ -97,14 +115,14 @@ export async function attachBlenderSoldier(rig) {
       rig._outlines = null;
     }
     const collect = node => {
-      if ([rig.gunMount, rig.backMount, rig.holsterMount, rig.nameTag,motion.root].includes(node)) return;
+      if ([rig.gunMount, rig.backMount, rig.holsterMount, rig.nameTag].includes(node)) return;
       for (const child of [...node.children]) {
-        if (child.isMesh) {child.visible=false;child.userData.blenderSourceHidden=true;}
+        if (child.isMesh) child.removeFromParent();
         else collect(child);
       }
     };
     collect(rig.root);
-    rig.blenderMotion=motion;
+    for (const [parent, object] of replacements) parent.add(object);
     rig._blenderWeaponTemplates=assets.weapons;
     for(const [key,gun] of Object.entries(rig.guns))attachBlenderWeapon(rig,gun,key);
     rig.blenderSoldier = true;

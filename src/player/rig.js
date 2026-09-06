@@ -1833,7 +1833,6 @@ export class Rig {
         this._ikArm(this.armL, -1, tgt);
       }
     }
-    this.blenderMotion?.update(dt,p);
   }
 
   setTransform(x, z, yaw, y = 0) {
@@ -1883,7 +1882,6 @@ export class Rig {
 
   dispose(scene) {
     this._disposed = true;
-    this.blenderMotion?.dispose();
     this._restoreDeathVisuals();
     scene.remove(this.root);
     const geos = new Set(), mats = new Set(), maps = new Set();
