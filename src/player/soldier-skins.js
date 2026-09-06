@@ -15,9 +15,13 @@ faceShape.lineTo(-.38,-.22);faceShape.closePath();
 const shield=new THREE.ExtrudeGeometry(faceShape,{depth:1,steps:1,bevelEnabled:false});
 shield.translate(0,0,-.5);shield.userData.shared=true;
 const triangleShape=new THREE.Shape();
-triangleShape.moveTo(-.5,.5);triangleShape.lineTo(.5,.5);
-triangleShape.lineTo(0,-.5);triangleShape.closePath();
-const triangle=new THREE.ExtrudeGeometry(triangleShape,{depth:1,steps:1,bevelEnabled:false});
+triangleShape.moveTo(-.14,.5);triangleShape.quadraticCurveTo(-.25,.5,-.31,.33);
+triangleShape.lineTo(-.48,-.14);triangleShape.quadraticCurveTo(-.52,-.27,-.40,-.37);
+triangleShape.lineTo(-.22,-.48);triangleShape.quadraticCurveTo(0,-.53,.22,-.48);
+triangleShape.lineTo(.40,-.37);triangleShape.quadraticCurveTo(.52,-.27,.48,-.14);
+triangleShape.lineTo(.31,.33);triangleShape.quadraticCurveTo(.25,.5,.14,.5);
+triangleShape.closePath();
+const triangle=new THREE.ExtrudeGeometry(triangleShape,{depth:1,steps:1,curveSegments:4,bevelEnabled:false});
 triangle.translate(0,0,-.5);triangle.userData.shared=true;
 // Near-black sRGB finish stays black under the game's bright ambient light.
 // Shared across both teams and all four new masks; never recolor the Recruit.
@@ -158,17 +162,20 @@ export function attachSkinDetails(rig){
       shoulder(side,[.21,.035,.23],[.045,.152,-.015],armor,-.20);
     }
   }else if(v===3){
-    // Heavy: inverted triangular helmet, three separate triangular optics.
-    // The tapered volume replaces the old rectangular shell and filter mask.
-    detail(rig.head,'triangular helmet',[.59,.43,.43],[0,.265,-.005],armor,triangle);
-    detail(rig.head,'triangular face rim',[.55,.39,.045],[0,.268,-.242],metal,triangle);
-    detail(rig.head,'black triangular visor',[.485,.335,.014],[0,.272,-.272],dark,triangle);
-    plate('crown team inset',[.45,.023,.20],[0,.483,-.015],team);
-    for(const [x,y] of [[-.116,.365],[.116,.365],[0,.248]]){
-      detail(rig.head,'triangular optic bezel',[.116,.087,.012],[x,y,-.286],metal,triangle);
-      detail(rig.head,'triangular illuminated eye',[.086,.060,.008],[x,y+.003,-.297],light,triangle);
+    // Heavy: squat, softened triangular shell and three round recessed eyes.
+    detail(rig.head,'soft triangular helmet',[.59,.385,.43],[0,.275,-.005],armor,triangle);
+    detail(rig.head,'rounded face rim',[.505,.333,.045],[0,.268,-.242],metal,triangle);
+    detail(rig.head,'black face recess',[.452,.286,.014],[0,.269,-.272],dark,triangle);
+    plate('crown team inset',[.135,.021,.19],[0,.465,-.015],team);
+    for(const [x,y] of [[0,.350],[-.103,.261],[.103,.261]]){
+      lens('round triad optic',x,y,-.291,.035);
     }
-    for(const side of [-1,1])fastener(side*.249,.437,-.269);
+    grille('lower breathing intake',0,.164,-.291,.084,.029,3);
+    for(const side of [-1,1]){
+      fastener(side*.211,.224,-.267);
+      const rail=plate('temple team inset',[.021,.084,.020],[side*.214,.32,-.217],team);
+      rail.rotation.z=side*.37;
+    }
     for(let i=0;i<3;i++)detail(rig.torso,'breastplate rib',[.30,.022,.022],[0,.51+i*.038,-.289],metal);
     for(const x of [-.23,.23])detail(rig.torso,'reinforcement lock',[.045,.08,.024],[x,.58,-.272],team);
     for(const side of [-1,1]){
