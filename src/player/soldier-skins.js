@@ -14,19 +14,23 @@ faceShape.lineTo(.5,.32);faceShape.lineTo(.38,-.22);faceShape.lineTo(0,-.5);
 faceShape.lineTo(-.38,-.22);faceShape.closePath();
 const shield=new THREE.ExtrudeGeometry(faceShape,{depth:1,steps:1,bevelEnabled:false});
 shield.translate(0,0,-.5);shield.userData.shared=true;
+// Near-black sRGB finish stays black under the game's bright ambient light.
+// Shared across both teams and all four new masks; never recolor the Recruit.
+const maskBlack=new THREE.MeshStandardMaterial({name:'skin matte black',color:0x030405,
+  roughness:1,metalness:0});
+maskBlack.userData.shared=true;
 
 /** Details are attached to existing joints; no bone, socket or scale changes. */
 export function attachSkinDetails(rig){
   const v=rig.variant,skin=SOLDIER_SKINS[v];
   rig.root.userData.skin=skin.name;
-  // Reuse the Recruit's actual materials, including its roughness/emission.
-  // No per-skin recolors: identity comes exclusively from attached geometry.
+  // Shared Recruit palette plus a common matte-black finish for new masks.
   const base=[];
   rig.root.traverse(o=>{if(o.userData.blenderSoldier)
     base.push(...(Array.isArray(o.material)?o.material:[o.material]));});
   const find=name=>base.find(m=>m.name.includes(name));
   const armor=find('slate ceramic'),metal=find('edge gunmetal');
-  const dark=find('rubber seals'),ivory=find('unit markings');
+  const dark=v===0?find('rubber seals'):maskBlack,ivory=find('unit markings');
   const team=find('team red armor'),light=find('helmet red LED');
   // Replace armor shells, not anatomy: the same head/shoulder joints and
   // collision volumes drive every variant. No more identical helmet + decals.
@@ -92,7 +96,7 @@ export function attachSkinDetails(rig){
       plate('temple team tab',[.025,.09,.018],[x,.27,-.225],team);
     }
     plate('chin guard',[.29,.052,.032],[0,.075,-.308],metal);
-    // Black face recesses use the Recruit's rubber, not a new palette.
+    // Broad matte-black recesses frame the face rather than gray rubber.
     for(const side of [-1,1]){
       plate('black cheek bed',[.138,.125,.012],[side*.115,.195,-.293],dark);
       plate('visor outer pocket',[.029,.069,.010],[side*.204,.30,-.292],dark);

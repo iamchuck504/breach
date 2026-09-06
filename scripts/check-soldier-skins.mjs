@@ -50,7 +50,9 @@ try{
         for(const m of Array.isArray(o.material)?o.material:[o.material]){
           opaque&&=!m.transparent&&m.opacity===1&&m.depthWrite;
           shared&&=!!m.userData.shared;
-          samePalette&&=recruitMaterials[r.team].has(m);
+          const matteBlack=m.name==='skin matte black'&&r.variant!==0&&
+            m.color.getHex()===0x030405&&m.roughness===1&&m.metalness===0;
+          samePalette&&=recruitMaterials[r.team].has(m)||matteBlack;
         }
       });
       old.root.visible=false;r.setWeapon('smg');
