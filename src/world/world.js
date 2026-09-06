@@ -10,6 +10,9 @@ import { getMap, isCustomLayout, cratesOf, specialOf, spawnsOf, footprint, palet
   from './map-data.js';
 import { cloneUrbanAsset } from './urban-assets.js';
 import { HELIPAD, collisionBoxesFor, helipadSegments } from './collision-layouts.js';
+import { CALLE_2, calle2FurnitureZ } from './calle-expansion.js';
+import { decorateCalleExpansion } from './calle-expansion-art.js';
+import { CalleNavigation } from './calle-navigation.js';
 
 const FIELD_X = 15, FIELD_Z = 18; // semiancho / semilargo
 const SOLDIER_HEIGHT = 1.63;
@@ -95,12 +98,13 @@ export class World {
     // cambia de dónde salen dims/tema/piezas. El "tema" reutiliza texturas,
     // piso y ambiente de un mapa existente.
     this.customMap = isCustomLayout(layout) ? getMap(layout) : null;
-    const theme = this.customMap?.theme ?? layout;
+    const theme = this.customMap?.theme ?? (layout === 'calle2' ? 'calle' : layout);
     this.theme = theme;
 
     const dims = {
       arena: [11, 13], fortaleza: [21, 26.6], azoteas: [31.5, 40],
       calle: [17, 42], metro: [16, 26], prision: [22, 30], pueblo: [26, 34],
+      calle2: [CALLE_2.fx, CALLE_2.fz],
       foundry: [FIELD_X, FIELD_Z],
     };
     if (this.customMap) [this.fx, this.fz] = [this.customMap.fx, this.customMap.fz];
@@ -134,6 +138,7 @@ export class World {
     this._addMapPeriphery(theme);
     this._flushBoxBatch();
     this._buildSpawns();
+    this.navigation = layout === 'calle2' ? new CalleNavigation(this) : null;
 
     // el frustum de sombras debe cubrir el mapa ACTUAL (con ±30 fijos, las
     // esquinas de Fortaleza quedaban sin sombra)
@@ -159,6 +164,7 @@ export class World {
     else if (layout === 'fortaleza') this._buildFortaleza();
     else if (layout === 'azoteas') this._buildAzoteas();
     else if (layout === 'calle') this._buildCalle();
+    else if (layout === 'calle2') this._buildCalle(true);
     else if (layout === 'metro') this._buildMetro();
     else if (layout === 'prision') this._buildPrision();
     else if (layout === 'pueblo') this._buildPueblo();
@@ -2452,7 +2458,7 @@ export class World {
   // con vehículos como cobertura, un BUS que rompe la línea de visión larga
   // a cada lado del centro, edificios que forman callejones laterales CQC y
   // barricadas en los chokes. Simetría rotacional; LOW/MID/HIGH estrictos.
-  _buildCalle() {
+  _buildCalle(expanded = false) {
     const { LOW, MID, HIGH } = BLOCK;
     const lowOpts = { color: 0x8f8c86, top: 0xb8b4ab };   // autos/cobertura
     const midOpts = { color: 0x7d7a74, top: 0xa9a59c };
@@ -2461,15 +2467,17 @@ export class World {
 
     const solidProp = { mirror: false, visual: false, cover: false, surface: 'metal' };
     const shelterCover = { mirror: false, visual: false, cover: true, surface: 'metal' };
-    buildSharedCollision(this, 'calle', {
+    buildSharedCollision(this, expanded ? 'calle2' : 'calle', {
       low: lowOpts, mid: midOpts, high: highOpts, wall: wallOpts,
       solid: solidProp, shelter: shelterCover,
     });
 
-    this._decorCalle();
+    this._decorCalle(expanded);
   }
 
-  _decorCalle() {
+  _decorCalle(expanded = false) {
+    // Width of the avenue does not change when lateral districts are added.
+    const streetFX = expanded ? CALLE_2.streetHalfWidth : this.fx;
     // Calle cerrada: asfalto con carriles, aceras y autos inutilizados. Las
     // siluetas se calzan sobre los bloques LOW/HIGH existentes: el auto, bus
     // y barricada se leen como cover natural sin alterar la navegación.
@@ -2604,7 +2612,7 @@ export class World {
       // El muro físico comienza a ±17.0 y la masa exterior termina en ±16.92.
       // La piel se proyecta 5 cm hacia la calle para que nunca comparta plano
       // con el ladrillo del volumen (la causa del parpadeo anterior).
-      const faceX = side * (this.fx - 0.13);
+      const faceX = side * (expanded ? 16.10 : streetFX - 0.13);
       const rot = side > 0 ? -Math.PI / 2 : Math.PI / 2;
       const toward = -side;
       const brickId = variant % 3 === 1 ? 'urbanBrickDark' : 'urbanBrick';
@@ -2641,8 +2649,8 @@ export class World {
       // Volumen exterior: visible por encima de la fachada, sin afectar juego.
       // El techo usa material liso: evita el patrón de ladrillo horizontal
       // de alta frecuencia que producía moiré al observar el mapa desde arriba.
-      const massX = side * (this.fx + 2.22);
-      const mass = new THREE.Mesh(new THREE.BoxGeometry(4.6, height, span),
+      const massX = side * (expanded ? 18.85 : streetFX + 2.22);
+      const mass = new THREE.Mesh(new THREE.BoxGeometry(expanded ? 5.4 : 4.6, height, span),
         [facadeMat, facadeMat, roofMat, roofMat, facadeMat, facadeMat]);
       mass.position.set(massX, height / 2, z); mass.castShadow = true; this.mapGroup.add(mass);
       const face = new THREE.Mesh(new THREE.PlaneGeometry(span - 0.16, height - 0.18), facadeMat);
@@ -2812,6 +2820,10 @@ export class World {
       [36, 11.7, 9.35,
         ['MINI MARKET', 0x95796c, 'market'], ['CORNER CAFE', 0x876f66, 'cafe'], 4],
     ];
+    if (expanded) for (const b of blocks) {
+      if (Math.abs(b[0]) === 12 || Math.abs(b[0]) === 24) b[1] = 7.6;
+      if (b[0] === 0) b[1] = 15.7;
+    }
     for (const [z, span, h, left, right, variant] of blocks) {
       addStreetBuilding(-1, z, span, h, left[0], left[1], variant, left[2]);
       addStreetBuilding(1, -z, span, h, right[0], right[1], variant, right[2]);
@@ -2835,14 +2847,15 @@ export class World {
         const endA = blocks[i][0] + blocks[i][1] / 2;
         const startB = blocks[i + 1][0] - blocks[i + 1][1] / 2;
         const gapC = (endA + startB) / 2;
+        if (expanded && Math.abs(Math.abs(gapC) - CALLE_2.portalZ) < 0.1) continue;
         const gapW = Math.max(0.2, startB - endA) + 0.26;
         const hSeam = Math.min(blocks[i][2], blocks[i + 1][2]);
         for (const side of [-1, 1]) {
           const seam = new THREE.Mesh(
-            new THREE.BoxGeometry(4.65, hSeam, gapW),
+            new THREE.BoxGeometry(expanded ? 5.4 : 4.65, hSeam, gapW),
             [seamBrickMat, seamBrickMat, seamRoofMat, seamRoofMat, seamBrickMat, seamBrickMat],
           );
-          seam.position.set(side * (this.fx + 2.195), hSeam / 2, side > 0 ? -gapC : gapC);
+          seam.position.set(side * (expanded ? 18.85 : streetFX + 2.195), hSeam / 2, side > 0 ? -gapC : gapC);
           seam.castShadow = true; seam.receiveShadow = true;
           this.mapGroup.add(seam);
         }
@@ -2859,13 +2872,13 @@ export class World {
     const continuationShades = [0.72, 0.56, 0.40, 0.24];
     const roadBeyondMat = new THREE.MeshStandardMaterial({
       color: 0x8b8f91,
-      map: this._tex('asphalt', this.fx * 2 / 3.6, continuationLength / 3.6),
+      map: this._tex('asphalt', streetFX * 2 / 3.6, continuationLength / 3.6),
       roughness: 0.50, metalness: 0.06,
     });
     for (const dir of [-1, 1]) {
       const beyondZ = dir * (this.fz + continuationLength * 0.5);
       const roadBeyond = new THREE.Mesh(
-        new THREE.PlaneGeometry(this.fx * 2, continuationLength), roadBeyondMat,
+        new THREE.PlaneGeometry(streetFX * 2, continuationLength), roadBeyondMat,
       );
       roadBeyond.rotation.x = -Math.PI / 2;
       roadBeyond.position.set(0, -0.002, beyondZ);
@@ -3019,6 +3032,7 @@ export class World {
 
       // cada elemento se coloca en (x,z) del lado este y espejado a (-x,-z)
       const eachSide = (x, z, build) => {
+        if (expanded) z = calle2FurnitureZ(x,z);
         for (const s of [1, -1]) {
           const g = new THREE.Group();
           g.position.set(s * x, 0, s * z);
@@ -3464,7 +3478,7 @@ export class World {
       ['cornerStore', 22.8, -0.5, 0.86, -Math.PI / 2],
       ['shopfrontRow', -22.2, 12.8, 0.88, Math.PI / 2],
       ['shopfrontRow', 22.2, -12.8, 0.88, -Math.PI / 2],
-    ]) this._addUrbanAsset(id, x, z, { scale, rotation, castShadow: false });
+    ]) this._addUrbanAsset(id, x + (expanded ? Math.sign(x) * 15 : 0), z, { scale, rotation, castShadow: false });
 
     // Skyline GLB: cuatro siluetas distintas sustituyen los prismas genéricos.
     // Siguen lejos del espacio jugable, sin collider ni sombras dinámicas.
@@ -3475,11 +3489,13 @@ export class World {
       ['waterfrontTower', -25, 12, 6, 12, 0.68, 0.34],
       ['glassSkyscraper', 24, 20, 7, 16, 0.62, Math.PI + 0.12],
     ]) {
-      if (this._addUrbanAsset(id, x, z, { scale, rotation, castShadow: false, receiveShadow: false })) continue;
+      const skylineX = x + (expanded ? Math.sign(x) * 15 : 0);
+      if (this._addUrbanAsset(id, skylineX, z, { scale, rotation, castShadow: false, receiveShadow: false })) continue;
       const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, 6), winMat);
-      b.position.set(x, h / 2 - 0.5, z);
+      b.position.set(skylineX, h / 2 - 0.5, z);
       this.mapGroup.add(b);
     }
+    if (expanded) decorateCalleExpansion(this, streetBuildings);
   }
 
   // Mapa "Estación de Metro" (32×52): subterráneo de luz artificial. Dos

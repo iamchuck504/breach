@@ -76,7 +76,7 @@ try {
   browser = await chromium.launch({ executablePath: chrome, headless: true });
   const page = await browser.newPage({ viewport: { width: 960, height: 540 } });
   await page.goto(`http://127.0.0.1:${port}/?nolock=1`, { waitUntil: 'networkidle' });
-  for (const map of ['fortaleza', 'azoteas', 'calle']) {
+  for (const map of ['fortaleza', 'azoteas', 'calle', 'calle2']) {
     const actual = await page.evaluate((layout) => {
       const world = window.BREACH_WORLD;
       world.setLayout(layout, true);

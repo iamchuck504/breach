@@ -296,7 +296,7 @@ export function mapFromSnapshot(layout, snap, name = null) {
     v: MAP_FORMAT_VERSION,
     id: 'map-' + Math.random().toString(36).slice(2, 8),
     name: name || (layout.toUpperCase() + ' COPIA'),
-    theme: layout,
+    theme: layout === 'calle2' ? 'calle' : layout,
     base: layout,     // decoración: el builder original corre intacto
     decorCaptured: true,
     decorCaptureVersion: 9,

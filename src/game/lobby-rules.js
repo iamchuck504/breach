@@ -3,7 +3,7 @@ export const TEAM_CAPACITY = 4;
 // Mapas aprobados para la build pública. Los layouts restantes se conservan
 // en el proyecto para seguir trabajándolos, pero no aparecen en lobbies ni en
 // la rotación automática hasta que estén listos.
-export const MAPS = ['fortaleza', 'azoteas', 'calle'];
+export const MAPS = ['fortaleza', 'azoteas', 'calle', 'calle2'];
 // Datos de gameplay que deben coincidir entre cliente y servidor. Mantenerlos
 // aquí evita que el mapa dibuje pickups en un sitio mientras la autoridad
 // online los valida en otro.
@@ -19,6 +19,11 @@ export const MAP_RUNTIME = Object.freeze({
     special: Object.freeze({ x: 0, z: 0, y: 1.1 }),
   }),
   calle: Object.freeze({
+    spawnZ: 38.4,
+    crates: Object.freeze([{ x: -14, z: 0 }, { x: 14, z: 0 }]),
+    special: Object.freeze({ x: 0, z: 0, y: 0 }),
+  }),
+  calle2: Object.freeze({
     spawnZ: 38.4,
     crates: Object.freeze([{ x: -14, z: 0 }, { x: 14, z: 0 }]),
     special: Object.freeze({ x: 0, z: 0, y: 0 }),

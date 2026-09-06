@@ -1,6 +1,7 @@
 // Geometría jugable compartida entre World (cliente) y la autoridad online.
 // Estas cajas son la fuente única para movimiento, cover y línea de tiro.
 import { BLOCK } from './block-heights.js';
+import { expansionBoxes, calle2FurnitureZ } from './calle-expansion.js';
 
 const { LOW, MID, HIGH } = BLOCK;
 const make = (x, z, w, d, h, style, options = {}) =>
@@ -296,7 +297,13 @@ function calleSpecs() {
 }
 
 const calle = calleSpecs();
-export const COLLISION_LAYOUTS = Object.freeze({ fortaleza, azoteas, calle });
+// Reuse every avenue collider, replacing ONLY its two unbroken side walls.
+const calle2 = freeze([
+  ...calle.filter(b => !(Math.abs(b.x) === 16.55 && b.z === 0 && b.d === 86))
+    .map(b=>({...b,z:calle2FurnitureZ(b.x,b.z)})),
+  ...expansionBoxes(),
+]);
+export const COLLISION_LAYOUTS = Object.freeze({ fortaleza, azoteas, calle, calle2 });
 
 export const HELIPAD = Object.freeze({
   height: LOW,

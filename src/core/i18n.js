@@ -637,6 +637,7 @@ Object.assign(it, { 'menu.zoomSensitivity': 'SENS. ZOOM' });
 Object.assign(zh, { 'menu.zoomSensitivity': '缩放灵敏度' });
 
 const DICTIONARIES = Object.freeze({ en, es, pt, fr, ja, it, zh });
+for (const dict of Object.values(DICTIONARIES)) dict['map.calle2'] = `${dict['map.calle']} #2`;
 const valid = new Set(LANGUAGES.map((l) => l.code));
 const storage = typeof globalThis.localStorage !== 'undefined' ? globalThis.localStorage : null;
 const savedLanguage = storage?.getItem('breach.language');

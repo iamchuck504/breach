@@ -294,6 +294,19 @@ export class Bot {
   // Steering: el look-ahead identifica el collider alto antes del contacto y
   // crea un waypoint persistente detrás de una de sus esquinas.
   _steer(dx, dz, match, goal) {
+    if (this.world.navigation && goal) {
+      const next = this.world.navigation.next(this.pos, goal, this);
+      if (next && this.world.navigation.clear(this.pos,next)) {
+        const d = Math.max(.001, Math.hypot(next.x-this.pos.x,next.z-this.pos.z));
+        dx=(next.x-this.pos.x)/d;dz=(next.z-this.pos.z)/d;goal=next;
+        // The graph already selects a collision-clear corner; stale recovery
+        // must not steer back into the facade that the route is bypassing.
+        this.recovery=null;
+        // Do not look past the waypoint into a wall when the route turns at
+        // this corner. The full segment was already swept with body clearance.
+        return {x:dx,z:dz,blocked:false,hit:null};
+      }
+    }
     _v1.set(this.pos.x, 0.7, this.pos.z);
     if (this.recovery) {
       const currentP = this.pos.x * this.recovery.perpX + this.pos.z * this.recovery.perpZ;
@@ -1424,6 +1437,11 @@ export class BotMatch {
       if (score > bestScore) { bestScore = score; best = { x, z, role }; }
     }
 
+    if (!best && this.world.navigation && !this.world.navigation.walkable({x:targetX,z:targetZ})) {
+      const p=this.world.navigation.nodes.reduce((a,b)=>
+        Math.hypot(b.x-targetX,b.z-targetZ)<Math.hypot(a.x-targetX,a.z-targetZ)?b:a);
+      return {...p,role};
+    }
     return best || { x: targetX, z: targetZ, role };
   }
 

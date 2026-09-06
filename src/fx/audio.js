@@ -236,6 +236,7 @@ export class Audio {
   // la intención antes de que WebAudio se desbloquee y se cambia con fade para
   // que menú/transiciones de mapa nunca produzcan un corte audible.
   setAmbience(name = null) {
+    if (name === 'calle2') name = 'calle';
     const next = AMBIENCE_PROFILES[name] ? name : null;
     if (this._ambienceName === next && (!!this._ambienceNodes === !!next)) return;
     this._ambienceName = next;

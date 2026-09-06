@@ -51,6 +51,7 @@
     "check:smoke-authority": "node scripts/check-smoke-authority.mjs",
     "check:online-flow": "node scripts/check-online-flow-authority.mjs",
     "check:calle-collision": "node scripts/check-calle-collision.mjs",
+    "check:calle2": "node scripts/check-calle2.mjs",
     "check:cover-lean": "node scripts/check-cover-lean-collision.mjs",
     "check:test-portability": "node scripts/check-test-portability.mjs",
     "check:editor": "node scripts/check-editor.mjs",
