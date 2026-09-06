@@ -61,6 +61,8 @@ try{
       return Math.min(z+half,seam.position.z+s)-Math.max(z-half,seam.position.z-s)<1e-6;
     }));
     const district=world.mapGroup.getObjectByName('calle2-service-districts');
+    const patrols=world.mapGroup.children.filter(o=>o.userData.police);
+    checks.policePair=patrols.length===2&&patrols.every(p=>Math.abs(p.position.x)===8.8&&Math.abs(p.position.z)===26);
     const baseFloors=district.children.filter(o=>['service-alley-floor','workshop-floor'].includes(o.name));
     const markings=district.children.filter(o=>['loading-pad','workshop-bay-line','alley-loading-line'].includes(o.name));
     checks.floorLayers=markings.every(m=>baseFloors.every(f=>m.position.y>f.position.y+.005));
@@ -127,6 +129,7 @@ try{
     images.aerial=renderer.domElement.toDataURL();scene.fog=fog;
     for(const [name,p,target] of [
       ['seam',[9,2.3,24],[16.15,5,29]],
+      ['police',[13,2.5,-30],[8.8,.85,-26]],
       ['seam-oblique',[12,2.3,34],[16.15,5,29]],
       ['alley',[-25,2.3,-18],[-25,1.6,14]],
       ['workshop',[25,2.3,-18],[25,1.6,14]],

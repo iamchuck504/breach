@@ -1854,6 +1854,31 @@ export class World {
       crack.position.set(-0.34, 1.27, -S.length * 0.14); crack.rotation.x = 0.68; group.add(crack);
     }
     if (variant === 2) add(0.48, 0.012, 0.72, 0.40, S.height + 0.007, 0.30, trimMat);
+    if (variant === 3) {
+      group.name='street-police-sedan';
+      group.userData.police=true;
+      // Livery belongs to the vehicle, including editor clones. No extra cover.
+      const canvas=document.createElement('canvas');canvas.width=512;canvas.height=128;
+      const ctx=canvas.getContext('2d');
+      ctx.fillStyle='#d9dedb';ctx.fillRect(0,0,512,128);
+      ctx.fillStyle='#17232c';ctx.fillRect(0,108,512,20);
+      ctx.fillStyle='#b99755';ctx.beginPath();ctx.moveTo(24,22);ctx.lineTo(83,22);
+      ctx.lineTo(83,65);ctx.lineTo(54,93);ctx.lineTo(24,65);ctx.closePath();ctx.fill();
+      ctx.fillStyle='#17232c';ctx.font='bold 67px sans-serif';ctx.fillText('POLICE',103,82);
+      const livery=new THREE.CanvasTexture(canvas);livery.colorSpace=THREE.SRGBColorSpace;livery.anisotropy=4;
+      const paint=new THREE.MeshStandardMaterial({map:livery,roughness:.55,metalness:.25});
+      for(const side of [-1,1]){
+        const panel=new THREE.Mesh(new THREE.PlaneGeometry(1.85,.40),paint);
+        panel.position.set(side*(S.width/2+.052),.69,.05);
+        panel.rotation.y=side*Math.PI/2;group.add(panel);
+      }
+      // Small static lenses, not strobes or floating light halos.
+      add(1.30,.045,.24,0,S.height+.0225,.12,trimMat);
+      const red=new THREE.MeshStandardMaterial({color:0xb92929,emissive:0x7a1111,emissiveIntensity:.7,roughness:.35});
+      const blue=new THREE.MeshStandardMaterial({color:0x276aaf,emissive:0x123d82,emissiveIntensity:.7,roughness:.35});
+      add(.53,.095,.22,-.34,S.height+.0925,.12,red);
+      add(.53,.095,.22,.34,S.height+.0925,.12,blue);
+    }
     this.mapGroup.add(group);
     return group;
   }
@@ -3126,6 +3151,7 @@ export class World {
       [-3, -5.5, Math.PI / 2, 0x52696c, 2], [3, 5.5, -Math.PI / 2, 0x52696c, 2],
     ]) {
       if(expanded)[x,z]=calle2VehiclePosition(x,z);
+      if(expanded&&Math.abs(x)===8.8&&Math.abs(z)===26){variant=3;color=0x18232c;}
       // El SUV se usa como una variante compacta, no se estira: escala
       // uniforme 1.35 deja ancho/longitud cerca del collider LOW existente.
       const assetVehicle = variant === 0
