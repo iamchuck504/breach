@@ -1291,6 +1291,8 @@ export class Rig {
       }
       case 'run': case 'idle': default: { // default: estados desconocidos (red) caen a idle
         const m = p.state === 'run' ? 1 : 0;
+        const forward = p.moveForward ?? 1;
+        const side = p.moveSide ?? 0;
         const tw = p.twist ?? 0; // torso/cabeza giran hacia la cámara
         rootRotX = (p.groundPitch ?? 0) * 0.72;
         // La postura relajada nace de brazos/arma al frente; el torso conserva
@@ -1298,8 +1300,9 @@ export class Rig {
         R(this.torso, -0.1 * m + Math.sin(ph * 0.4) * 0.015,
           tw * 0.55, swing * 0.04 * m);
         R(this.head, 0.05 * m, tw * 0.35, 0);
-        R(this.legL.hip, swing * 0.75 * m, 0, 0); R(this.legL.knee, -(Math.max(0, -swing) * 1.1 + 0.1) * m, 0, 0);
-        R(this.legR.hip, swing2 * 0.75 * m, 0, 0); R(this.legR.knee, -(Math.max(0, -swing2) * 1.1 + 0.1) * m, 0, 0);
+        // Reverse the stride, not the knee joint: knees still flex naturally.
+        R(this.legL.hip, swing * 0.75 * m * forward, 0, swing * 0.35 * m * side); R(this.legL.knee, -(Math.max(0, -swing) * 1.1 + 0.1) * m, 0, 0);
+        R(this.legR.hip, swing2 * 0.75 * m * forward, 0, swing2 * 0.35 * m * side); R(this.legR.knee, -(Math.max(0, -swing2) * 1.1 + 0.1) * m, 0, 0);
         leftOnGun = true;
         // El arma permanece al frente, sostenida por ambas manos y apenas por
         // debajo de ADS. Así la silueta comunica la dirección del hip fire sin

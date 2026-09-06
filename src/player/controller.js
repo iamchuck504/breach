@@ -148,6 +148,8 @@ export class Controller {
     return {
       state: st,
       speed: Math.min(1, this.speed / TUNING.move.roadieSpeed),
+      moveForward: this.speed > 0.05 ? (this.vel.x * -Math.sin(this.yaw) + this.vel.z * -Math.cos(this.yaw)) / this.speed : 1,
+      moveSide: this.speed > 0.05 ? (this.vel.x * Math.cos(this.yaw) - this.vel.z * Math.sin(this.yaw)) / this.speed : 0,
       aim: this.aim,
       aimPitch: this.cam.pitch,
       aimYawErr: yawErr,
@@ -366,12 +368,14 @@ export class Controller {
     switch (this.state) {
       case 'idle': case 'run': case 'roadie': {
         const roadie = this.state === 'roadie';
+        const forward = this.cam.flatForward();
+        const sprintForward = mw.x * forward.x + mw.z * forward.z > 0.1;
         // Estados lógicos y visuales deben coincidir: momentum, pasos, red y
         // animación consumen este estado. Antes se podía correr a 4.8 m/s
         // permaneciendo lógicamente en idle.
-        if (roadie && (!input.sprintHeld || !hasInput || input.aimHeld || firing)) {
+        if (roadie && (!input.sprintHeld || !hasInput || !sprintForward || input.aimHeld || firing)) {
           this._setState(hasInput || this.speed > 0.4 ? 'run' : 'idle');
-        } else if (!roadie && input.sprintHeld && hasInput && !this.aim &&
+        } else if (!roadie && input.sprintHeld && hasInput && sprintForward && !this.aim &&
                    this.stateT > 0.05) {
           this._setState('roadie');
         } else if (this.state === 'idle' && hasInput) {
@@ -395,7 +399,8 @@ export class Controller {
           // angular evita que un delta grande se convierta en un snap de 180°.
           this._turnToCamera(dt);
         } else if (hasInput) {
-          this.yaw = lerpAngle(this.yaw, yawFromDir(dx, dz), 1 - Math.exp(-M.turnLerp * dt));
+          // Locomotion never turns the player's back to the view.
+          this._turnToCamera(dt);
         } else {
           // En reposo el cuerpo y la mira siguen a la cámara.
           this.yaw = approachAngle(this.yaw, this.cam.yaw,

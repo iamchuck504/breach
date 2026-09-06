@@ -62,6 +62,7 @@ export class RemotePlayer {
   }
 
   update(dt, scene) {
+    const oldX = this.x, oldZ = this.z;
     const now = performance.now() / 1000;
     const t = now - TUNING.net.interpDelay;
     const b = this.buf;
@@ -119,9 +120,17 @@ export class RemotePlayer {
         this.z + cy * cp * TUNING.cam.aimDist - sy * TUNING.cam.aimShoulder * side,
       );
     }
+    const dx = this.x - oldX, dz = this.z - oldZ;
+    const travel = Math.hypot(dx, dz);
+    if (travel > 0.0001) {
+      this.moveForward = (-dx * Math.sin(this.yaw) - dz * Math.cos(this.yaw)) / travel;
+      this.moveSide = (dx * Math.cos(this.yaw) - dz * Math.sin(this.yaw)) / travel;
+    }
     this.rig.update(dt, {
       state: this.alive ? this.st : 'dead',
       speed: this.sp,
+      moveForward: this.moveForward ?? 1,
+      moveSide: this.moveSide ?? 0,
       aim: this.aim,
       aimPitch: this.pitch,
       aimYawErr: this.aimErr,
