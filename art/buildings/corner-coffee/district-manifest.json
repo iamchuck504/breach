@@ -4,14 +4,14 @@
     "span": 11.7,
     "height": 9.25,
     "style": "pharmacy",
-    "meshes": 21
+    "meshes": 22
   },
   "DAILY BREAD": {
     "file": "district-daily-bread.glb",
     "span": 11.7,
     "height": 9.25,
     "style": "bakery",
-    "meshes": 20
+    "meshes": 21
   },
   "CEDAR PHARMACY": {
     "file": "district-cedar-pharmacy.glb",
@@ -46,14 +46,14 @@
     "span": 15.7,
     "height": 7.3,
     "style": "hardware",
-    "meshes": 21
+    "meshes": 22
   },
   "UNION BARBER": {
     "file": "district-union-barber.glb",
     "span": 15.7,
     "height": 7.3,
     "style": "barber",
-    "meshes": 21
+    "meshes": 22
   },
   "SPIN CYCLE": {
     "file": "district-spin-cycle.glb",
@@ -81,13 +81,13 @@
     "span": 11.7,
     "height": 9.35,
     "style": "deli",
-    "meshes": 21
+    "meshes": 22
   },
   "NIGHT OWL CAFE": {
     "file": "district-night-owl-cafe.glb",
     "span": 11.7,
     "height": 9.35,
     "style": "cafe",
-    "meshes": 19
+    "meshes": 20
   }
 }

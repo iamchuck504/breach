@@ -182,6 +182,18 @@ for name,style,span,height,color,tag in SHOPS:
                 o=source.copy();o.data=source.data.copy();scene.collection.objects.link(o)
                 o.location.x+=center;asset.append(o)
         for o in windows:asset.remove(o);bpy.data.objects.remove(o,do_unlink=True)
+        # Two occupied rooms, stable across exports; no extra lights or geometry.
+        lit=material('Occupied room warm glazing',(.58,.33,.12))
+        shader=lit.node_tree.nodes['Principled BSDF']
+        shader.inputs['Emission Color'].default_value=(.78,.44,.17,1)
+        shader.inputs['Emission Strength'].default_value=.8
+        panes=sorted([o for o in asset if o.name.startswith('Window glazing')],
+                     key=lambda o:(o.location.z,o.location.x))
+        seed=sum(ord(c) for c in name)
+        occupied={seed%count, (seed+2)%count if short else count+(seed+2)%count}
+        for i,o in enumerate(panes):
+            o.data.materials.clear();o.data.materials.append(lit if i in occupied else glass)
+        assert len(occupied)==2
     # West-side shops keep their existing world-space door bay. Reposition parts,
     # never mirror geometry/lettering (which would reverse the signs).
     if name in {'NORTHLINE RX','CEDAR PHARMACY','MOTOR WORKS','IRON & KEY','SPIN CYCLE','NEIGHBOR MARKET','SOUTH END DELI'}:
