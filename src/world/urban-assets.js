@@ -1,8 +1,10 @@
 import { Box3 } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+import { DISTRICT_FACADES } from './district-facades.js';
 
 const URBAN_ASSETS = Object.freeze({
+  ...Object.fromEntries(Object.values(DISTRICT_FACADES).filter(id=>id!=='cornerCoffee').map(id=>[id,`${id}.glb`])),
   cornerCoffee: 'corner-coffee.glb',
   apartmentBlock: 'apartment-block-01.glb',
   busShelter: 'bus-shelter-01.glb',

@@ -1,0 +1,93 @@
+{
+  "NORTHLINE RX": {
+    "file": "district-northline-rx.glb",
+    "span": 11.7,
+    "height": 9.25,
+    "style": "pharmacy",
+    "meshes": 22
+  },
+  "DAILY BREAD": {
+    "file": "district-daily-bread.glb",
+    "span": 11.7,
+    "height": 9.25,
+    "style": "bakery",
+    "meshes": 21
+  },
+  "CEDAR PHARMACY": {
+    "file": "district-cedar-pharmacy.glb",
+    "span": 7.6,
+    "height": 9.25,
+    "style": "pharmacy",
+    "meshes": 22
+  },
+  "OVEN No. 8": {
+    "file": "district-oven-no-8.glb",
+    "span": 7.6,
+    "height": 9.25,
+    "style": "bakery",
+    "meshes": 21
+  },
+  "MOTOR WORKS": {
+    "file": "district-motor-works.glb",
+    "span": 7.6,
+    "height": 7.3,
+    "style": "garage",
+    "meshes": 21
+  },
+  "SIGNAL ELECTRONICS": {
+    "file": "district-signal-electronics.glb",
+    "span": 7.6,
+    "height": 7.3,
+    "style": "electronics",
+    "meshes": 22
+  },
+  "IRON & KEY": {
+    "file": "district-iron-key.glb",
+    "span": 15.7,
+    "height": 7.3,
+    "style": "hardware",
+    "meshes": 22
+  },
+  "UNION BARBER": {
+    "file": "district-union-barber.glb",
+    "span": 15.7,
+    "height": 7.3,
+    "style": "barber",
+    "meshes": 22
+  },
+  "SPIN CYCLE": {
+    "file": "district-spin-cycle.glb",
+    "span": 7.6,
+    "height": 7.3,
+    "style": "laundry",
+    "meshes": 21
+  },
+  "PAPER & INK": {
+    "file": "district-paper-ink.glb",
+    "span": 7.6,
+    "height": 7.3,
+    "style": "stationery",
+    "meshes": 22
+  },
+  "NEIGHBOR MARKET": {
+    "file": "district-neighbor-market.glb",
+    "span": 7.6,
+    "height": 9.35,
+    "style": "market",
+    "meshes": 22
+  },
+  "SOUTH END DELI": {
+    "file": "district-south-end-deli.glb",
+    "span": 11.7,
+    "height": 9.35,
+    "style": "deli",
+    "meshes": 22
+  },
+  "NIGHT OWL CAFE": {
+    "file": "district-night-owl-cafe.glb",
+    "span": 11.7,
+    "height": 9.35,
+    "style": "cafe",
+    "meshes": 20
+  }
+}

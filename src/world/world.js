@@ -14,6 +14,7 @@ import { CALLE_2, calle2FurnitureZ, calle2VehiclePosition, calle2AccessOffset } 
 import { decorateCalleExpansion } from './calle-expansion-art.js';
 import { CalleNavigation } from './calle-navigation.js';
 import { calleShopDisplay } from './calle-shop-display.js';
+import { DISTRICT_FACADES } from './district-facades.js';
 
 const FIELD_X = 15, FIELD_Z = 18; // semiancho / semilargo
 const SOLDIER_HEIGHT = 1.63;
@@ -2655,23 +2656,24 @@ export class World {
     };
     const streetBuildings = [];
     const addStreetBuilding = (side, z, span, height, name, color, variant = 0, signStyle = 'market') => {
-      // One approved sample, built synchronously from the preloaded asset.
+      // Approved Blender family, built synchronously from preloaded assets.
       // Do not build/discard a procedural facade (that would leak resources).
-      if (expanded && side === 1 && z === -24 && signStyle === 'cafe') {
-        const cafe = cloneUrbanAsset('cornerCoffee');
+      if (expanded && DISTRICT_FACADES[name]) {
+        const cafe = cloneUrbanAsset(DISTRICT_FACADES[name]);
         if (cafe) {
           const building = new THREE.Group();
-          building.position.set(18.85, 0, z);
-          cafe.name = 'corner-coffee-blender';
+          building.position.set(side * 18.85, 0, z);
+          cafe.name = 'district-blender-facade';
           // glTF faces +Z; its depth runs -Z. Keep the original wall plane.
-          cafe.rotation.y = -Math.PI / 2;
-          cafe.position.x = -2.7;
+          cafe.rotation.y = -side * Math.PI / 2;
+          cafe.position.x = -side * 2.7;
           cafe.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
           building.add(cafe); this.mapGroup.add(building);
           building.userData.streetBuilding = { side, z, span, height, name, color, variant, signStyle };
-          building.userData.blenderCafe = true;
+          building.userData.blenderCafe = name === 'CORNER COFFEE';
+          building.userData.blenderFacade = true;
           this._registerBaseDecor(building, 'building', {
-            x: 18.85, z, rotation: 0, w: 6.3, d: span + 0.5, h: height, name, color, variant,
+            x: side * 18.85, z, rotation: 0, w: 6.3, d: span + 0.5, h: height, name, color, variant,
           });
           streetBuildings.push(building);
           return building;

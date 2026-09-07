@@ -48,6 +48,17 @@ try{
       botRoutes:true,originalUnchanged:false,interiorSolid:true,wallCover:true,floorLayers:true,seamsClear:true};
     const buildings=world.mapGroup.children.filter(o=>o.userData.streetBuilding);
     const cafes=buildings.filter(b=>b.userData.blenderCafe);
+    checks.allDistrictFacades=buildings.length===14&&buildings.every(b=>b.userData.blenderFacade);
+    checks.facadeDimensions=buildings.every(b=>{
+      const meta=b.userData.streetBuilding;
+      const box=new T.Box3().setFromObject(b.getObjectByName('Existing_envelope'));
+      return Math.abs(box.max.z-box.min.z-meta.span)<.002&&Math.abs(box.max.x-box.min.x-5.4)<.002;
+    });
+    checks.doorAlignment=buildings.filter(b=>!b.userData.blenderCafe).every(b=>{
+      const door=b.getObjectByName('Door_leaf');if(!door)return false;
+      const box=new T.Box3().setFromObject(door),pos=box.getCenter(new T.Vector3());
+      return Math.abs(pos.z-(b.position.z+b.userData.streetBuilding.span*.31))<.002&&box.max.y-box.min.y>2.4;
+    });
     checks.blenderCafe=cafes.length===1&&cafes[0].position.z===-24;
     checks.cafeDrawBudget=cafes.every(b=>{
       let meshes=0; b.traverse(o=>{if(o.isMesh) meshes++;}); return meshes>0&&meshes<=24;
@@ -56,16 +67,17 @@ try{
     checks.signClearance=true;
     scene.updateMatrixWorld(true);
     for(const b of buildings){
-      const sign=b.getObjectByName(b.userData.blenderCafe?'Sign_enamel_inset':'street-shop-sign');
+      const sign=b.getObjectByName(b.userData.blenderFacade?'Sign_enamel_inset':'street-shop-sign');
       if(!sign){checks.signClearance=false;continue;}
       const o=sign.localToWorld(new T.Vector3(0,0,.8));
       const target=sign.localToWorld(new T.Vector3(0,0,0));
       const hit=new T.Raycaster(o,target.sub(o).normalize(),0,.8).intersectObject(b,true)[0];
       let belongs=false;for(let p=hit?.object;p;p=p.parent)if(p===sign)belongs=true;
+      if(b.userData.blenderFacade&&['Shop_title','Shop_subtitle'].includes(hit?.object.name))belongs=true;
       checks.signClearance&&=belongs;
     }
     checks.roofLayers=buildings.every(b=>{
-      const mass=b.getObjectByName(b.userData.blenderCafe?'Existing_envelope':'street-building-mass'),roof=b.getObjectByName(b.userData.blenderCafe?'Roof_cap':'street-building-roof');
+      const mass=b.getObjectByName(b.userData.blenderFacade?'Existing_envelope':'street-building-mass'),roof=b.getObjectByName(b.userData.blenderFacade?'Roof_cap':'street-building-roof');
       if(!mass||!roof)return false;
       const bodyBox=new T.Box3().setFromObject(mass),roofBox=new T.Box3().setFromObject(roof);
       return Math.abs(bodyBox.max.y-roofBox.min.y)<1e-5&&roofBox.max.y-bodyBox.max.y>.17;
@@ -145,6 +157,11 @@ try{
     images['top-down']=renderer.domElement.toDataURL();
     renderer.setSize(1600,1100);
     const cam=new T.PerspectiveCamera(55,1600/1100,.1,250);
+    for(const b of buildings){
+      const {side,z,name}=b.userData.streetBuilding;
+      cam.position.set(side*3,5,z+6);cam.lookAt(side*16.1,4,z);
+      renderer.render(scene,cam);images['shop-'+name.replace(/[^a-z0-9]/gi,'-')]=renderer.domElement.toDataURL();
+    }
     cam.position.set(0,88,70);cam.lookAt(0,0,0);renderer.render(scene,cam);
     images.aerial=renderer.domElement.toDataURL();scene.fog=fog;
     for(const [name,p,target] of [
