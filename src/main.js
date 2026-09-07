@@ -1,6 +1,7 @@
 // BREACH — vertical slice. Orquesta mundo, jugador, combate, red y UI.
 import * as THREE from 'three';
 import GUI from 'lil-gui';
+import {initMenuPresentation,updateMapPreview} from './ui/presentation.js';
 import { TUNING, TUNING_DEFAULTS } from './config/tuning.js';
 import { BINDS, KB_LABELS, PAD_LABELS, keyLabel, padBtnName, loadBinds, saveBinds, resetBinds } from './core/bindings.js';
 import { LANGUAGES, t, getLanguage, setLanguage, applyTranslations, onLanguageChange } from './core/i18n.js';
@@ -74,6 +75,7 @@ const specials = new SpecialPickup(scene);
 const rockets = new Rockets(scene, world, audio);
 audio.setAmbience('azoteas');
 const hud = new HUD();
+initMenuPresentation();
 const input = new Input(canvas);
 const shoulderCam = new ShoulderCamera(camera, world);
 const MENU_CAM_POS = new THREE.Vector3(18, 7.2, -25.5);
@@ -785,6 +787,7 @@ const btnMap = document.getElementById('btn-map');
   G.mapChoice = MAPS.includes(saved) ? saved : 'fortaleza';
 }
 function updateMapBtn() {
+  updateMapPreview(G.mapChoice);
   document.getElementById('map-label').textContent = t('menu.mapValue', { map: mapLabel(G.mapChoice) });
 }
 btnMap.addEventListener('click', () => {

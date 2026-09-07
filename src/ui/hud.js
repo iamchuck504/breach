@@ -1,6 +1,7 @@
 import { t, getLanguage } from '../core/i18n.js';
 import { TUNING } from '../config/tuning.js';
 import { weaponIconMarkup } from './weapon-icons.js';
+import {BINDS,keyLabel} from '../core/bindings.js';
 
 // HUD sobre DOM. Toda retícula permanece en el centro óptico: ADS usa el
 // anillo y hip/blind usa #barrel-dot; la balística converge desde el muzzle.
@@ -78,6 +79,7 @@ export class HUD {
     const sectors = this.el.wepWheel.querySelectorAll('.wheel-sector');
     for (const sector of sectors) {
       const idx = Number(sector.dataset.slot);
+      sector.querySelector('.wheel-key').textContent = `${['▶','◀','▼','▲'][idx]} · ${keyLabel(BINDS.kb[`slot${idx+1}`])}`;
       const weapon = w.slots[idx];
       const st = w.state[weapon];
       const def = TUNING.weapons[weapon];
@@ -165,6 +167,8 @@ export class HUD {
       : w.reloading ? t('hud.reloading')
       : (w.st.mag === 0 && w.st.reserve === 0 ? t('hud.noAmmo') : '');
     this.el.weapon.classList.toggle('reloading', w.reloading);
+    this.el.weapon.classList.toggle('empty-ammo',w.st.mag<=0&&w.st.reserve<=0);
+    this.el.weapon.classList.toggle('needs-reload',w.st.mag<=0&&w.st.reserve>0);
     this.el.weapon.classList.toggle('low-ammo', !w.reloading &&
       w.st.mag <= Math.max(2, Math.ceil(w.def.mag * 0.2)));
     this._lastWep = w.cur;
@@ -213,12 +217,14 @@ export class HUD {
       // Consumibles (granadas) y especiales muestran cuánto QUEDA: son
       // recursos limitados y decidir con ellos exige verlo sin equiparlos.
       // Las primarias no lo muestran (el contador grande ya está arriba).
-      const left = d.thrown ? st?.mag ?? 0 : d.special ? (st?.mag ?? 0) + (st?.reserve ?? 0) : null;
-      chips[i].lastChild.textContent = left === null
+      const left = d?.thrown ? st?.mag ?? 0 : d?.special ? (st?.mag ?? 0) + (st?.reserve ?? 0) : null;
+      chips[i].lastChild.textContent = !d ? '—' : left === null
         ? t('weapon.' + k + 'Short')
         : `${t('weapon.' + k + 'Short')} ×${left}`;
       chips[i].classList.toggle('cur', k === w.cur);
       chips[i].classList.toggle('dry', !!st && st.mag <= 0 && st.reserve <= 0);
+      chips[i].classList.toggle('unavailable',!d||!st);
+      chips[i].firstChild.textContent=keyLabel(BINDS.kb[`slot${i+1}`]);
     }
     this._syncWeaponWheel(w, this._wheelIntent ?? w.selectionTarget ?? w.cur);
     // Pickups, drops y reset de loadout cambian slots sin pasar por el input
@@ -274,7 +280,7 @@ export class HUD {
   scoreboard(rows, localId = 'player') {
     this.el.scoreboard.classList.toggle('on', !!rows);
     if (!rows) { this._scoreboardKey = null; return; }
-    const key = getLanguage() + '|' + localId + '|' + rows.map((r) => `${r.id}:${r.kills}:${r.deaths}:${r.score}`).join('|');
+    const key = getLanguage() + '|' + localId + '|' + rows.map((r) => `${r.id}:${r.name}:${r.team}:${r.kills}:${r.deaths}:${r.score}`).join('|');
     if (this._scoreboardKey === key) return;
     this._scoreboardKey = key;
     const head = `<div class="sb-row sb-cols-head"><span>${esc(t('hud.name'))}</span><span>K</span><span>D</span><span>${esc(t('hud.points'))}</span></div>`;
@@ -369,7 +375,7 @@ export class HUD {
       this._spectatorKey = null;
       return;
     }
-    const key = [getLanguage(), view.name, view.controls, view.respawn, view.waiting].join('|');
+    const key = [getLanguage(), view.name, view.controls, view.respawn, view.waiting,view.ready].join('|');
     if (key === this._spectatorKey) return;
     this._spectatorKey = key;
     root.innerHTML = `<div class="spec-card">

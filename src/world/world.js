@@ -3683,6 +3683,7 @@ export class World {
   }
 
   _decorMetro() {
+    if(this._addRefinedDecor('metro'))return;
     // Metro: los cuatro bloques HIGH centrales se convierten en vagones
     // reconocibles. La huella es exactamente la de la geometría que ya
     // bloquea/da cover; no se añade ningún tren decorativo que engañe al AI.
@@ -3823,6 +3824,7 @@ export class World {
   }
 
   _decorPrision() {
+    if(this._addRefinedDecor('prision'))return;
     // Prisión: los muros HIGH laterales adquieren frentes de celdas y los
     // MID del borde se vuelven divisores/mesas de patio. Todo queda sobre los
     // AABB existentes para no encoger pasillos ni sorprender a los bots.
@@ -3979,6 +3981,7 @@ export class World {
   }
 
   _decorPueblo() {
+    if(this._addRefinedDecor('pueblo'))return;
     // Pueblo: las L de bloque se convierten en casas abiertas y derruidas. Los
     // huecos, marcos y tejados rotos se apoyan sobre muros existentes: cuentan
     // historia sin abrir atajos visuales que no existan en la colisión.
@@ -4634,6 +4637,16 @@ export class World {
   // Ambiente nocturno de Azoteas: TODO decorativo (cero colisión) — skyline
   // con ventanas encendidas, tanque de agua central, antenas con luz roja,
   // claraboyas con brillo, neones de equipo y luna.
+  _addRefinedDecor(id) {
+    if(this._skipRefinedDecor)return false;
+    const model=cloneUrbanAsset(`refined-${id}`);if(!model)return false;
+    model.name=`refined-${id}`;
+    // Flat signs and shallow relief must not cast false silhouettes. Existing
+    // collision-backed geometry retains the map's structural shadows.
+    model.traverse(o=>{if(o.isMesh){o.castShadow=false;o.receiveShadow=true;}});
+    this.mapGroup.add(model);return true;
+  }
+
   _decorAzoteas() {
     const { HIGH } = BLOCK;
     // --- calle abajo y skyline alrededor (edificios con ventanas emisivas)
@@ -4671,13 +4684,19 @@ export class World {
     this._tankSpots = [[-20.25, -15.75], [20.25, 15.75]];
     const tankMat = new THREE.MeshLambertMaterial({ color: 0x4c525c });
     for (const [tx, tz] of this._tankSpots) {
+      const refinedTank=cloneUrbanAsset('refined-roof-tank');
+      if(refinedTank){
+        refinedTank.position.set(tx,HIGH,tz);refinedTank.name='refined-roof-tank';
+        refinedTank.traverse(o=>{if(o.isMesh){o.castShadow=true;o.receiveShadow=true;}});
+        this.mapGroup.add(refinedTank);
+      }
       const tank = new THREE.Mesh(new THREE.CylinderGeometry(1.0, 1.0, 1.5, 10), tankMat);
       tank.position.set(tx, HIGH + 0.75, tz);
       tank.castShadow = true;
-      this.mapGroup.add(tank);
+      if(!refinedTank)this.mapGroup.add(tank);
       const cap = new THREE.Mesh(new THREE.ConeGeometry(1.1, 0.55, 10), tankMat);
       cap.position.set(tx, HIGH + 1.75, tz);
-      this.mapGroup.add(cap);
+      if(!refinedTank)this.mapGroup.add(cap);
       const beacon = new THREE.Mesh(
         new THREE.SphereGeometry(0.09, 8, 6),
         new THREE.MeshBasicMaterial({ color: 0xff4444 })
@@ -5289,7 +5308,7 @@ export class World {
         tankBands.setMatrixAt(t * 2 + i, m4);
       });
     });
-    this.mapGroup.add(tankBands);
+    if(!this.mapGroup.getObjectByName('refined-roof-tank'))this.mapGroup.add(tankBands);
     const ladderParts = new THREE.InstancedMesh(
       new THREE.BoxGeometry(1, 1, 1),
       new THREE.MeshBasicMaterial({ color: 0x9b7040 }), spots.length * 7);

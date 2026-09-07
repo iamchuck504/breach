@@ -1,0 +1,173 @@
+{
+  "layouts": [
+    {
+      "width": 1280,
+      "height": 720,
+      "lang": "en",
+      "issues": []
+    },
+    {
+      "width": 1280,
+      "height": 720,
+      "lang": "es",
+      "issues": []
+    },
+    {
+      "width": 1280,
+      "height": 720,
+      "lang": "pt",
+      "issues": []
+    },
+    {
+      "width": 1280,
+      "height": 720,
+      "lang": "fr",
+      "issues": []
+    },
+    {
+      "width": 1280,
+      "height": 720,
+      "lang": "ja",
+      "issues": []
+    },
+    {
+      "width": 1280,
+      "height": 720,
+      "lang": "it",
+      "issues": []
+    },
+    {
+      "width": 1280,
+      "height": 720,
+      "lang": "zh",
+      "issues": []
+    },
+    {
+      "width": 1920,
+      "height": 1080,
+      "lang": "en",
+      "issues": []
+    },
+    {
+      "width": 1920,
+      "height": 1080,
+      "lang": "es",
+      "issues": []
+    },
+    {
+      "width": 1920,
+      "height": 1080,
+      "lang": "pt",
+      "issues": []
+    },
+    {
+      "width": 1920,
+      "height": 1080,
+      "lang": "fr",
+      "issues": []
+    },
+    {
+      "width": 1920,
+      "height": 1080,
+      "lang": "ja",
+      "issues": []
+    },
+    {
+      "width": 1920,
+      "height": 1080,
+      "lang": "it",
+      "issues": []
+    },
+    {
+      "width": 1920,
+      "height": 1080,
+      "lang": "zh",
+      "issues": []
+    },
+    {
+      "width": 2560,
+      "height": 1080,
+      "lang": "en",
+      "issues": []
+    },
+    {
+      "width": 2560,
+      "height": 1080,
+      "lang": "es",
+      "issues": []
+    },
+    {
+      "width": 2560,
+      "height": 1080,
+      "lang": "pt",
+      "issues": []
+    },
+    {
+      "width": 2560,
+      "height": 1080,
+      "lang": "fr",
+      "issues": []
+    },
+    {
+      "width": 2560,
+      "height": 1080,
+      "lang": "ja",
+      "issues": []
+    },
+    {
+      "width": 2560,
+      "height": 1080,
+      "lang": "it",
+      "issues": []
+    },
+    {
+      "width": 2560,
+      "height": 1080,
+      "lang": "zh",
+      "issues": []
+    },
+    {
+      "width": 800,
+      "height": 600,
+      "lang": "en",
+      "issues": []
+    },
+    {
+      "width": 800,
+      "height": 600,
+      "lang": "es",
+      "issues": []
+    },
+    {
+      "width": 800,
+      "height": 600,
+      "lang": "pt",
+      "issues": []
+    },
+    {
+      "width": 800,
+      "height": 600,
+      "lang": "fr",
+      "issues": []
+    },
+    {
+      "width": 800,
+      "height": 600,
+      "lang": "ja",
+      "issues": []
+    },
+    {
+      "width": 800,
+      "height": 600,
+      "lang": "it",
+      "issues": []
+    },
+    {
+      "width": 800,
+      "height": 600,
+      "lang": "zh",
+      "issues": []
+    }
+  ],
+  "errors": []
+}

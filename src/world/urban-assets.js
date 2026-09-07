@@ -4,6 +4,7 @@ import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { DISTRICT_FACADES } from './district-facades.js';
 
 const URBAN_ASSETS = Object.freeze({
+  ...Object.fromEntries(['metro','prision','pueblo','roof-tank'].map(id=>[`refined-${id}`,`refined-${id}.glb`])),
   'fortress-kit':'fortress-kit.glb',
   'fortaleza-galleries':'fortaleza-galleries.glb',
   ...Object.fromEntries(['fort-gate','roof-access','roof-grille','roof-cabinet'].map(id=>[id,`${id}.glb`])),

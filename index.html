@@ -656,6 +656,7 @@
     .menu-note { flex-direction: column; gap: 7px; }
   }
 </style>
+<link rel="stylesheet" href="/src/ui/visual-system.css" />
 </head>
 <body>
 <canvas id="game"></canvas>
@@ -782,6 +783,7 @@
             <button class="btn" id="btn-leave-match" data-i18n="common.leaveMatch">LEAVE MATCH</button>
           </div>
         </div>
+        <p id="mode-detail" class="mode-detail" data-i18n="menu.botsSub">ROUND-BASED MATCH · BEST OF 3</p>
       </section>
       <aside class="prep-panel">
         <div class="prep-head"><strong data-i18n="menu.preparation">LOADOUT</strong><span data-i18n="common.localSave">LOCAL SAVE</span></div>
@@ -792,6 +794,7 @@
         <div class="field">
           <span class="field-label" data-i18n="menu.map">MAP</span>
           <div class="map-row">
+            <img id="map-preview" alt="" aria-hidden="true" />
             <button class="btn" id="btn-map"><span id="map-label">MAP: FORTRESS</span><span class="btn-num" data-i18n="common.change">CHANGE</span></button>
           </div>
           <div class="field-note" data-i18n="menu.mapNote">Default map for new local lobbies and Practice.</div>

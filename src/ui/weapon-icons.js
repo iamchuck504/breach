@@ -51,5 +51,5 @@ const ICONS = Object.freeze({
 
 export const weaponIconMarkup = (weapon, extraClass = '') => {
   const key = Object.prototype.hasOwnProperty.call(ICONS, weapon) ? weapon : 'smg';
-  return `<svg class="weapon-glyph icon-${key} ${extraClass}" data-icon="${key}" viewBox="0 0 200 64" aria-hidden="true" focusable="false">${ICONS[key]}</svg>`;
+  return `<svg class="weapon-glyph icon-${key} ${extraClass}" data-icon="${key}" viewBox="0 0 480 160" aria-hidden="true" focusable="false"><image href="${import.meta.env?.BASE_URL??'/'}assets/ui/${key}.png" width="480" height="160" /></svg>`;
 };

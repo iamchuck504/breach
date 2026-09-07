@@ -1,0 +1,383 @@
+{
+  "maps": [
+    {
+      "map": "fortaleza",
+      "gameplayManifestUnchanged": true,
+      "views": [
+        {
+          "view": "ground",
+          "calls": [
+            102,
+            102
+          ],
+          "triangles": [
+            129692,
+            129692
+          ],
+          "medianMs": [
+            1.800000011920929,
+            0.8999999761581421
+          ]
+        },
+        {
+          "view": "aerial",
+          "calls": [
+            175,
+            175
+          ],
+          "triangles": [
+            131412,
+            131412
+          ],
+          "medianMs": [
+            2,
+            1.399999976158142
+          ]
+        }
+      ]
+    },
+    {
+      "map": "azoteas",
+      "gameplayManifestUnchanged": true,
+      "views": [
+        {
+          "view": "ground",
+          "calls": [
+            159,
+            159
+          ],
+          "triangles": [
+            91702,
+            91962
+          ],
+          "medianMs": [
+            2.399999976158142,
+            0.800000011920929
+          ]
+        },
+        {
+          "view": "aerial",
+          "calls": [
+            227,
+            228
+          ],
+          "triangles": [
+            92616,
+            93296
+          ],
+          "medianMs": [
+            2.399999976158142,
+            0.800000011920929
+          ]
+        }
+      ]
+    },
+    {
+      "map": "calle",
+      "gameplayManifestUnchanged": true,
+      "views": [
+        {
+          "view": "ground",
+          "calls": [
+            2200,
+            2200
+          ],
+          "triangles": [
+            59752,
+            59752
+          ],
+          "medianMs": [
+            19.899999976158142,
+            8.899999976158142
+          ]
+        },
+        {
+          "view": "aerial",
+          "calls": [
+            2935,
+            2935
+          ],
+          "triangles": [
+            74048,
+            74048
+          ],
+          "medianMs": [
+            24.30000001192093,
+            12.299999952316284
+          ]
+        }
+      ]
+    },
+    {
+      "map": "calle2",
+      "gameplayManifestUnchanged": true,
+      "views": [
+        {
+          "view": "ground",
+          "calls": [
+            1724,
+            1724
+          ],
+          "triangles": [
+            499232,
+            499232
+          ],
+          "medianMs": [
+            28.19999998807907,
+            8
+          ]
+        },
+        {
+          "view": "aerial",
+          "calls": [
+            2262,
+            2262
+          ],
+          "triangles": [
+            704274,
+            704274
+          ],
+          "medianMs": [
+            27.69999998807907,
+            10.600000023841858
+          ]
+        }
+      ]
+    },
+    {
+      "map": "metro",
+      "gameplayManifestUnchanged": true,
+      "views": [
+        {
+          "view": "ground",
+          "calls": [
+            138,
+            49
+          ],
+          "triangles": [
+            1952,
+            2912
+          ],
+          "medianMs": [
+            0.3999999761581421,
+            0.19999998807907104
+          ]
+        },
+        {
+          "view": "aerial",
+          "calls": [
+            153,
+            51
+          ],
+          "triangles": [
+            2158,
+            2926
+          ],
+          "medianMs": [
+            1.5,
+            0.19999998807907104
+          ]
+        }
+      ]
+    },
+    {
+      "map": "prision",
+      "gameplayManifestUnchanged": true,
+      "views": [
+        {
+          "view": "ground",
+          "calls": [
+            93,
+            27
+          ],
+          "triangles": [
+            1948,
+            2740
+          ],
+          "medianMs": [
+            0.7000000476837158,
+            0.10000002384185791
+          ]
+        },
+        {
+          "view": "aerial",
+          "calls": [
+            133,
+            31
+          ],
+          "triangles": [
+            2432,
+            2768
+          ],
+          "medianMs": [
+            0.30000001192092896,
+            0.10000002384185791
+          ]
+        }
+      ]
+    },
+    {
+      "map": "pueblo",
+      "gameplayManifestUnchanged": true,
+      "views": [
+        {
+          "view": "ground",
+          "calls": [
+            75,
+            28
+          ],
+          "triangles": [
+            2556,
+            3190
+          ],
+          "medianMs": [
+            1.699999988079071,
+            0.10000002384185791
+          ]
+        },
+        {
+          "view": "aerial",
+          "calls": [
+            108,
+            36
+          ],
+          "triangles": [
+            3082,
+            3322
+          ],
+          "medianMs": [
+            0.9000000357627869,
+            0.19999998807907104
+          ]
+        }
+      ]
+    },
+    {
+      "map": "foundry",
+      "gameplayManifestUnchanged": true,
+      "views": [
+        {
+          "view": "ground",
+          "calls": [
+            10,
+            10
+          ],
+          "triangles": [
+            336,
+            336
+          ],
+          "medianMs": [
+            0.5,
+            0.09999996423721313
+          ]
+        },
+        {
+          "view": "aerial",
+          "calls": [
+            13,
+            13
+          ],
+          "triangles": [
+            372,
+            372
+          ],
+          "medianMs": [
+            0.40000003576278687,
+            0.10000002384185791
+          ]
+        }
+      ]
+    },
+    {
+      "map": "arena",
+      "gameplayManifestUnchanged": true,
+      "views": [
+        {
+          "view": "ground",
+          "calls": [
+            9,
+            9
+          ],
+          "triangles": [
+            224,
+            224
+          ],
+          "medianMs": [
+            0.5,
+            0
+          ]
+        },
+        {
+          "view": "aerial",
+          "calls": [
+            9,
+            9
+          ],
+          "triangles": [
+            224,
+            224
+          ],
+          "medianMs": [
+            0.09999996423721313,
+            0.09999996423721313
+          ]
+        }
+      ]
+    }
+  ],
+  "buildBytes": [
+    35992192,
+    39543258
+  ],
+  "assetBytes": [
+    33720497,
+    37255022
+  ],
+  "loadMs": [
+    502.30000001192093,
+    217.10000002384186
+  ],
+  "heapBytes": [
+    180203819,
+    140664498
+  ],
+  "rebuildResources": [
+    [
+      {
+        "geometries": 1680,
+        "textures": 162
+      },
+      {
+        "geometries": 1680,
+        "textures": 162
+      },
+      {
+        "geometries": 1680,
+        "textures": 162
+      },
+      {
+        "geometries": 1680,
+        "textures": 162
+      }
+    ],
+    [
+      {
+        "geometries": 1770,
+        "textures": 167
+      },
+      {
+        "geometries": 1770,
+        "textures": 167
+      },
+      {
+        "geometries": 1770,
+        "textures": 167
+      },
+      {
+        "geometries": 1770,
+        "textures": 167
+      }
+    ]
+  ],
+  "caveat": "Static headless renders; not gameplay FPS or a multi-round soak. Load/heap/timings are sensitive to cache, GC and competing processes."
+}
