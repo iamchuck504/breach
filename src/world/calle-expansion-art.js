@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { expansionBoxes, SIDE_PROPS } from './calle-expansion.js';
+import { clipFacadeAbove } from './clip-facade.js';
 
 // Visual extension only; collision comes from the shared server/client specs.
 export function decorateCalleExpansion(world, buildings) {
@@ -39,7 +40,8 @@ export function decorateCalleExpansion(world, buildings) {
   const facadeInstances=new Map();
   for(const side of [-1,1])for(const z of [-30,-18,-6,6,18,30]) {
     const source=buildings.find(b=>b.userData.streetBuilding.side===side);
-    const clone=source.clone(true);clone.position.set(side*31.74,0,z);
+    // Put the complete first upper sill above the 4.4m service wall.
+    const clone=source.clone(true);clone.position.set(side*31.74,.95,z);
     clone.name='calle2-outer-city-building';clone.userData={streetContinuation:true};
     root.add(clone);
     clone.updateWorldMatrix(true,true);
@@ -48,20 +50,13 @@ export function decorateCalleExpansion(world, buildings) {
     clone.traverse(part=>{
       if(!part.isMesh)return;
       const bounds=new THREE.Box3().setFromObject(part);
-      if(bounds.max.y<=4.5){part.visible=false;return;}
+      // Masonry closes the seam. Other batches must also discard the last
+      // storefront sign/awning fragments below the complete upper windows.
+      const cut=part.name==='Existing_envelope'||part.name.startsWith('District_Brick')?4.4:4.55;
+      if(bounds.max.y<=cut){part.visible=false;return;}
       // Trim crossing wall panels as well as removing entire storefronts.
       // Otherwise their lower halves overlap the new district walls.
-      if(bounds.min.y<4.5){
-        part.geometry=part.geometry.clone();
-        const positions=part.geometry.attributes.position;
-        const inverse=part.matrixWorld.clone().invert(),v=new THREE.Vector3();
-        for(let i=0;i<positions.count;i++){
-          v.fromBufferAttribute(positions,i).applyMatrix4(part.matrixWorld);
-          v.y=Math.max(4.5,v.y);v.applyMatrix4(inverse);
-          positions.setXYZ(i,v.x,v.y,v.z);
-        }
-        positions.needsUpdate=true;part.geometry.computeBoundingBox();part.geometry.computeBoundingSphere();
-      }
+      if(bounds.min.y<cut)part.geometry=clipFacadeAbove(part.geometry,part.matrixWorld,cut);
       const materials=Array.isArray(part.material)?part.material:[part.material];
       const key=part.geometry.uuid+materials.map(m=>m.uuid).join(':');
       if(!facadeInstances.has(key))facadeInstances.set(key,{geometry:part.geometry,material:part.material,matrices:[]});
