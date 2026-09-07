@@ -192,7 +192,7 @@ export const TUNING = {
     botCooldownMax: 1.05,
   },
   combat: {
-    spawnProtection: 5,   // seg de invulnerabilidad al nacer (se rompe al disparar)
+    spawnProtection: 5,   // seg completos de invulnerabilidad al nacer, incluso al atacar
     // Cámara, cuerpo y arma comparten este margen. Fuera de él el input queda
     // bufereado mientras el cuerpo gira, en vez de disparar visualmente al revés.
     fireAlignMaxDeg: 50,

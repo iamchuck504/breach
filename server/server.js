@@ -304,7 +304,7 @@ function relayRocket(sourceWs, shooter, msg) {
   // después que el click con latencia. El launch aprobado corrige ese desfase.
   shooter.w = 'bazooka';
   shooter.lastRocketAt = now; shooter.lastFireAt = now;
-  shooter.pendingShot = null; shooter.prot = 0;
+  shooter.pendingShot = null;
   const fp = validatedFirePose(shooter, msg.fp);
   const packet = { t: 'rocket', rid, id: shooter.id, o, d: dir,
     ...(fp ? { fp } : {}) };
@@ -442,7 +442,6 @@ function registerFire(shooter, msg, isBotFire = false) {
     at: now, wep: weapon, origin: o, endpoint, direction: shotDir,
     length: shotLen, remainingDamage: rule.maxDamage, hitIds: new Set(),
   };
-  shooter.prot = 0;
   const fp = validatedFirePose(shooter, msg.fp);
   broadcastRaw({ t: 'fire', id: shooter.id, o, p: endpoint, w: weapon,
     ...(decals?.length ? { d: decals } : {}), ...(fp ? { fp } : {}) }); return true;

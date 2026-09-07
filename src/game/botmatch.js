@@ -1671,7 +1671,6 @@ export class BotMatch {
       Math.max(0, len - ml.wallPadding)) !== null) {
       return { connected: false, killed: false };
     }
-    bot.protT = 0;
     const ctx = { weapon: 'melee', distance: best.d, damage: ml.dmg,
       part: 'body', gib: false, attackerState: bot.state };
     let killed = false;
@@ -1804,7 +1803,6 @@ export class BotMatch {
   }
 
   botShoot(bot, enemy) {
-    bot.protT = 0; // disparar rompe la protección de spawn
     const def = TUNING.weapons[bot.wep];
     _v1.set(bot.pos.x, bot.y + 1.35, bot.pos.z);
     _v3.set(enemy.x, (enemy.y ?? 0) + 1.0 + Math.random() * 0.4, enemy.z).sub(_v1).normalize();

@@ -60,7 +60,8 @@ try {
   await waitFor(b, (m) => m.t === 'matchStart');
   await waitFor(a, (m) => m.t === 'start');
   a.messages.length = 0; b.messages.length = 0;
-  // El target rompe su protección de spawn para aislar la autoridad melee.
+  // Wait for the full shield: attacking no longer cancels it.
+  await delay(5100);
   state(b, 3, 0, Math.PI);
   await delay(80);
   send(b, { t: 'fire', w: 'smg', o: [3, 1.1, 0], p: [3, 1.1, 6], d: [] });

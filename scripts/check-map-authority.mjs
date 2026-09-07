@@ -101,7 +101,8 @@ try {
   await a.next((m) => m.t === 'matchStart', 'matchStart');
   await a.next((m) => m.t === 'start', 'start');
 
-  // B rompe protección y ambos se colocan a lados opuestos del pilar central.
+  // Expire protection before isolating geometry/LOS authority.
+  await wait(5100);
   state(b, 0, 4); state(a, 0, -4); await wait(100);
   b.send({ t: 'fire', w: 'smg', o: [0, 1.1, 4], p: [0, 1.1, 8], d: [] });
   await wait(90);

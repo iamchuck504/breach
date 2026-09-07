@@ -68,7 +68,9 @@ try {
   await a.next((m) => m.t === 'matchStart', 'matchStart');
   await a.next((m) => m.t === 'start', 'start');
 
-  // A recoge la bazooka autoritativa; B rompe protección de spawn.
+  // Expire protection before measuring rocket damage (shots preserve it).
+  await wait(5100);
+  // A recoge la bazooka autoritativa.
   state(a, 2.8, 0); await wait(80);
   a.send({ t: 'takeSpecial' });
   await a.next((m) => m.t === 'specialTaken' && m.id === aw.id && m.wep === 'bazooka',

@@ -137,7 +137,7 @@ const G = {
   crates: null,
   drops: null,         // armas caídas de los muertos
   dropSeq: 0,
-  spawnProt: 0,        // protección de spawn (5s, se rompe al disparar)
+  spawnProt: 0,        // protección de spawn (5s completos, incluso al atacar)
   respawnT: 0,         // countdown visible de reaparición
   selfRespawnPending: false, // únicamente el server decide si queda una vida
   playerLastHit: 99,
@@ -3048,8 +3048,6 @@ function resolveMelee() {
     const score = dist + (1 - dot) * 0.42;
     if (!best || score < best.score) best = { tg, dist, dx, dz, dot, score };
   }
-  // el golpe rompe la protección de spawn propia aunque pegue al aire
-  if (G.spawnProt > 0) { G.spawnProt = 0; hud.hint(t('msg.protectionBroken'), 900); }
   if (!best) return { connected: false, killed: false };
   const { tg, dist } = best;
   _v1.set(p.pos.x, p.y + 1.08, p.pos.z);
@@ -3231,7 +3229,6 @@ function fireShot() {
       true, null, cid, G.mode === 'online');
     // replicar el proyectil: los demás clientes lo ven volar y explotar
     G.net?.rocket(muzzle, projectileDir, cid, G.player);
-    if (G.spawnProt > 0) { G.spawnProt = 0; hud.hint(t('msg.protectionBroken'), 900); }
     effects.muzzleFlash(muzzle, true);
     audio.gun(w.cur);
     input.pad.rumble(110, 0.6, 1.0);
@@ -3310,10 +3307,6 @@ function fireShot() {
       dmgByTarget.set(hit.id, e);
     }
   }
-
-  // disparar rompe la protección de spawn
-  if (G.spawnProt > 0) { G.spawnProt = 0; hud.hint(t('msg.protectionBroken'), 900); }
-
   // feedback de disparo (flash grande + rumble fuerte para armas pesadas)
   effects.muzzleFlash(muzzle, w.cur === 'shotgun' || !!def.special);
   audio.gun(w.cur);

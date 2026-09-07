@@ -470,7 +470,7 @@ try {
   console.log('BOTS:', JSON.stringify(bots));
   if (bots.mode !== 'bots' || bots.bots !== 7) errors.push('BOTS: modo/bots mal (' + JSON.stringify(bots) + ')');
   if (bots.livesR !== 15 || bots.livesB > 15) errors.push('BOTS: vidas iniciales mal (' + bots.livesR + '/' + bots.livesB + ')');
-  // protección de spawn: activa al nacer, se rompe al disparar
+  // protección de spawn: activa al nacer, se conserva al disparar
   const prot0 = await page.evaluate(() => +window.BREACH.spawnProt.toFixed(1));
   if (!(prot0 > 3)) errors.push('PROT: sin protección al nacer (' + prot0 + ')');
   await page.mouse.down();
@@ -480,7 +480,7 @@ try {
     prot: window.BREACH.spawnProt, mag: window.BREACH.weapons.st.mag,
   }));
   console.log('PROT:', JSON.stringify({ alNacer: prot0, trasDisparar: afterFire.prot }));
-  if (afterFire.prot !== 0) errors.push('PROT: no se rompió al disparar');
+  if (!(afterFire.prot > 0)) errors.push('PROT: se perdió al disparar');
 
   // caja de munición: recarga todo y se consume
   await page.evaluate(() => {

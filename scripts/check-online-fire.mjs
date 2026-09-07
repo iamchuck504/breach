@@ -45,7 +45,7 @@ function waitFor(peer, pred, timeout = 1200) {
     setTimeout(() => {
       const i = peer.waiters.indexOf(waiter);
       if (i >= 0) peer.waiters.splice(i, 1);
-      reject(new Error('timeout esperando mensaje'));
+      reject(new Error('timeout esperando mensaje: ' + pred.toString()));
     }, timeout);
   });
 }
@@ -83,13 +83,25 @@ try {
   const bx = 3, bz = -2;
   send(b, { t: 's', x: bx, z: bz, y: 0, yaw: Math.PI, st: 'idle', w: 'smg', am: 50, ar: 150 });
   b.self.x = bx; b.self.z = bz;
-  // El target rompe su protección para aislar la validación del atacante.
+  // Firing must preserve the target's five-second spawn shield.
   send(b, firePacket(b, a));
   await delay(80);
 
   send(a, { t: 's', x: bx, z: bz - 4, y: 0, yaw: 0, st: 'idle', w: 'smg', am: 50, ar: 150 });
   a.self.x = bx; a.self.z = bz - 4;
   await delay(100);
+
+  send(a, firePacket(a, b));
+  send(a, { t: 'hit', target: b.welcome.id, dmg: 10, part: 'body', p: [bx, 1.0, bz] });
+  a.messages.length = 0;
+  const protectedSnap = await waitFor(a, m => m.t === 'snap');
+  if (hpOf(protectedSnap,b.welcome.id)!==100 ||
+      !protectedSnap.ps.find(p=>p.id===b.welcome.id)?.inv ||
+      !protectedSnap.ps.find(p=>p.id===a.welcome.id)?.inv) throw new Error('firing cancelled spawn protection');
+  await delay(5100);
+  a.messages.length = 0;
+  const expiredSnap = await waitFor(a,m=>m.t==='snap');
+  if(expiredSnap.ps.find(p=>p.id===b.welcome.id)?.inv)throw new Error('spawn protection did not expire');
 
   // Hit sin fire asociado: rechazado.
   send(a, { t: 'hit', target: b.welcome.id, dmg: 120, part: 'head', gib: 1 });
@@ -177,7 +189,7 @@ try {
   const special = await waitFor(a, (m) => m.t === 'specialTaken' && m.id === a.welcome.id);
   if (special.wep !== 'sniper') throw new Error('round 1 no entregó sniper');
 
-  // Romper la protección del target y dejar transcurrir la cadencia global
+  // La protección inicial ya expiró; dejar transcurrir la cadencia global
   // desde el disparo de escopeta anterior.
   const dx = 3, dz = 4;
   send(d, { t: 's', x: dx, z: dz, y: 0, yaw: Math.PI,
@@ -203,10 +215,11 @@ try {
 
   // El mismo cliente no puede registrar un rayo al torso y después mover el
   // claim a la cabeza. Esperamos el respawn de B (muerto por la escopeta),
-  // rompemos su protección y comprobamos que el server lo degrada a body shot.
+  // esperamos su protección y comprobamos que el server lo degrada a body shot.
   const bRespawn = await waitFor(a,
     (m) => m.t === 'respawn' && m.id === b.welcome.id, 11000);
   const dRespawn = await waitFor(a, m => m.t === 'respawn' && m.id === d.welcome.id, 11000);
+  await delay(5100); // Every respawn grants a fresh non-cancellable shield.
   if (Math.abs(bRespawn.receivedAt - dRespawn.receivedAt) > 100) throw new Error('eligible players did not share a respawn wave');
   if (!(death.respawn > 0 && death.respawn <= 10 && sniperDeath.respawn > 0 && sniperDeath.respawn <= 10)) throw new Error('wave wait outside 0–10 seconds');
   b.self = { ...b.self, ...bRespawn.spawn };
