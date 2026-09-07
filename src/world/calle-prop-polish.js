@@ -2,7 +2,7 @@ import * as T from 'three';
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
 import {RoundedBoxGeometry} from 'three/addons/geometries/RoundedBoxGeometry.js';
 
-// Cosmetic, parent-local attachments. No collider, cover face, light or animation.
+// Parent-local visual details and unshadowed street lamps; no gameplay geometry.
 export function polishCalleProp(world, parent, kind, spec={}) {
   const source=world.customMap?.base ?? world.layout;
   if ((source!=='calle2' && world.theme!=='calle2') || parent.userData.callePolish) return;
@@ -35,6 +35,15 @@ export function polishCalleProp(world, parent, kind, spec={}) {
   };
   const vehicle=['sedan','truck','bus'].includes(kind);
   if(vehicle){
+    if(kind==='truck'||kind==='bus')parent.traverse(o=>{
+      if(!o.isMesh)return;
+      for(const m of (Array.isArray(o.material)?o.material:[o.material])){
+        if(m.emissiveMap && m.emissiveIntensity===.34){
+          m.color.setHex(0x030507);m.emissive.setHex(0);m.emissiveIntensity=0;
+          m.metalness=.05;m.roughness=.42;
+        }
+      }
+    });
     // Keep the tire diameter/width and the existing gray hubs. Add inset hub
     // hardware on the outer wheel face, not a torus wrapped around the tire.
     const wheels=parent.children.filter(o=>o.isMesh&&o.geometry.type==='CylinderGeometry'
@@ -128,6 +137,39 @@ export function polishCalleProp(world, parent, kind, spec={}) {
       }return clones.get(m);};
       o.material=Array.isArray(o.material)?o.material.map(tune):tune(o.material);
     });
+  }
+  if(kind==='streetlight'){
+    // Coordinates on the underside of this GLB's existing LED housing,
+    // in its centered local space. Fixtures follow editor moves/rotation.
+    // Use the housing's actual underside triangles, not a flat intersecting
+    // rectangle. Private tiny offset avoids coplanar flicker at every angle.
+    parent.updateWorldMatrix(true,true);
+    const inverse=parent.matrixWorld.clone().invert(),points=[];
+    parent.traverse(o=>{
+      if(!o.isMesh)return;
+      const g=o.geometry,p=g.attributes.position,n=g.attributes.normal,index=g.index;
+      if(!p||!n)return;
+      const transform=inverse.clone().multiply(o.matrixWorld);
+      for(let i=0;i<(index?index.count:p.count);i+=3){
+        const ids=[0,1,2].map(k=>index?index.getX(i+k):i+k);
+        if(!ids.every(j=>p.getY(j)>4.8&&p.getX(j)>.6&&n.getY(j)<-.6))continue;
+        for(const j of ids){
+          const v=new T.Vector3().fromBufferAttribute(p,j)
+            .addScaledVector(new T.Vector3().fromBufferAttribute(n,j),.002).applyMatrix4(transform);
+          points.push(v.x,v.y,v.z);
+        }
+      }
+    });
+    const lensGeometry=new T.BufferGeometry();
+    lensGeometry.setAttribute('position',new T.Float32BufferAttribute(points,3));
+    const lens=new T.Mesh(lensGeometry,new T.MeshBasicMaterial({color:0xffe4ba,side:T.DoubleSide,toneMapped:false}));
+    lens.name='streetlamp-lit-lens';root.add(lens);
+    if(spec.illuminate){
+      const light=new T.SpotLight(0xffdfb0,65,14,Math.PI*.34,.8,2);
+      light.name='streetlamp-light';light.position.set(.50,2.38,0);
+      const target=new T.Object3D();target.position.set(1.4,-2.5,0);
+      light.target=target;light.castShadow=false;root.add(light,target);
+    }
   }
   for(const [material,geometries] of batches){
     const geometry=mergeGeometries(geometries);geometries.forEach(g=>g.dispose());

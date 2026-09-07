@@ -154,6 +154,11 @@ export class World {
     // el tema decide luz/cielo/niebla (un mapa de datos hereda el ambiente
     // completo del mapa en el que se inspira)
     this._applyEnvironment(theme);
+    if ((this.customMap?.base ?? layout) === 'calle2') {
+      this.hemi.intensity *= 0.90;
+      this.amb.intensity *= 0.88;
+      this.sun.intensity *= 0.90;
+    }
     // El raycast visual de impactos trabaja con matrices estáticas ya
     // resueltas. La lista de receptores se reconstruye al cambiar de mapa.
     this.mapGroup.updateWorldMatrix(true, true);
@@ -2373,7 +2378,7 @@ export class World {
     model.rotation.y = rotation;
     model.scale.setScalar(scale);
     model.userData.urbanAssetId = id;
-    polishCalleProp(this, model, id);
+    polishCalleProp(this, model, id, {illuminate: capture && Math.abs(z) <= this.fz});
     model.traverse((o) => {
       if (!o.isMesh) return;
       o.castShadow = castShadow;
@@ -3569,7 +3574,7 @@ export class World {
     // Seis luces prácticas sin sombras mantienen legibles los módulos nuevos
     // húmedo y los volúmenes de vehículos respondan a la escena sin convertir
     // cada escaparate en un coste de iluminación independiente.
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < (expanded ? 0 : 6); i++) {
       const z = -30 + i * 12;
       const x = i % 2 ? 11.1 : -11.1;
       const light = new THREE.PointLight(i % 2 ? 0xffb36b : 0xffc17d, 4.2, 13, 2);
