@@ -51,6 +51,18 @@ try{
     const polished=[];world.mapGroup.traverse(o=>{if(o.userData.callePolish)polished.push(o);});
     checks.propPolish=['sedan','truck','bus','dumpster','jersey','kiosk','coffee','suvMinivan','streetlight','busShelter']
       .every(kind=>polished.some(o=>o.userData.callePolish===kind));
+    const modeled=world.mapGroup.children.filter(o=>o.userData.blenderProp);
+    checks.blenderStreetProps=['coffee','hotdog','news','dumpster','jersey','roadwork']
+      .every(kind=>modeled.some(o=>o.userData.blenderProp===kind));
+    checks.blenderPropEnvelope=modeled.every(o=>{
+      const fallback=o.getObjectByName('procedural-prop-fallback');
+      if(!fallback||fallback.visible)return false;
+      const old=new T.Box3().setFromObject(fallback,true),current=new T.Box3();
+      for(const c of o.children)if(c!==fallback)current.union(new T.Box3().setFromObject(c,true));
+      const fits=['x','y','z'].every(a=>current.min[a]>=old.min[a]-.08&&current.max[a]<=old.max[a]+.08);
+      if(!fits)throw Error(JSON.stringify({prop:o.userData.blenderProp,key:o.userData.editorDecorKey,old,current}));
+      return fits;
+    });
     checks.parentedPropDetails=polished.every(p=>p.children.filter(o=>o.name.startsWith('calle2-prop-polish:'))
       .every(o=>o.position.length()===0&&o.rotation.x===0&&o.rotation.y===0&&o.rotation.z===0));
     checks.propSilhouette=polished.every(p=>{
@@ -183,6 +195,9 @@ try{
       ['polish-bus',[-8,2.1,-28],[0,1.5,-34.5]],
       ['polish-waste',[12.4,1.5,5.2],[15.15,.7,8]],
       ['polish-kiosk',[11.4,1.6,-30],[14.35,1.4,-26]],
+      ['blender-coffee',[12,1.7,-11],[14.35,1.1,-8.5]],
+      ['blender-hotdog',[11,1.9,-27],[13.3,1.4,-30]],
+      ['blender-news',[-11,1.9,-26],[-13.3,1.4,-29]],
       ['seam',[9,2.3,24],[16.15,5,29]],
       ['police',[13,2.5,-30],[8.8,.85,-26]],
       ['storefront',[11,2.1,33],[16.1,1.5,36]],

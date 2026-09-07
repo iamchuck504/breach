@@ -8,6 +8,7 @@ export function polishCalleProp(world, parent, kind, spec={}) {
   if ((source!=='calle2' && world.theme!=='calle2') || parent.userData.callePolish) return;
   if(!['sedan','truck','bus','dumpster','jersey','kiosk','coffee','suvMinivan','busShelter','fireHydrant','streetlight'].includes(kind))return;
   parent.userData.callePolish=kind;
+  if(parent.userData.blenderProp)return; // Details are baked into the Blender GLB.
   const root=new T.Group();root.name=`calle2-prop-polish:${kind}`;
   const batches=new Map(),materials=new Map();
   const mat=(color,metalness=.25,roughness=.65)=>{

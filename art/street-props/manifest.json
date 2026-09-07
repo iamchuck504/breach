@@ -1,0 +1,37 @@
+{
+  "coffee": {
+    "file": "prop-coffee.glb",
+    "meshes": 16,
+    "bytes": 436384
+  },
+  "hotdog": {
+    "file": "prop-hotdog.glb",
+    "meshes": 16,
+    "bytes": 462268
+  },
+  "news": {
+    "file": "prop-news.glb",
+    "meshes": 15,
+    "bytes": 601640
+  },
+  "dumpster": {
+    "file": "prop-dumpster.glb",
+    "meshes": 11,
+    "bytes": 232708
+  },
+  "jersey": {
+    "file": "prop-jersey.glb",
+    "meshes": 6,
+    "bytes": 64916
+  },
+  "roadwork": {
+    "file": "prop-roadwork.glb",
+    "meshes": 6,
+    "bytes": 180636
+  },
+  "shelter": {
+    "file": "prop-shelter.glb",
+    "meshes": 1,
+    "bytes": 23664
+  }
+}

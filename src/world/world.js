@@ -1672,6 +1672,21 @@ export class World {
   // La clave estable (tipo + ordinal) permite reconstruir el builder base y
   // aplicar después la transformación guardada por el editor.
   _registerBaseDecor(group, kind, data) {
+    if ((this.customMap?.base ?? this.layout)==='calle2') {
+      const id=kind==='kiosk'?(data.decorLink?.includes('news')?'news':'hotdog'):kind;
+      if(['coffee','hotdog','news','dumpster','jersey','roadwork'].includes(id)){
+        const model=cloneUrbanAsset(`prop-${id}`);
+        if(model){
+          // Keep the fallback owned by the map for normal disposal, but never
+          // render/raycast it alongside the Blender replacement.
+          const fallback=new THREE.Group();fallback.name='procedural-prop-fallback';fallback.visible=false;
+          for(const child of [...group.children])fallback.add(child);
+          group.add(fallback,model);
+          if(kind==='kiosk'&&data.decorLink?.includes('north'))model.rotation.y=Math.PI;
+          group.userData.blenderProp=id;
+        }
+      }
+    }
     polishCalleProp(this, group, kind, data);
     const ordinal = this._baseDecorOrdinals[kind] ?? 0;
     this._baseDecorOrdinals[kind] = ordinal + 1;
@@ -2368,7 +2383,8 @@ export class World {
     y = 0, scale = 1, rotation = 0, castShadow = true, receiveShadow = true,
     decorLink = null, capture = true,
   } = {}) {
-    const model = cloneUrbanAsset(id);
+    const useBlenderShelter=id==='busShelter'&&(this.customMap?.base ?? this.layout)==='calle2';
+    const model = (useBlenderShelter?cloneUrbanAsset('prop-shelter'):null) ?? cloneUrbanAsset(id);
     if (!model) return null;
     model.name = `urban-${id}`;
     // Los assets de Three.js Assets vienen centrados en el origen. Apoyarlos

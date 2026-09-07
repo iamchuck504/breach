@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { expansionBoxes, SIDE_PROPS } from './calle-expansion.js';
 import { clipFacadeAbove } from './clip-facade.js';
+import { cloneUrbanAsset } from './urban-assets.js';
 
 // Visual extension only; collision comes from the shared server/client specs.
 export function decorateCalleExpansion(world, buildings) {
@@ -84,6 +85,16 @@ export function decorateCalleExpansion(world, buildings) {
     cube('passage-lamp',side*19.0,3.30,z,.7,.08,.24,lamp);
   }
   for(const p of SIDE_PROPS) {
+    const detailedBin=p.kind==='dumpster'?cloneUrbanAsset('prop-dumpster'):null;
+    if(detailedBin){
+      const bounds=new THREE.Box3().setFromObject(detailedBin),size=bounds.getSize(new THREE.Vector3());
+      detailedBin.scale.set(p.w/size.x,p.h/size.y,p.d/size.z);
+      detailedBin.position.set(p.x,-bounds.min.y*detailedBin.scale.y,p.z);
+      detailedBin.name='blender-service-dumpster';root.add(detailedBin);
+      detailedBin.traverse(o=>{if(o.isMesh)o.castShadow=o.receiveShadow=true;});
+      floor('loading-pad',p.x,p.z,p.w+.35,p.d+.35,mat(0x73603f));
+      continue;
+    }
     const bodyMat=p.kind==='dumpster'?green:red;
     cube(p.kind,p.x,(p.h-.05)/2,p.z,p.w,p.h-.05,p.d,bodyMat);
     cube(p.kind+' top',p.x,p.h-.025,p.z,p.w,.05,p.d,metal);
