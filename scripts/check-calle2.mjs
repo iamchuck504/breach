@@ -48,6 +48,18 @@ try{
       botRoutes:true,originalUnchanged:false,interiorSolid:true,wallCover:true,floorLayers:true,seamsClear:true};
     const buildings=world.mapGroup.children.filter(o=>o.userData.streetBuilding);
     const cafes=buildings.filter(b=>b.userData.blenderCafe);
+    const polished=[];world.mapGroup.traverse(o=>{if(o.userData.callePolish)polished.push(o);});
+    checks.propPolish=['sedan','truck','bus','dumpster','jersey','kiosk','coffee','suvMinivan','streetlight','busShelter']
+      .every(kind=>polished.some(o=>o.userData.callePolish===kind));
+    checks.parentedPropDetails=polished.every(p=>p.children.filter(o=>o.name.startsWith('calle2-prop-polish:'))
+      .every(o=>o.position.length()===0&&o.rotation.x===0&&o.rotation.y===0&&o.rotation.z===0));
+    checks.propSilhouette=polished.every(p=>{
+      p.updateWorldMatrix(true,true);
+      const before=new T.Box3();
+      for(const c of p.children)if(!c.name.startsWith('calle2-prop-polish:'))before.union(new T.Box3().setFromObject(c));
+      const after=new T.Box3().setFromObject(p);
+      return ['x','y','z'].every(a=>after.min[a]>=before.min[a]-.04&&after.max[a]<=before.max[a]+.04);
+    });
     checks.allDistrictFacades=buildings.length===14&&buildings.every(b=>b.userData.blenderFacade);
     checks.facadeDimensions=buildings.every(b=>{
       const meta=b.userData.streetBuilding;
@@ -166,6 +178,11 @@ try{
     images.aerial=renderer.domElement.toDataURL();scene.fog=fog;
     for(const [name,p,target] of [
       ['cafe',[3,5,-18],[16.1,4.4,-24]],
+      ['polish-sedan',[5,2.0,-31],[8.8,.7,-26]],
+      ['polish-truck',[-9,2,-8],[-6.5,1.5,-1.5]],
+      ['polish-bus',[-8,2.1,-28],[0,1.5,-34.5]],
+      ['polish-waste',[12.4,1.5,5.2],[15.15,.7,8]],
+      ['polish-kiosk',[11.4,1.6,-30],[14.35,1.4,-26]],
       ['seam',[9,2.3,24],[16.15,5,29]],
       ['police',[13,2.5,-30],[8.8,.85,-26]],
       ['storefront',[11,2.1,33],[16.1,1.5,36]],
@@ -180,6 +197,7 @@ try{
     const nodes=world.navigation.nodes.length;
     const performance={triangles:renderer.info.render.triangles,drawCalls:renderer.info.render.calls};
     world.setLayout('calle');checks.originalUnchanged=JSON.stringify(original)===JSON.stringify(world.colliders.map(key))&&world.navigation===null;
+    checks.polishScoped=true;world.mapGroup.traverse(o=>{if(o.userData.callePolish)checks.polishScoped=false;});
     renderer.dispose();return {boxes,checks,nodes,performance,images};
   });
   for(const [name,url] of Object.entries(report.images))await fs.writeFile(`${out}/${name}.png`,Buffer.from(url.split(',')[1],'base64'));

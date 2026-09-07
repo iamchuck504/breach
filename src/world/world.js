@@ -15,6 +15,7 @@ import { decorateCalleExpansion } from './calle-expansion-art.js';
 import { CalleNavigation } from './calle-navigation.js';
 import { calleShopDisplay } from './calle-shop-display.js';
 import { DISTRICT_FACADES } from './district-facades.js';
+import { polishCalleProp } from './calle-prop-polish.js';
 
 const FIELD_X = 15, FIELD_Z = 18; // semiancho / semilargo
 const SOLDIER_HEIGHT = 1.63;
@@ -1666,6 +1667,7 @@ export class World {
   // La clave estable (tipo + ordinal) permite reconstruir el builder base y
   // aplicar después la transformación guardada por el editor.
   _registerBaseDecor(group, kind, data) {
+    polishCalleProp(this, group, kind, data);
     const ordinal = this._baseDecorOrdinals[kind] ?? 0;
     this._baseDecorOrdinals[kind] = ordinal + 1;
     const key = `${kind}:${ordinal}`;
@@ -1902,6 +1904,7 @@ export class World {
       add(.53,.095,.22,-.34,S.height+.0925,.12,red);
       add(.53,.095,.22,.34,S.height+.0925,.12,blue);
     }
+    polishCalleProp(this, group, 'sedan', {variant});
     this.mapGroup.add(group);
     return group;
   }
@@ -2075,6 +2078,7 @@ export class World {
       add(0.15, 0.38, 0.075, sx, 0.67, S.length / 2 + 0.085, rearLampMat);
     }
     add(S.width + 0.10, 0.18, 0.16, 0, 0.32, S.length / 2 + 0.090, trimMat);
+    polishCalleProp(this, group, 'truck', {variant});
     this.mapGroup.add(group);
     return group;
   }
@@ -2289,6 +2293,7 @@ export class World {
       );
       cracked.position.set(0.48, 2.14, -4.43); cracked.rotation.x = 0.27; group.add(cracked);
     }
+    polishCalleProp(this, group, 'bus', {variant});
     this.mapGroup.add(group);
     return group;
   }
@@ -2368,6 +2373,7 @@ export class World {
     model.rotation.y = rotation;
     model.scale.setScalar(scale);
     model.userData.urbanAssetId = id;
+    polishCalleProp(this, model, id);
     model.traverse((o) => {
       if (!o.isMesh) return;
       o.castShadow = castShadow;
@@ -3252,8 +3258,10 @@ export class World {
       const top = new THREE.Mesh(new THREE.BoxGeometry(w * 0.96, 0.30, d * 0.54), jerseyMat);
       top.position.y = 0.95; top.castShadow = true; g.add(top);
       for (const px of [-w * 0.28, w * 0.28]) {
-        const stain = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.06, d + 0.012), grimeMat);
-        stain.position.set(px, 0.44, 0); stain.rotation.z = 0.55; g.add(stain);
+        const stain = new THREE.Mesh(new THREE.BoxGeometry(0.24, expanded ? 0.026 : 0.06,
+          expanded ? d * 0.78 + 0.006 : d + 0.012), grimeMat);
+        stain.position.set(px, expanded ? 0.56 : 0.44, 0);
+        stain.rotation.z = expanded ? 0.08 : 0.55; g.add(stain);
       }
       this._registerBaseDecor(g, 'jersey', { x, z, rotation: rot, w, d, h: BLOCK.LOW });
     };
