@@ -77,6 +77,7 @@ export class Bot {
   }
 
   respawn(spawn) {
+    this.world.navigation?.cache?.delete(this);
     this.pos = { x: spawn.x, z: spawn.z };
     this.yaw = spawn.yaw;
     this.y = 0; this.vy = 0; this.grounded = true;
@@ -303,10 +304,10 @@ export class Bot {
         this.recovery=null;
         // Do not look past the waypoint into a wall when the route turns at
         // this corner. The full segment was already swept with body clearance.
-        return {x:dx,z:dz,blocked:false,hit:null};
+        return {x:dx,z:dz,blocked:false,hit:null,stairsRoute:!!this.world.galleryEnabled};
       }
     }
-    _v1.set(this.pos.x, 0.7, this.pos.z);
+    _v1.set(this.pos.x, this.y + 0.7, this.pos.z);
     if (this.recovery) {
       const currentP = this.pos.x * this.recovery.perpX + this.pos.z * this.recovery.perpZ;
       const lateral = this.recovery.targetP - currentP;
@@ -328,7 +329,7 @@ export class Bot {
     const lowHit = this.world.raycastHit?.(_v1, _v2, 1.35);
     if (!lowHit) return { x: dx, z: dz, blocked: false, hit: null };
     // si lo alto está libre es un obstáculo saltable: _jumpIfBlocked se encarga
-    _v1.y = 1.6;
+    _v1.y = this.y + 1.6;
     const highHit = this.world.raycastHit?.(_v1, _v2, 1.6);
     if (!highHit) return { x: dx, z: dz, blocked: false, hit: lowHit };
 
@@ -477,11 +478,11 @@ export class Bot {
 
   _jumpIfBlocked(mx, mz) {
     if (!this.grounded || this.jumpCd > 0) return;
-    _v1.set(this.pos.x, 0.5, this.pos.z);
+    _v1.set(this.pos.x, this.y + 0.5, this.pos.z);
     _v2.set(mx, 0, mz).normalize();
     const tLow = this.world.raycast(_v1, _v2, 1.3);
     if (tLow === null) return;
-    _v1.y = 1.6;
+    _v1.y = this.y + 1.6;
     const tHigh = this.world.raycast(_v1, _v2, 2.2);
     if (tHigh === null) this._jump(); // bajo bloqueado, alto libre → brincable
   }
@@ -866,7 +867,7 @@ export class Bot {
     let steering = null;
     if (mlen > 0.05) {
       steering = this._steer(mx / mlen, mz / mlen, match, activeGoal);
-      this._jumpIfBlocked(steering.x, steering.z);
+      if(!steering.stairsRoute)this._jumpIfBlocked(steering.x, steering.z);
       // Un salto deliberado deja de ser un movimiento pegado al suelo.
       wasGrounded = this.grounded;
       this.pos.x += steering.x * spd * dt;
@@ -951,6 +952,9 @@ export class Bot {
         this.y = ground; this.vy = 0; this.grounded = true;
       } else this.grounded = this.y <= ground + 0.02;
     }
+
+    const ceiling=this.world.ceilingHeight?.(this.pos,.38,this.y)??Infinity;
+    if(this.y+1.63>ceiling){this.y=ceiling-1.63;this.vy=Math.min(0,this.vy);}
 
     // vuelta acrobática: progresa en el aire, se limpia al aterrizar
     if (this.flip) {
@@ -1360,6 +1364,10 @@ export class BotMatch {
     const clampX = (x) => Math.max(-this.world.fx + 2, Math.min(this.world.fx - 2, x));
     const clampZ = (z) => Math.max(-this.world.fz + 2, Math.min(this.world.fz - 2, z));
     let lane = bot.laneBias ?? 0;
+    if(this.world.layout==='fortaleza'&&role==='flank'&&bot.profile.flank>.5){
+      const side=Math.sign(lane)||(bot.profile.flank<.75?-1:1);
+      return {x:side*23.7,z:Math.abs(bot.pos.z)>10?0:toward*22.85,role};
+    }
     if (role === 'flank' && Math.abs(lane) < 0.45) lane = this._leastControlledLane(bot) ||
       (bot.profile.flank < 0.5 ? -0.78 : 0.78);
 
@@ -1530,6 +1538,7 @@ export class BotMatch {
     for (let fi = 0; fi < this.world.faces.length; fi++) {
       const f = this.world.faces[fi];
       if (f.h > 2.6) continue; // muros perimetrales no
+      if(Math.abs((f.baseY??0)-bot.y)>.3)continue;
       const mx = (f.a.x + f.b.x) / 2, mz = (f.a.z + f.b.z) / 2;
       // la cara debe darle la ESPALDA a la amenaza primaria: sin este check
       // el bot se "cubría" parado del lado del enemigo, de frente a él
@@ -1559,7 +1568,7 @@ export class BotMatch {
       // vista bloqueada desde la POSTURA real: agachado (0.8) tras bloques
       // LOW — con ojo fijo a 1.2 un bloque de 1.1 jamás calificaba
       const eye = f.h <= TUNING.cover.lowHeight ? 0.8 : 1.2;
-      _v1.set(sx, eye, sz);
+      _v1.set(sx, bot.y + eye, sz);
       _v2.set(primary.x - sx, 0.1, primary.z - sz);
       const len = _v2.length();
       _v2.normalize();
@@ -1571,7 +1580,7 @@ export class BotMatch {
       for (let ti = 1; ti < threatList.length; ti++) {
         const t2 = threatList[ti];
         const sideOk = (t2.x - mx) * f.n.x + (t2.z - mz) * f.n.z < 0.2;
-        _v1.set(sx, eye, sz);
+        _v1.set(sx, bot.y + eye, sz);
         _v2.set(t2.x - sx, 0.1, t2.z - sz);
         const l2 = _v2.length();
         _v2.normalize();

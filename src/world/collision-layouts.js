@@ -1,6 +1,7 @@
 // Geometría jugable compartida entre World (cliente) y la autoridad online.
 // Estas cajas son la fuente única para movimiento, cover y línea de tiro.
 import { BLOCK } from './block-heights.js';
+import {galleryBoxes,galleryCourtyardWalls} from './fortaleza-galleries.js';
 import { expansionBoxes, calle2FurnitureZ, calle2VehiclePosition, calle2AccessOffset } from './calle-expansion.js';
 
 const { LOW, MID, HIGH } = BLOCK;
@@ -11,8 +12,8 @@ const freeze = (items) => Object.freeze(items.map(Object.freeze));
 const fortaleza = freeze([
   make(0, -27, 44, 0.8, HIGH, 'wall', { mirror: false }),
   make(0, 27, 44, 0.8, HIGH, 'wall', { mirror: false }),
-  make(-21.4, 0, 0.8, 55.2, HIGH, 'wall', { mirror: false }),
-  make(21.4, 0, 0.8, 55.2, HIGH, 'wall', { mirror: false }),
+  ...galleryCourtyardWalls(),
+  ...galleryBoxes(),
   make(0, -20.9, 8, 1, HIGH, 'high'),
   make(-6, -20.2, 2.6, 0.9, LOW, 'low'),
   make(6, -20.2, 2.6, 0.9, LOW, 'low'),
@@ -44,7 +45,8 @@ const fortaleza = freeze([
   // existe en el lado este, sin espejo
   make(20.7, 0, 0.7, 4.7, 2.5, 'low',
     { visual: false, cover: false, mirror: false }),
-  make(-20.1, -22.4, 1.2, 2.8, 0.64, 'low', { visual: false, cover: false }),
+  // Non-cover shrub beds moved behind the new side entrances, never across them.
+  make(-19.1, -25.0, 1.2, 2.8, 0.64, 'low', { visual: false, cover: false }),
   make(-20.1, -15, 1.0, 0.8, 0.6, 'low', { visual: false, cover: false }),
   make(-19.65, 3.6, 1.2, 1.3, 0.54, 'low', { visual: false, cover: false }),
   make(20.1, 2.7, 1.2, 1.2, 0.54, 'low', { visual: false, cover: false }),
@@ -331,6 +333,8 @@ export function expandedCollisionBoxes(layout) {
     minx: x - box.w / 2, maxx: x + box.w / 2,
     minz: z - box.d / 2, maxz: z + box.d / 2,
     h: box.h,
+    ...(box.minY!==undefined?{minY:box.minY}:{}),
+    ...(box.walkSurface?{walkSurface:true}:{}),
   });
   for (const box of collisionBoxesFor(layout)) {
     place(box, box.x, box.z);

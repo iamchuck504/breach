@@ -62,7 +62,7 @@ class Peer {
   close() { this.ws?.close(); }
 }
 
-const state = (peer, x, z) => peer.send({ t: 's', x, y: 0, z, yaw: 0,
+const state = (peer, x, z, y=0, yaw=0) => peer.send({ t: 's', x, y, z, yaw,
   st: 'idle', aim: 0, p: 0, w: 'smg', am: 50, ar: 150, sp: 0 });
 const hpOf = (snap, id) => snap.ps.find((p) => p.id === id)?.hp;
 let browser, a, b;
@@ -81,8 +81,8 @@ try {
       const world = window.BREACH_WORLD;
       world.setLayout(layout, true);
       return {
-        boxes: world.colliders.map(({ minx, maxx, minz, maxz, h }) =>
-          ({ minx, maxx, minz, maxz, h })),
+        boxes: world.colliders.map(({ minx, maxx, minz, maxz, h, minY, walkSurface }) =>
+          ({ minx, maxx, minz, maxz, h, ...(minY !== undefined ? {minY} : {}), ...(walkSurface ? {walkSurface} : {}) })),
         segments: world.segmentColliders.map(({ a, b, n, half, h }) => ({ a, b, n, half, h })),
       };
     }, map);
@@ -143,7 +143,26 @@ try {
   snap = await a.next((m) => m.t === 'snap', 'snap punto falso');
   assert.equal(hpOf(snap, bw.id), 80, 'se aceptó un impacto lejos del objetivo');
 
-  console.log('MAP AUTHORITY OK · colliders compartidos, LOS, decals y rewind validados');
+  // Same authority at the new elevation: clear window vs solid stone pier.
+  state(a,23.2,0,3,Math.PI/2);state(b,5,0);await wait(130);
+  a.history.length=0;
+  const elevated=await a.next(m=>m.t==='snap'&&m.ps.some(p=>p.id===aw.id&&p.y===3),'upper pose sync');
+  const beforeUpper=hpOf(elevated,bw.id);
+  a.send({t:'fire',w:'smg',o:[23.2,4.6,0],p:[5,1.1,0],d:[]});
+  a.send({t:'hit',target:bw.id,dmg:999,part:'body',p:[5,1.1,0]});
+  a.history.length=0;
+  const through=await a.next(m=>m.t==='snap'&&hpOf(m,bw.id)<beforeUpper,'gallery window hit');
+  const afterUpper=hpOf(through,bw.id);
+  state(a,23.2,1.5,3,Math.PI/2);state(b,5,1.5);await wait(130);
+  b.history.length=0;
+  a.send({t:'fire',w:'smg',o:[23.2,4.6,1.5],p:[5,1.1,1.5],d:[]});
+  a.send({t:'hit',target:bw.id,dmg:999,part:'body',p:[5,1.1,1.5]});
+  const pier=await b.next(m=>m.t==='fire'&&m.id===aw.id,'gallery pier clipping');
+  assert(Math.abs(pier.p[0]-21.8)<.05,'pier must clip remote tracer');
+  await wait(120);a.history.length=0;
+  const blockedUpper=await a.next(m=>m.t==='snap','gallery blocked damage');
+  assert.equal(hpOf(blockedUpper,bw.id),afterUpper,'gallery pier allowed damage');
+  console.log('MAP AUTHORITY OK · colliders, LOS, decals, rewind, upper pose and gallery windows validated');
 } finally {
   a?.close(); b?.close(); await browser?.close(); server.kill();
 }

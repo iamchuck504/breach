@@ -3,6 +3,7 @@
 // discrepar sobre paredes, vehículos, cover o barandas del helipuerto.
 import { HELIPAD, expandedCollisionBoxes, helipadSegments }
   from '../src/world/collision-layouts.js';
+import {galleryHeight} from '../src/world/fortaleza-galleries.js';
 
 const ORIGIN_NUDGE = 0.055;
 const TARGET_MARGIN = 0.16;
@@ -24,7 +25,7 @@ export function serverMapPhysics(layout) {
   const g = geometry(layout);
   return {
     groundHeight(p, r = 0, y = 0) {
-      let height = 0;
+      let height = layout==='fortaleza'?galleryHeight(p,r):0;
       const zone = g.helipad;
       if (zone) {
         const ax = Math.abs(p.x), az = Math.abs(p.z);
@@ -39,6 +40,7 @@ export function serverMapPhysics(layout) {
       }
       const margin = r * 0.5;
       for (const box of g.boxes) {
+        if(box.walkSurface)continue;
         if (box.h > y + 0.25) continue;
         if (p.x + margin < box.minx || p.x - margin > box.maxx ||
             p.z + margin < box.minz || p.z - margin > box.maxz) continue;
@@ -51,6 +53,8 @@ export function serverMapPhysics(layout) {
       for (let iter = 0; iter < 3; iter++) {
         let moved = false;
         for (const box of g.boxes) {
+          if(box.walkSurface)continue;
+          if(box.minY!==undefined&&y+(r<.25?r*2:1.63)<=box.minY+.02)continue;
           if (y >= box.h - 0.05) continue;
           const cx = Math.max(box.minx, Math.min(box.maxx, p.x));
           const cz = Math.max(box.minz, Math.min(box.maxz, p.z));
@@ -106,7 +110,7 @@ export function serverMapPhysics(layout) {
 function pointInsideBox(box, point) {
   return point.x >= box.minx && point.x <= box.maxx &&
     point.z >= box.minz && point.z <= box.maxz &&
-    point.y >= -0.1 && point.y <= box.h;
+    point.y >= (box.minY??-0.1) && point.y <= box.h;
 }
 
 function pointInsideSegment(segment, point) {
@@ -150,7 +154,7 @@ function slabHit(axes, maxDist) {
 function boxHit(box, origin, dir, maxDist) {
   return slabHit([
     { o: origin.x, d: dir.x, lo: box.minx, hi: box.maxx },
-    { o: origin.y, d: dir.y, lo: -0.1, hi: box.h },
+    { o: origin.y, d: dir.y, lo: box.minY??-0.1, hi: box.h },
     { o: origin.z, d: dir.z, lo: box.minz, hi: box.maxz },
   ], maxDist);
 }

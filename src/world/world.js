@@ -13,10 +13,13 @@ import { HELIPAD, collisionBoxesFor, helipadSegments } from './collision-layouts
 import { CALLE_2, calle2FurnitureZ, calle2VehiclePosition, calle2AccessOffset } from './calle-expansion.js';
 import { decorateCalleExpansion } from './calle-expansion-art.js';
 import { CalleNavigation } from './calle-navigation.js';
+import { FortalezaNavigation } from './fortaleza-navigation.js';
 import { calleShopDisplay } from './calle-shop-display.js';
 import { DISTRICT_FACADES } from './district-facades.js';
 import { polishCalleProp } from './calle-prop-polish.js';
 import { polishArchitecture } from './architecture-polish.js';
+import {galleryHeight} from './fortaleza-galleries.js';
+import {addFortalezaGalleries} from './fortaleza-gallery-art.js';
 
 const FIELD_X = 15, FIELD_Z = 18; // semiancho / semilargo
 const SOLDIER_HEIGHT = 1.63;
@@ -102,11 +105,12 @@ export class World {
     // cambia de dónde salen dims/tema/piezas. El "tema" reutiliza texturas,
     // piso y ambiente de un mapa existente.
     this.customMap = isCustomLayout(layout) ? getMap(layout) : null;
+    this.galleryEnabled = layout==='fortaleza'||(this.customMap?.base==='fortaleza'&&this.customMap.objects.some(o=>o.walkSurface));
     const theme = this.customMap?.theme ?? (layout === 'calle2' ? 'calle' : layout);
     this.theme = theme;
 
     const dims = {
-      arena: [11, 13], fortaleza: [21, 26.6], azoteas: [31.5, 40],
+      arena: [11, 13], fortaleza: [26, 26.6], azoteas: [31.5, 40],
       calle: [17, 42], metro: [16, 26], prision: [22, 30], pueblo: [26, 34],
       calle2: [CALLE_2.fx, CALLE_2.fz],
       foundry: [FIELD_X, FIELD_Z],
@@ -139,11 +143,12 @@ export class World {
     this._buildFloor();
     if (this.customMap) this._buildFromData(this.customMap);
     else this._runBuilder(layout);
+    if(this.galleryEnabled&&this.customMap?.decor!==false)addFortalezaGalleries(this);
     if (!this.customMap) polishArchitecture(this, layout);
     this._addMapPeriphery(theme);
     this._flushBoxBatch();
     this._buildSpawns();
-    this.navigation = layout === 'calle2' ? new CalleNavigation(this) : null;
+    this.navigation = layout === 'calle2' ? new CalleNavigation(this) : this.galleryEnabled ? new FortalezaNavigation(this) : null;
 
     // el frustum de sombras debe cubrir el mapa ACTUAL (con ±30 fijos, las
     // esquinas de Fortaleza quedaban sin sombra)
@@ -1138,7 +1143,7 @@ export class World {
   // Caja física + visual. mirror=true agrega la copia rotada 180° (-x,-z).
   _box(x, z, w, d, h, {
     mirror = true, color = 0x9a958c, top = 0xaeaaa1, cover = true, visual = true,
-    surface = null, decorLink = null,
+    surface = null, decorLink = null, minY = 0, walkSurface = false, coverBase = 0,
   } = {}) {
     const place = (px, pz) => {
       // CLONADO DE MAPAS: place() es el embudo por el que pasa cada caja de
@@ -1146,26 +1151,34 @@ export class World {
       // caja exacta como datos; _suppressBoxes deja correr el builder solo
       // por su decoración (fachadas, GLBs, helipuerto) sin crear las cajas —
       // las del clon, ya como datos editables, ocupan su lugar.
-      if (this._capture) this._capture.push({ x: px, z: pz, w, d, h, color, top, cover, visual, surface, decorLink });
+      if (this._capture) this._capture.push({ x: px, z: pz, w, d, h, color, top, cover, visual, surface, decorLink,
+        ...(minY?{minY}:{}),...(walkSurface?{walkSurface}:{}),...(coverBase?{coverBase}:{}) });
       if (this._suppressBoxes) return;
       // variación sutil de tono por caja: rompe la monotonía sin romper la paleta
       const jit = 0.95 + Math.random() * 0.1;
       const c = new THREE.Color(color).multiplyScalar(jit).getHex();
       const t = new THREE.Color(top).multiplyScalar(jit).getHex();
-      if (visual) this._batchBox(px, pz, w, d, h, c, t);
+      if (visual && !minY) this._batchBox(px, pz, w, d, h, c, t);
+      else if(visual){
+        const mesh=new THREE.Mesh(new THREE.BoxGeometry(w,h-minY,d),new THREE.MeshLambertMaterial({color:c}));
+        mesh.position.set(px,(h+minY)/2,pz);mesh.castShadow=true;mesh.receiveShadow=true;this.mapGroup.add(mesh);
+      }
       const minx = px - w / 2, maxx = px + w / 2, minz = pz - d / 2, maxz = pz + d / 2;
       const material = surface ||
         ((this.theme ?? this.layout) === 'fortaleza' || (this.theme ?? this.layout) === 'pueblo' ? 'stone' : 'concrete');
       const collider = { minx, minz, maxx, maxz, h, surface: material };
+      if(minY)collider.minY=minY;
+      if(walkSurface)collider.walkSurface=true;
       this.colliders.push(collider);
       if (cover) {
-        const kind = h <= BLOCK.LOW ? 'low' : h <= BLOCK.MID ? 'medium' : 'high';
+        const kind = h-coverBase <= BLOCK.LOW+.001 ? 'low' : h-coverBase <= BLOCK.MID ? 'medium' : 'high';
         this.faces.push(
           { n: { x: 1, z: 0 }, a: { x: maxx, z: minz }, b: { x: maxx, z: maxz }, h, topY: h, kind, collider },
           { n: { x: -1, z: 0 }, a: { x: minx, z: minz }, b: { x: minx, z: maxz }, h, topY: h, kind, collider },
           { n: { x: 0, z: 1 }, a: { x: minx, z: maxz }, b: { x: maxx, z: maxz }, h, topY: h, kind, collider },
           { n: { x: 0, z: -1 }, a: { x: minx, z: minz }, b: { x: maxx, z: minz }, h, topY: h, kind, collider },
         );
+        if(coverBase)for(const f of this.faces.slice(-4)){f.h=h-coverBase;f.baseY=coverBase;}
       }
     };
     place(x, z);
@@ -1316,6 +1329,7 @@ export class World {
           cover: o.cover ?? (piece.cover !== false),
           visual: decorOn ? (o.visual ?? true) : true,
           surface: o.surface ?? null,
+          minY: o.minY ?? 0, walkSurface: o.walkSurface ?? false, coverBase: o.coverBase ?? 0,
           ...opts(h),
           ...(o.color != null ? { color: o.color } : null),
           ...(o.top != null ? { top: o.top } : null),
@@ -4098,6 +4112,7 @@ export class World {
   // braseros y torreones lejanos de silueta.
   _decorFortaleza() {
     const { HIGH } = BLOCK;
+    const courtyardX=21; // original towers/parapets do not follow annex bounds
     const stoneMat = new THREE.MeshStandardMaterial({
       color: 0x898176, map: this._tex('stone', 1, 0.5),
       bumpMap: this._detailTex('stone', 1, 0.5), bumpScale: 0.042,
@@ -4112,20 +4127,21 @@ export class World {
     // --- almenas: muralla perimetral + escudos de spawn + coronas de torreón
     const pts = [];
     const step = 1.7;
-    for (let x = -this.fx + 0.4; x <= this.fx; x += step) {
+    for (let x = -courtyardX + 0.4; x <= courtyardX; x += step) {
       pts.push([x, -this.fz - 0.4, 0, HIGH]);
       pts.push([x, this.fz + 0.4, 0, HIGH]);
     }
     for (let z = -this.fz + 0.4; z <= this.fz; z += step) {
-      pts.push([-this.fx - 0.4, z, Math.PI / 2, HIGH]);
-      pts.push([this.fx + 0.4, z, Math.PI / 2, HIGH]);
+      if(Math.abs(z)<24.5)continue; // incorporated into the new roofed wall, not floating inside it
+      pts.push([-courtyardX - 0.4, z, Math.PI / 2, HIGH]);
+      pts.push([courtyardX + 0.4, z, Math.PI / 2, HIGH]);
     }
     for (let x = -3.2; x <= 3.3; x += 1.6) { // escudos de spawn (z ∓20.9)
       pts.push([x, -20.9, 0, HIGH]);
       pts.push([-x, 20.9, 0, HIGH]);
     }
     const towers = [[1, 1], [1, -1], [-1, 1], [-1, -1]]
-      .map(([sx, sz]) => [sx * (this.fx + 2.6), sz * (this.fz + 2.6)]);
+      .map(([sx, sz]) => [sx * (courtyardX + 2.6), sz * (this.fz + 2.6)]);
     for (const [tx, tz] of towers) {
       for (let i = 0; i < 10; i++) {
         const a = (i / 10) * Math.PI * 2;
@@ -4465,7 +4481,7 @@ export class World {
       new THREE.MeshLambertMaterial({ color: 0x6c8a4d }),
     ];
     const bushes = [
-      [-20.2, -22, 1.1], [20.2, 22, 1.1], [-19.8, 3.4, 0.9], [19.8, -3.4, 0.9],
+      [-19.2, -25, 1.1], [19.2, 25, 1.1], [-19.8, 3.4, 0.9], [19.8, -3.4, 0.9],
       [-12.9, -25.9, 0.8], [12.9, 25.9, 0.8], [6.3, -25.9, 1.0], [-6.3, 25.9, 1.0],
       [18.2, -10.6, 0.75], [-18.2, 10.6, 0.75], [-15.2, -15.8, 0.85], [15.2, 15.8, 0.85],
     ];
@@ -4485,7 +4501,7 @@ export class World {
       new THREE.MeshLambertMaterial({ color: 0x648a47 }),
     ];
     const trees = [
-      [-26.5, -6, 1.3], [26.5, 6, 1.3], [-25.5, 10, 1.0], [25.5, -10, 1.0],
+      [-30.5, -6, 1.3], [30.5, 6, 1.3], [-29.5, 10, 1.0], [29.5, -10, 1.0],
       [-11, -30.5, 1.15], [11, 30.5, 1.15], [19, -31, 0.9], [-19, 31, 0.9],
     ];
     for (const [x, z, s] of trees) {
@@ -5465,7 +5481,7 @@ export class World {
       slabs([
         { o: origin.x, d: dir.x, lo: c.minx, hi: c.maxx,
           nLo: HIT_N.nx, nHi: HIT_N.px },
-        { o: origin.y, d: dir.y, lo: -0.1, hi: c.h,
+        { o: origin.y, d: dir.y, lo: c.minY??-0.1, hi: c.h,
           nLo: HIT_N.ny, nHi: HIT_N.py },
         { o: origin.z, d: dir.z, lo: c.minz, hi: c.maxz,
           nLo: HIT_N.nz, nHi: HIT_N.pz },
@@ -5539,7 +5555,7 @@ export class World {
     for (const c of this.colliders) {
       const minx = c.minx - inflate, maxx = c.maxx + inflate;
       const minz = c.minz - inflate, maxz = c.maxz + inflate;
-      const miny = -0.1, maxy = c.h + inflate;
+      const miny = c.minY===undefined?-0.1:c.minY-inflate, maxy = c.h + inflate;
       let tmin = 0, tmax = maxDist;
       let ok = true;
       const axes = [
@@ -5576,10 +5592,20 @@ export class World {
     return best;
   }
 
-  // Altura del "suelo" bajo el círculo: la caja más alta que quede a la
-  // altura de los pies o debajo (permite pararse sobre coberturas).
+  // Underside of elevated slabs; prevents jumping into roofs/lintels.
+  ceilingHeight(p,r=0,y=0) {
+    let ceiling=Infinity;
+    for(const c of this.colliders){
+      if(c.minY===undefined||c.minY<=y+.02)continue;
+      if(p.x+r<c.minx||p.x-r>c.maxx||p.z+r<c.minz||p.z-r>c.maxz)continue;
+      ceiling=Math.min(ceiling,c.minY);
+    }
+    return ceiling;
+  }
+
+  // Highest support under the feet, including continuous stair traversal.
   groundHeight(p, r = 0, y = 0) {
-    let g = 0;
+    let g = (this.galleryEnabled||this.layout==='fortaleza')?galleryHeight(p,r):0;
     for (const zone of this.surfaceZones) {
       if (zone.kind !== 'helipad') continue;
       const ax = Math.abs(p.x), az = Math.abs(p.z);
@@ -5596,6 +5622,7 @@ export class World {
     }
     const m = r * 0.5;
     for (const c of this.colliders) {
+      if(c.walkSurface)continue;
       if (c.h > y + 0.25) continue; // demasiado alta para apoyarse
       if (p.x + m < c.minx || p.x - m > c.maxx || p.z + m < c.minz || p.z - m > c.maxz) continue;
       if (c.h > g) g = c.h;
@@ -5610,6 +5637,8 @@ export class World {
       let moved = false;
       for (const c of this.colliders) {
         if (c === ignoredCollider) continue;
+        if(c.walkSurface)continue;
+        if(c.minY!==undefined&&y+(r<.25?r*2:1.63)<=c.minY+.02)continue;
         if (y >= c.h - 0.05) continue;
         const cx = Math.max(c.minx, Math.min(c.maxx, p.x));
         const cz = Math.max(c.minz, Math.min(c.maxz, p.z));
@@ -5659,9 +5688,10 @@ export class World {
 
   // Busca la mejor cara de cobertura en la dirección dada.
   // pos {x,z}, dir {x,z} normalizado. Devuelve {face, target:{x,z}, dist, t} o null.
-  findCover(pos, dir, range, playerR, minDot = 0.45) {
+  findCover(pos, dir, range, playerR, minDot = 0.45, footY = 0) {
     let best = null;
     for (const f of this.faces) {
+      if((f.baseY??0)>footY+.25||f.topY<footY+.5)continue;
       const n = f.n;
       const rel = { x: pos.x - f.a.x, z: pos.z - f.a.z };
       const side = rel.x * n.x + rel.z * n.z;   // distancia con signo a la cara
@@ -5682,7 +5712,7 @@ export class World {
         z: f.a.z + tz * cu + n.z * playerR,
       };
       // línea de visión libre hasta la entrada (evita engancharse a través de otra caja)
-      const o = new THREE.Vector3(pos.x, 0.6, pos.z);
+      const o = new THREE.Vector3(pos.x, footY+0.6, pos.z);
       const d3 = new THREE.Vector3(target.x - pos.x, 0, target.z - pos.z);
       const dl = d3.length();
       if (dl > 0.01) {

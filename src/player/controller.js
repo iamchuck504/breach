@@ -313,7 +313,7 @@ export class Controller {
     dir = { x: dir.x / m, z: dir.z / m };
     this.coverLeanAnim = 0; // no arrastrar el lean al salir de cover
     const exclude = this.cover;
-    const found = this.world.findCover(this.pos, dir, range, PLAYER_R, 0.4);
+    const found = this.world.findCover(this.pos, dir, range, PLAYER_R, 0.4, this.y);
     let reachable = !!found;
     if (found) {
       const steps = Math.max(1, Math.ceil(found.dist / (PLAYER_R * 0.5)));
@@ -474,7 +474,7 @@ export class Controller {
           const earnedRoadie = roadie && this.speed > M.runSpeed * 0.55;
           const range = earnedRoadie ? E.roadieSlideDist : E.slideMaxDist;
           // primero intento snap directo si el cover está pegado
-          const snap = this.world.findCover(this.pos, dir, C.snapRange, PLAYER_R, 0.3);
+          const snap = this.world.findCover(this.pos, dir, C.snapRange, PLAYER_R, 0.3, this.y);
           if (snap && snap.dist <= C.directAttachRange) this._enterCover(snap.face, snap.target);
           else this._tryEvade(dir, range);
         }
@@ -817,7 +817,7 @@ export class Controller {
             // filtro por collider garantizan que sea otra cobertura.
             TMP_O.set(this.pos.x + sx * 1.4, this.y, this.pos.z + sz * 1.4);
             const ahead = this.world.findCover(TMP_O, { x: sx, z: sz },
-              E.bounceRange - 1.4, PLAYER_R, 0.5);
+              E.bounceRange - 1.4, PLAYER_R, 0.5, this.y);
             if (ahead && ahead.face?.collider !== prevCover?.collider) {
               this.cover = null;
               const res = this._tryEvade({ x: sx, z: sz }, E.bounceRange);
@@ -972,6 +972,9 @@ export class Controller {
       this.grounded = true;
     }
 
+    const ceiling=this.world.ceilingHeight?.(this.pos,PLAYER_R,this.y)??Infinity;
+    if(this.y+1.63>ceiling){this.y=ceiling-1.63;this.vy=Math.min(0,this.vy);}
+
     // Pendiente longitudinal para el rig. Dos muestras pequeñas producen un
     // pitch estable en la rampa, pero ignoran paredes/desniveles laterales.
     let pitchTarget = 0;
@@ -994,7 +997,7 @@ export class Controller {
   // tope del bloque (no un hueco ni otro nivel).
   _tryMantle(f, n) {
     if (this.mantle) return false;
-    const h = f.h;
+    const h = f.topY ?? f.h;
     const landX = this.pos.x - n.x * (PLAYER_R + 0.5);
     const landZ = this.pos.z - n.z * (PLAYER_R + 0.5);
     TMP_O.set(this.pos.x, h + 0.55, this.pos.z);
@@ -1031,7 +1034,7 @@ export class Controller {
     if (this.speed > 1) dirs.push({ x: this.vel.x / this.speed, z: this.vel.z / this.speed });
     dirs.push(this.facing());
     for (const d of dirs) {
-      const wall = this.world.findCover(this.pos, d, 0.95, PLAYER_R, 0.3);
+      const wall = this.world.findCover(this.pos, d, 0.95, PLAYER_R, 0.3, this.y);
       if (!wall || wall.face.h < J.wallMinH || wall.face.h < this.y + 0.8 || wall.t > 0.85) continue;
       const n = wall.face.n;
       const tx = -n.z, tz = n.x;

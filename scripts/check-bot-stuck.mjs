@@ -29,6 +29,10 @@ try {
   await page.waitForTimeout(700);
   await page.evaluate(() => {
     const bm = window.BREACH.botMatch;
+    // Exercise the fallback recovery itself. Fortaleza now has a navigation
+    // graph that avoids this obstacle before recovery is needed; gallery
+    // traversal with the graph enabled is covered by check-fort-galleries.
+    bm.world.navigation = null;
     // Esta prueba aísla navegación; salta la presentación inicial sin alterar
     // el comportamiento productivo del match.
     bm.phase = 'playing'; bm.phaseT = 0;

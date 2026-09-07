@@ -134,6 +134,12 @@ abre el editor y arranca su servidor local oculto si todavía no está activo.
 
 ## Validación (headless, sin abrir ventana)
 
+Fortaleza incorpora dos galerías techadas con 18 ventanas y cuatro escaleras
+laterales que arrancan delante de los spawns. El patio y sus coberturas se
+conservan. Fuente Blender, reproducción y alcance de pruebas en
+[`art/fortaleza-galleries/README.md`](art/fortaleza-galleries/README.md).
+Con el servidor de desarrollo activo: `node scripts/check-fort-galleries.mjs`.
+
 ```bash
 npx playwright install chromium        # una vez por máquina/CI
 npm test                                # genera dist y ejecuta la suite oficial

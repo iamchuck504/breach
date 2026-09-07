@@ -236,6 +236,9 @@ export function mapFromSnapshot(layout, snap, name = null) {
     ...(b.visual === false ? { visual: false } : null),
     ...(b.surface ? { surface: b.surface } : null),
     ...(b.decorLink ? { _decorLink: b.decorLink } : null),
+    ...(b.minY ? { minY:b.minY } : null),
+    ...(b.walkSurface ? { walkSurface:true } : null),
+    ...(b.coverBase ? { coverBase:b.coverBase } : null),
   }));
   // La decoración editable se captura separada de las cajas jugables.
   // Los vehículos se enlazan con el collider invisible que comparte centro,

@@ -98,7 +98,7 @@ export function polishArchitecture(world, layout) {
     }
     // Masonry bands articulate the existing round towers, outside play.
     const ring=new T.CylinderGeometry(2.17,2.19,.18,12,1,true);
-    for(const x of [-world.fx-2.6,world.fx+2.6])for(const z of [-world.fz-2.6,world.fz+2.6]){
+    for(const x of [-23.6,23.6])for(const z of [-world.fz-2.6,world.fz+2.6]){
       for(const y of [1.2,4.5,7.4])add(ring,stone,pose(x,y,z));
     }
     // The four existing braziers get an iron cage, not extra floor props.
