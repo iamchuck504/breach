@@ -138,6 +138,8 @@ try{
       return Math.min(z+half,seam.position.z+s)-Math.max(z-half,seam.position.z-s)<1e-6;
     }));
     const district=world.mapGroup.getObjectByName('calle2-service-districts');
+    const upperBatches=district.children.filter(o=>o.name==='calle2-instanced-upper-facades');
+    checks.upperFacadeBatchBudget=upperBatches.length>0&&upperBatches.length<=70;
     const patrols=world.mapGroup.children.filter(o=>o.userData.police);
     checks.policePair=patrols.length===2&&patrols.every(p=>Math.abs(p.position.x)===8.8&&Math.abs(p.position.z)===26);
     const baseFloors=district.children.filter(o=>['service-alley-floor','workshop-floor'].includes(o.name));

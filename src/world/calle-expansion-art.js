@@ -39,6 +39,9 @@ export function decorateCalleExpansion(world, buildings) {
   }
   // Existing facade modules continue behind the side routes, outside play.
   const facadeInstances=new Map();
+  // Identical local clipping planes must reuse geometry or every repeated
+  // building becomes its own draw batch. Cache lives only for this map build.
+  const clippedFacades=new Map();
   for(const side of [-1,1])for(const z of [-30,-18,-6,6,18,30]) {
     const source=buildings.find(b=>b.userData.streetBuilding.side===side);
     // Put the complete first upper sill above the 4.4m service wall.
@@ -57,9 +60,17 @@ export function decorateCalleExpansion(world, buildings) {
       if(bounds.max.y<=cut){part.visible=false;return;}
       // Trim crossing wall panels as well as removing entire storefronts.
       // Otherwise their lower halves overlap the new district walls.
-      if(bounds.min.y<cut)part.geometry=clipFacadeAbove(part.geometry,part.matrixWorld,cut);
+      if(bounds.min.y<cut){
+        const e=part.matrixWorld.elements;
+        const clipKey=[part.geometry.uuid,e[1],e[5],e[9],e[13]-cut].join(':');
+        if(!clippedFacades.has(clipKey))clippedFacades.set(clipKey,clipFacadeAbove(part.geometry,part.matrixWorld,cut));
+        part.geometry=clippedFacades.get(clipKey);
+      }
       const materials=Array.isArray(part.material)?part.material:[part.material];
-      const key=part.geometry.uuid+materials.map(m=>m.uuid).join(':');
+      // Two-building chunks retain useful frustum culling along the alley.
+      // One avenue-wide batch saves calls but submits too many hidden triangles.
+      const chunk=bounds.min.y<cut?Math.floor((z+30)/24):'shared';
+      const key=part.geometry.uuid+materials.map(m=>m.uuid).join(':')+':'+chunk;
       if(!facadeInstances.has(key))facadeInstances.set(key,{geometry:part.geometry,material:part.material,matrices:[]});
       facadeInstances.get(key).matrices.push(part.matrixWorld.clone());part.visible=false;
     });
