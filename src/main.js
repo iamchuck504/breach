@@ -36,6 +36,9 @@ import {
 } from './game/lobby-rules.js';
 import { AmmoCrates } from './game/crates.js';
 import { WeaponDrops } from './game/drops.js';
+import { PowerRespawn } from './game/power-respawn.js';
+const localPowerRespawn = new PowerRespawn();
+let localPowerTime = 0;
 import { takeDropAmmo, replacementSlot, canReplaceDrop } from './game/drop-policy.js';
 import { LobbyUI } from './ui/lobby.js';
 import { MenuControllerNavigator } from './ui/menu-controller.js';
@@ -1583,7 +1586,9 @@ function damagePlayerLocal(dmg, fromName, shooter, hitCtx = null) {
     const wep = dropWep, mag = G.weapons.state[dropWep].mag, res = G.weapons.state[dropWep].reserve;
     const id = 'p' + G.dropSeq++;
     const deathRig = G.rig, deathDrops = G.drops;
+    if (deathDrops && TUNING.weapons[wep]?.special && mag + res > 0) deathDrops.pendingPower = (deathDrops.pendingPower || 0) + 1;
     setTimeout(() => {
+      if (deathDrops && TUNING.weapons[wep]?.special && mag + res > 0) deathDrops.pendingPower--;
       if (!deathDrops || G.rig !== deathRig || G.drops !== deathDrops) return;
       const rag = deathRig.rag;
       const x = rag ? rag.bx + rag.ox : dropAt.x;
@@ -1624,22 +1629,24 @@ function startBots(lobby = G.lobby || defaultLocalLobby()) {
     playerName: G.name,
     playerVariant: G.charVariant,
     stepSound,
-    dropWeapon: (wep, x, z, team, y = 0, deathRig = null) => {
+    dropWeapon: (wep, x, z, team, y = 0, deathRig = null, specialAmmo = 0) => {
       // los bots no llevan contador de balas: sueltan un remanente plausible.
       // Aparece exactamente al soltar el arma y sigue el pequeño arrastre del
       // cadáver en vez de quedarse en la posición previa al impacto.
       const def = TUNING.weapons[wep];
       const id = 'b' + G.dropSeq++;
       const deathDrops = G.drops;
+      if (deathDrops && def.special && specialAmmo > 0) deathDrops.pendingPower = (deathDrops.pendingPower || 0) + 1;
       setTimeout(() => {
+        if (deathDrops && def.special && specialAmmo > 0) deathDrops.pendingPower--;
         if (!deathDrops || G.drops !== deathDrops) return;
         const rag = deathRig?.rag;
         const dx = rag ? rag.bx + rag.ox : x;
         const dz = rag ? rag.bz + rag.oz : z;
         const gy = world.groundHeight({ x: dx, z: dz }, PLAYER_R, rag?.by ?? y);
         deathDrops.spawn(id, wep, dx, dz, team,
-          Math.ceil(def.mag * (0.2 + Math.random() * 0.6)),
-          Math.ceil(def.reserve * Math.random() * 0.4), undefined, gy);
+          def.special ? Math.min(def.mag, specialAmmo) : Math.ceil(def.mag * (0.2 + Math.random() * 0.6)),
+          def.special ? Math.max(0, specialAmmo - def.mag) : Math.ceil(def.reserve * Math.random() * 0.4), undefined, gy);
       }, 220);
     },
     player: () => ({
@@ -2411,6 +2418,11 @@ function bindNet(net) {
     const d = G.drops?.drops.get(m.id);
     if (d) { d.mag = m.mag; d.res = m.res; d.claimed = false; }
   });
+  net.on('specialRespawn', (m) => {
+    if (G.mode !== 'online' || G.onlinePhase !== 'playing' || !world.specialSpot || !TUNING.weapons[m.wep]?.special) return;
+    const spot = world.specialSpot;
+    specials.spawn(m.wep, spot.x, spot.z, world.groundHeight(spot, 0.4, 0.1));
+  });
   net.on('dropR', (m) => { if (alive()) G.drops?.remove(m.id); });
   net.on('dropGive', (m) => {
     if (!alive()) return;
@@ -2789,6 +2801,8 @@ function spawnOnlineSpecial(info) {
 
 // Coloca el arma especial de la ronda en el pedestal del mapa (si lo tiene)
 function spawnSpecialForRound() {
+  localPowerRespawn.deadline = null;
+  localPowerTime = 0;
   const spot = world.specialSpot;
   if (!spot) { specials.clear(); return; }
   const wep = G.specialRound % 2 === 1 ? 'sniper' : 'bazooka';
@@ -3767,6 +3781,16 @@ function simStep(dt) {
         !G.botMatch.controlsLocked()) {
       G.specialRound = G.botMatch.round;
       spawnSpecialForRound();
+    }
+    if (G.mode === 'bots') {
+      localPowerTime += dt;
+      const wep = G.specialRound % 2 === 1 ? 'sniper' : 'bazooka';
+      const st = G.weapons.state[wep];
+      const available = !!specials.active || (G.selfAlive && st && st.mag + st.reserve > 0) ||
+        G.botMatch.bots.some(b => b.alive && b.wep === wep && b.specialAmmo > 0) ||
+        (G.drops?.pendingPower || 0) > 0 ||
+        [...(G.drops?.drops.values() || [])].some(d => d.wep === wep && d.mag + d.res > 0);
+      if (localPowerRespawn.update(localPowerTime, G.botMatch.phase === 'playing', available)) spawnSpecialForRound();
     }
     // regen del jugador (igual que online, pero local)
     if (G.mode === 'bots') {

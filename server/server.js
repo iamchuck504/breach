@@ -13,6 +13,7 @@ import {
 import { ROUND_FINISH_HOLD as DEFAULT_ROUND_FINISH_HOLD } from '../src/game/match-flow.js';
 import { TUNING } from '../src/config/tuning.js';
 import { nextRespawnWave } from '../src/game/respawn-wave.js';
+import { PowerRespawn } from '../src/game/power-respawn.js';
 import { takeDropAmmo, canReplaceDrop, replacementSlot } from '../src/game/drop-policy.js';
 import { damageFalloff, firearmDamage, rocketSplashDamage } from '../src/combat/damage.js';
 import { isSniperHeadshotDeath, rocketDeathLevel } from '../src/combat/death-reactions.js';
@@ -197,6 +198,7 @@ function clearTimer() { if (phaseTimer) clearTimeout(phaseTimer); phaseTimer = n
 // bazooka). El servidor es la ÚNICA autoridad de quién se la lleva: dos
 // jugadores que la reclaman a la vez producen un solo ganador.
 let special = { wep: null, taken: true, by: null };
+const powerRespawn = new PowerRespawn();
 const firstSpecial = process.env.SPECIAL_FIRST_WEAPON === 'bazooka' ? 'bazooka' : 'sniper';
 function specialForRound(r) {
   return r % 2 === 1 ? firstSpecial : (firstSpecial === 'sniper' ? 'bazooka' : 'sniper');
@@ -320,6 +322,7 @@ function prepareRound(first = false) {
   waveEpoch = startAt;
   for (const p of roster) freshCombatState(p, pickSpawn(p.team, indices[p.team]++));
   special = { wep: specialForRound(round), taken: false, by: null };
+  powerRespawn.deadline = null;
   phase = first ? 'intro' : 'countdown';
   broadcastRaw({ t: first ? 'matchStart' : 'prepare', phase, startAt, round,
     startsIn: Math.max(0, startAt - nowSec()),
@@ -934,7 +937,8 @@ wss.on('connection', (ws) => {
           Math.abs((claimant.y || 0) - (spot.y || 0)) > 1.5) return;
       special.taken = true; special.by = claimant.id; claimant.specialWep = special.wep;
       claimant.weaponSlots ||= ['smg', 'shotgun', 'pistol', 'grenade'];
-      claimant.weaponSlots[replacementSlot(claimant.weaponSlots, claimant.w)] = special.wep;
+      const existingSlot = claimant.weaponSlots.indexOf(special.wep);
+      claimant.weaponSlots[existingSlot >= 0 ? existingSlot : replacementSlot(claimant.weaponSlots, claimant.w)] = special.wep;
       grantWeaponAmmo(claimant, special.wep);
       broadcastRaw({ t: 'specialTaken', id: claimant.id, wep: special.wep });
       return;
@@ -979,6 +983,13 @@ setInterval(() => {
     }
   }
   for (const [id, d] of drops) { d.t -= 1 / TICK_HZ; if (d.t <= 0) { drops.delete(id); broadcastRaw({ t: 'dropR', id }); } }
+  const powerAvailable = !special.taken || allSlots().some(p => p.alive &&
+    p.weaponSlots?.includes(special.wep) && (p.ammoBudget?.[special.wep] || 0) > 0) ||
+    [...drops.values()].some(d => d.wep === special.wep && d.mag + d.res > 0);
+  if (powerRespawn.update(now, phase === 'playing' && !!special.wep, powerAvailable)) {
+    special.taken = false; special.by = null;
+    broadcastRaw({ t: 'specialRespawn', wep: special.wep });
+  }
   for (let i = 0; i < CRATES.length; i++) { const c = CRATES[i]; if (!c.up) { c.t -= 1 / TICK_HZ; if (c.t <= 0) { c.up = true; broadcastRaw({ t: 'crate', i, up: 1 }); } } }
   if (players.size && inMatch()) broadcastRaw({ t: 'snap', phase,
     startsIn: (phase === 'intro' || phase === 'countdown')

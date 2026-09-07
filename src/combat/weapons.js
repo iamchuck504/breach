@@ -85,7 +85,8 @@ export class Weapons {
   // llevas pistola/granada). Devuelve el id del arma que salió del loadout.
   giveSpecial(k) {
     const curIdx = this.slots.indexOf(this.cur);
-    const idx = curIdx === 0 || curIdx === 1 ? curIdx : 0;
+    const existing = this.slots.indexOf(k);
+    const idx = existing >= 0 ? existing : (curIdx === 0 || curIdx === 1 ? curIdx : 0);
     const removed = this.slots[idx];
     delete this.state[removed];
     this.slots[idx] = k;
