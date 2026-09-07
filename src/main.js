@@ -784,7 +784,7 @@ document.getElementById('btn-lobby-join').addEventListener('click', () => connec
 const btnMap = document.getElementById('btn-map');
 {
   const saved = localStorage.getItem('breach.map');
-  G.mapChoice = MAPS.includes(saved) ? saved : 'fortaleza';
+  G.mapChoice = saved === 'calle' ? 'calle2' : MAPS.includes(saved) ? saved : 'fortaleza';
 }
 function updateMapBtn() {
   updateMapPreview(G.mapChoice);

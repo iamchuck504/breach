@@ -57,11 +57,12 @@ pedestal — la bazooka solo con línea limpia y sin compañeros en el radio.
 ## Mapas
 
 La rotación jugable actual contiene **Fortaleza** (día, castillo),
-**Azoteas** (noche urbana), **Calle Cerrada** (calle urbana nocturna) y
-**Calle Cerrada #2** (versión independiente con callejón de servicio y taller
-semiabierto). La #2 conserva la avenida, vehículos, spawns y pickups del
-original; añade dos pasos por lado en el tercio medio y navegación por rutas
-verificadas contra la colisión compartida con el servidor. El original sigue disponible.
+**Azoteas** (noche urbana) y **Calle Cerrada** (la antigua #2, con callejón de
+servicio y taller semiabierto). La primera versión fue retirada de la selección
+y rotación. Se conserva el identificador interno `calle2` para no romper sus
+assets ni mapas guardados; las selecciones antiguas de `calle` migran a `calle2`.
+Incluye dos pasos por lado en el tercio medio y navegación por rutas verificadas
+contra la colisión compartida con el servidor.
 Son los únicos mapas disponibles en el menú y el lobby. Hay builders de mapas
 experimentales fuera de rotación, pero no se anuncian como contenido jugable.
 Hay 5 variantes de soldado por equipo en PERSONAJE y opciones de Audio, Video,

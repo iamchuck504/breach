@@ -19,7 +19,8 @@ for(const p of SIDE_PROPS){
   assert(Math.abs(p.x)-p.w/2>25+.48,'Center route retains body clearance');
 }
 
-assert(MAPS.includes('calle')&&MAPS.includes('calle2'));
+assert(!MAPS.includes('calle')&&MAPS.includes('calle2'));
+assert.equal(normalizeLobbySettings({map:'calle'}).map,'calle2');
 assert.equal(normalizeLobbySettings({map:'calle2'}).map,'calle2');
 assert.deepEqual(MAP_RUNTIME.calle,MAP_RUNTIME.calle2);
 for(const side of [-1,1]){
@@ -255,7 +256,7 @@ try{
   await page.evaluate(()=>document.getElementById('btn-bots').click());
   const selector=page.locator('[data-setting="map"]');
   const options=await selector.locator('option').evaluateAll(items=>items.map(o=>o.value));
-  assert(options.includes('calle')&&options.includes('calle2'));
+  assert(!options.includes('calle')&&options.includes('calle2'));
   await selector.selectOption('calle2');
   await page.evaluate(()=>document.getElementById('btn-lobby-start').click());
   await page.waitForFunction(()=>window.BREACH_WORLD.layout==='calle2'&&window.BREACH.botMatch?.bots.length>0);

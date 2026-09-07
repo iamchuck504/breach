@@ -3,7 +3,7 @@ export const TEAM_CAPACITY = 4;
 // Mapas aprobados para la build pública. Los layouts restantes se conservan
 // en el proyecto para seguir trabajándolos, pero no aparecen en lobbies ni en
 // la rotación automática hasta que estén listos.
-export const MAPS = ['fortaleza', 'azoteas', 'calle', 'calle2'];
+export const MAPS = ['fortaleza', 'azoteas', 'calle2'];
 // Datos de gameplay que deben coincidir entre cliente y servidor. Mantenerlos
 // aquí evita que el mapa dibuje pickups en un sitio mientras la autoridad
 // online los valida en otro.
@@ -61,6 +61,8 @@ export const DEFAULT_LOBBY_SETTINGS = Object.freeze({
 export const isCustomMapId = (id) => typeof id === 'string' && id.startsWith('custom:');
 
 export function normalizeLobbySettings(value = {}, { allowCustom = false } = {}) {
+  // Old saved street selections now open the retained expanded map.
+  if(value.map==='calle')value={...value,map:'calle2'};
   const rounds = Number(value.rounds);
   const lives = Number(value.lives);
   const mapOk = MAPS.includes(value.map) || (allowCustom && isCustomMapId(value.map));
