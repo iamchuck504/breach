@@ -367,7 +367,7 @@ export class Controller {
     const lowCoverAim = this.state === 'cover' && this.aim && this.cover &&
       this.cover.h <= C.lowHeight;
     const exposeTarget = lowCoverAim ? 1 : 0;
-    const exposeRate = exposeTarget ? 18 : 40;
+    const exposeRate = exposeTarget ? C.aimEnterRate : 40;
     this.coverAimExposure += (exposeTarget - this.coverAimExposure) *
       (1 - Math.exp(-exposeRate * dt));
     // Evaluar contra el input de ESTE frame, no contra this.aim anterior.

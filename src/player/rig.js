@@ -1696,6 +1696,9 @@ export class Rig {
     set(this.aimRig.position, 'y', aimRigY);
 
     // aplicar targets con damping
+    if ((p.aim && p.state.startsWith('cover_')) || p.state.startsWith('blind_')) {
+      damp = Math.max(damp, TUNING.cover.firePoseRate);
+    }
     const k = 1 - Math.exp(-damp * dt);
     for (const [o, props] of T) {
       for (const prop in props) o[prop] += (props[prop] - o[prop]) * k;

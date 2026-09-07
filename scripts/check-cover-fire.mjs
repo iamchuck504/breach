@@ -46,7 +46,7 @@ const ctrlInput = {
 };
 controller.update(1 / 60, ctrlInput, false);
 check(!controller.fireAligned(), 'cover bajo permitió disparar antes de asomarse');
-for (let i = 1; i < 9; i++) controller.update(1 / 60, ctrlInput, false);
+for (let i = 1; i < 3; i++) controller.update(1 / 60, ctrlInput, false);
 check(controller.coverAimExposure >= 0.82 && controller.fireAligned(),
   `ADS no recuperó línea de fuego a tiempo (${controller.coverAimExposure})`);
 ctrlInput.aimHeld = false;

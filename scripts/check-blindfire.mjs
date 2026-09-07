@@ -108,6 +108,7 @@ try {
       return {
         weapon: G.weapons.cur,
         mag: G.weapons.st.mag,
+        reloading: G.weapons.reloading,
         initialMag: G.weapons.def.mag,
         anim: G.player.animState(),
         mode: G.player.blindMode,
@@ -173,6 +174,12 @@ try {
   for (const [weapon, result] of Object.entries(weaponResults)) {
     if (result.mag >= result.initialMag) {
       fail.push(`${weapon} no disparó en blindfire (${JSON.stringify(result)})`);
+    }
+    // Single-shot weapons can already be reloading at this sample. Their
+    // protected reload pose is not an active barrel-reticle pose.
+    if (result.reloading && result.mag === 0 && result.mode === null) {
+      if (!result.anim.startsWith('cover_')) fail.push(`${weapon} no volvió a cover durante recarga`);
+      continue;
     }
     if (!result.reticleVisible || result.reticleError > 1.25) {
       fail.push(`${weapon} retícula blindfire incorrecta (${JSON.stringify(result)})`);
