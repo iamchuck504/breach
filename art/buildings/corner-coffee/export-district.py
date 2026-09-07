@@ -51,7 +51,11 @@ for name,style,span,height,color,tag in SHOPS:
         if short and ((n.startswith(('Window','Sloped sill','Lintel','Pipe clamp')) and z>6.5)
                       or (n.startswith('Brick course') and z>6.93)):
             removed.append(o);continue
-        o.location.x*=ratio
+        # Move complete window bays, never stretch the spacing of their parts.
+        if n.startswith(('Window','Sloped sill','Lintel')):
+            bay=min((-2.45,0,2.45),key=lambda center:abs(x-center))
+            o.location.x=bay*ratio+(x-bay)
+        else:o.location.x*=ratio
         if n.startswith(('Brick course','Existing envelope','Roof','Stepped cornice','Floor string','Store surround','Sign ')):
             o.scale.x*=ratio
         if n=='Existing envelope':o.scale=(ratio,1,(height-.18)/9.17);o.location.z=(height-.18)/2
@@ -164,15 +168,20 @@ for name,style,span,height,color,tag in SHOPS:
     if style=='cafe':
         ring('Owl eye',center-.18,-.42,1.8,.13,ivory);ring('Owl eye',center+.18,-.42,1.8,.13,ivory)
         text('NIGHT SERVICE',center,-.42,1.39,.21,ivory)
-    # Wide storefronts need architectural bay rhythm, not stretched 3-bay windows.
+    # Reuse the complete approved center window, including identical frames,
+    # transoms and sills. Keep a generous masonry pier between every bay.
     if span>10:
-        for level,z in enumerate((4.78,7.5) if not short else (4.78,)):
-            for x in (-1.225*ratio,1.225*ratio):
-                box('Extra window recess',x,-.065,z,1.55,.08,1.85,black)
-                box('Extra window glass',x,-.11,z,1.29,.04,1.57,glass)
-                for dx in (-.73,.73):box('Extra window jamb',x+dx,-.15,z,.11,.22,1.85,bpy.data.materials['Warm limestone'])
-                for dz in (-.91,.91):box('Extra window lintel',x,-.18,z+dz,1.7,.25,.12,bpy.data.materials['Warm limestone'])
-                box('Extra window mullion',x,-.15,z,.05,.08,1.65,black)
+        windows=[o for o in asset if o.name.startswith(('Window','Sloped sill','Lintel'))]
+        template=[o for o in windows if abs(o.location.x)<1]
+        count=4 if span<13 else 5
+        spacing=(span-2.8)/(count-1)
+        assert spacing>2.2
+        for i in range(count):
+            center=(i-(count-1)/2)*spacing
+            for source in template:
+                o=source.copy();o.data=source.data.copy();scene.collection.objects.link(o)
+                o.location.x+=center;asset.append(o)
+        for o in windows:asset.remove(o);bpy.data.objects.remove(o,do_unlink=True)
     # West-side shops keep their existing world-space door bay. Reposition parts,
     # never mirror geometry/lettering (which would reverse the signs).
     if name in {'NORTHLINE RX','CEDAR PHARMACY','MOTOR WORKS','IRON & KEY','SPIN CYCLE','NEIGHBOR MARKET','SOUTH END DELI'}:
