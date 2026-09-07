@@ -4,6 +4,7 @@ import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { DISTRICT_FACADES } from './district-facades.js';
 
 const URBAN_ASSETS = Object.freeze({
+  ...Object.fromEntries(['fort-gate','roof-access','roof-grille','roof-cabinet'].map(id=>[id,`${id}.glb`])),
   ...Object.fromEntries(['coffee','hotdog','news','dumpster','jersey','roadwork','shelter'].map(id=>[`prop-${id}`,`prop-${id}.glb`])),
   ...Object.fromEntries(Object.values(DISTRICT_FACADES).filter(id=>id!=='cornerCoffee').map(id=>[id,`${id}.glb`])),
   cornerCoffee: 'corner-coffee.glb',

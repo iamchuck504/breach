@@ -16,6 +16,7 @@ import { CalleNavigation } from './calle-navigation.js';
 import { calleShopDisplay } from './calle-shop-display.js';
 import { DISTRICT_FACADES } from './district-facades.js';
 import { polishCalleProp } from './calle-prop-polish.js';
+import { polishArchitecture } from './architecture-polish.js';
 
 const FIELD_X = 15, FIELD_Z = 18; // semiancho / semilargo
 const SOLDIER_HEIGHT = 1.63;
@@ -138,6 +139,7 @@ export class World {
     this._buildFloor();
     if (this.customMap) this._buildFromData(this.customMap);
     else this._runBuilder(layout);
+    if (!this.customMap) polishArchitecture(this, layout);
     this._addMapPeriphery(theme);
     this._flushBoxBatch();
     this._buildSpawns();
@@ -4245,6 +4247,7 @@ export class World {
     const gate = new THREE.InstancedMesh(
       new THREE.PlaneGeometry(4.6, 2.45),
       new THREE.MeshLambertMaterial({ map: this._tex('gate'), color: 0xa47a56 }), 2);
+    gate.name = 'fortaleza-procedural-gates';
     for (const [i, z, ry] of [[0, -20.385, 0], [1, 20.385, Math.PI]]) {
       q.setFromEuler(e.set(0, ry, 0));
       m4.compose(p.set(0, 1.23, z), q, s.set(1, 1, 1));
