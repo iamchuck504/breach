@@ -63,6 +63,30 @@ try{
       if(!fits)throw Error(JSON.stringify({prop:o.userData.blenderProp,key:o.userData.editorDecorKey,old,current}));
       return fits;
     });
+    // Plaques must be readable from standing approach angles, not merely
+    // when looking horizontally at their centers. Ignore hidden fallbacks.
+    checks.propSignClearance=true;
+    for(const group of modeled){
+      const id=group.userData.blenderProp;
+      const model=group.children.find(c=>c.name!=='procedural-prop-fallback');
+      const samples=[];
+      if(id==='hotdog'||id==='news'){
+        const z=id==='hotdog'?1.311:1.361;
+        for(const x of [-.4,0,.4])for(const y of [2.32,2.40,2.48])samples.push([x,y,z,1]);
+      }
+      if(id==='coffee')for(const y of [1.535,1.625])samples.push([-.37,y,.135,-1]);
+      if(id==='hotdog')for(const y of [1.65,1.78,1.94])samples.push([0,y,-.66,1]);
+      if(id==='dumpster')for(const side of [-1,1])for(const x of [-.3,0,.3])samples.push([x,.60,side*.98,side]);
+      model.updateWorldMatrix(true,true);
+      for(const [x,y,z,side] of samples)for(const approach of [-.65,0,.65]){
+        const target=model.localToWorld(new T.Vector3(x,y,z));
+        const origin=model.localToWorld(new T.Vector3(approach,1.63,z+side*2.5));
+        const hit=new T.Raycaster(origin,target.clone().sub(origin).normalize(),0,5).intersectObject(model,true)[0];
+        const clear=!!hit&&hit.point.distanceTo(target)<.065;
+        if(!clear)throw Error(`Prop sign blocked: ${id} ${group.userData.editorDecorKey} ${[x,y,z,approach]} by ${hit?.object.name}`);
+        checks.propSignClearance&&=clear;
+      }
+    }
     checks.parentedPropDetails=polished.every(p=>p.children.filter(o=>o.name.startsWith('calle2-prop-polish:'))
       .every(o=>o.position.length()===0&&o.rotation.x===0&&o.rotation.y===0&&o.rotation.z===0));
     checks.propSilhouette=polished.every(p=>{

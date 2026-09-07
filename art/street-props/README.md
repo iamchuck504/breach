@@ -27,3 +27,11 @@ presence, hidden fallback, unchanged spawns/routes/collision, and seven-bot play
 Screenshots cover coffee, hot dogs, news and dumpster inside the map.
 Representative frame: 443,916 triangles / 1,532 draws (previous 411,538 / 1,585).
 This is not a low-end GPU benchmark or a long multiplayer soak test.
+
+Signage follow-up: kiosk plaques moved as complete framed assemblies to the
+awning's leading edge; coffee menu raised clear of the grinder; hot-dog menu
+centered away from the upright; dumpster's central rib removed from the label.
+`propSignClearance` samples titles/subtitles and labels at three standing
+approach angles on both kiosk orientations and both dumpster faces. This checks
+the prop's own geometry, not an impossible guarantee against occlusion from
+every distant viewpoint by other objects. The district facade checks also pass.

@@ -7,7 +7,7 @@
   "hotdog": {
     "file": "prop-hotdog.glb",
     "meshes": 16,
-    "bytes": 462268
+    "bytes": 462460
   },
   "news": {
     "file": "prop-news.glb",
@@ -17,7 +17,7 @@
   "dumpster": {
     "file": "prop-dumpster.glb",
     "meshes": 11,
-    "bytes": 232708
+    "bytes": 225148
   },
   "jersey": {
     "file": "prop-jersey.glb",

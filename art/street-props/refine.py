@@ -11,6 +11,12 @@ for kind in ('coffee','hotdog','news','dumpster','jersey','roadwork','shelter'):
     bpy.ops.wm.read_factory_settings(use_empty=True)
     bpy.ops.import_scene.gltf(filepath=str(HERE/'input'/f'{kind}.glb'))
     original=[o for o in bpy.context.scene.objects if o.type=='MESH']
+    if kind in ('hotdog','news'):
+        # Mount the complete plaque at the awning's leading edge, so its
+        # subtitle remains visible from a character-height approach.
+        for o in original:
+            if abs(o.matrix_world.translation.z-2.40)<.005:
+                transform=o.matrix_world.copy();transform.translation.y-=.38;o.matrix_world=transform
     if kind=='news':
         for o in list(original):
             if abs(o.dimensions.x-.25)<.005 and abs(o.matrix_world.translation.z-.49)<.005:
@@ -63,9 +69,9 @@ for kind in ('coffee','hotdog','news','dumpster','jersey','roadwork','shelter'):
         for x in (-.50,-.25,0,.25,.50):
             for y,h in ((.31,.20),(.84,.17)):
                 box('Cart panel slat',x,y,-.326,.012,h,.018,copper,.002)
-        box('Menu plaque',-.37,1.38,.16,.29,.37,.03,black)
-        label('ESPRESSO',-.37,1.44,.138,.039,cream,True)
-        label('LATTE',-.37,1.35,.138,.039,cream,True)
+        box('Menu plaque',-.37,1.55,.16,.29,.37,.03,black)
+        label('ESPRESSO',-.37,1.61,.138,.039,cream,True)
+        label('LATTE',-.37,1.52,.138,.039,cream,True)
         for x in (-.56,.56):box('Canopy edge trim',x,2.09,0,.025,.08,.86,copper)
     elif kind=='hotdog':
         box('Griddle housing',-.40,1.16,.60,.61,.10,.34,steel)
@@ -75,10 +81,10 @@ for kind in ('coffee','hotdog','news','dumpster','jersey','roadwork','shelter'):
             cyl('Grilled sausage',-.60+i*.13,1.265,.60,.027,.16,red,'z')
         box('Serving tray',.41,1.125,.61,.35,.04,.25,steel)
         for x in (.33,.46):box('Bread roll',x,1.18,.61,.10,.07,.18,cream,.028)
-        box('Small menu board',.47,1.72,-.686,.42,.59,.04,black)
-        label('MENU',.47,1.91,-.66,.083,cream)
-        label('HOT DOG',.47,1.76,-.66,.047,cream)
-        label('SODA',.47,1.63,-.66,.047,cream)
+        box('Small menu board',0,1.72,-.686,.42,.59,.04,black)
+        label('MENU',0,1.91,-.66,.083,cream)
+        label('HOT DOG',0,1.76,-.66,.047,cream)
+        label('SODA',0,1.63,-.66,.047,cream)
         for x in (-.62,-.41,-.20,.01,.22,.43,.64):box('Awning stripe',x,2.247,1.02,.075,.005,.41,cream,.001)
         for x in (-.74,.74):box('Counter corner trim',x,.57,.82,.045,.77,.025,steel)
     elif kind=='news':
@@ -93,7 +99,7 @@ for kind in ('coffee','hotdog','news','dumpster','jersey','roadwork','shelter'):
         for i in range(4):box('Newspaper stack',-.40,1.12+i*.024,.77,.43,.018,.25,cream,.001)
         box('Till register',.43,1.19,.65,.25,.18,.24,black)
     elif kind=='dumpster':
-        for x in (-.82,0,.82):
+        for x in (-.82,.82):
             box('Welded front rib',x,.53,-.978,.06,.65,.022,steel)
         for side in (-1,1):
             box('Lift pocket',side*1.185,.64,0,.045,.14,.65,steel)
