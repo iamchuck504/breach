@@ -5624,6 +5624,12 @@ export class World {
     for(const c of this.colliders){
       if(c.minY===undefined||c.minY<=y+.02)continue;
       if(p.x+r<c.minx||p.x-r>c.maxx||p.z+r<c.minz||p.z-r>c.maxz)continue;
+      // Use the same circular footprint as horizontal collision. The bounding
+      // square includes empty corners and wall tangencies; treating those as
+      // ceilings pushes a supported character down beside gallery windows.
+      const dx=p.x-Math.max(c.minx,Math.min(c.maxx,p.x));
+      const dz=p.z-Math.max(c.minz,Math.min(c.maxz,p.z));
+      if(r>0&&dx*dx+dz*dz>=Math.max(0,r-1e-6)**2)continue;
       ceiling=Math.min(ceiling,c.minY);
     }
     return ceiling;
