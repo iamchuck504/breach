@@ -11,6 +11,8 @@ export const LANGUAGES = Object.freeze([
 ]);
 
 const en = {
+  'pickup.replace': 'Press [{button}] to replace {old} with {weapon}',
+  'spectator.waveIn': 'NEXT RESPAWN WAVE · {count}s',
   'common.enter': 'ENTER', 'common.preparing': 'PREPARING…', 'common.play': 'PLAY',
   'common.pause': 'PAUSE', 'common.resume': 'RESUME', 'common.back': 'BACK',
   'common.change': 'CHANGE', 'common.fullscreen': 'FULLSCREEN',
@@ -130,6 +132,8 @@ const en = {
 };
 
 const es = {
+  'pickup.replace': 'Pulsa [{button}] para reemplazar {old} por {weapon}',
+  'spectator.waveIn': 'PRÓXIMA OLA · {count}s',
   ...en,
   'common.enter': 'ENTRAR', 'common.preparing': 'PREPARANDO…', 'common.play': 'JUGAR',
   'common.pause': 'PAUSA', 'common.resume': 'REANUDAR', 'common.back': 'VOLVER',

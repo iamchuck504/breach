@@ -23,6 +23,7 @@ function connect(name, action) {
     ws.on('error', reject);
     ws.on('message', (raw) => {
       const msg = JSON.parse(raw);
+      if (msg.t === 'respawn') msg.receivedAt = performance.now();
       if (msg.t === 'welcome' && !peer.welcome) {
         peer.welcome = msg;
         resolve(peer);
@@ -157,6 +158,18 @@ try {
   }
 
   // El power weapon de la ronda se reclama en su pedestal. El servidor debe
+  // Two nearby peers claim only compatible ammo, leaving the remainder.
+  const floor = await waitFor(a, m => m.t === 'dropA');
+  send(c, { t: 's', x: bx, z: bz - 1, y: 0, yaw: 0, st: 'idle', w: 'smg', am: 49, ar: 150 });
+  send(c, { t: 'fire', w: 'smg', o: [bx, 1.1, bz - 1], p: [bx, 1.1, bz + 5], d: [] });
+  send(a, { t: 'takeDrop', id: floor.id, capacity: 1 });
+  send(c, { t: 'takeDrop', id: floor.id, capacity: 1 });
+  const ammoA = await waitFor(a, m => m.t === 'dropGive');
+  const ammoC = await waitFor(c, m => m.t === 'dropGive');
+  if (ammoA.amount !== 1 || ammoC.amount !== 1 || ammoA.replace || ammoC.replace) throw new Error('ammo claims replaced weapon or lost count');
+  await waitFor(a, m => m.t === 'dropUpdate' && m.id === floor.id && m.mag + m.res === floor.mag + floor.res - 2);
+
+  // El power weapon de la ronda se reclama en su pedestal. El servidor debe
   // validar la cabeza y publicar `hs=1` solo en la muerte letal; el cliente no
   // puede inventar esta reacción visual.
   send(a, { t: 's', x: 2.8, z: 0, y: 0, yaw: 0, st: 'idle', w: 'smg', am: 40, ar: 150 });
@@ -192,7 +205,10 @@ try {
   // claim a la cabeza. Esperamos el respawn de B (muerto por la escopeta),
   // rompemos su protección y comprobamos que el server lo degrada a body shot.
   const bRespawn = await waitFor(a,
-    (m) => m.t === 'respawn' && m.id === b.welcome.id, 6500);
+    (m) => m.t === 'respawn' && m.id === b.welcome.id, 11000);
+  const dRespawn = await waitFor(a, m => m.t === 'respawn' && m.id === d.welcome.id, 11000);
+  if (Math.abs(bRespawn.receivedAt - dRespawn.receivedAt) > 100) throw new Error('eligible players did not share a respawn wave');
+  if (!(death.respawn > 0 && death.respawn <= 10 && sniperDeath.respawn > 0 && sniperDeath.respawn <= 10)) throw new Error('wave wait outside 0–10 seconds');
   b.self = { ...b.self, ...bRespawn.spawn };
   const rx = 3, rz = 4;
   send(b, { t: 's', x: rx, z: rz, y: 0, yaw: Math.PI,
@@ -215,7 +231,21 @@ try {
     throw new Error('claim de cabeza desconectado del rayo fue aceptado');
   }
 
-  console.log('ONLINE FIRE OK · autoridad de hit, gore de escopeta y headshot sniper validados');
+  await delay(1600);
+  send(a, { t: 'fire', w: 'sniper', o: [rx, 1.1, rz - 4], p: [rx, 1.52, rz], d: [] });
+  send(a, { t: 'hit', target: b.welcome.id, part: 'head', dmg: 999, p: [rx, 1.52, rz] });
+  const newDrop = await waitFor(a, m => m.t === 'dropA', 1800);
+  send(a, { t: 's', x: rx, z: rz - 0.5, y: 0, yaw: 0, st: 'idle', w: 'sniper', am: 1, ar: 2 });
+  const beforeGive = a.messages.filter(m => m.t === 'dropGive').length;
+  send(a, { t: 'takeDrop', id: newDrop.id, capacity: 100 });
+  await delay(100);
+  if (a.messages.filter(m => m.t === 'dropGive').length !== beforeGive) throw new Error('walking over different weapon granted it');
+  const replace = { t: 'takeDrop', id: newDrop.id, replace: true, slot: 0, expected: 'sniper' };
+  send(a, replace); send(a, replace);
+  await waitFor(a, m => m.t === 'dropGive' && m.replace === true);
+  await delay(100);
+  if (a.messages.filter(m => m.t === 'dropGive' && m.replace === true).length !== 1) throw new Error('duplicate replacement');
+  console.log('ONLINE FIRE OK · hits, partial shared drops, manual replacement and synchronized respawn waves');
 } finally {
   a?.ws.close();
   b?.ws.close();

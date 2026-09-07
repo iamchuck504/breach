@@ -36,6 +36,7 @@ import {
 } from './game/lobby-rules.js';
 import { AmmoCrates } from './game/crates.js';
 import { WeaponDrops } from './game/drops.js';
+import { takeDropAmmo, replacementSlot, canReplaceDrop } from './game/drop-policy.js';
 import { LobbyUI } from './ui/lobby.js';
 import { MenuControllerNavigator } from './ui/menu-controller.js';
 
@@ -374,7 +375,7 @@ function spectatorView() {
   if (!G.spectator.active || G.spectator.deathHold > 0) return null;
   const target = spectatorTarget();
   let respawn = '';
-  if (G.respawnT > 0) respawn = t('spectator.respawnsIn', { count: Math.ceil(G.respawnT) });
+  if (G.respawnT > 0) respawn = t('spectator.waveIn', { count: Math.ceil(G.respawnT) });
   else if (G.mode === 'bots' && G.botMatch?.pool[G.team] <= 0) respawn = t('spectator.noRespawns');
   else if (G.mode === 'online' && !G.selfRespawnPending) respawn = t('spectator.noRespawns');
   else if (!G.selfAlive) respawn = t('spectator.waitingRespawn');
@@ -1569,7 +1570,7 @@ function damagePlayerLocal(dmg, fromName, shooter, hitCtx = null) {
     input.pad.rumble(350, 0.8, 1.0);
     // countdown solo si de verdad queda respawn en el pool del equipo
     if (!G.botMatch || G.botMatch.pool[G.team] > 0) {
-      G.respawnT = TUNING.combat.respawnTime;
+      G.respawnT = G.botMatch ? G.botMatch.waveRemaining : TUNING.combat.respawnTime;
     } else {
       G.respawnT = 0;
       hud.center(t('msg.noLives'), t('msg.waitRound'), 4500);
@@ -2405,25 +2406,29 @@ function bindNet(net) {
   });
   // la vida viaja en 'life': 't' es el discriminador del protocolo (usarlo
   // de 8º argumento dejaba d.t = 'dropA' → NaN → arma invisible en online)
-  net.on('dropA', (m) => { if (alive()) G.drops?.spawn(m.id, m.wep, m.x, m.z, m.team, 0, 0, m.life ?? 8, m.y || 0); });
+  net.on('dropA', (m) => { if (alive()) G.drops?.spawn(m.id, m.wep, m.x, m.z, m.team, m.mag || 0, m.res || 0, m.life ?? 8, m.y || 0); });
+  net.on('dropUpdate', (m) => {
+    const d = G.drops?.drops.get(m.id);
+    if (d) { d.mag = m.mag; d.res = m.res; d.claimed = false; }
+  });
   net.on('dropR', (m) => { if (alive()) G.drops?.remove(m.id); });
   net.on('dropGive', (m) => {
     if (!alive()) return;
     const def = TUNING.weapons[m.wep];
     if (!def) return;
     let s = G.weapons.state[m.wep];
-    if (!s && def.special) {
-      G.weapons.giveSpecial(m.wep);
+    if (m.replace === true && (m.slot === 0 || m.slot === 1)) {
+      G.weapons.replaceSlot(m.slot, m.wep, m.mag, m.res);
       s = G.weapons.state[m.wep];
       s.mag = Math.min(def.mag, Math.max(0, m.mag || 0));
       s.reserve = Math.min(def.reserve, Math.max(0, m.res || 0));
-      G.rig?.setWeapon?.(m.wep);
+      G.rig?.setWeapon?.(G.weapons.cur);
       audio.reloadDone();
       hud.hint(t('msg.weaponRecovered', { weapon: t(def.nameKey) }), 1500);
       return;
     }
     if (!s) return;
-    const total = (m.mag || 0) + (m.res || 0);
+    const total = m.amount || 0;
     const gained = Math.min(def.reserve, s.reserve + total) - s.reserve;
     s.reserve += gained;
     audio.reloadDone();
@@ -3431,6 +3436,7 @@ window.BREACH_RIG = Rig; // para tests visuales de poses/animaciones
 window.THREE = THREE;
 
 function simStep(dt) {
+  hud.pickupPrompt('');
   const p = G.player;
   if (!p) return;
 
@@ -3495,9 +3501,34 @@ function simStep(dt) {
     (input.firePressed || G.fireBuffer > 0) && G.weapons.st.mag > 0;
   const hasAmmo = (!G.weapons.reloading || canInterruptReload) &&
     (G.weapons.st.mag > 0 || G.weapons.st.reserve > 0 || G.weapons.infinite);
+  hud.pickupPrompt('');
+  const nearbyDrop = G.selfAlive && !p.dead && !G.weapons.swapping && G.drops
+    ? [...G.drops.drops.entries()].filter(([, d]) => !d.claimed &&
+      canReplaceDrop(G.weapons.slots, d.wep) && Math.abs(p.y - d.y) < 0.8 &&
+      Math.hypot(p.pos.x - d.x, p.pos.z - d.z) < 1.1)
+      .sort((a, b) => Math.hypot(p.pos.x - a[1].x, p.pos.z - a[1].z) - Math.hypot(p.pos.x - b[1].x, p.pos.z - b[1].z))[0] : null;
+  if (nearbyDrop) {
+    const [id, d] = nearbyDrop;
+    const slot = replacementSlot(G.weapons.slots, G.weapons.cur);
+    const old = G.weapons.slots[slot];
+    const button = input.lastDevice === 'pad' ? padBtnName(BINDS.pad.evade) : keyLabel(BINDS.kb.evade);
+    hud.pickupPrompt(t('pickup.replace', { button, old: t('weapon.' + old + 'Short'), weapon: t('weapon.' + d.wep + 'Short') }));
+    if (input.evadePressed) {
+      input.evadePressed = false;
+      if (G.mode === 'online') {
+        d.claimed = true; d.claimT = 1;
+        G.net?.send({ t: 'takeDrop', id, replace: true, slot, expected: old });
+      } else {
+        G.weapons.replaceSlot(slot, d.wep, d.mag, d.res);
+        G.rig.setWeapon(G.weapons.cur);
+        G.drops.remove(id);
+        audio.reloadDone();
+      }
+    }
+  }
   // pickup del arma ESPECIAL: junto al pedestal, evadir se convierte en
   // "tomar" (se consume el edge para no rodar encima) y hay que MANTENERLO
-  if (specials.active && G.selfAlive && !p.dead && p.grounded &&
+  if (!nearbyDrop && specials.active && G.selfAlive && !p.dead && p.grounded &&
       specials.near(p.pos.x, p.pos.z, p.y)) {
     const holding = input.keys.has(BINDS.kb.evade) || input.pad.pressed.has(BINDS.pad.evade);
     input.evadePressed = false;
@@ -3550,7 +3581,8 @@ function simStep(dt) {
 
   // la intención de disparo SIEMPRE llega al controller: cancela el roadie
   // (en tierra o en el aire) y gira el cuerpo para disparar
-  p.update(dt, input, (input.fireHeld || G.fireBuffer > 0) && !p.dead && hasAmmo);
+  // A buffered shot must not keep a released cover peek exposed.
+  p.update(dt, input, (input.fireHeld || (p.state !== 'cover' && G.fireBuffer > 0)) && !p.dead && hasAmmo);
 
   // colisión de cuerpos del jugador: suave y sin atrapamiento (mitad del
   // solape por paso, con tope). Cover y mantle gestionan su propia posición:
@@ -3695,54 +3727,18 @@ function simStep(dt) {
     G.drops.update(dt, p.pos.x, p.pos.z, p.y, G.selfAlive && !p.dead, (id, d) => {
       const def = TUNING.weapons[d.wep];
       const s = G.weapons.state[d.wep];
-      if (!s) {
-        if (def.special) {
-          if (G.mode === 'online') {
-            d.claimed = true;
-            d.claimT = 2;
-            G.net?.send({ t: 'takeDrop', id });
-          } else {
-            G.weapons.giveSpecial(d.wep);
-            const specialState = G.weapons.state[d.wep];
-            specialState.mag = Math.min(def.mag, Math.max(0, d.mag || 0));
-            specialState.reserve = Math.min(def.reserve, Math.max(0, d.res || 0));
-            G.rig?.setWeapon?.(d.wep);
-            G.drops.remove(id);
-            audio.reloadDone();
-            hud.hint(t('msg.weaponRecovered', { weapon: t(def.nameKey) }), 1500);
-          }
-          return;
-        }
-        // no llevas esa arma: si es una primaria normal del suelo y tu slot
-        // primario carga una ESPECIAL ya vacía, la recuperas en su lugar
-        if (def.thrown) return;
-        for (const idx of [0, 1]) {
-          const curW = G.weapons.slots[idx];
-          const curDef = TUNING.weapons[curW];
-          const curSt = G.weapons.state[curW];
-          if (curDef.special && curSt.mag <= 0 && curSt.reserve <= 0) {
-            G.weapons.replaceSlot(idx, d.wep,
-              Math.min(d.mag, def.mag), Math.min(d.res, def.reserve));
-            G.drops.remove(id);
-            audio.reloadDone();
-            hud.hint(t('msg.weaponRecovered', { weapon: t(def.nameKey) }), 1600);
-            input.pad.rumble(50, 0.15, 0.25);
-            return;
-          }
-        }
-        return;
-      }
+      if (!s || !def || d.mag + d.res <= 0) return;
       if (s.reserve >= def.reserve) return; // reserva llena: no desperdiciarla
       if (G.mode === 'online') {
         d.claimed = true;
         d.claimT = 2; // si el server no confirma, vuelve a ser reclamable
-        G.net?.send({ t: 'takeDrop', id });
+        G.net?.send({ t: 'takeDrop', id, capacity: def.reserve - s.reserve });
         return;
       }
       // anunciar lo GANADO real (el clamp de reserva podía comerse la mayoría)
-      const gained = Math.min(def.reserve, s.reserve + d.mag + d.res) - s.reserve;
+      const gained = takeDropAmmo(d, def.reserve - s.reserve);
       s.reserve += gained;
-      G.drops.remove(id);
+      if (d.mag + d.res <= 0) G.drops.remove(id);
       audio.reloadDone();
       hud.hint(t('msg.bulletsOf', { count: gained, weapon: t(def.nameKey) }), 1500);
       input.pad.rumble(50, 0.15, 0.25);
@@ -3955,6 +3951,7 @@ function frame(now) {
     // countdown grande de reaparición (no en fin de ronda/partida: ahí la
     // cola de respawns se vació y el contador mentía, pisando "ROUND PARA…")
     const bmPhase = G.botMatch?.phase;
+    if (G.botMatch && !G.botMatch.external && !G.selfAlive) G.respawnT = Math.max(0, G.botMatch.respawnQueue.find(q => q.id === 'player')?.t ?? 0);
     if (!G.spectator.active && !G.selfAlive && G.respawnT > 0 && bmPhase !== 'over' && bmPhase !== 'intermission') {
       hud.respawnTick(Math.ceil(G.respawnT));
     } else {

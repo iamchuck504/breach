@@ -174,6 +174,7 @@ export class Controller {
       coverKind: this.cover?.kind,
       latMove: this._latMove(),
       groundPitch: this.groundPitch,
+      evadePhase: this.state === 'dive' ? Math.min(1, this.stateT / TUNING.evade.diveTime) : 0,
       meleePhase: this.state === 'melee'
         ? Math.min(1, this.meleeT / Math.max(0.001, this.meleeEndT || TUNING.melee.time))
         : 0,
@@ -313,7 +314,19 @@ export class Controller {
     this.coverLeanAnim = 0; // no arrastrar el lean al salir de cover
     const exclude = this.cover;
     const found = this.world.findCover(this.pos, dir, range, PLAYER_R, 0.4);
-    if (found && found.face !== exclude && found.dist > 0.5) {
+    let reachable = !!found;
+    if (found) {
+      const steps = Math.max(1, Math.ceil(found.dist / (PLAYER_R * 0.5)));
+      for (let i = 1; i <= steps && reachable; i++) {
+        const x = this.pos.x + (found.target.x - this.pos.x) * i / steps;
+        const z = this.pos.z + (found.target.z - this.pos.z) * i / steps;
+        const probe = { x, z };
+        this.world.resolveCircle(probe, PLAYER_R, this.y);
+        reachable = Math.hypot(probe.x - x, probe.z - z) < 0.06 &&
+          Math.abs(this.world.groundHeight(probe, PLAYER_R, this.y) - this.y) <= TUNING.move.maxStepUp;
+      }
+    }
+    if (found && reachable && found.face !== exclude && found.dist > 0.5) {
       this.slide = { target: found.target, face: found.face, dir };
       this.dive = null;
       this.cover = null;
@@ -354,12 +367,13 @@ export class Controller {
     const lowCoverAim = this.state === 'cover' && this.aim && this.cover &&
       this.cover.h <= C.lowHeight;
     const exposeTarget = lowCoverAim ? 1 : 0;
-    const exposeRate = exposeTarget ? 18 : 25;
+    const exposeRate = exposeTarget ? 18 : 40;
     this.coverAimExposure += (exposeTarget - this.coverAimExposure) *
       (1 - Math.exp(-exposeRate * dt));
     // Evaluar contra el input de ESTE frame, no contra this.aim anterior.
     // Así mantener fuego al soltar ADS entra a blindfire sin un frame ambiguo.
     if (firing && !this.aim) this.firingBlind = 0.7;
+    if (this.state === 'cover' && !firing) this.firingBlind = 0;
 
     // momentum GANADO corriendo: tiempo continuo + distancia reciente en el
     // suelo. Se pierde al instante al dejar de correr — un toque de carrera

@@ -98,6 +98,14 @@ check(highLeft.animState() === 'blind_high_left' && highRight.animState() === 'b
   `orillas altas no se espejaron (${highLeft.animState()}/${highRight.animState()})`);
 check(lowCenter.blindPoseExposure > 0.76 && highLeft.blindPoseExposure > 0.76,
   'blindfire válido no terminó su transición de pose');
+for (const c of [lowCenter, lowLeft, lowRight, highLeft, highRight]) {
+  c.update(1 / 60, { ...ctrlInput, aimHeld: false }, false);
+  check(c.firingBlind === 0 && c.animState().startsWith('cover_'), 'release must immediately begin protected pose');
+  for (let i = 0; i < 8; i++) c.update(1 / 60, { ...ctrlInput, aimHeld: false }, false);
+  check(c.blindPoseExposure < 0.03, 'blindfire return exceeds 150ms');
+  c.update(1 / 60, { ...ctrlInput, aimHeld: true }, false);
+  check(c.aim, 'aim must cancel cover return without cooldown');
+}
 
 function checkRigClearance(kind, pitch, weapon, elevated = false, blind = false) {
   const testScene = new THREE.Scene();

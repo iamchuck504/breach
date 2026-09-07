@@ -1359,14 +1359,17 @@ export class Rig {
         break;
       }
       case 'dive': {
-        damp = 16;
-        R(this.torso, -0.8, 0, 0);
+        damp = 22;
+        const evade = Math.sin(Math.PI * Math.max(0, Math.min(1, p.evadePhase ?? 0.5)));
+        // Low forward dodge: compress, extend, recover. Unlike the feet-first
+        // cover slide, both hands retain the weapon and the torso leads.
+        R(this.torso, -0.2 - 0.65 * evade, 0, -0.12 * evade);
         R(this.head, 0.3, 0, 0);
-        R(this.legL.hip, 0.9, 0, 0); R(this.legL.knee, -1.4, 0, 0);
-        R(this.legR.hip, 0.6, 0, 0); R(this.legR.knee, -1.2, 0, 0);
-        R(this.armL.shoulder, 0.6, 0, -0.45); R(this.armL.elbow, 0.4, 0, 0);
+        R(this.legL.hip, 0.35 + 0.65 * evade, 0, 0); R(this.legL.knee, -0.4 - evade, 0, 0);
+        R(this.legR.hip, -0.35 * evade, 0, 0); R(this.legR.knee, -0.3 - 0.6 * evade, 0, 0);
+        leftOnGun = true;
         M(0.12, -0.22, -0.28, -0.3, 0, 0);
-        hipsY = 0.45;
+        hipsY = 0.62 - 0.23 * evade;
         break;
       }
       case 'slide': {
@@ -1381,6 +1384,7 @@ export class Rig {
         break;
       }
       case 'cover_low': case 'cover_high': {
+        damp = 32; // protection recovery begins on input release
         const low = p.state === 'cover_low';
         const lat = p.latMove ?? 0;         // -1..1: paso lateral
         const stepping = Math.abs(lat) > 0.12;

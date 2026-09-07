@@ -12,6 +12,8 @@ import {
 } from '../src/game/lobby-rules.js';
 import { ROUND_FINISH_HOLD as DEFAULT_ROUND_FINISH_HOLD } from '../src/game/match-flow.js';
 import { TUNING } from '../src/config/tuning.js';
+import { nextRespawnWave } from '../src/game/respawn-wave.js';
+import { takeDropAmmo, canReplaceDrop, replacementSlot } from '../src/game/drop-policy.js';
 import { damageFalloff, firearmDamage, rocketSplashDamage } from '../src/combat/damage.js';
 import { isSniperHeadshotDeath, rocketDeathLevel } from '../src/combat/death-reactions.js';
 import { makeSmokeProjectile, stepSmokeProjectile } from '../src/game/smoke-physics.js';
@@ -118,6 +120,7 @@ const activeRockets = new Map(), activeNades = new Map(), activeSmokes = new Map
 let nextId = 1, nextBotId = 1, nextDropId = 1;
 let nextRocketId = 1, nextNadeId = 1, hostId = null;
 let settings = { ...DEFAULT_LOBBY_SETTINGS }, phase = 'empty', phaseTimer = null, startAt = 0, round = 0;
+let waveEpoch = 0;
 let wins = { red: 0, blue: 0 }, pools = { red: 0, blue: 0 };
 
 const nowSec = () => Date.now() / 1000;
@@ -233,6 +236,7 @@ function freshCombatState(p, spawn) {
   Object.assign(p, { x: spawn.x, z: spawn.z, y: 0, yaw: spawn.yaw, st: 'idle', aim: 0,
     p: 0, ae: 0, cl: 0, ce: 1, ck: null, w: 'smg', sp: 0, hp: HP, alive: true,
     specialWep: null,
+    weaponSlots: ['smg', 'shotgun', 'pistol', 'grenade'],
     ammoBudget: createAmmoBudget(),
     nades: p.bot ? 1 : WD.grenade.mag,
     lastNadeAt: -Infinity, lastRocketAt: -Infinity,
@@ -306,13 +310,14 @@ function relayRocket(sourceWs, shooter, msg) {
   send(sourceWs, { t: 'rocketAck', rid, id: shooter.id, cid, o, d: dir });
   return true;
 }
-function livesOf(team) { return pools[team] + allSlots().filter((p) => p.team === team && p.alive).length; }
+function livesOf(team) { return pools[team] + allSlots().filter((p) => p.team === team && (p.alive || p.respawnAt > 0)).length; }
 function livesState() { return { red: livesOf('red'), blue: livesOf('blue') }; }
 function prepareRound(first = false) {
   clearTimer(); round++;
   const roster = allSlots(), counts = teamCounts(roster), indices = { red: 0, blue: 0 };
   pools = { red: Math.max(0, settings.lives - counts.red), blue: Math.max(0, settings.lives - counts.blue) };
   resetWorld(); startAt = nowSec() + (first ? INTRO_TIME : 0) + COUNTDOWN_TIME;
+  waveEpoch = startAt;
   for (const p of roster) freshCombatState(p, pickSpawn(p.team, indices[p.team]++));
   special = { wep: specialForRound(round), taken: false, by: null };
   phase = first ? 'intro' : 'countdown';
@@ -378,7 +383,7 @@ function dropWeapon(target) {
   const res = Math.min(def.reserve || 0, Math.max(0, remaining - mag));
   const d = { wep: clampDropWep(target.w), x: target.x, z: target.z, y: target.y || 0,
     team: target.team, mag, res, t: DROP_LIFE };
-  drops.set(id, d); broadcastRaw({ t: 'dropA', id, wep: d.wep, x: d.x, z: d.z, y: d.y, team: d.team, life: DROP_LIFE });
+  drops.set(id, d); broadcastRaw({ t: 'dropA', id, wep: d.wep, x: d.x, z: d.z, y: d.y, team: d.team, mag, res, life: DROP_LIFE });
 }
 
 function validatedFirePose(shooter, raw) {
@@ -586,7 +591,7 @@ function commitAuthoritativeDamage(shooter, target, shot, msg, dist, authoritati
     : dist <= 0.82;
   const explosiveLevel = rocketDeathLevel(shot.wep, dist, dmg, directRocket);
   const deathPoint = validatedDeathPoint(target, part, vec3(msg.p));
-  const respawnDelay = pools[target.team] > 0 ? RESPAWN_TIME : 0;
+  const respawnDelay = pools[target.team] > 0 ? nextRespawnWave(now, waveEpoch) - now : 0;
   if (respawnDelay > 0) { pools[target.team]--; target.respawnAt = now + respawnDelay; }
   else target.respawnAt = 0;
   broadcastRaw({ t: 'death', target: target.id, from: shooter.id, gib: gib ? 1 : 0,
@@ -895,10 +900,30 @@ wss.on('connection', (ws) => {
     if (msg.t === 'botHit') { if (isHost(me)) { const b = bots.get(msg.id); if (b) registerHit(b, msg); } return; }
     if (msg.t === 'takeDrop') {
       const d = drops.get(msg.id);
-      if (!d || !me.alive || phase !== 'playing' || Math.hypot(me.x - d.x, me.z - d.z) > 3) return;
-      if (SPECIAL_WEAPONS.has(d.wep)) me.specialWep = d.wep;
-      grantWeaponAmmo(me, d.wep, d.mag, d.res);
-      drops.delete(msg.id); broadcastRaw({ t: 'dropR', id: msg.id }); send(ws, { t: 'dropGive', wep: d.wep, mag: d.mag, res: d.res }); return;
+      if (!d || !me.alive || phase !== 'playing' || Math.hypot(me.x - d.x, me.z - d.z) > 1.6 || Math.abs((me.y || 0) - d.y) > 0.8) return;
+      me.weaponSlots ||= ['smg', 'shotgun', 'pistol', 'grenade'];
+      const def = WD[d.wep];
+      if (msg.replace === true) {
+        const slot = replacementSlot(me.weaponSlots, me.w);
+        if (!canReplaceDrop(me.weaponSlots, d.wep) || msg.slot !== slot || msg.expected !== me.weaponSlots[slot]) return;
+        const removed = me.weaponSlots[slot];
+        me.weaponSlots[slot] = d.wep;
+        me.ammoBudget[removed] = 0;
+        me.specialWep = me.weaponSlots.find(w => SPECIAL_WEAPONS.has(w)) || null;
+        grantWeaponAmmo(me, d.wep, d.mag, d.res);
+        drops.delete(msg.id); broadcastRaw({ t: 'dropR', id: msg.id });
+        send(ws, { t: 'dropGive', replace: true, slot, wep: d.wep, mag: d.mag, res: d.res });
+      } else {
+        if (!me.weaponSlots.includes(d.wep) || !Number.isFinite(msg.capacity)) return;
+        const room = Math.max(0, def.mag + def.reserve - (me.ammoBudget[d.wep] || 0));
+        const amount = takeDropAmmo(d, Math.min(room, def.reserve, Math.max(0, msg.capacity)));
+        if (!amount) return;
+        me.ammoBudget[d.wep] = (me.ammoBudget[d.wep] || 0) + amount;
+        send(ws, { t: 'dropGive', wep: d.wep, amount });
+        if (d.mag + d.res <= 0) { drops.delete(msg.id); broadcastRaw({ t: 'dropR', id: msg.id }); }
+        else broadcastRaw({ t: 'dropUpdate', id: msg.id, mag: d.mag, res: d.res });
+      }
+      return;
     }
     // pickup del arma especial: gana el PRIMER reclamo válido y solo uno
     if (msg.t === 'takeSpecial') {
@@ -908,6 +933,8 @@ wss.on('connection', (ws) => {
       if (!spot || Math.hypot(claimant.x - spot.x, claimant.z - spot.z) > 2.2 ||
           Math.abs((claimant.y || 0) - (spot.y || 0)) > 1.5) return;
       special.taken = true; special.by = claimant.id; claimant.specialWep = special.wep;
+      claimant.weaponSlots ||= ['smg', 'shotgun', 'pistol', 'grenade'];
+      claimant.weaponSlots[replacementSlot(claimant.weaponSlots, claimant.w)] = special.wep;
       grantWeaponAmmo(claimant, special.wep);
       broadcastRaw({ t: 'specialTaken', id: claimant.id, wep: special.wep });
       return;
@@ -942,6 +969,7 @@ setInterval(() => {
     if (!p.alive && p.respawnAt > 0 && now >= p.respawnAt) {
       p.alive = true; p.hp = HP; p.respawnAt = 0; p.prot = now + SPAWN_PROT;
       p.w = 'smg'; p.specialWep = null; p.ammoBudget = createAmmoBudget();
+      p.weaponSlots = ['smg', 'shotgun', 'pistol', 'grenade'];
       p.nades = p.bot ? 1 : WD.grenade.mag;
       p.lastNadeAt = -Infinity; p.lastRocketAt = -Infinity;
       const spawn = pickSpawn(p.team); Object.assign(p, { x: spawn.x, z: spawn.z, y: 0, yaw: spawn.yaw });

@@ -178,37 +178,38 @@
     background: rgba(151,164,174,.26); filter: drop-shadow(0 5px 10px rgba(0,0,0,.22)); }
   .wheel-sector::before { content: ""; position: absolute; inset: 1px; background: var(--sector-bg);
     clip-path: inherit; transition: background .1s ease-out; }
-  .wheel-sector.up, .wheel-sector.down { width: 44%; height: 31%; left: 28%;
-    clip-path: polygon(14% 0,86% 0,100% 100%,72% 78%,50% 65%,28% 78%,0 100%); }
+  .wheel-sector.up, .wheel-sector.down { width: 36%; height: 30%; left: 32%;
+    clip-path: polygon(7% 0,93% 0,100% 8%,100% 92%,93% 100%,7% 100%,0 92%,0 8%); }
   .wheel-sector.up { top: 3%; }
-  .wheel-sector.down { bottom: 3%; transform: rotate(180deg); }
-  .wheel-sector.left, .wheel-sector.right { width: 31%; height: 44%; top: 28%;
-    clip-path: polygon(0 14%,100% 0,78% 28%,65% 50%,78% 72%,100% 100%,0 86%); }
-  .wheel-sector.left { left: 3%; }
-  .wheel-sector.right { right: 3%; transform: rotate(180deg); }
-  .wheel-sector.down .wheel-content, .wheel-sector.right .wheel-content { transform: rotate(180deg); }
+  .wheel-sector.down { bottom: 3%; }
+  .wheel-sector.left, .wheel-sector.right { width: 36%; height: 30%; top: 35%;
+    clip-path: polygon(7% 0,93% 0,100% 8%,100% 92%,93% 100%,7% 100%,0 92%,0 8%); }
+  .wheel-sector.left { left: 0; }
+  .wheel-sector.right { right: 0; }
   .wheel-content { position: relative; z-index: 1; width: 82%; display: flex; flex-direction: column;
     align-items: center; gap: 1px; }
-  .wheel-sector.up .wheel-content { transform: translateY(-5%); }
-  .wheel-sector.down .wheel-content { transform: rotate(180deg) translateY(-5%); }
-  .wheel-sector.left .wheel-content { transform: translateX(-5%); }
-  .wheel-sector.right .wheel-content { transform: rotate(180deg) translateX(-5%); }
-  .wheel-sector .wheel-icon { width: 82%; height: 30px; }
+  .wheel-sector .wheel-content { padding-top: 7px; }
+  .wheel-sector .wheel-icon { width: 95%; height: 30px; }
   .wheel-sector.left .wheel-icon, .wheel-sector.right .wheel-icon { width: 95%; }
   .wheel-sector .wheel-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis;
-    white-space: nowrap; font-size: 9px; letter-spacing: .09em; color: #d8dde0; }
-  .wheel-sector .wheel-meta { font-size: 8px; letter-spacing: .08em; color: #77838d; }
+    white-space: nowrap; font-size: 10px; letter-spacing: .04em; color: #d8dde0; }
+  .wheel-sector .wheel-meta { font-size: 12px; font-weight: 700; letter-spacing: .03em; color: #dde5ec; }
   .wheel-sector .wheel-key { position: absolute; z-index: 2; color: #7f8a93; font-size: 8px;
     letter-spacing: .08em; }
-  .wheel-sector.up .wheel-key { top: 5px; }
-  .wheel-sector.down .wheel-key { top: 5px; transform: rotate(180deg); }
-  .wheel-sector.left .wheel-key { left: 6px; top: 50%; transform: translateY(-50%); }
-  .wheel-sector.right .wheel-key { left: 6px; top: 50%; transform: translateY(-50%) rotate(180deg); }
+  .wheel-sector .wheel-key { top: 4px; left: 8px; }
   .wheel-sector.selected { color: #fff3e9; background: var(--accent); filter: drop-shadow(0 0 14px rgba(255,122,47,.32)); }
   .wheel-sector.selected::before { --sector-bg: rgba(78,42,23,.94); }
   .wheel-sector.selected .wheel-label, .wheel-sector.selected .wheel-key { color: #fff; }
   .wheel-sector.selected .wheel-meta { color: #ffc49e; }
-  .wheel-sector.dry { opacity: .46; }
+  .wheel-sector.dry { color: #ffe3e3; background: #f16a70; }
+  .wheel-sector.dry::before { --sector-bg: rgba(124,28,36,.92); }
+  .wheel-sector.dry .wheel-meta { color: #fff; }
+  .wheel-sector.needs-reload { background: #e3b95f; }
+  .wheel-sector.needs-reload .wheel-meta { color: #ffe3a0; }
+  .wheel-sector.unavailable { opacity: .25; filter: none; }
+  #pickup-prompt { position: fixed; left: 50%; bottom: 24%; transform: translateX(-50%); z-index: 20;
+    padding: 12px 18px; color: #fff; background: rgba(12,18,24,.94); border: 1px solid #dca267;
+    font: 600 15px sans-serif; pointer-events: none; border-radius: 5px; }
   .wheel-core { position: absolute; left: 50%; top: 50%; width: 17%; aspect-ratio: 1;
     transform: translate(-50%,-50%) rotate(45deg); border: 1px solid rgba(255,122,47,.72);
     background: rgba(9,12,15,.95); box-shadow: 0 0 18px rgba(255,122,47,.14); }

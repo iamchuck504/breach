@@ -8,6 +8,7 @@ export class Input {
   constructor(canvas) {
     this.canvas = canvas;
     this.keys = new Set();
+    this.lastDevice = 'keyboard';
     this.pad = new PadInput();
     this.mouseDX = 0; this.mouseDY = 0;
     // El cursor virtual del menú y la cámara reciben los mismos eventos de
@@ -50,6 +51,7 @@ export class Input {
     window.addEventListener('keydown', (e) => this._key(e, true));
     window.addEventListener('keyup', (e) => this._key(e, false));
     canvas.addEventListener('mousedown', (e) => {
+      this.lastDevice = 'keyboard';
       // con ?nolock el juego opera SIN lock: el click va directo al gameplay
       if (!this.locked && !this.lockDisabled) { this.requestLock(); return; }
       // el cursor virtual del menú consume el click (pausa con lock activo)
@@ -152,6 +154,7 @@ export class Input {
   }
 
   _key(e, down) {
+    if (down) this.lastDevice = 'keyboard';
     if (e.repeat) return;
     const c = e.code;
     // Escape SIEMPRE funciona, incluso con el foco en un input de texto
@@ -196,6 +199,7 @@ export class Input {
   pollPad(dt, gameplay) {
     const wasFire = this.pad.fireHeld;
     this.pad.poll(dt);
+    if (this.pad.justPressed.size || Math.hypot(this.pad.moveX || 0, this.pad.moveZ || 0) > 0.25) this.lastDevice = 'pad';
     // durante un rebind, el botón de pausa actual no debe cerrar el menú
     if (!this.rebinding && this.pad.justPressed.has(BINDS.pad.pause)) this.onEscape?.();
     if (!gameplay) return;

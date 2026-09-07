@@ -99,6 +99,7 @@ export class RemotePlayer {
     this.firing = Math.max(0, this.firing - dt);
     // flip remoto: progreso local aproximado mientras el estado sea 'flip'
     this.flipT = this.st === 'flip' ? Math.min(1, (this.flipT ?? 0) + dt / 0.72) : 0;
+    this.evadePhase = this.st === 'dive' ? Math.min(1, (this.evadePhase ?? 0) + dt / TUNING.evade.diveTime) : 0;
     this.rig.setTransform(this.x, this.z, this.yaw, this.y ?? 0);
     const targetAimSide = this.aim && Math.abs(this.coverLean) > 0.1
       ? this.coverLean : 1;
@@ -139,8 +140,9 @@ export class RemotePlayer {
       coverKind: this.coverKind,
       aimLineOrigin,
       aimLineDir,
-      firing: this.firing > 0,
+      firing: this.firing > 0 && (this.aim || !this.st.startsWith('cover_')),
       flipT: this.flipT,
+      evadePhase: this.evadePhase,
       flipDir: 1,
       swapping: this.swapAnim > 0,
     });

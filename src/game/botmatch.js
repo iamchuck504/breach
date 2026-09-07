@@ -24,8 +24,7 @@ import { t } from '../core/i18n.js';
 
 const ROUND_TIME = 300;      // 5 minutos
 const DEFAULT_LIVES = 15;
-const BOT_RESPAWN = 3;
-const PLAYER_RESPAWN = () => TUNING.combat.respawnTime;
+import { nextRespawnWave } from './respawn-wave.js';
 const INTRO_TIME = 10;
 const COUNTDOWN_TIME = 3;
 const ROUND_RESULT_TIME = 5;
@@ -1068,6 +1067,10 @@ export class Bot {
 }
 
 export class BotMatch {
+  get waveRemaining() {
+    const elapsed = ROUND_TIME - this.timer;
+    return nextRespawnWave(elapsed) - elapsed;
+  }
   // cb: { effects, audio, hud, playerName,
   //   player(): {x,z,y,alive}, damagePlayer(dmg, fromName) -> murió?,
   //   respawnPlayer(spawn), onMatchEnd(winnerTeam) }
@@ -1173,7 +1176,8 @@ export class BotMatch {
     if (!this.external && team === this.playerTeam && this.cb.player().alive) alive++;
     if (this.external) alive += (this.cb.humans?.() || []).filter((p) => p.team === team && p.alive).length;
     for (const b of this.bots) if (b.team === team && b.alive) alive++;
-    return alive + this.pool[team];
+    const queued = this.respawnQueue.filter(q => q.id === 'player' ? team === this.playerTeam : this.bots.some(b => b.id === q.id && b.team === team)).length;
+    return alive + this.pool[team] + queued;
   }
 
   // agachado real: escondido tras cover BAJO → hitbox reducida en ballistics
@@ -1978,7 +1982,8 @@ export class BotMatch {
       this.pool[team]--;
       this.respawnQueue.push({
         id: victimId,
-        t: victimId === 'player' ? PLAYER_RESPAWN() : BOT_RESPAWN,
+        t: nextRespawnWave(ROUND_TIME - this.timer) - (ROUND_TIME - this.timer),
+        waveAt: nextRespawnWave(ROUND_TIME - this.timer),
       });
     }
     this._checkRoundEnd();
@@ -2103,7 +2108,7 @@ export class BotMatch {
     }
     for (let i = this.respawnQueue.length - 1; i >= 0; i--) {
       const q = this.respawnQueue[i];
-      q.t -= dt;
+      q.t = q.waveAt - (ROUND_TIME - this.timer);
       if (q.t <= 0) {
         this.respawnQueue.splice(i, 1);
         if (q.id === 'player') {

@@ -31,6 +31,8 @@
     "check:bazooka": "node scripts/check-bazooka-identity.mjs",
     "check:equipped-weapon-scale": "node scripts/check-equipped-weapon-scale.mjs",
     "check:weapon-wheel": "node scripts/check-weapon-wheel.mjs",
+    "check:gameplay-tuning": "node scripts/check-gameplay-tuning.mjs",
+    "check:gameplay-ui": "node scripts/check-gameplay-ui.mjs",
     "check:cover-fire": "node scripts/check-cover-fire.mjs",
     "check:blindfire": "node scripts/check-blindfire.mjs",
     "check:reticle": "node scripts/check-reticle.mjs",

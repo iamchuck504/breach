@@ -55,7 +55,7 @@ export class HUD {
 
   show(on) {
     this.el.hud.classList.toggle('on', on);
-    if (!on) this.hideWeaponWheel(true);
+    if (!on) { this.hideWeaponWheel(true); this.pickupPrompt(''); }
   }
   showMenu(on) { this.el.menu.classList.toggle('off', !on); }
 
@@ -81,7 +81,16 @@ export class HUD {
       const weapon = w.slots[idx];
       const st = w.state[weapon];
       const def = TUNING.weapons[weapon];
-      if (!weapon || !st || !def) continue;
+      const unavailable = !weapon || !st || !def;
+      sector.classList.toggle('unavailable', unavailable);
+      if (unavailable) {
+        sector.dataset.weapon = '';
+        sector.querySelector('.wheel-icon').innerHTML = '';
+        sector.querySelector('.wheel-label').textContent = '—';
+        sector.querySelector('.wheel-meta').textContent = '—';
+        sector.classList.remove('selected', 'dry', 'needs-reload');
+        continue;
+      }
       if (sector.dataset.weapon !== weapon) {
         sector.dataset.weapon = weapon;
         sector.querySelector('.wheel-icon').innerHTML = weaponIconMarkup(weapon);
@@ -89,12 +98,21 @@ export class HUD {
       sector.querySelector('.wheel-label').textContent = t(`weapon.${weapon}Short`);
       sector.querySelector('.wheel-meta').textContent = def.thrown
         ? `×${st.mag}`
-        : def.special
-          ? `×${st.mag + st.reserve}`
-          : `${st.mag}/${st.reserve}`;
+        : `${st.mag} / ${st.reserve}`;
       sector.classList.toggle('selected', weapon === selected);
       sector.classList.toggle('dry', st.mag <= 0 && st.reserve <= 0);
+      sector.classList.toggle('needs-reload', st.mag <= 0 && st.reserve > 0);
     }
+  }
+
+  pickupPrompt(text) {
+    if (!this._pickupPrompt) {
+      this._pickupPrompt = document.createElement('div');
+      this._pickupPrompt.id = 'pickup-prompt';
+      document.body.appendChild(this._pickupPrompt);
+    }
+    this._pickupPrompt.textContent = text;
+    this._pickupPrompt.hidden = !text;
   }
 
   // Un solo overlay y un solo TTL. Cada nuevo input actualiza el highlight y
