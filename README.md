@@ -134,7 +134,7 @@ abre el editor y arranca su servidor local oculto si todavía no está activo.
 
 ## Validación (headless, sin abrir ventana)
 
-Fortaleza incorpora dos galerías techadas con 18 ventanas y cuatro escaleras
+Fortaleza incorpora dos galerías techadas con 10 ventanas y cuatro escaleras
 laterales que arrancan delante de los spawns. El patio y sus coberturas se
 conservan. Fuente Blender, reproducción y alcance de pruebas en
 [`art/fortaleza-galleries/README.md`](art/fortaleza-galleries/README.md).

@@ -18,7 +18,7 @@ import { calleShopDisplay } from './calle-shop-display.js';
 import { DISTRICT_FACADES } from './district-facades.js';
 import { polishCalleProp } from './calle-prop-polish.js';
 import { polishArchitecture } from './architecture-polish.js';
-import {galleryHeight} from './fortaleza-galleries.js';
+import {galleryHeight,FORT_GALLERY} from './fortaleza-galleries.js';
 import {addFortalezaGalleries} from './fortaleza-gallery-art.js';
 
 const FIELD_X = 15, FIELD_Z = 18; // semiancho / semilargo
@@ -4132,7 +4132,7 @@ export class World {
       pts.push([x, this.fz + 0.4, 0, HIGH]);
     }
     for (let z = -this.fz + 0.4; z <= this.fz; z += step) {
-      if(Math.abs(z)<24.5)continue; // incorporated into the new roofed wall, not floating inside it
+      if(Math.abs(z)<FORT_GALLERY.end+.5)continue; // incorporated into the new roofed wall, not floating inside it
       pts.push([-courtyardX - 0.4, z, Math.PI / 2, HIGH]);
       pts.push([courtyardX + 0.4, z, Math.PI / 2, HIGH]);
     }

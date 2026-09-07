@@ -3,10 +3,11 @@
 Ampliación simétrica del mapa existente. No se ha reorganizado el patio.
 
 - Dos galerías exteriores de 3.8 m de ancho, piso superior a 3 m.
-- Cuatro escaleras: comienzan en z ±21.8, delante de los spawns en ±23.4;
-  ascienden hacia el centro hasta ±14. No hay escaleras desde el centro ni
+- Galerías acortadas de 48 a 36 m: terminan en z ±18, unos 5 m antes del spawn.
+- Cuatro escaleras: comienzan en z ±15.8, delante de los spawns en ±23.4;
+  ascienden hacia el centro hasta ±8. No hay escaleras desde el centro ni
   vuelos que suban hacia atrás del spawn.
-- Accesos laterales z 21.8–24.0; nueve ventanas abiertas por galería.
+- Accesos laterales z 15.8–18.0; cinco ventanas abiertas por galería.
 - Antepechos de 1.1 m respecto al piso superior; dinteles y tejados sólidos.
 - Se conservan coberturas, escudos, pilares, munición, especial y spawns.
   Solo se abren cuatro huecos en las murallas largas. Dos macizos vegetales
@@ -33,7 +34,7 @@ raycasts sí ven los peldaños físicos. `minY` permite ventanas, dinteles y
 tejados con huecos reales, compartidos con el servidor. Los snapshots del
 editor conservan `minY`, `walkSurface` y `coverBase`.
 
-Benchmark local de render (no equivale a FPS de una partida): vista de patio
+Benchmark previo al recorte (no equivale a FPS de una partida): vista de patio
 116 llamadas / 96,175 triángulos / mediana 1.7 ms; vista aérea 190 llamadas /
 97,900 triángulos / 1.8 ms. Construcción de escena ~249 ms. La ampliación
 añade geometría real, no imágenes planas que simulen un segundo piso.
@@ -43,7 +44,7 @@ añade geometría real, no imágenes planas que simulen un segundo piso.
 - Build de producción.
 - `check-fort-galleries`: cuatro recorridos de jugador y de bot, subida y
   bajada, retorno al suelo, sin rodeos al spawn enemigo, sin saltos de bots;
-  18 ventanas abiertas y cobertura superior que conserva y=3 al apuntar.
+  10 ventanas abiertas y cobertura superior que conserva y=3 al apuntar.
 - `check-map-authority`: colliders cliente/servidor idénticos, pose elevada
   sincronizada, daño a través de ventana abierta, tracer recortado y daño
   rechazado al disparar contra un pilar; pruebas anteriores de LOS/rewind.

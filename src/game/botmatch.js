@@ -1366,7 +1366,7 @@ export class BotMatch {
     let lane = bot.laneBias ?? 0;
     if(this.world.layout==='fortaleza'&&role==='flank'&&bot.profile.flank>.5){
       const side=Math.sign(lane)||(bot.profile.flank<.75?-1:1);
-      return {x:side*23.7,z:Math.abs(bot.pos.z)>10?0:toward*22.85,role};
+      return {x:side*23.7,z:Math.abs(bot.pos.z)>6?0:toward*16.4,role};
     }
     if (role === 'flank' && Math.abs(lane) < 0.45) lane = this._leastControlledLane(bot) ||
       (bot.profile.flank < 0.5 ? -0.78 : 0.78);

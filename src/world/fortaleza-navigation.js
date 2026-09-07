@@ -10,10 +10,10 @@ export class FortalezaNavigation extends CalleNavigation {
       if(this.walkable({x,z}))this.nodes.push({x,z});
     for(const side of [-1,1])for(const end of [-1,1]){
       for(const x of [18.8,20.1,21.4,G.x]){
-        const p={x:side*x,z:end*22.85};
+        const p={x:side*x,z:end*G.entry};
         if(this.walkable(p))this.nodes.push(p);
       }
-      for(const z of [21.7,19,16,14,10,5,0])this.nodes.push({x:side*G.x,z:end*z});
+      for(const z of [G.start-.1,G.start-2.8,G.top+2,G.top,G.top/2,0])this.nodes.push({x:side*G.x,z:end*z});
     }
     this.edges=this.nodes.map(()=>[]);
     for(let i=0;i<this.nodes.length;i++)for(let j=i+1;j<this.nodes.length;j++){

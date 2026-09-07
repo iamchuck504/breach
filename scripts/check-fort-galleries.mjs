@@ -3,15 +3,18 @@ import fs from 'node:fs/promises';
 import { chromium } from 'playwright-core';
 import { CHROME } from './lib-chrome.mjs';
 import { mapLineBlocked,serverMapPhysics } from '../server/map-geometry.js';
-import { galleryHeight } from '../src/world/fortaleza-galleries.js';
+import { galleryHeight,FORT_GALLERY as G,galleryBoxes } from '../src/world/fortaleza-galleries.js';
+
+assert(galleryBoxes().every(b=>Math.abs(b.z)+b.d/2<=18.41),'annex must stop before spawn');
+assert.equal(galleryHeight({x:G.x,z:22}),0,'old annex area must not retain floating floor');
 
 for(const side of [-1,1]){
-  for(let z=-12;z<=12;z+=3){
+  for(let z=-G.windowRadius*3;z<=G.windowRadius*3;z+=3){
     assert(!mapLineBlocked('fortaleza',[side*23,4.7,z],[side*19,4.7,z]),'window must be open');
     assert(mapLineBlocked('fortaleza',[side*23,3.8,z],[side*19,3.8,z]),'sill must block');
     assert(mapLineBlocked('fortaleza',[side*23,5.8,z],[side*19,5.8,z]),'lintel must block');
   }
-  for(const end of [-1,1])for(let z=21.8;z>=14;z-=.1){
+  for(const end of [-1,1])for(let z=G.start;z>=G.top;z-=.1){
     const p={x:side*23.7,z:end*z},h=galleryHeight(p);
     assert(Math.abs(serverMapPhysics('fortaleza').groundHeight(p,.38,h)-h)<1e-6);
     const q={...p};serverMapPhysics('fortaleza').resolveCircle(q,.38,h);
@@ -28,6 +31,7 @@ try{
   const {preloadUrbanAssets}=await import('/src/world/urban-assets.js');await preloadUrbanAssets();
   const {World}=await import('/src/world/world.js');
   const {Controller}=await import('/src/player/controller.js');
+  const {FORT_GALLERY:G}=await import('/src/world/fortaleza-galleries.js');
   const {Bot,BotMatch}=await import('/src/game/botmatch.js');
   const scene=new T.Scene(),world=new World(scene,'fortaleza'),nav=world.navigation;
   const routes=[],motion=[],botMotion=[];
@@ -38,7 +42,7 @@ try{
     const camera={yaw:0,pitch:0,flatForward:()=>({x:0,z:-1}),flatRight:()=>({x:1,z:0})};
     const player=new Controller(world,camera);player.pos={...from};
     let maxStep=0,frames=0;
-    for(const target of [...path,{x:side*23.7,z:end*22.85},{x:side*18.8,z:end*22.85}]){
+    for(const target of [...path,{x:side*23.7,z:end*G.entry},{x:side*18.8,z:end*G.entry}]){
       let count=0;
       while(Math.hypot(player.pos.x-target.x,player.pos.z-target.z)>.18&&count++<1600){
         const dx=target.x-player.pos.x,dz=target.z-player.pos.z,d=Math.hypot(dx,dz);
@@ -53,7 +57,7 @@ try{
     match.bots=[bot];match.nearestVisibleEnemy=()=>null;
     const steer=bot._steer.bind(bot);bot._steer=(...args)=>{const s=steer(...args);bot.testSteer=s;return s;};
     let steps=0,maxJump=0;
-    for(const target of [goal,{x:side*18.8,z:end*22.85}]){
+    for(const target of [goal,{x:side*18.8,z:end*G.entry}]){
       bot.tacticalGoal={...target,role:'advance'};bot.wp=bot.tacticalGoal;bot.state='advance';
       bot.roleT=bot.decisionT=bot.repathT=999;bot.commitMove=true;
       let count=0;const trace=[];
@@ -66,7 +70,7 @@ try{
     botMotion.push({side,end,steps,maxJump,y:bot.y});
   }
   const windows=[];
-  for(const side of [-1,1])for(let z=-12;z<=12;z+=3){
+  for(const side of [-1,1])for(let z=-G.windowRadius*3;z<=G.windowRadius*3;z+=3){
     const o=new T.Vector3(side*23,4.7,z),d=new T.Vector3(-side,0,0);
     windows.push(world.raycast(o,d,4)===null);
   }
@@ -83,9 +87,9 @@ try{
   renderer.setSize(1280,720);renderer.shadowMap.enabled=true;renderer.shadowMap.type=T.PCFSoftShadowMap;
   const camera=new T.PerspectiveCamera(60,1280/720,.1,200),views=[];
   for(const [name,pos,target] of [
-    ['entrance',[17,1.65,-23.8],[23.7,1.2,-21.3]],
-    ['stairs',[23.7,1.65,-22.5],[23.7,4.1,-13]],
-    ['gallery',[24.2,4.63,-10],[21,4.3,1]],
+    ['entrance',[17,1.65,-G.entry],[23.7,1.2,-G.start]],
+    ['stairs',[23.7,1.65,-G.entry],[23.7,4.1,-G.top+1]],
+    ['gallery',[24.2,4.63,-G.top+1],[21,4.3,1]],
     ['courtyard',[10,1.65,-18],[20,4,0]],
     ['aerial',[40,47,49],[0,1,0]]]){
     // Inspection aerial only: hide distance fog, not geometry/lighting.
