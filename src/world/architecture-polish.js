@@ -98,12 +98,12 @@ export function polishArchitecture(world, layout) {
     }
     // Masonry bands articulate the existing round towers, outside play.
     const ring=new T.CylinderGeometry(2.17,2.19,.18,12,1,true);
-    for(const x of [-23.6,23.6])for(const z of [-world.fz-2.6,world.fz+2.6]){
+    for(const x of (world.mapGroup.getObjectByName('fortaleza-blender-castle')?[]:[-23.6,23.6]))for(const z of [-world.fz-2.6,world.fz+2.6]){
       for(const y of [1.2,4.5,7.4])add(ring,stone,pose(x,y,z));
     }
     // The four existing braziers get an iron cage, not extra floor props.
     const ironRing=new T.TorusGeometry(.245,.022,5,12);
-    for(const [x,z] of [[7,-6],[-7,6],[-11,-5],[11,5]]){
+    for(const [x,z] of (world.mapGroup.getObjectByName('fortaleza-blender-castle')?[]:[[7,-6],[-7,6],[-11,-5],[11,5]])){
       for(const y of [3.12,3.31]){
         const m=pose(x,y,z);m.multiply(new T.Matrix4().makeRotationX(Math.PI/2));add(ironRing,trim,m);
       }

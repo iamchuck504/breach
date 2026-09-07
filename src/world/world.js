@@ -4112,6 +4112,12 @@ export class World {
   // braseros y torreones lejanos de silueta.
   _decorFortaleza() {
     const { HIGH } = BLOCK;
+    const castleKit=cloneUrbanAsset('fortress-kit');
+    if(castleKit){
+      castleKit.name='fortaleza-blender-castle';
+      castleKit.traverse(o=>{if(o.isMesh){o.castShadow=true;o.receiveShadow=true;}});
+      this.mapGroup.add(castleKit);
+    }
     const courtyardX=21; // original towers/parapets do not follow annex bounds
     const stoneMat = new THREE.MeshStandardMaterial({
       color: 0x898176, map: this._tex('stone', 1, 0.5),
@@ -4158,14 +4164,14 @@ export class World {
       merlon.setMatrixAt(i, m4);
     });
     merlon.castShadow = true;
-    this.mapGroup.add(merlon);
+    if(!castleKit)this.mapGroup.add(merlon);
 
     // --- torreones de esquina (fuera del campo, tras la muralla)
     for (const [tx, tz] of towers) {
       const t = new THREE.Mesh(new THREE.CylinderGeometry(2.05, 2.35, 8.5, 12), towerMat);
       t.position.set(tx, 3.75, tz);
       t.castShadow = true;
-      this.mapGroup.add(t);
+      if(!castleKit)this.mapGroup.add(t);
     }
 
     // --- estandartes de equipo colgados del escudo de spawn, mirando al campo
@@ -4180,7 +4186,7 @@ export class World {
         );
         b.position.set(team === 'red' ? x : -x, 1.75, z);
         b.rotation.y = ry;
-        this.mapGroup.add(b);
+        if(!castleKit)this.mapGroup.add(b);
       }
     }
     // estandartes neutros (acento) en el pilar central
@@ -4201,19 +4207,19 @@ export class World {
         new THREE.MeshLambertMaterial({ color: 0x3a352e })
       );
       bowl.position.set(px, HIGH + 0.11, pz);
-      this.mapGroup.add(bowl);
+      if(!castleKit)this.mapGroup.add(bowl);
       const flame = new THREE.Mesh(
         new THREE.ConeGeometry(0.17, 0.5, 6),
         new THREE.MeshBasicMaterial({ color: 0xffa63d })
       );
       flame.position.set(px, HIGH + 0.45, pz);
-      this.mapGroup.add(flame);
+      if(!castleKit)this.mapGroup.add(flame);
       const core = new THREE.Mesh(
         new THREE.ConeGeometry(0.08, 0.3, 6),
         new THREE.MeshBasicMaterial({ color: 0xffe291 })
       );
       core.position.set(px, HIGH + 0.42, pz);
-      this.mapGroup.add(core);
+      if(!castleKit)this.mapGroup.add(core);
     }
 
     // --- terreno exterior: campiña alrededor de la muralla (sin él, los
@@ -4316,7 +4322,8 @@ export class World {
       const ry = Math.atan2(nx, nz);
       for (const y of ys) windowData.push([x + nx * (r + 0.035), y, z + nz * (r + 0.035), ry]);
     };
-    for (const [x, z] of towers) addTowerWindows(x, z, 2.18, [3.1, 5.2]);
+    if(!this.mapGroup.getObjectByName('fortaleza-blender-castle'))
+      for (const [x, z] of towers) addTowerWindows(x, z, 2.18, [3.1, 5.2]);
     for (const [x, z, r, h] of farTowers) addTowerWindows(x, z, r * 0.91, [h * 0.42, h * 0.66]);
     const windows = new THREE.InstancedMesh(
       new THREE.PlaneGeometry(0.52, 0.9),

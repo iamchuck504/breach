@@ -34,6 +34,11 @@ try{
   const {FORT_GALLERY:G}=await import('/src/world/fortaleza-galleries.js');
   const {Bot,BotMatch}=await import('/src/game/botmatch.js');
   const scene=new T.Scene(),world=new World(scene,'fortaleza'),nav=world.navigation;
+  const castle=world.mapGroup.getObjectByName('fortaleza-blender-castle');
+  if(!castle)throw Error('Blender castle kit missing');
+  let castleMeshes=0,castleTriangles=0;
+  castle.traverse(o=>{if(o.isMesh){castleMeshes++;castleTriangles+=(o.geometry.index?.count??o.geometry.attributes.position.count)/3;}});
+  if(castleMeshes>10||castleTriangles>90000)throw Error('Castle kit exceeds static asset budget');
   const routes=[],motion=[],botMotion=[];
   for(const side of [-1,1])for(const end of [-1,1]){
     const from={x:0,z:end*23.4},goal={x:side*23.7,z:0};
@@ -73,6 +78,7 @@ try{
   for(const side of [-1,1])for(let z=-G.windowRadius*3;z<=G.windowRadius*3;z+=3){
     const o=new T.Vector3(side*23,4.7,z),d=new T.Vector3(-side,0,0);
     windows.push(world.raycast(o,d,4)===null);
+    if(new T.Raycaster(o,d,0,4).intersectObject(castle,true).length)throw Error('Castle art obstructs gallery window');
   }
   const covers=[];
   for(const side of [-1,1]){
@@ -91,6 +97,8 @@ try{
     ['stairs',[23.7,1.65,-G.entry],[23.7,4.1,-G.top+1]],
     ['gallery',[24.2,4.63,-G.top+1],[21,4.3,1]],
     ['courtyard',[10,1.65,-18],[20,4,0]],
+    ['castle-gate',[6,1.7,-15],[0,2,-20.9]],
+    ['castle-tower',[15,1.7,-21],[23.6,5,-29.2]],
     ['aerial',[40,47,49],[0,1,0]]]){
     // Inspection aerial only: hide distance fog, not geometry/lighting.
     const fog=scene.fog;if(name==='aerial')scene.fog=null;
@@ -99,7 +107,7 @@ try{
     scene.fog=fog;
   }
   renderer.dispose();
-  return {blender:!!world.mapGroup.getObjectByName('fortaleza-galleries')?.userData.blender,routes,motion,botMotion,covers,windows,views};
+  return {castleMeshes,castleTriangles,blender:!!world.mapGroup.getObjectByName('fortaleza-galleries')?.userData.blender,routes,motion,botMotion,covers,windows,views};
  });
  await fs.mkdir('artifacts/fortaleza-galleries',{recursive:true});
  for(const v of result.views){await fs.writeFile(`artifacts/fortaleza-galleries/${v.name}.png`,Buffer.from(v.image.split(',')[1],'base64'));delete v.image;}
