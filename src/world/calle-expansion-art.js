@@ -190,6 +190,7 @@ export function decorateCalleExpansion(world, buildings) {
     for(const x of [-.75,.75])floor('braking-trace',x,dir*31.1,.12,1.7,mat(0x20282b),.023);
   }
   for(const b of buildings){
+    if(b.userData.blenderCafe) continue; // Signs/door details are authored into this facade.
     const {side,z,span,variant}=b.userData.streetBuilding;
     const rot=side<0?Math.PI/2:-Math.PI/2;
     world._addMapSign(String(100+Math.round(z+42)+(side>0?1:0)),side*15.91,2.12,z+span*.19,rot,

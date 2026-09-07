@@ -47,11 +47,16 @@ try{
     const checks={spawnsUnchanged:spawns===JSON.stringify(world.spawns),portals:true,paths:true,
       botRoutes:true,originalUnchanged:false,interiorSolid:true,wallCover:true,floorLayers:true,seamsClear:true};
     const buildings=world.mapGroup.children.filter(o=>o.userData.streetBuilding);
+    const cafes=buildings.filter(b=>b.userData.blenderCafe);
+    checks.blenderCafe=cafes.length===1&&cafes[0].position.z===-24;
+    checks.cafeDrawBudget=cafes.every(b=>{
+      let meshes=0; b.traverse(o=>{if(o.isMesh) meshes++;}); return meshes>0&&meshes<=24;
+    });
     checks.shopIdentity=new Set(buildings.map(b=>b.userData.streetBuilding.name)).size===buildings.length;
     checks.signClearance=true;
     scene.updateMatrixWorld(true);
     for(const b of buildings){
-      const sign=b.getObjectByName('street-shop-sign');
+      const sign=b.getObjectByName(b.userData.blenderCafe?'Sign_enamel_inset':'street-shop-sign');
       if(!sign){checks.signClearance=false;continue;}
       const o=sign.localToWorld(new T.Vector3(0,0,.8));
       const target=sign.localToWorld(new T.Vector3(0,0,0));
@@ -60,7 +65,7 @@ try{
       checks.signClearance&&=belongs;
     }
     checks.roofLayers=buildings.every(b=>{
-      const mass=b.getObjectByName('street-building-mass'),roof=b.getObjectByName('street-building-roof');
+      const mass=b.getObjectByName(b.userData.blenderCafe?'Existing_envelope':'street-building-mass'),roof=b.getObjectByName(b.userData.blenderCafe?'Roof_cap':'street-building-roof');
       if(!mass||!roof)return false;
       const bodyBox=new T.Box3().setFromObject(mass),roofBox=new T.Box3().setFromObject(roof);
       return Math.abs(bodyBox.max.y-roofBox.min.y)<1e-5&&roofBox.max.y-bodyBox.max.y>.17;
@@ -143,6 +148,7 @@ try{
     cam.position.set(0,88,70);cam.lookAt(0,0,0);renderer.render(scene,cam);
     images.aerial=renderer.domElement.toDataURL();scene.fog=fog;
     for(const [name,p,target] of [
+      ['cafe',[3,5,-18],[16.1,4.4,-24]],
       ['seam',[9,2.3,24],[16.15,5,29]],
       ['police',[13,2.5,-30],[8.8,.85,-26]],
       ['storefront',[11,2.1,33],[16.1,1.5,36]],

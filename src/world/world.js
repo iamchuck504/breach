@@ -2655,6 +2655,28 @@ export class World {
     };
     const streetBuildings = [];
     const addStreetBuilding = (side, z, span, height, name, color, variant = 0, signStyle = 'market') => {
+      // One approved sample, built synchronously from the preloaded asset.
+      // Do not build/discard a procedural facade (that would leak resources).
+      if (expanded && side === 1 && z === -24 && signStyle === 'cafe') {
+        const cafe = cloneUrbanAsset('cornerCoffee');
+        if (cafe) {
+          const building = new THREE.Group();
+          building.position.set(18.85, 0, z);
+          cafe.name = 'corner-coffee-blender';
+          // glTF faces +Z; its depth runs -Z. Keep the original wall plane.
+          cafe.rotation.y = -Math.PI / 2;
+          cafe.position.x = -2.7;
+          cafe.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+          building.add(cafe); this.mapGroup.add(building);
+          building.userData.streetBuilding = { side, z, span, height, name, color, variant, signStyle };
+          building.userData.blenderCafe = true;
+          this._registerBaseDecor(building, 'building', {
+            x: 18.85, z, rotation: 0, w: 6.3, d: span + 0.5, h: height, name, color, variant,
+          });
+          streetBuildings.push(building);
+          return building;
+        }
+      }
       const firstPart = this.mapGroup.children.length;
       // El muro físico comienza a ±17.0 y la masa exterior termina en ±16.92.
       // La piel se proyecta 5 cm hacia la calle para que nunca comparta plano
@@ -3167,6 +3189,8 @@ export class World {
       // bancas de acera contra la fachada, mirando a la calle
       for (const [nx, nz] of [[14.85, -20.5], [14.85, 24.2]]) {
         eachSide(nx, nz, (g) => {
+          // This decorative bench crossed the cafe entrance; no collider is involved.
+          if (expanded && nz === -20.5 && g.position.x > 0) return;
           for (const dz of [-0.78, 0.78]) box(g, 0.52, 0.07, 0.09, 0, 0.42, dz, darkSteelMat);
           for (const dz of [-0.78, 0.78]) box(g, 0.46, 0.36, 0.07, 0, 0.20, dz, darkSteelMat);
           for (const ox of [-0.17, -0.03, 0.11]) box(g, 0.12, 0.05, 1.80, ox, 0.47, 0, woodMat);

@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 
 const URBAN_ASSETS = Object.freeze({
+  cornerCoffee: 'corner-coffee.glb',
   apartmentBlock: 'apartment-block-01.glb',
   busShelter: 'bus-shelter-01.glb',
   cornerStore: 'corner-store-01.glb',
