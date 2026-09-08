@@ -15,7 +15,7 @@ try{
   await preloadUrbanAssets();
   const scene=new T.Scene(),world=new World(scene,'calle2');
   const rig=new Rig(scene,'red');await rig.visualReady;
-  const faces=world.faces.filter(f=>f.standOff),samples=[];
+  const faces=world.faces.filter(f=>f.standOff&&f.n.x!==0),samples=[];
   if(faces.length!==6)throw Error('Expected all six street-facing building strips');
   for(const b of expandedCollisionBoxes('calle2'))if(!world.colliders.some(c=>
    ['minx','maxx','minz','maxz','h'].every(k=>Math.abs(c[k]-b[k])<1e-6)))throw Error('Collision parity changed');

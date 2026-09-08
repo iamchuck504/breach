@@ -55,6 +55,12 @@ function buildSharedCollision(world, layout, styles) {
     // for the visible backpack/slung weapon, without adding a bullet collider.
     if(layout==='calle2'&&box.expansionKind==='wall-cover'&&Math.abs(x)===18.85&&w===5.4){
       for(const face of world.faces.slice(firstFace)){
+        if(face.n.z!==0){
+          face.standOff=.82;
+          // The street-facing frame extends .46 m beyond the structural
+          // corner. A side-wall peek must clear that visible edge too.
+          face.peekMargin=.46;
+        }
         if(face.n.x===-Math.sign(x)){
           face.standOff=1.20;
           face.bodyStandOff=1.28; // .46 m facade projection + .82 m body
