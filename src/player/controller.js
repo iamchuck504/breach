@@ -112,11 +112,11 @@ export class Controller {
     if (this.aim) {
       // asomándose por la orilla izquierda: la cámara cambia de hombro
       // shoulder swap automático para no ver solo la pared
-      const side = this.state === 'cover' && this.coverLeanAnim ? this.coverLeanAnim : 1;
+      const side = this.state === 'cover' ? (this.coverLeanAnim || 0) : 1;
       return { mode: 'aim', side };
     }
     if (this.state === 'roadie') return { mode: 'roadie' };
-    if (this.state === 'cover') return { mode: 'cover', side: this.coverLeanAnim || 1 };
+    if (this.state === 'cover') return { mode: 'cover', side: this.coverLeanAnim || 0 };
     return { mode: 'normal' };
   }
 

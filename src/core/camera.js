@@ -117,7 +117,10 @@ export class ShoulderCamera {
     else if (st.mode === 'cover') { dist = c.coverDist; }
 
     // shoulder swap suave (lean izquierdo en cover → cámara al hombro izquierdo)
-    const targetSide = st.side ?? 1;
+    // A neutral cover section is not a request to switch to the right.
+    // Retain the last requested shoulder until a real opposite edge is reached.
+    if (st.side !== 0) this._targetSide = st.side ?? 1;
+    const targetSide = this._targetSide ?? 1;
     this._side += (targetSide - this._side) * (1 - Math.exp(-9 * dt));
     shoulder *= this._side;
 

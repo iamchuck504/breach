@@ -1767,10 +1767,24 @@ export class Rig {
       }
     }
 
+    // Fast trigger entry is not a fast lateral transfer. While ADS remains
+    // held, crossing edge/over/edge changes pelvis height and arm targets;
+    // the fire-entry rate used to finish 80% of that change in one frame.
+    const coverAds = !!p.aim && p.state.startsWith('cover_');
+    const coverSection = p.coverLean ?? 0;
+    if (coverAds && this._previousCoverAds && coverSection !== this._previousCoverSection) {
+      this._coverTransferTime = .24;
+    }
+    if (!coverAds) this._coverTransferTime = 0;
+    const transferringCover = coverAds && (this._coverTransferTime ?? 0) > 0;
+    this._coverTransferTime = Math.max(0, (this._coverTransferTime ?? 0) - dt);
+    this._previousCoverAds = coverAds;
+    this._previousCoverSection = coverSection;
     // aplicar targets con damping
     if ((p.aim && p.state.startsWith('cover_')) || p.state.startsWith('blind_')) {
       damp = Math.max(damp, TUNING.cover.firePoseRate);
     }
+    if (transferringCover) damp = 14;
     const k = 1 - Math.exp(-damp * dt);
     for (const [o, props] of T) {
       for (const prop in props) o[prop] += (props[prop] - o[prop]) * k;
@@ -1902,7 +1916,7 @@ export class Rig {
     // Keep the approved shoulder/barrel clearance while tucking the pelvis
     // and feet behind it. The torso, not detached arm sockets, carries lean.
     const supportedLean=p.aim&&p.state.startsWith('cover_')?(p.coverLean??0)*.12:0;
-    this.torso.position.x+=(supportedLean-this.torso.position.x)*(1-Math.exp(-TUNING.cover.firePoseRate*dt));
+    this.torso.position.x+=(supportedLean-this.torso.position.x)*(1-Math.exp(-(transferringCover?14:TUNING.cover.firePoseRate)*dt));
     if (ikArms) {
       if(/^blind_(high|low)_/.test(p.state)){
         // Counter-rotate the actual interpolated chest, not its future target.
