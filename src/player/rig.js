@@ -1481,7 +1481,9 @@ export class Rig {
         const longGun = this._wep === 'shotgun' ? 0.06
           : (this._wep === 'sniper' || this._wep === 'bazooka') ? 0.1 : 0;
         aimRigX = side * (low ? 0.14 : 0.08);
-        M(side * (low ? 0.48 : 0.54), low ? 0.25 : 0.04,
+        // High cover: keep the grip between the shoulders rather than beyond
+        // the opposite arm's reach. Low-cover clearance uses its own pose.
+        M(side * (low ? 0.48 : 0.18), low ? 0.25 : 0.04,
           -0.34 - longGun, 0, 0, -side * 0.04);
         break;
       }
