@@ -1609,7 +1609,9 @@ export class Rig {
       R(this.head, pitch * adsPose.head, 0, lean * 0.08);
       // Pistola extendida, armas largas apoyadas y bazooka alta al hombro.
       // Cero rotación local evita que el modelo prometa otra dirección.
-      M(adsPose.mount[0], adsPose.mount[1] - (aimingFromCover&&poseKey!=='bazooka'?.12:0),
+      // Left-edge support: move the two-handed grip slightly toward the
+      // opening, not the barrel axis toward the wall. IK still limits reach.
+      M(adsPose.mount[0] - (aimingFromCover&&lean<0?.035:0), adsPose.mount[1] - (aimingFromCover&&poseKey!=='bazooka'?.12:0),
         adsPose.mount[2] - (coverPose?.gunForward ?? 0) - (aimingFromCover&&poseKey!=='pistol'&&poseKey!=='bazooka'?.32:0), 0, 0, 0);
       if (coverPose) {
         hipsY = coverPose.hipsY;
@@ -1770,7 +1772,7 @@ export class Rig {
       for (const prop in props) o[prop] += (props[prop] - o[prop]) * k;
     }
     // desplazamiento lateral de cadera al asomarse (lean)
-    const hipsX = p.aim && p.coverLean ? p.coverLean * 0.1 : 0;
+    const hipsX = p.aim && p.coverLean ? -p.coverLean * 0.02 : 0;
     this.hips.position.x += (hipsX - this.hips.position.x) * k;
     this.hips.position.y += (hipsY - this.hips.position.y) * k;
     this.root.rotation.x += (rootRotX - this.root.rotation.x) * (1 - Math.exp(-10 * dt));
@@ -1896,7 +1898,10 @@ export class Rig {
     // A crouched side peek moves the chest with the shoulders; it must not
     // obtain clearance by sliding the arm sockets away from the chest.
     const chestSide=p.state==='blind_low_left'?-1:p.state==='blind_low_right'?1:0;
-    this.torso.position.x+=(chestSide*.25-this.torso.position.x)*(1-Math.exp(-TUNING.cover.firePoseRate*dt));
+    // Keep the approved shoulder/barrel clearance while tucking the pelvis
+    // and feet behind it. The torso, not detached arm sockets, carries lean.
+    const supportedLean=p.aim&&p.state.startsWith('cover_')?(p.coverLean??0)*.12:0;
+    this.torso.position.x+=(chestSide*.25+supportedLean-this.torso.position.x)*(1-Math.exp(-TUNING.cover.firePoseRate*dt));
     if (ikArms) {
       this.root.updateWorldMatrix(true, true);
       const gun = this.activeGun;

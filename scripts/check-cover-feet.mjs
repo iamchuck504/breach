@@ -6,6 +6,10 @@ for (const fps of [30, 60, 144]) for (const state of ['cover_high', 'blind_high_
   for (const side of [-1, 1]) {
     for (let i=0;i<fps;i++) rig.update(1/fps,{state,aim:state==='cover_high',coverLean:side,aimPitch:0,firing:true});
     rig.root.updateMatrixWorld(true);
+    if (state === 'cover_high') {
+      assert.ok(rig.hips.position.x*side < 0, 'pelvis stays inward instead of following the exposed shoulder');
+      assert.ok(Math.abs(rig.torso.position.x-side*.12)<.001, 'chest preserves barrel clearance without moving the feet out');
+    }
     const feet = [rig.legL,rig.legR].map(leg=>{
       const up = new T.Vector3(0,1,0).transformDirection(leg.knee.matrixWorld);
       assert.ok(up.y>.9999, 'sole must remain level');
