@@ -43,7 +43,15 @@ export { BLOCK };
 function buildSharedCollision(world, layout, styles) {
   for (const box of collisionBoxesFor(layout)) {
     const { x, z, w, d, h, style, ...options } = box;
+    const firstFace=world.faces.length;
     world._box(x, z, w, d, h, { ...(styles[style] || {}), ...options });
+    // The shop frame projects in front of the structural wall. Reserve room
+    // for the visible backpack/slung weapon, without adding a bullet collider.
+    if(layout==='calle2'&&box.expansionKind==='wall-cover'&&Math.abs(x)===18.85&&w===5.4){
+      for(const face of world.faces.slice(firstFace)){
+        if(face.n.x===-Math.sign(x))face.standOff=1.20;
+      }
+    }
   }
 }
 const HIT_N = {
@@ -5741,10 +5749,15 @@ export class World {
       const u = ((hx - f.a.x) * tx + (hz - f.a.z) * tz) / (len * len);
       if (u < -0.05 || u > 1.05) continue;
       const cu = Math.max(playerR / len, Math.min(1 - playerR / len, u));
+      const standOff=Math.max(playerR,f.standOff??0);
       const target = {
-        x: f.a.x + tx * cu + n.x * playerR,
-        z: f.a.z + tz * cu + n.z * playerR,
+        x: f.a.x + tx * cu + n.x * standOff,
+        z: f.a.z + tz * cu + n.z * standOff,
       };
+      if(f.standOff){
+        const probe={...target};this.resolveCircle(probe,playerR,footY,f.collider);
+        if(Math.hypot(probe.x-target.x,probe.z-target.z)>.01)continue;
+      }
       // línea de visión libre hasta la entrada (evita engancharse a través de otra caja)
       const o = new THREE.Vector3(pos.x, footY+0.6, pos.z);
       const d3 = new THREE.Vector3(target.x - pos.x, 0, target.z - pos.z);

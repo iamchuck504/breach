@@ -684,8 +684,17 @@ export class Controller {
         const leanOut = aimLeanSide !== 0 ? 0.45 : 0;
         u = Math.max(PLAYER_R * 0.7 - (aimLeanSide < 0 ? leanOut : 0),
           Math.min(len - PLAYER_R * 0.7 + (aimLeanSide > 0 ? leanOut : 0), u));
-        const desiredX = f.a.x + ux * u + n.x * PLAYER_R;
-        const desiredZ = f.a.z + uz * u + n.z * PLAYER_R;
+        const standOff=Math.max(PLAYER_R,f.standOff??0);
+        if(f.standOff){
+          const probe={x:f.a.x+ux*u+n.x*standOff,z:f.a.z+uz*u+n.z*standOff};
+          const px=probe.x,pz=probe.z;
+          this.world.resolveCircle(probe,PLAYER_R,this.y,f.collider);
+          // Stop at furniture instead of letting its circular push bury the
+          // body back inside the shop when strafing along the facade.
+          if(Math.hypot(probe.x-px,probe.z-pz)>.01)u=previousU;
+        }
+        const desiredX = f.a.x + ux * u + n.x * standOff;
+        const desiredZ = f.a.z + uz * u + n.z * standOff;
         if (this.coverEntry) {
           const entry = this.coverEntry;
           entry.t += dt;
