@@ -45,15 +45,27 @@ function buildSharedCollision(world, layout, styles) {
     const { x, z, w, d, h, style, ...options } = box;
     const firstFace=world.faces.length;
     world._box(x, z, w, d, h, { ...(styles[style] || {}), ...options });
+    // Living-body envelope; does not expand ballistic or navigation geometry.
+    if ((layout==='fortaleza' && ['wall','high'].includes(style)) ||
+        (layout==='azoteas' && ['wall','hut'].includes(style)) ||
+        (layout==='calle2' && box.expansionKind==='wall-cover')) {
+      for(const face of world.faces.slice(firstFace))face.bodyStandOff=.82;
+    }
     // The shop frame projects in front of the structural wall. Reserve room
     // for the visible backpack/slung weapon, without adding a bullet collider.
     if(layout==='calle2'&&box.expansionKind==='wall-cover'&&Math.abs(x)===18.85&&w===5.4){
       for(const face of world.faces.slice(firstFace)){
-        if(face.n.x===-Math.sign(x))face.standOff=1.20;
+        if(face.n.x===-Math.sign(x)){
+          face.standOff=1.20;
+          face.bodyStandOff=1.28; // .46 m facade projection + .82 m body
+        }
       }
     }
     if(layout==='azoteas'&&Math.abs(x)===25&&Math.abs(z)===6.8&&w===2.4){
-      for(const face of world.faces.slice(firstFace))face.standOff=.82;
+      for(const face of world.faces.slice(firstFace)){
+        face.standOff=.82;
+        face.bodyStandOff=.82;
+      }
     }
   }
 }
@@ -5728,6 +5740,28 @@ export class World {
         moved = true;
       }
       if (!moved) break;
+    }
+  }
+
+  // Fixed living-body envelope, independent of animation/recoil. Never used by
+  // projectiles or ragdolls; cover keeps its own lean-aware contact solver.
+  resolveFacadeBody(p, r, y = 0) {
+    for(let iteration=0;iteration<3;iteration++){
+      let moved=false;
+      for(const f of this.faces){
+        if(!f.bodyStandOff || y>=f.topY-.05 || y+1.63<=(f.baseY??0))continue;
+        const tx=f.b.x-f.a.x,tz=f.b.z-f.a.z,len=Math.hypot(tx,tz);
+        if(len<1e-6)continue;
+        const dx=p.x-f.a.x,dz=p.z-f.a.z;
+        const along=(dx*tx+dz*tz)/len,side=dx*f.n.x+dz*f.n.z;
+        // No correction from behind a wall or beyond the end of a facade.
+        if(side<0 || side>=f.bodyStandOff || along<0 || along>len)continue;
+        p.x+=f.n.x*(f.bodyStandOff-side);
+        p.z+=f.n.z*(f.bodyStandOff-side);
+        moved=true;
+      }
+      this.resolveCircle(p,r,y);
+      if(!moved)break;
     }
   }
 

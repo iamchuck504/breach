@@ -910,6 +910,7 @@ export class Controller {
       // Los demás obstáculos siguen resolviéndose con normalidad.
       this.world.resolveCircle(this.pos, PLAYER_R, this.y,
         this.state === 'cover' ? this.cover?.collider : null);
+      if(this.state!=='cover')this.world.resolveFacadeBody?.(this.pos,PLAYER_R,this.y);
     }
 
     // Nunca subir un desnivel grande solo porque groundHeight cambió bajo el
