@@ -1217,7 +1217,7 @@ export class Rig {
   // soluciones de codo y elige la que alcanza el target con el codo
   // hacia abajo/afuera (vector polo).
   _ikArm(arm, side, target) {
-    IK_S.set(side * 0.36, 0, 0);
+    IK_S.copy(arm.shoulder.position);
     IK_V.copy(target).sub(IK_S);
     let d = IK_V.length();
     d = Math.min(L1 + L2 - 0.02, Math.max(0.12, d));
@@ -1866,9 +1866,38 @@ export class Rig {
     }
 
     // IK: manos sobre el arma (después del damping, sobre la pose ya aplicada)
+    // A crouched side peek moves the chest with the shoulders; it must not
+    // obtain clearance by sliding the arm sockets away from the chest.
+    const chestSide=p.state==='blind_low_left'?-1:p.state==='blind_low_right'?1:0;
+    this.torso.position.x+=(chestSide*.25-this.torso.position.x)*(1-Math.exp(-TUNING.cover.firePoseRate*dt));
     if (ikArms) {
       this.root.updateWorldMatrix(true, true);
       const gun = this.activeGun;
+      const coverPoseActive=p.state.startsWith('cover_')||p.state.startsWith('blind_');
+      // The aim pivot may move/rotate the gun, never detach the shoulder
+      // sockets from the chest. Express fixed chest sockets in aim space.
+      for(const [arm,side] of [[this.armL,-1],[this.armR,1]]){
+        if(coverPoseActive){
+          TMP_A.set(side*.36,.5,0);
+          this.torso.localToWorld(TMP_A);
+          arm.shoulder.position.copy(this.aimRig.worldToLocal(TMP_A));
+        }else arm.shoulder.position.set(side*.36,0,0);
+      }
+      if(coverPoseActive){
+        // Fit the weapon to both arms instead of stretching an arm toward an
+        // unreachable grip. Translation preserves the physical barrel axis.
+        const grips=[[this.armR,gun.userData.grip],
+          ...(!gun.userData.oneHand&&leftOnGun?[[this.armL,gun.userData.forend]]:[])];
+        for(let pass=0;pass<8;pass++)for(const [arm,anchor] of grips){
+          if(!anchor)continue;
+          this.root.updateWorldMatrix(true,true);
+          anchor.getWorldPosition(TMP_A);this.aimRig.worldToLocal(TMP_A);
+          TMP_B.copy(TMP_A).sub(arm.shoulder.position);
+          const distance=TMP_B.length(),reach=L1+L2-.04;
+          if(distance>reach)this.gunMount.position.addScaledVector(TMP_B,(reach-distance)/distance);
+        }
+        this.root.updateWorldMatrix(true,true);
+      }
       gun.userData.grip.getWorldPosition(TMP_A);
       this._ikArm(this.armR, 1, this.aimRig.worldToLocal(TMP_A));
       // el gesto de recarga solo aplica en posturas con el arma al frente
