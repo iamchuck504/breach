@@ -1073,6 +1073,8 @@ export class Rig {
       // reacción al impacto ANTES de perder el cuerpo: el golpe se "encaja"
       // un instante (más potencia = más encaje) mientras el paso trastabilla
       reactT: 0.09 + power * 0.09,
+      impactSide: side, impactFront: front, impactPower: power,
+      startHipY: this.hips.position.y,
       bx: this.root.position.x, bz: this.root.position.z, byaw: yaw,
       by: this.root.position.y, vyy: 0, // caída vertical real (muerte en el aire)
       // suelo REAL bajo el cadáver: clavar a y=0 enterraba el cuerpo dentro
@@ -1095,8 +1097,8 @@ export class Rig {
       severe: !!ctx.gib || isSniperHeadshotDeath(ctx) || rocketDeathLevel(ctx) > 0,
       pose: [
         rnd(-0.08, 0.16), rnd(-0.22, 0.22), rnd(0.34, 0.66), rnd(-0.58, 0.58),
-        rnd(0.08, 0.42), rnd(0.82, 1.18), rnd(0.12, 0.4),
-        rnd(0.08, 0.42), rnd(0.82, 1.18), rnd(0.12, 0.4),
+        rnd(0.08, 0.42), rnd(0.38, 0.72), rnd(0.36, 0.72),
+        rnd(0.08, 0.42), rnd(0.38, 0.72), rnd(0.36, 0.72),
         rnd(-0.08, 0.22), rnd(0.25, 0.48), rnd(-0.38, -0.12),
         rnd(-0.04, 0.28), rnd(-0.42, -0.14),
       ],
@@ -1267,11 +1269,16 @@ export class Rig {
 
     let hipsY = 0.66, aimRigX = 0, aimRigY = 0.5, rootRotX = 0, damp = 12;
     let leftOnGun = false, ikArms = true;
-    const sp = p.speed;
-    this.phase += dt * (4.5 + sp * 8.5) * (sp > 0.02 ? 1 : 0);
+    // Visual cadence follows acceleration without changing movement, aiming or
+    // weapon timing. Keep the phase continuous when releasing/reapplying input.
+    const gaitTarget = ['run','roadie'].includes(p.state) ? Math.min(1,Math.max(0,p.speed??0)) : 0;
+    this._gaitSpeed = (this._gaitSpeed??0) + (gaitTarget-(this._gaitSpeed??0))*(1-Math.exp(-14*dt));
+    this._strideWeight = (this._strideWeight??0) + ((gaitTarget>.02?1:0)-(this._strideWeight??0))*(1-Math.exp(-18*dt));
+    const sp = this._gaitSpeed;
+    this.phase += dt * (4.5 + sp * 8.5) * this._strideWeight;
     const ph = this.phase;
     const swing = Math.sin(ph), swing2 = Math.sin(ph + Math.PI);
-    const bob = Math.abs(Math.cos(ph));
+    const bob = .5 + .5*Math.cos(ph*2); // smooth footfall, no abs() cusp at each contact
     const pitch = p.aimPitch ?? 0;
 
     const locomotionState = p.state === 'roadie' && (p.moveForward ?? 1) < 0.5 ? 'run' : p.state;
@@ -1281,17 +1288,17 @@ export class Rig {
         rootRotX = (p.groundPitch ?? 0) * 0.58;
         R(this.torso, -0.55, 0, Math.sin(ph * 0.5) * 0.04);
         R(this.head, 0.42, 0, 0);
-        R(this.legL.hip, swing * 1.05, 0, 0); R(this.legL.knee, -(Math.max(0, -swing) * 1.5 + 0.2), 0, 0);
-        R(this.legR.hip, swing2 * 1.05, 0, 0); R(this.legR.knee, -(Math.max(0, -swing2) * 1.5 + 0.2), 0, 0);
+        R(this.legL.hip, swing * 1.05*this._strideWeight, 0, 0); R(this.legL.knee, -(Math.max(0, -swing) * 1.5 + 0.2)*this._strideWeight, 0, 0);
+        R(this.legR.hip, swing2 * 1.05*this._strideWeight, 0, 0); R(this.legR.knee, -(Math.max(0, -swing2) * 1.5 + 0.2)*this._strideWeight, 0, 0);
         R(this.armL.shoulder, swing2 * 0.9 + 0.2, 0, -0.2); R(this.armL.elbow, 1.25, 0, 0);
         // arma baja al costado, una mano
         M(0.19, -0.34, -0.22, -0.5, 0.05, 0);
         R(this.aimRig, 0, 0, 0);
-        hipsY = 0.58 + bob * 0.06;
+        hipsY = 0.58 + bob * 0.06*this._strideWeight;
         break;
       }
       case 'run': case 'idle': default: { // default: estados desconocidos (red) caen a idle
-        const m = locomotionState === 'run' ? 1 : 0;
+        const m = this._strideWeight;
         const forward = p.moveForward ?? 1;
         const side = p.moveSide ?? 0;
         const tw = p.twist ?? 0; // torso/cabeza giran hacia la cámara
@@ -1520,22 +1527,26 @@ export class Rig {
         if (!this.rag) this._startRagdoll();
         // (la visibilidad del arma la maneja la física del ragdoll: se le
         // cae de las manos ~0.22s después del impacto, no al instante)
-        damp = 3.2; // articulaciones flojas: van rezagadas detrás del cuerpo
+        damp = this.rag.t < this.rag.reactT ? 18 : this.rag.hit ? 5 : 7;
         ikArms = false;
         const rg = this.rag;
         const rp = rg.pose;
+        // Short directional impact, then asymmetric loss of knee support.
+        // This is corpse presentation only; living aim and hitboxes stay intact.
+        const shock=Math.sin(Math.PI*Math.min(1,rg.t/rg.reactT))*(.12+rg.impactPower*.16);
+        const buckle=Math.sin(Math.PI*Math.min(1,rg.ang));
         // flop al impactar: oscilación amortiguada, coeficiente por miembro
         const flop = rg.hit ? Math.sin(rg.flopT * 24) * Math.exp(-rg.flopT * 8) : 0;
-        R(this.torso, rp[0] + flop * rg.fl[5] * 0.4, rp[1], 0);
-        R(this.head, rp[2] + flop * rg.fl[4], 0, rp[3]);
+        R(this.torso, rp[0] + flop * rg.fl[5] * 0.4 + shock*rg.impactFront, rp[1], -shock*rg.impactSide);
+        R(this.head, rp[2] + flop * rg.fl[4] - shock*.55*rg.impactFront, 0, rp[3]+shock*.3*rg.impactSide);
         R(this.armL.shoulder, rp[4] + flop * rg.fl[0], 0, -Math.abs(rp[5]));
         R(this.armL.elbow, rp[6] + flop * rg.fl[0] * 0.7, 0, 0);
         R(this.armR.shoulder, rp[7] + flop * rg.fl[1], 0, Math.abs(rp[8]));
         R(this.armR.elbow, rp[9] + flop * rg.fl[1] * 0.7, 0, 0);
         R(this.legL.hip, rp[10] + flop * rg.fl[2], 0, rp[11]);
-        R(this.legL.knee, rp[12], 0, 0);
+        R(this.legL.knee, rp[12]-.55*buckle, 0, 0);
         R(this.legR.hip, rp[13] + flop * rg.fl[3], 0, -rp[11]);
-        R(this.legR.knee, rp[14], 0, 0);
+        R(this.legR.knee, rp[14]-.35*buckle, 0, 0);
         R(this.aimRig, 0, 0, 0);
         M(0.12, -0.18, -0.14, 0.4, 0, 0.2);
         break;
@@ -1730,11 +1741,14 @@ export class Rig {
     // suelo; ahí dispara el flop de extremidades del case 'dead'.
     if (p.state === 'dead' && this.rag) {
       const r = this.rag;
+      const previousT=r.t;
       r.t += dt;
       this._updateCorpseVisual(Math.max(r.t, monotonicSeconds() - r.visualStartedAt));
       const fr = Math.exp(-6 * dt);
+      // Integrate drag analytically: the death must carry the same momentum
+      // at 30/60/144 Hz, not travel farther on a faster rendering client.
+      r.ox += r.vx * (1-fr)/6; r.oz += r.vz * (1-fr)/6;
       r.vx *= fr; r.vz *= fr;
-      r.ox += r.vx * dt; r.oz += r.vz * dt;
       // el cadáver COLISIONA: contra una pared choca, se frena y se apoya —
       // ya no la atraviesa deslizándose (collideFn lo inyecta quien tiene
       // el world, igual que groundFn)
@@ -1751,7 +1765,8 @@ export class Rig {
       const onGround = r.by <= r.floorY + 0.08;
       if (r.ang < 1) {
         if (onGround && r.t > r.reactT) {
-          r.ang = Math.min(1, r.ang + dt * (0.9 + r.ang * 7.5)); // cae acelerando
+          const fallDt=r.t-Math.max(previousT,r.reactT);
+          r.ang = Math.min(1, (r.ang+.12)*Math.exp(7.5*fallDt)-.12);
           if (r.ang >= 1 && !r.hit) {
             r.hit = true; r.flopT = 0;
             r.vx *= 0.5; r.vz *= 0.5; // el golpe contra el suelo absorbe el arrastre
@@ -1767,7 +1782,7 @@ export class Rig {
       if (r.axis === 'x') { this.hips.rotation.x = a; this.hips.rotation.z = r.tilt * fall; }
       else { this.hips.rotation.z = a; this.hips.rotation.x = r.tilt * fall; }
       // rodillas que ceden: la cadera baja con la caída (golpe, no flotación)
-      this.hips.position.y = 0.66 - 0.37 * fall;
+      this.hips.position.y = r.startHipY + (.29-r.startHipY)*fall;
       // gravedad hasta el suelo REAL bajo el cadáver (bloques incluidos)
       if (r.by > r.floorY) {
         r.vyy -= 22 * dt;
@@ -1818,6 +1833,7 @@ export class Rig {
         this.rag = null;
         this._restoreDeathVisuals();
         this.hips.position.y = 0.66; // sin "brotar" del suelo al revivir
+        this._gaitSpeed=0;this._strideWeight=0;
       }
     }
 
