@@ -34,7 +34,8 @@ try {
     if(w.raycast(muzzle,direction,5)!==null)throw Error(JSON.stringify({height,side,weapon,pitch,aim,muzzle,direction,reason:'barrel obstructed'}));
     if(!aim){
      const head=new T.Box3().setFromObject(rig.head),edge=side<0?-head.min.x:head.max.x;
-     if(edge>2)throw Error(`${height} ${side} ${weapon}: helmet exposed ${edge}`);
+     // Balanced blindfire permits a partial peek, not the full ADS silhouette.
+     if(edge-2>(head.max.x-head.min.x)*.4)throw Error(`${height} ${side} ${weapon}: excessive helmet exposure ${edge}`);
      for(const [arm,anchor] of [[rig.armR,rig.activeGun.userData.grip],[rig.armL,rig.activeGun.userData.blindSupport]]){
       if(arm.hand.getWorldPosition(new T.Vector3()).distanceTo(anchor.getWorldPosition(new T.Vector3()))>.025)throw Error(`${height} ${side} ${weapon}: hand detached`);
      }

@@ -23,7 +23,7 @@ for(const side of [-1,1])for(const aim of [false,true])for(const weapon of ['pis
  if(!aim){
   const bounds=new T.Box3().setFromObject(rig.head);
   const exposed=side<0?-bounds.min.x:bounds.max.x;
-  assert.ok(exposed<2,`${weapon} ${side}: helmet protrudes beyond cover (${exposed})`);
+  assert.ok(exposed-2<(bounds.max.x-bounds.min.x)*.4,`${weapon} ${side}: blindfire exposes too much helmet (${exposed})`);
  }
  assert.ok(muzzle.x*side>2,`${weapon} ${aim?'ADS':'blind'} ${side}: muzzle inside edge ${muzzle.x}`);
  assert.ok(muzzle.z>0||Math.abs(muzzle.x)>2,'muzzle cannot start inside the wall');

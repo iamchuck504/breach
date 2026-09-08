@@ -1476,7 +1476,7 @@ export class Rig {
           hipsY = 0.14;
           aimRigY = 0.68 + down * 0.08;
         } else {
-          R(this.torso, 0.05, -side * 1.40, side * 0.08);
+          R(this.torso, 0.05, -side * 1.10, side * 0.08);
           R(this.head, 0.08, 0.12, 0);
           R(this.legL.hip, -0.04, 0, 0.08); R(this.legL.knee, -0.18, 0, 0);
           R(this.legR.hip, 0.04, 0, -0.08); R(this.legR.knee, -0.16, 0, 0);

@@ -687,11 +687,11 @@ export class Controller {
           : 0;
         const firingEdge = aimLeanSide || blindEdgeSide;
         u += (lat * M.coverStrafe + entryCarry) * dt + firingEdge * 2.6 * dt;
-        const blindInset = -.12;
+        const blindInset = .09;
         const leanOut = firingEdge !== 0 ? (this.aim ? 0.30 : blindInset) + (f.peekMargin??0) : 0;
         u = Math.max(PLAYER_R * 0.7 - (firingEdge < 0 ? leanOut : 0),
           Math.min(len - PLAYER_R * 0.7 + (firingEdge > 0 ? leanOut : 0), u));
-        // ADS -> protected blindfire retracts quickly, not a 42 cm root snap.
+        // ADS -> protected blindfire retracts quickly, not a root snap.
         // Keep the barrel outside while the two-handed pose folds into place.
         if(blindEdgeSide && (previousU-u)*blindEdgeSide>0){
           u=previousU+Math.max(-6*dt,Math.min(6*dt,u-previousU));

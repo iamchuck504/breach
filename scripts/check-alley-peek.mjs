@@ -26,7 +26,7 @@ try{
     if(!aim){
      const head=new T.Box3().setFromObject(rig.head);
      const inner=edge.x>0?head.min.x:-head.max.x;
-     if(inner<15.69)throw Error(JSON.stringify({reason:'helmet exposed',edge,weapon,inner,muzzle}));
+     if(inner<15.69-(head.max.x-head.min.x)*.4)throw Error(JSON.stringify({reason:'excessive helmet exposure',edge,weapon,inner,muzzle}));
      for(const [arm,anchor] of [[rig.armR,rig.activeGun.userData.grip],[rig.armL,rig.activeGun.userData.blindSupport]]){
       const error=arm.hand.getWorldPosition(new T.Vector3()).distanceTo(anchor.getWorldPosition(new T.Vector3()));
       if(error>.025)throw Error(JSON.stringify({reason:'hand off grip',edge,weapon,error}));
