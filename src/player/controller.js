@@ -724,8 +724,19 @@ export class Controller {
         // orientación: DE ESPALDAS a la pared; al apuntar/disparar → cámara.
         // Blindfire gira más pesado para conservar la lectura del cover y no
         // invertir cuerpo/cañón de un frame al siguiente.
-        if (this.aim || (this.firingBlind > 0 && this.blindMode)) {
-          this._turnToCamera(dt * 2, !this.aim);
+        if (this.aim || (this.firingBlind > 0 && (this.blindMode || blindEdgeSide))) {
+          const exitSide = aimLeanSide || blindEdgeSide;
+          let delta = angleDelta(this.yaw,this.cam.yaw);
+          // Back-to-wall -> firing is nearly a half turn. The shortest-angle
+          // tie must be resolved through the physical opening, not by the
+          // sign of +/-PI (which depends on the wall's world orientation).
+          if(exitSide && Math.abs(delta)>Math.PI/2){
+            const turnSign=Math.sign(n.z*ux*exitSide-n.x*uz*exitSide);
+            if(turnSign && Math.sign(delta)!==turnSign)delta+=turnSign*Math.PI*2;
+          }
+          const rate=this.aim?TUNING.combat.bodyTurnAimDeg:TUNING.combat.bodyTurnBlindDeg;
+          const step=rate*Math.PI/180*dt*2;
+          this.yaw+=Math.max(-step,Math.min(step,delta));
         } else {
           this.yaw = approachAngle(this.yaw, yawFromDir(n.x, n.z),
             TUNING.combat.bodyTurnFollowDeg * Math.PI / 180 * dt);
