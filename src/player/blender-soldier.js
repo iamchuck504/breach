@@ -68,6 +68,13 @@ export function attachBlenderWeapon(rig,gun,key){
   holder.scale.set(1/gun.scale.x,1/gun.scale.y,1/gun.scale.z);
   const offset=gun.userData.muzzle.position.clone().multiply(gun.scale).sub(new Vector3().fromArray(sockets.muzzle));
   holder.position.copy(offset.divide(gun.scale));holder.add(object);gun.add(holder);
+  // The native weapon has different grip locations from the procedural
+  // placeholder. Drive hands from the same sockets as the visible GLB.
+  // Muzzle remains untouched: holder was aligned to it above.
+  for(const key of ['grip','forend','aimSupport','mag']){
+    const anchor=gun.userData[key],socket=sockets[key];
+    if(anchor&&socket)anchor.position.fromArray(socket).divide(gun.scale).add(holder.position);
+  }
   if(gun.userData.equippedVisual)gun.userData.equippedVisual.visible=false;
   else gun.traverse(o=>{if(o.isMesh&&!holder.getObjectById(o.id))o.visible=false;});
   gun.userData.blenderVisual=holder;
@@ -95,6 +102,9 @@ export async function attachBlenderSoldier(rig) {
   // Finish loading/validating before removing any old geometry.
   const replacements = segments.map(source => {
     const object = source.clone(true);
+    // The shoulder shell previously covered the whole upper arm in firing
+    // poses. Reduce only this cosmetic shell, not bones, hands or body scale.
+    if(source.userData.runtimeTarget.startsWith('pauldron.'))object.scale.multiplyScalar(.82);
     object.traverse(o => {
       if (!o.isMesh) return;
       o.material = Array.isArray(o.material)
