@@ -681,10 +681,14 @@ export class Controller {
           : 0;
         const firingEdge = aimLeanSide || blindEdgeSide;
         u += (lat * M.coverStrafe + entryCarry) * dt + firingEdge * 2.6 * dt;
-        const leanOut = firingEdge !== 0 ? 0.45 + (f.peekMargin??0) : 0;
+        const leanOut = firingEdge !== 0 ? (this.aim ? 0.30 : 0.45) + (f.peekMargin??0) : 0;
         u = Math.max(PLAYER_R * 0.7 - (firingEdge < 0 ? leanOut : 0),
           Math.min(len - PLAYER_R * 0.7 + (firingEdge > 0 ? leanOut : 0), u));
-        const standOff=Math.max(PLAYER_R,f.standOff??0);
+        // At an exposed ADS edge, the bladed stance needs less wall-normal
+        // clearance than the back-to-wall resting pose. Keep the larger
+        // envelope for rest/blindfire and never remove collision checks.
+        const edgeSupport = this.aim && firingEdge && f.peekMargin ? .12 : 0;
+        const standOff=Math.max(PLAYER_R,(f.standOff??0)-edgeSupport);
         if(f.standOff){
           const probe={x:f.a.x+ux*u+n.x*standOff,z:f.a.z+uz*u+n.z*standOff};
           const px=probe.x,pz=probe.z;
