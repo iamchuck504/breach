@@ -1216,13 +1216,16 @@ export class Rig {
   // IK analítico de dos huesos en espacio del aimRig. Prueba las dos
   // soluciones de codo y elige la que alcanza el target con el codo
   // hacia abajo/afuera (vector polo).
-  _ikArm(arm, side, target) {
+  _ikArm(arm, side, target, shouldered = false) {
     IK_S.copy(arm.shoulder.position);
     IK_V.copy(target).sub(IK_S);
     let d = IK_V.length();
     d = Math.min(L1 + L2 - 0.02, Math.max(0.12, d));
     IK_V.normalize();
-    IK_POLE.set(side * 0.7, -0.75, -0.4).normalize();
+    // A shouldered rifle hangs the upper arms down from the chest, rather
+    // than folding both elbows forward alongside the receiver.
+    IK_POLE.set(side * (shouldered ? .3 : .7), shouldered ? -1 : -.75,
+      shouldered ? .18 : -.4).normalize();
     IK_N.crossVectors(IK_V, IK_POLE);
     if (IK_N.lengthSq() < 1e-5) IK_N.set(0, 0, -side);
     IK_N.normalize();
@@ -1900,7 +1903,7 @@ export class Rig {
         this.root.updateWorldMatrix(true,true);
       }
       gun.userData.grip.getWorldPosition(TMP_A);
-      this._ikArm(this.armR, 1, this.aimRig.worldToLocal(TMP_A));
+      this._ikArm(this.armR, 1, this.aimRig.worldToLocal(TMP_A),p.aim);
       // el gesto de recarga solo aplica en posturas con el arma al frente
       // (misma whitelist que reloadPose, calculada arriba). Las armas de una
       // mano (granada) no lleva la izquierda al arma; la pistola sí usa apoyo
@@ -1915,7 +1918,7 @@ export class Rig {
         a.getWorldPosition(TMP_B);
         const tgt = this.aimRig.worldToLocal(TMP_B);
         if (reloadIk) tgt.y -= 0.16 * Math.sin(Math.PI * (p.reloadT ?? 0));
-        this._ikArm(this.armL, -1, tgt);
+        this._ikArm(this.armL, -1, tgt,p.aim&&!reloadIk);
       }
     }
   }
