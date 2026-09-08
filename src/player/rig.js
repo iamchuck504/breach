@@ -1474,8 +1474,8 @@ export class Rig {
           hipsY = 0.14;
           aimRigY = 0.68 + down * 0.08;
         } else {
-          R(this.torso, 0.12, side * 0.08, -side * 0.12);
-          R(this.head, 0.02, -side * 0.08, side * 0.05);
+          R(this.torso, 0.12, side * 0.08, side * 0.08);
+          R(this.head, 0.20, -side * 0.18, side * 0.10);
           R(this.legL.hip, -0.04, 0, 0.08); R(this.legL.knee, -0.18, 0, 0);
           R(this.legR.hip, 0.04, 0, -0.08); R(this.legR.knee, -0.16, 0, 0);
           hipsY = 0.62;
@@ -1483,11 +1483,11 @@ export class Rig {
         }
         const longGun = this._wep === 'shotgun' ? 0.06
           : (this._wep === 'sniper' || this._wep === 'bazooka') ? 0.1 : 0;
-        aimRigX = side * (low ? 0.14 : 0.08);
+        aimRigX = side * (low ? 0.27 : 0.26);
         // High cover: keep the grip between the shoulders rather than beyond
         // the opposite arm's reach. Low-cover clearance uses its own pose.
-        M(side * (low ? 0.48 : 0.18), low ? 0.25 : 0.04,
-          -0.34 - longGun, 0, 0, -side * 0.04);
+        M(side * (low ? 0.48 : 0.32), low ? 0.25 : 0.04,
+          -0.24 - longGun, 0, 0, -side * 0.04);
         break;
       }
       case 'melee': {
@@ -1638,7 +1638,10 @@ export class Rig {
         const parentPitch = p.state.startsWith('blind_low_') ? -0.42
           : p.state.startsWith('blind_high_') ? 0.12 : -0.05;
         set(this.aimRig.rotation, 'x', pitch - parentPitch);
-        set(this.aimRig.rotation, 'y', yawErr);
+        // Chest bracing is cosmetic, not an inward barrel yaw. Blindfire
+        // still shoots along this physical axis, never a camera target ray.
+        const blindSide=p.state.endsWith('_left')?-1:p.state.endsWith('_right')?1:0;
+        set(this.aimRig.rotation, 'y', yawErr-blindSide*.08);
       } else if (p.state === 'cover_low' || p.state === 'cover_high') {
         set(this.aimRig.rotation, 'x', p.firing ? pitch : 0);
         set(this.aimRig.rotation, 'y', p.firing ? yawErr : 0);

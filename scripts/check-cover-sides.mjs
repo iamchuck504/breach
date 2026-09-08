@@ -3,6 +3,7 @@ import * as T from 'three';
 import {Controller} from '../src/player/controller.js';
 import {World} from '../src/world/world.js';
 import {Rig} from '../src/player/rig.js';
+const exposure=new Map();
 for(const side of [-1,1])for(const aim of [false,true])for(const weapon of ['pistol','smg','shotgun','sniper','bazooka']){
  const w=Object.create(World.prototype),box={minx:-2,maxx:2,minz:-2,maxz:0,h:3};
  const face={a:{x:-2,z:0},b:{x:2,z:0},n:{x:0,z:1},h:3,topY:3,kind:'high',collider:box};
@@ -14,6 +15,10 @@ for(const side of [-1,1])for(const aim of [false,true])for(const weapon of ['pis
  for(let i=0;i<120;i++){p.update(1/60,input,true);rig.setTransform(p.pos.x,p.pos.z,p.yaw,p.y);rig.update(1/60,p.animParams());}
  assert.equal(p.coverLeanAnim,side);
  const muzzle=rig.muzzleWorld(new T.Vector3());
+ const head=rig.head.getWorldPosition(new T.Vector3());
+ const key=`${side}:${weapon}`;
+ if(!aim)exposure.set(key,head.x*side);
+ else assert.ok(head.x*side>exposure.get(key)+.05,'blindfire head must stay further behind cover than ADS');
  assert.ok(muzzle.x*side>2,`${weapon} ${aim?'ADS':'blind'} ${side}: muzzle inside edge ${muzzle.x}`);
  assert.equal(w.raycast(muzzle,new T.Vector3(0,0,-1),5),null,'own wall blocks barrel');
  for(const yaw of [-1.7,1.7,0]){cam.yaw=yaw;p.update(1/60,input,true);assert.equal(p.coverLeanAnim,side,'camera swapped opening');}

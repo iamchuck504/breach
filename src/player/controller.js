@@ -681,7 +681,7 @@ export class Controller {
           : 0;
         const firingEdge = aimLeanSide || blindEdgeSide;
         u += (lat * M.coverStrafe + entryCarry) * dt + firingEdge * 2.6 * dt;
-        const leanOut = firingEdge !== 0 ? (this.aim ? 0.30 : 0.45) + (f.peekMargin??0) : 0;
+        const leanOut = firingEdge !== 0 ? (this.aim ? 0.30 : 0.32) + (f.peekMargin??0) : 0;
         u = Math.max(PLAYER_R * 0.7 - (firingEdge < 0 ? leanOut : 0),
           Math.min(len - PLAYER_R * 0.7 + (firingEdge > 0 ? leanOut : 0), u));
         // At an exposed ADS edge, the bladed stance needs less wall-normal
