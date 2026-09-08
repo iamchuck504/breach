@@ -1590,10 +1590,11 @@ export class Rig {
       // ni separar las manos de grip/forend.
       aimRigX = adsPose.center;
       const lean = p.coverLean ?? 0; // asomarse en la orilla de pared alta
-      if(p.state==='cover_high')aimRigX += lean * .38;
+      if(p.state==='cover_high'||p.state==='cover_low')aimRigX += lean * .38;
       const coverPose = p.state === 'cover_low'
-        ? coverAimPose({ kind: p.coverKind, h: 1.1 }, pitch,
-          p.coverAimExposure ?? 1)
+        ? (lean ? {hipsY:.18,aimRigY:.68,gunForward:0,torsoLean:0}
+          : coverAimPose({ kind: p.coverKind, h: 1.1 }, pitch,
+            p.coverAimExposure ?? 1))
         : null;
       const torsoPitch = adsPose.torsoPitch - (coverPose?.torsoLean ?? 0);
       // Compensar inclinación de root+torso: el cañón visual conserva el pitch
@@ -1615,8 +1616,10 @@ export class Rig {
       aimRigY += p.aimLift ?? 0;
       if (lean) {
         // piernas plantadas hacia la pared, torso fuera de la esquina
-        R(this.legL.hip, 0, 0, 0.1 + lean * 0.12);
-        R(this.legR.hip, 0, 0, -0.1 + lean * 0.12);
+        const crouched=p.state==='cover_low';
+        R(this.legL.hip, crouched?1.7:0, 0, 0.1 + lean * 0.12);
+        R(this.legR.hip, crouched?1.7:0, 0, -0.1 + lean * 0.12);
+        if(crouched){R(this.legL.knee,-2.2,0,0);R(this.legR.knee,-2.2,0,0);}
       }
     } else if (p.state !== 'dead') {
       // Sin ADS no existe intención óptica central. El cañón conserva la pose

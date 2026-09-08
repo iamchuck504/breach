@@ -648,7 +648,7 @@ export class Controller {
           ? camF.x * ux * edgeSide + camF.z * uz * edgeSide
           : -1;
         let aimLeanSide = 0;
-        if (!low && this.aim) aimLeanSide = edgeSide;
+        if (this.aim) aimLeanSide = edgeSide;
 
         // Melee contextual desde una orilla: abandonar cover requiere una
         // pulsación explícita y solo se permite donde el arma/brazos pueden
@@ -665,8 +665,7 @@ export class Controller {
         // conserva la distinción entre disparar por arriba y rodear una esquina.
         let blindEdgeSide = 0;
         if (!this.aim && this.firingBlind > 0) {
-          if (!low && edgeSide) blindEdgeSide = edgeSide;
-          else if (low && edgeSide && aroundEdge > 0.24) blindEdgeSide = edgeSide;
+          if (edgeSide) blindEdgeSide = edgeSide;
           else if (low) this.blindMode = 'over';
           else this.blindMode = null;
         } else this.blindMode = null;

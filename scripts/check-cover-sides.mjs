@@ -21,9 +21,9 @@ for(const side of [-1,1])for(const aim of [false,true])for(const weapon of ['pis
 console.log('COVER SIDES OK: both edges, five weapons, ADS/blind, no camera side inversion');
 // Check the whole turn, not just the final pose: every wall orientation must
 // turn through its opening, including the ambiguous +/-PI half-turn.
-for(const n of [{x:0,z:1},{x:0,z:-1},{x:1,z:0},{x:-1,z:0}])for(const side of [-1,1])for(const aim of [false,true]){
+for(const height of [1.1,3])for(const n of [{x:0,z:1},{x:0,z:-1},{x:1,z:0},{x:-1,z:0}])for(const side of [-1,1])for(const aim of [false,true]){
  const t={x:n.z,z:-n.x};
- const face={a:{x:-2*t.x,z:-2*t.z},b:{x:2*t.x,z:2*t.z},n,h:3,topY:3,kind:'high'};
+ const face={a:{x:-2*t.x,z:-2*t.z},b:{x:2*t.x,z:2*t.z},n,h:height,topY:height,kind:height<2?'low':'high'};
  const w={groundHeight:()=>0,resolveCircle(){},raycast:()=>null};
  const cam={yaw:Math.atan2(n.x,n.z),pitch:0,flatForward:()=>({x:-n.x,z:-n.z}),flatRight:()=>t};
  const p=new Controller(w,cam);p.state='cover';p.cover=face;p.yaw=Math.atan2(-n.x,-n.z);
