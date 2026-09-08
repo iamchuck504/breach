@@ -110,20 +110,6 @@ export async function attachBlenderSoldier(rig) {
       o.material = Array.isArray(o.material)
         ? o.material.map(m => teamMaterial(m, rig.team))
         : teamMaterial(o.material, rig.team);
-      // Separate the flexible sleeves/gloves from the near-black chest and
-      // gun. Keep team-coloured details, and never mutate shared GLB materials.
-      const limb=source.userData.runtimeTarget;
-      if(/^(upper_arm|forearm|hand)\./.test(limb)){
-        const readable=m=>{
-          if(/red|emiss|glow|copper/i.test(m.name))return m;
-          if(Math.max(m.color.r,m.color.g,m.color.b)>.16)return m;
-          const copy=m.clone();
-          copy.color.set(limb.startsWith('hand')?0x626b73:limb.startsWith('upper_arm')?0x454f58:0x3b454f);
-          copy.roughness=.85;copy.metalness=.1;
-          return copy;
-        };
-        o.material=Array.isArray(o.material)?o.material.map(readable):readable(o.material);
-      }
       o.castShadow = true;
       o.receiveShadow = true;
       o.userData.blenderSoldier = true;

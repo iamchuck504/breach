@@ -1224,7 +1224,7 @@ export class Rig {
     IK_V.normalize();
     // A shouldered rifle hangs the upper arms down from the chest, rather
     // than folding both elbows forward alongside the receiver.
-    IK_POLE.set(side * (shouldered ? .3 : .7), shouldered ? -1 : -.75,
+    IK_POLE.set(side * (shouldered ? 1.25 : .7), shouldered ? -.65 : -.75,
       shouldered ? .18 : -.4).normalize();
     IK_N.crossVectors(IK_V, IK_POLE);
     if (IK_N.lengthSq() < 1e-5) IK_N.set(0, 0, -side);
@@ -1603,13 +1603,14 @@ export class Rig {
       const torsoPitch = adsPose.torsoPitch - (coverPose?.torsoLean ?? 0);
       // Compensar inclinación de root+torso: el cañón visual conserva el pitch
       // de cámara en vez de sumar accidentalmente la postura inclinada.
-      R(this.aimRig, pitch - rootRotX - torsoPitch, p.aimYawErr ?? 0, lean * 0.1);
-      R(this.torso, torsoPitch, 0, -lean * 0.22);
+      const chestYaw=aimingFromCover?-.35:0;
+      R(this.aimRig, pitch - rootRotX - torsoPitch, (p.aimYawErr ?? 0)-chestYaw, lean * 0.1);
+      R(this.torso, torsoPitch, chestYaw, -lean * 0.22);
       R(this.head, pitch * adsPose.head, 0, lean * 0.08);
       // Pistola extendida, armas largas apoyadas y bazooka alta al hombro.
       // Cero rotación local evita que el modelo prometa otra dirección.
       M(adsPose.mount[0], adsPose.mount[1] - (aimingFromCover&&poseKey!=='bazooka'?.12:0),
-        adsPose.mount[2] - (coverPose?.gunForward ?? 0) - (aimingFromCover&&poseKey!=='pistol'&&poseKey!=='bazooka'?.18:0), 0, 0, 0);
+        adsPose.mount[2] - (coverPose?.gunForward ?? 0) - (aimingFromCover&&poseKey!=='pistol'&&poseKey!=='bazooka'?.32:0), 0, 0, 0);
       if (coverPose) {
         hipsY = coverPose.hipsY;
         aimRigY = coverPose.aimRigY;
