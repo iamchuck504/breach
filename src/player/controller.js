@@ -355,6 +355,7 @@ export class Controller {
   }
 
   update(dt, input, firing) {
+    if (this.state !== 'cover') { this._coverTurnFace = null; this._coverRestYaw = null; }
     const M = TUNING.move, E = TUNING.evade, C = TUNING.cover;
     this.stateT += dt;
     this.evadeCooldown = Math.max(0, this.evadeCooldown - dt);
@@ -739,7 +740,17 @@ export class Controller {
         // orientación: DE ESPALDAS a la pared; al apuntar/disparar → cámara.
         // Blindfire gira más pesado para conservar la lectura del cover y no
         // invertir cuerpo/cañón de un frame al siguiente.
+        if (this._coverTurnFace !== f) {
+          this._coverTurnFace = f;
+          this._coverRestYaw = null;
+        }
         if (this.aim || (this.firingBlind > 0 && (this.blindMode || blindEdgeSide))) {
+          // Keep the same unwrapped rest orientation through a firing cycle.
+          // Recomputing shortest-path return at +/-PI can complete a circle
+          // instead of undoing the opening turn.
+          if (this._coverRestYaw == null) {
+            this._coverRestYaw = this.yaw + angleDelta(this.yaw, yawFromDir(n.x, n.z));
+          }
           const exitSide = aimLeanSide || blindEdgeSide;
           let delta = angleDelta(this.yaw,this.cam.yaw);
           // Back-to-wall -> firing is nearly a half turn. The shortest-angle
@@ -753,8 +764,16 @@ export class Controller {
           const step=rate*Math.PI/180*dt*2;
           this.yaw+=Math.max(-step,Math.min(step,delta));
         } else {
-          this.yaw = approachAngle(this.yaw, yawFromDir(n.x, n.z),
-            TUNING.combat.bodyTurnFollowDeg * Math.PI / 180 * dt);
+          let target = this._coverRestYaw ?? (this.yaw + angleDelta(this.yaw, yawFromDir(n.x, n.z)));
+          // A deliberate full camera orbit while firing must not accumulate
+          // revolutions for the return animation to unwind.
+          if (Math.abs(target-this.yaw)>Math.PI*1.5) target=this.yaw+angleDelta(this.yaw,target);
+          this._coverRestYaw=target;
+          const delta=target-this.yaw;
+          const step=Math.min(TUNING.combat.bodyTurnFollowDeg*Math.PI/180*dt,
+            Math.abs(delta)*(1-Math.exp(-18*dt)));
+          this.yaw+=Math.sign(delta)*step;
+          if(Math.abs(target-this.yaw)<1e-4){this.yaw=target;this._coverRestYaw=null;}
         }
 
         // The wall's outward normal fixes the opening's left/right frame.
