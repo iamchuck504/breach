@@ -21,6 +21,7 @@ SHOPS=[
 ]
 def slug(name):return name.lower().replace(' & ','-').replace(' ','-').replace('.','')
 manifest={}
+WEST_SHOPS={'NORTHLINE RX','CEDAR PHARMACY','MOTOR WORKS','IRON & KEY','SPIN CYCLE','NEIGHBOR MARKET','SOUTH END DELI'}
 for name,style,span,height,color,tag in SHOPS:
     bpy.ops.wm.open_mainfile(filepath=str(SOURCE))
     scene=bpy.data.scenes['Breach_Corner_Coffee_Study'];bpy.context.window.scene=scene
@@ -116,7 +117,7 @@ for name,style,span,height,color,tag in SHOPS:
         for x in (-sign_width/2+.30,sign_width/2-.30):ring('Laundry bubble',x,-.45,3.04,.16,pale)
     elif style=='stationery':
         box('Stationery underline',0,-.449,2.87,sign_width*.82,.025,.025,ivory,0)
-    # Display details lie in front of opaque display back, inside the frame.
+    # Author display contents here; recess them behind the glazing below.
     if style in ('bakery','market','deli','pharmacy','stationery','hardware'):
         for z in (1.02,1.53):
             box('Display shelf',center,-.355,z,(right-left)*.92,.12,.055,metal)
@@ -168,6 +169,46 @@ for name,style,span,height,color,tag in SHOPS:
     if style=='cafe':
         ring('Owl eye',center-.18,-.42,1.8,.13,ivory);ring('Owl eye',center+.18,-.42,1.8,.13,ivory)
         text('NIGHT SERVICE',center,-.42,1.39,.21,ivory)
+    if style!='garage':
+        # A real recessed shop window, not merchandise pasted outside opaque
+        # glass. Negative Y faces the street; positive Y goes into the shop.
+        pane=next(o for o in asset if o.name=='Display glass')
+        back=next(o for o in asset if o.name=='Display dark recess')
+        content_prefixes=('Display shelf','Store goods','Bread loaf','Washer',
+                          'Monitor','Barber chair','Key head','Key blade')
+        contents=[o for o in asset if o.name.startswith(content_prefixes)]
+        for o in contents:o.location.y+=.50
+        back.location.y=.39
+        pane.data.materials.clear()
+        clear=material('Shop window clear glazing',(.12,.19,.21),.05)
+        clear.surface_render_method='BLENDED'
+        shader=clear.node_tree.nodes['Principled BSDF']
+        shader.inputs['Alpha'].default_value=.16
+        shader.inputs['Roughness'].default_value=.20
+        clear.diffuse_color=(.12,.19,.21,.16)
+        pane.data.materials.append(clear)
+        # Cut only the render envelope/surround, never gameplay colliders.
+        opening_x=-pane.location.x if name in WEST_SHOPS else pane.location.x
+        cutter=box('Temporary window opening',opening_x,.04,pane.location.z,
+                   pane.dimensions.x,.88,pane.dimensions.z,black,0)
+        for wall in [o for o in asset if o.name in ('Existing envelope','Store surround')]:
+            bpy.context.view_layer.objects.active=wall
+            cut=wall.modifiers.new('Recessed shop opening','BOOLEAN')
+            cut.operation='DIFFERENCE';cut.solver='EXACT';cut.object=cutter
+            bpy.ops.object.modifier_apply(modifier=cut.name)
+        asset.remove(cutter);bpy.data.objects.remove(cutter,do_unlink=True)
+        # Opaque reveals enclose the display at grazing angles, including the
+        # exterior thickness of the wall before the main envelope starts.
+        for edge in (-1,1):
+            box('Display side reveal',pane.location.x+edge*(pane.dimensions.x/2-.01),
+                .035,pane.location.z,.04,.65,pane.dimensions.z,black,0)
+            box('Display horizontal reveal',pane.location.x,.035,
+                pane.location.z+edge*(pane.dimensions.z/2-.01),pane.dimensions.x,.65,.04,black,0)
+        from mathutils import Vector
+        for o in contents:
+            bpy.context.view_layer.update()
+            ys=[(o.matrix_world@Vector(v)).y for v in o.bound_box]
+            assert min(ys)>-.275 and max(ys)<.35,(name,o.name,ys)
     # Reuse the complete approved center window, including identical frames,
     # transoms and sills. Keep a generous masonry pier between every bay.
     if span>10:
@@ -196,7 +237,7 @@ for name,style,span,height,color,tag in SHOPS:
         assert len(occupied)==2
     # West-side shops keep their existing world-space door bay. Reposition parts,
     # never mirror geometry/lettering (which would reverse the signs).
-    if name in {'NORTHLINE RX','CEDAR PHARMACY','MOTOR WORKS','IRON & KEY','SPIN CYCLE','NEIGHBOR MARKET','SOUTH END DELI'}:
+    if name in WEST_SHOPS:
         for o in asset:
             if o.location.z<3.6 and o.name!='Existing envelope':o.location.x *= -1
     # Convert before batching so lettering is exported and modifiers are baked.
