@@ -200,8 +200,8 @@ export function decorateCalleExpansion(world, buildings) {
   for(const dir of [-1,1]){
     for(const x of [-10.8,10.8]){
       cube('police-closure-tape',x,1.55,dir*41.99,3.1,.10,.025,tapeMaterial);
-      world._addMapSign('POLICE LINE',x,1.95,dir*41.98,dir>0?Math.PI:0,
-        {w:1.7,h:.35,parent:root,style:'industrial',subtitle:'AREA CLOSED'});
+      world._addMapSign('POLICE CORDON',x,2.12,dir*41.98,dir>0?Math.PI:0,
+        {w:2.5,h:.48,parent:root,style:'institutional',subtitle:'DISTRICT CLOSED / EVACUATION'});
     }
     // Two short paired braking traces approaching each bus; no giant decals.
     for(const x of [-.75,.75])floor('braking-trace',x,dir*31.1,.12,1.7,mat(0x20282b),.023);

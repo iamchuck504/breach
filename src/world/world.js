@@ -20,6 +20,7 @@ import { polishCalleProp } from './calle-prop-polish.js';
 import { polishArchitecture } from './architecture-polish.js';
 import {galleryHeight,FORT_GALLERY} from './fortaleza-galleries.js';
 import {addFortalezaGalleries} from './fortaleza-gallery-art.js';
+import {addMapIdentity} from './map-identity.js';
 
 const FIELD_X = 15, FIELD_Z = 18; // semiancho / semilargo
 const SOLDIER_HEIGHT = 1.63;
@@ -145,6 +146,7 @@ export class World {
     else this._runBuilder(layout);
     if(this.galleryEnabled&&this.customMap?.decor!==false)addFortalezaGalleries(this);
     if (!this.customMap) polishArchitecture(this, layout);
+    if (!this.customMap) addMapIdentity(this, layout);
     this._addMapPeriphery(theme);
     this._flushBoxBatch();
     this._buildSpawns();
