@@ -1622,8 +1622,8 @@ export class Rig {
       if (lean) {
         // piernas plantadas hacia la pared, torso fuera de la esquina
         const crouched=p.state==='cover_low';
-        R(this.legL.hip, crouched?1.7:0, 0, 0.1 + lean * 0.12);
-        R(this.legR.hip, crouched?1.7:0, 0, -0.1 + lean * 0.12);
+        R(this.legL.hip, crouched?1.7:0, 0, -0.1);
+        R(this.legR.hip, crouched?1.7:0, 0, 0.1);
         if(crouched){R(this.legL.knee,-2.2,0,0);R(this.legR.knee,-2.2,0,0);}
       }
     } else if (p.state !== 'dead') {
@@ -1738,6 +1738,28 @@ export class Rig {
     this.aimRig.position.z = this._recoil * 0.06;
     set(this.aimRig.position, 'x', aimRigX);
     set(this.aimRig.position, 'y', aimRigY);
+
+    // A planted standing firing stance: outward thighs, staggered knees and
+    // level shins/boots. Never inherit the resting-cover knee rotation while
+    // replacing just the hips (that pinched the knees and tipped the soles).
+    const standingCoverFire = (p.aim && p.state === 'cover_high') ||
+      p.state === 'blind_high_left' || p.state === 'blind_high_right';
+    for (const [leg, side] of [[this.legL, -1], [this.legR, 1]]) {
+      set(leg.hip.position, 'y', .02);
+      if (standingCoverFire) {
+        const bend = side < 0 ? .48 : .14;
+        const spread = side * .20;
+        R(leg.hip, bend, 0, spread);
+        // Inverse Euler order matters: compensate the full thigh rotation,
+        // rather than cancelling individual angles in the same XYZ order.
+        const inverse = new THREE.Quaternion().setFromEuler(new THREE.Euler(bend, 0, spread)).invert();
+        const knee = new THREE.Euler().setFromQuaternion(inverse);
+        R(leg.knee, knee.x, knee.y, knee.z);
+        // Keep the same sole height on both legs despite the stagger, without
+        // moving the pelvis/weapon or changing shot clearance.
+        set(leg.hip.position, 'y', .68 - hipsY - .32 * (1 - Math.cos(bend) * Math.cos(spread)));
+      }
+    }
 
     // aplicar targets con damping
     if ((p.aim && p.state.startsWith('cover_')) || p.state.startsWith('blind_')) {
