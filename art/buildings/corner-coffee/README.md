@@ -29,6 +29,24 @@ flicker or multiplayer stress test. Existing bundle-size warning remains.
 
 ## District family
 
+### Shop display containment
+
+All enclosed district displays use recessed contents behind clear glazing.
+The exporter checks every shelf, product, washer, monitor and chair against the
+window's horizontal/vertical bounds and interior depth before batching. Western
+storefront openings account for their repositioned door/display bays.
+
+Check the source without rewriting GLBs:
+
+```sh
+blender --background --python art/buildings/corner-coffee/export-district.py -- --validate-only
+```
+
+With the development server running, `npm run check:shop-recess` verifies all
+12 exported glazed variants and captures an oblique view. Corner Coffee has no
+3D shelf contents; Motor Works has a shutter. Open newsstand magazine shelves
+are intentionally open retail fixtures, not enclosed shop windows.
+
 Run `blender --background --python art/buildings/corner-coffee/export-district.py`
 to rebuild all 13 additional GLBs from `source.blend`. The script opens the source
 in a disposable background process for each shop; it never overwrites it.

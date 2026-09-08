@@ -12,6 +12,7 @@
     "server": "node server/server.js",
     "pretest": "npm run build && npm run check:gallery-support && npm run check:animation-fluidity",
     "check:animation-fluidity": "node scripts/check-animation-fluidity.mjs",
+    "check:shop-recess": "node scripts/check-shop-recess.mjs",
     "check:gallery-support": "node scripts/check-gallery-support.mjs",
     "check:controller": "node scripts/check-controller.mjs",
     "check:blender": "node scripts/check-blender-soldier.mjs",

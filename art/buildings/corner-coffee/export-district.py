@@ -1,5 +1,5 @@
 """Derive the district from the approved editable Blender cafe. Background only."""
-import bpy, math, json
+import bpy, math, json, sys
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[3]
 SOURCE=Path(__file__).with_name('source.blend')
@@ -20,9 +20,12 @@ SHOPS=[
  ('NIGHT OWL CAFE','cafe',11.7,9.35,(.075,.09,.16),'LATE COFFEE / EARLY BREAKFAST'),
 ]
 def slug(name):return name.lower().replace(' & ','-').replace(' ','-').replace('.','')
-manifest={}
+ONLY_SHOP=sys.argv[sys.argv.index('--shop')+1] if '--shop' in sys.argv else None
+manifest=json.loads(Path(__file__).with_name('district-manifest.json').read_text()) if ONLY_SHOP else {}
+VALIDATE_ONLY='--validate-only' in sys.argv
 WEST_SHOPS={'NORTHLINE RX','CEDAR PHARMACY','MOTOR WORKS','IRON & KEY','SPIN CYCLE','NEIGHBOR MARKET','SOUTH END DELI'}
 for name,style,span,height,color,tag in SHOPS:
+    if ONLY_SHOP and name!=ONLY_SHOP:continue
     bpy.ops.wm.open_mainfile(filepath=str(SOURCE))
     scene=bpy.data.scenes['Breach_Corner_Coffee_Study'];bpy.context.window.scene=scene
     asset=[o for o in scene.objects if o.type in {'MESH','FONT'} and o.name!='Presentation pavement']
@@ -177,7 +180,9 @@ for name,style,span,height,color,tag in SHOPS:
         content_prefixes=('Display shelf','Store goods','Bread loaf','Washer',
                           'Monitor','Barber chair','Key head','Key blade')
         contents=[o for o in asset if o.name.startswith(content_prefixes)]
-        for o in contents:o.location.y+=.50
+        for o in contents:
+            o.location.y+=.50
+            if o.name.startswith('Washer'):o.location.z+=.06
         back.location.y=.39
         pane.data.materials.clear()
         clear=material('Shop window clear glazing',(.12,.19,.21),.05)
@@ -205,10 +210,19 @@ for name,style,span,height,color,tag in SHOPS:
             box('Display horizontal reveal',pane.location.x,.035,
                 pane.location.z+edge*(pane.dimensions.z/2-.01),pane.dimensions.x,.65,.04,black,0)
         from mathutils import Vector
+        bpy.context.view_layer.update()
+        pane_points=[pane.matrix_world@Vector(v) for v in pane.bound_box]
         for o in contents:
-            bpy.context.view_layer.update()
-            ys=[(o.matrix_world@Vector(v)).y for v in o.bound_box]
+            points=[o.matrix_world@Vector(v) for v in o.bound_box]
+            ys=[v.y for v in points]
             assert min(ys)>-.275 and max(ys)<.35,(name,o.name,ys)
+            for axis in ('x','z'):
+                low=min(getattr(v,axis) for v in pane_points)
+                high=max(getattr(v,axis) for v in pane_points)
+                assert all(low<=getattr(v,axis)<=high for v in points),(name,o.name,axis)
+        print('DISPLAY BOUNDS OK',name,len(contents),'interior objects')
+    if VALIDATE_ONLY:
+        continue
     # Reuse the complete approved center window, including identical frames,
     # transoms and sills. Keep a generous masonry pier between every bay.
     if span>10:
@@ -260,4 +274,5 @@ for name,style,span,height,color,tag in SHOPS:
     file='district-'+slug(name)+'.glb'
     bpy.ops.export_scene.gltf(filepath=str(ROOT/'public/assets/calle'/file),use_selection=True,export_apply=True)
     manifest[name]={'file':file,'span':span,'height':height,'style':style,'meshes':len(bpy.context.selected_objects)}
-(Path(__file__).with_name('district-manifest.json')).write_text(json.dumps(manifest,indent=2)+'\n')
+if not VALIDATE_ONLY:
+    (Path(__file__).with_name('district-manifest.json')).write_text(json.dumps(manifest,indent=2)+'\n')
