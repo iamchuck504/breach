@@ -82,6 +82,12 @@ export class Controller {
   fireAligned(maxDeg = TUNING.combat.fireAlignMaxDeg) {
     const lowAim = this.state === 'cover' && this.aim && this.cover &&
       this.cover.h <= TUNING.cover.lowHeight;
+    // Protected side blindfire has much less exposed body to compensate for
+    // an unfinished turn. Buffer the shot until the barrel pose reaches the
+    // opening; the old 50-degree allowance could fire from inside the wall.
+    if(this.state==='cover'&&!this.aim&&(this.blindMode==='left'||this.blindMode==='right')){
+      maxDeg=Math.min(maxDeg,10);
+    }
     return Math.abs(this.cameraYawError()) <= maxDeg * Math.PI / 180 &&
       (!lowAim || this.coverAimExposure >= 0.82);
   }
@@ -681,9 +687,15 @@ export class Controller {
           : 0;
         const firingEdge = aimLeanSide || blindEdgeSide;
         u += (lat * M.coverStrafe + entryCarry) * dt + firingEdge * 2.6 * dt;
-        const leanOut = firingEdge !== 0 ? (this.aim ? 0.30 : 0.32) + (f.peekMargin??0) : 0;
+        const blindInset = -.12;
+        const leanOut = firingEdge !== 0 ? (this.aim ? 0.30 : blindInset) + (f.peekMargin??0) : 0;
         u = Math.max(PLAYER_R * 0.7 - (firingEdge < 0 ? leanOut : 0),
           Math.min(len - PLAYER_R * 0.7 + (firingEdge > 0 ? leanOut : 0), u));
+        // ADS -> protected blindfire retracts quickly, not a 42 cm root snap.
+        // Keep the barrel outside while the two-handed pose folds into place.
+        if(blindEdgeSide && (previousU-u)*blindEdgeSide>0){
+          u=previousU+Math.max(-6*dt,Math.min(6*dt,u-previousU));
+        }
         // At an exposed ADS edge, the bladed stance needs less wall-normal
         // clearance than the back-to-wall resting pose. Keep the larger
         // envelope for rest/blindfire and never remove collision checks.

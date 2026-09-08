@@ -23,6 +23,15 @@ try{
     if(hit && /District_|Existing_envelope/.test(hit.object.name))throw Error(JSON.stringify({edge,aim,weapon,hit:hit.object.name,distance:hit.distance,muzzle,pos:p.pos}));
     // A dumpster/car farther down the avenue is a legitimate shot target.
     if(Math.abs(muzzle.x)>=15.69)throw Error('barrel has not cleared street frame');
+    if(!aim){
+     const head=new T.Box3().setFromObject(rig.head);
+     const inner=edge.x>0?head.min.x:-head.max.x;
+     if(inner<15.69)throw Error(JSON.stringify({reason:'helmet exposed',edge,weapon,inner,muzzle}));
+     for(const [arm,anchor] of [[rig.armR,rig.activeGun.userData.grip],[rig.armL,rig.activeGun.userData.blindSupport]]){
+      const error=arm.hand.getWorldPosition(new T.Vector3()).distanceTo(anchor.getWorldPosition(new T.Vector3()));
+      if(error>.025)throw Error(JSON.stringify({reason:'hand off grip',edge,weapon,error}));
+     }
+    }
     if(p.state!=='cover')throw Error('lost cover');
     results.push({edge,aim,weapon});
    }

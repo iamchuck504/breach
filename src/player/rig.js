@@ -563,6 +563,8 @@ const IK_M = new THREE.Matrix4(), IK_Q = new THREE.Quaternion(), IK_QE = new THR
 const IK_BQ = new THREE.Quaternion();
 const AXIS_X = new THREE.Vector3(1, 0, 0);
 const TMP_A = new THREE.Vector3(), TMP_B = new THREE.Vector3();
+const BLIND_DIRECTION_Q = new THREE.Quaternion();
+const BLIND_EULER = new THREE.Euler();
 const RAG_P = { x: 0, z: 0 }; // punto mutable para la colisión del cadáver
 const clamp01 = (v) => Math.min(1, Math.max(-1, v));
 
@@ -1467,15 +1469,15 @@ export class Rig {
         const side = p.state.endsWith('_right') ? 1 : -1;
         const down = Math.max(0, Math.min(1, -pitch / 0.55));
         if (low) {
-          R(this.torso, -0.42, side * 0.08, -side * 0.08);
+          R(this.torso, -0.42, -side * 1.40, side * 0.08);
           R(this.head, 0.36, 0, side * 0.04);
           R(this.legL.hip, 1.82, 0, 0); R(this.legL.knee, -2.3, 0, 0);
           R(this.legR.hip, 1.72, 0, 0); R(this.legR.knee, -2.25, 0, 0);
           hipsY = 0.14;
           aimRigY = 0.68 + down * 0.08;
         } else {
-          R(this.torso, 0.12, side * 0.08, side * 0.08);
-          R(this.head, 0.20, -side * 0.18, side * 0.10);
+          R(this.torso, 0.05, -side * 1.40, side * 0.08);
+          R(this.head, 0.08, 0.12, 0);
           R(this.legL.hip, -0.04, 0, 0.08); R(this.legL.knee, -0.18, 0, 0);
           R(this.legR.hip, 0.04, 0, -0.08); R(this.legR.knee, -0.16, 0, 0);
           hipsY = 0.62;
@@ -1486,8 +1488,8 @@ export class Rig {
         aimRigX = side * (low ? 0.27 : 0.26);
         // High cover: keep the grip between the shoulders rather than beyond
         // the opposite arm's reach. Low-cover clearance uses its own pose.
-        M(side * (low ? 0.48 : 0.32), low ? 0.25 : 0.04,
-          -0.24 - longGun, 0, 0, -side * 0.04);
+        M(side * (low ? 0.60 : 0.52), low ? 0.25 : 0.04,
+          -0.08 - longGun, 0, 0, -side * 0.04);
         break;
       }
       case 'melee': {
@@ -1635,13 +1637,12 @@ export class Rig {
       // convertir hip fire en ADS oculto.
       const yawErr = p.aimYawErr ?? 0;
       if (p.state.startsWith('blind_')) {
-        const parentPitch = p.state.startsWith('blind_low_') ? -0.42
-          : p.state.startsWith('blind_high_') ? 0.12 : -0.05;
-        set(this.aimRig.rotation, 'x', pitch - parentPitch);
-        // Chest bracing is cosmetic, not an inward barrel yaw. Blindfire
-        // still shoots along this physical axis, never a camera target ray.
-        const blindSide=p.state.endsWith('_left')?-1:p.state.endsWith('_right')?1:0;
-        set(this.aimRig.rotation, 'y', yawErr-blindSide*.08);
+        // Side blindfire compensates the actual chest once, after pose
+        // interpolation below. The existing over-cover gesture stays intact.
+        if(p.state==='blind_over'){
+          set(this.aimRig.rotation, 'x', pitch + .05);
+          set(this.aimRig.rotation, 'y', yawErr);
+        }
       } else if (p.state === 'cover_low' || p.state === 'cover_high') {
         set(this.aimRig.rotation, 'x', p.firing ? pitch : 0);
         set(this.aimRig.rotation, 'y', p.firing ? yawErr : 0);
@@ -1660,7 +1661,7 @@ export class Rig {
         set(this.aimRig.rotation, 'y', 0);
       }
       // el roll del lean de ADS no debe quedarse pegado en hipfire
-      set(this.aimRig.rotation, 'z', 0);
+      if(!/^blind_(high|low)_/.test(p.state))set(this.aimRig.rotation, 'z', 0);
     }
 
     // recarga solo en posturas con el arma al frente (en dive/slide/roadie/
@@ -1898,16 +1899,31 @@ export class Rig {
     }
 
     // IK: manos sobre el arma (después del damping, sobre la pose ya aplicada)
-    // A crouched side peek moves the chest with the shoulders; it must not
-    // obtain clearance by sliding the arm sockets away from the chest.
-    const chestSide=p.state==='blind_low_left'?-1:p.state==='blind_low_right'?1:0;
     // Keep the approved shoulder/barrel clearance while tucking the pelvis
     // and feet behind it. The torso, not detached arm sockets, carries lean.
     const supportedLean=p.aim&&p.state.startsWith('cover_')?(p.coverLean??0)*.12:0;
-    this.torso.position.x+=(chestSide*.25+supportedLean-this.torso.position.x)*(1-Math.exp(-TUNING.cover.firePoseRate*dt));
+    this.torso.position.x+=(supportedLean-this.torso.position.x)*(1-Math.exp(-TUNING.cover.firePoseRate*dt));
     if (ikArms) {
+      if(/^blind_(high|low)_/.test(p.state)){
+        // Counter-rotate the actual interpolated chest, not its future target.
+        // Independently damping both rotations left a one-frame inward shot
+        // when the body finished turning from its back-to-wall resting pose.
+        BLIND_DIRECTION_Q.setFromEuler(BLIND_EULER.set(pitch,p.aimYawErr??0,0));
+        this.aimRig.quaternion.copy(this.torso.quaternion).invert().multiply(BLIND_DIRECTION_Q);
+      }
       this.root.updateWorldMatrix(true, true);
       const gun = this.activeGun;
+      let blindSupport=null;
+      if(/^blind_(high|low)_/.test(p.state)){
+        // Near-receiver support in blindfire, instead of the long ADS forend
+        // reach which pulled the far shoulder and head out of cover.
+        blindSupport=gun.userData.blindSupport;
+        if(!blindSupport){blindSupport=new THREE.Group();gun.add(blindSupport);gun.userData.blindSupport=blindSupport;}
+        gun.userData.grip.getWorldPosition(TMP_A);
+        (gun.userData.forend??gun.userData.aimSupport??gun.userData.grip).getWorldPosition(TMP_B);
+        TMP_A.lerp(TMP_B,.25);gun.worldToLocal(TMP_A);blindSupport.position.copy(TMP_A);
+        this.root.updateWorldMatrix(true,true);
+      }
       const coverPoseActive=p.state.startsWith('cover_')||p.state.startsWith('blind_');
       // The aim pivot may move/rotate the gun, never detach the shoulder
       // sockets from the chest. Express fixed chest sockets in aim space.
@@ -1919,16 +1935,27 @@ export class Rig {
         }else arm.shoulder.position.set(side*.36,0,0);
       }
       if(coverPoseActive){
+        if(blindSupport){
+          // A side-on torso lets both hands reach around the edge while the
+          // head stays inside it. Position the real grip, not a guessed mount.
+          const side=p.state.endsWith('_left')?-1:1;
+          const crouched=p.state.startsWith('blind_low_');
+          TMP_A.set(side*.46,crouched?.46:.50,(side<0?0:.04)-(crouched?.18:0));this.hips.localToWorld(TMP_A);
+          this.aimRig.worldToLocal(TMP_A);
+          gun.userData.grip.getWorldPosition(TMP_B);this.aimRig.worldToLocal(TMP_B);
+          this.gunMount.position.add(TMP_A.sub(TMP_B));
+          this.root.updateWorldMatrix(true,true);
+        }
         // Fit the weapon to both arms instead of stretching an arm toward an
         // unreachable grip. Translation preserves the physical barrel axis.
         const grips=[[this.armR,gun.userData.grip],
-          ...(!gun.userData.oneHand&&leftOnGun?[[this.armL,gun.userData.forend]]:[])];
+          ...(leftOnGun&&(!gun.userData.oneHand||blindSupport)?[[this.armL,blindSupport??gun.userData.forend]]:[])];
         for(let pass=0;pass<8;pass++)for(const [arm,anchor] of grips){
           if(!anchor)continue;
           this.root.updateWorldMatrix(true,true);
           anchor.getWorldPosition(TMP_A);this.aimRig.worldToLocal(TMP_A);
           TMP_B.copy(TMP_A).sub(arm.shoulder.position);
-          const distance=TMP_B.length(),reach=L1+L2-.04;
+          const distance=TMP_B.length(),reach=L1+L2-(blindSupport?.025:.04);
           if(distance>reach)this.gunMount.position.addScaledVector(TMP_B,(reach-distance)/distance);
         }
         this.root.updateWorldMatrix(true,true);
@@ -1942,10 +1969,10 @@ export class Rig {
       const reloadIk = reloadPose;
       const oneHand = !!gun.userData.oneHand;
       const pistolAimSupport = p.aim ? gun.userData.aimSupport : null;
-      if ((leftOnGun && (!oneHand || pistolAimSupport)) || reloadIk) {
+      if ((leftOnGun && (!oneHand || pistolAimSupport || blindSupport)) || reloadIk) {
         const a = reloadIk
           ? (gun.userData.mag ?? gun.userData.forend ?? gun.userData.aimSupport)
-          : (pistolAimSupport ?? gun.userData.forend);
+          : (blindSupport ?? pistolAimSupport ?? gun.userData.forend);
         a.getWorldPosition(TMP_B);
         const tgt = this.aimRig.worldToLocal(TMP_B);
         if (reloadIk) tgt.y -= 0.16 * Math.sin(Math.PI * (p.reloadT ?? 0));

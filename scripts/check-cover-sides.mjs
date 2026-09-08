@@ -19,8 +19,15 @@ for(const side of [-1,1])for(const aim of [false,true])for(const weapon of ['pis
  const key=`${side}:${weapon}`;
  if(!aim)exposure.set(key,head.x*side);
  else assert.ok(head.x*side>exposure.get(key)+.05,'blindfire head must stay further behind cover than ADS');
+ const direction=rig.gunForward(new T.Vector3());
+ if(!aim){
+  const bounds=new T.Box3().setFromObject(rig.head);
+  const exposed=side<0?-bounds.min.x:bounds.max.x;
+  assert.ok(exposed<2,`${weapon} ${side}: helmet protrudes beyond cover (${exposed})`);
+ }
  assert.ok(muzzle.x*side>2,`${weapon} ${aim?'ADS':'blind'} ${side}: muzzle inside edge ${muzzle.x}`);
- assert.equal(w.raycast(muzzle,new T.Vector3(0,0,-1),5),null,'own wall blocks barrel');
+ assert.ok(muzzle.z>0||Math.abs(muzzle.x)>2,'muzzle cannot start inside the wall');
+ assert.equal(w.raycast(muzzle,direction,5),null,`${weapon}: own wall blocks physical barrel`);
  for(const yaw of [-1.7,1.7,0]){cam.yaw=yaw;p.update(1/60,input,true);assert.equal(p.coverLeanAnim,side,'camera swapped opening');}
 }
 console.log('COVER SIDES OK: both edges, five weapons, ADS/blind, no camera side inversion');
