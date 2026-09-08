@@ -82,6 +82,7 @@ export class Dummies {
         }
         continue;
       }
+      if(d.rig.stunned){d.rig.update(dt,{state:'idle',speed:0,aim:false,aimPitch:0});continue;}
       const a = d.path[d.seg], b = d.path[1 - d.seg];
       const dx = b.x - a.x, dz = b.z - a.z;
       const len = Math.hypot(dx, dz);

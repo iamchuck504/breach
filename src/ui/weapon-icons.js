@@ -50,6 +50,7 @@ const ICONS = Object.freeze({
 });
 
 export const weaponIconMarkup = (weapon, extraClass = '') => {
+  if(weapon==='frag'||weapon==='stun')return `<svg class="weapon-glyph ${extraClass}" data-icon="${weapon}" viewBox="0 0 200 80" aria-hidden="true"><g fill="${weapon==='frag'?'#a9b56a':'#70dafa'}" stroke="#18262b" stroke-width="3">${weapon==='frag'?'<ellipse cx="85" cy="45" rx="26" ry="30"/><path d="M78 17V6h24l15 30h-10L95 17zM62 37h46M61 50h48M85 20v51"/>':'<path d="M28 17h130v24H89l-12 34H46l9-34H28z"/><path fill="#e7ffff" d="M107 9l-15 20h15l-12 27 32-35h-18l13-12z"/>'}</g></svg>`;
   const key = Object.prototype.hasOwnProperty.call(ICONS, weapon) ? weapon : 'smg';
   return `<svg class="weapon-glyph icon-${key} ${extraClass}" data-icon="${key}" viewBox="0 0 480 160" aria-hidden="true" focusable="false"><image href="${import.meta.env?.BASE_URL??'/'}assets/ui/${key}.png" width="480" height="160" /></svg>`;
 };

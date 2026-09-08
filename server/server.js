@@ -16,6 +16,8 @@ import { nextRespawnWave } from '../src/game/respawn-wave.js';
 import { PowerRespawn } from '../src/game/power-respawn.js';
 import { takeDropAmmo, canReplaceDrop, replacementSlot } from '../src/game/drop-policy.js';
 import { damageFalloff, firearmDamage, rocketSplashDamage } from '../src/combat/damage.js';
+import {evaluateBlast} from '../src/combat/blast.js';
+import {CombatPrototypes} from '../src/combat/prototypes.js';
 import { isSniperHeadshotDeath, rocketDeathLevel } from '../src/combat/death-reactions.js';
 import { makeSmokeProjectile, stepSmokeProjectile } from '../src/game/smoke-physics.js';
 import {
@@ -55,12 +57,12 @@ const FIRE_RULES = {
   melee: { interval: 0.4, range: 1.95, hitRange: 1.95, maxDamage: TUNING.melee.dmg },
 };
 // ids replicables en 'w' (la granada solo aparece EN MANO, nunca dispara aquí)
-const VALID_WEAPONS = new Set(['smg', 'shotgun', 'pistol', 'grenade', 'sniper', 'bazooka']);
+const VALID_WEAPONS = new Set(['smg', 'shotgun', 'pistol', 'grenade', 'sniper', 'bazooka','frag','stun']);
 const SPECIAL_WEAPONS = new Set(['sniper', 'bazooka']);
 const FIREABLE = new Set(Object.keys(FIRE_RULES));
 const clampWep = (w) => (VALID_WEAPONS.has(w) ? w : 'smg');
 // la granada no es un arma soltable: el drop degrada a smg
-const clampDropWep = (w) => (VALID_WEAPONS.has(w) && w !== 'grenade' ? w : 'smg');
+const clampDropWep = (w) => (VALID_WEAPONS.has(w) && !['grenade','frag','stun'].includes(w) ? w : 'smg');
 const HIT_WINDOW = .28;
 const NADE_RELAY_INTERVAL = 60 / WD.grenade.rpm * .82;
 const ROCKET_RELAY_INTERVAL = FIRE_RULES.bazooka.interval * .82;
@@ -121,6 +123,26 @@ const activeRockets = new Map(), activeNades = new Map(), activeSmokes = new Map
 let nextId = 1, nextBotId = 1, nextDropId = 1;
 let nextRocketId = 1, nextNadeId = 1, hostId = null;
 let settings = { ...DEFAULT_LOBBY_SETTINGS }, phase = 'empty', phaseTimer = null, startAt = 0, round = 0;
+const prototypes=new CombatPrototypes({
+ experimental:process.env.BREACH_EXPERIMENTAL_STUN==='1',
+ actors:()=>allSlots().map(p=>({...p,protected:p.prot>nowSec()})),
+ physics:{resolveCircle:(...a)=>serverMapPhysics(settings.map).resolveCircle(...a),groundHeight:(...a)=>serverMapPhysics(settings.map).groundHeight(...a)},
+ blocked:(a,b)=>mapLineBlocked(settings.map,[a.x,a.y,a.z],[b.x,b.y,b.z],.015),
+ event:e=>{if(e.kind==='blastResolved'){checkRoundEnd();return;}broadcastRaw({t:'protoEvent',...e});},
+ inventory:(id,item)=>{
+  const actor=allSlots().find(p=>p.id===id);if(!actor)return;
+  if(item.kind==='frag'){actor.weaponSlots[3]='frag';actor.nades=item.count;}
+  else if(!actor.weaponSlots.includes('stun'))actor.weaponSlots[2]='stun';
+  broadcastRaw({t:'protoInventory',id,...item});
+ },
+ damage:(owner,id,dmg,context)=>{
+  const target=allSlots().find(p=>p.id===id),shooter=allSlots().find(p=>p.id===owner);
+  if(!target?.alive||!shooter||phase!=='playing')return;
+  const ep=context.explosionPoint;
+  const shot={wep:'frag',origin:[ep.x,ep.y,ep.z],remainingDamage:Infinity,hitIds:new Set()};
+  commitAuthoritativeDamage(shooter,target,shot,{p:[target.x,(target.y??0)+.9,target.z]},context.distance,{dmg,part:'body'},nowSec(),true);
+ }
+});
 let waveEpoch = 0;
 let wins = { red: 0, blue: 0 }, pools = { red: 0, blue: 0 };
 
@@ -255,6 +277,7 @@ function eventShooter(me, msg) {
 }
 
 function relayNade(sourceWs, shooter, msg) {
+  if(prototypes.stunned(shooter?.id)||shooter?.weaponSlots?.[3]==='frag')return false;
   if (!shooter?.alive || phase !== 'playing' || shooter.nades <= 0) return false;
   const o = vec3(msg.o), v = vec3(msg.v); if (!o || !v) return false;
   const now = nowSec();
@@ -280,6 +303,7 @@ function relayNade(sourceWs, shooter, msg) {
 }
 
 function relayRocket(sourceWs, shooter, msg) {
+  if(prototypes.stunned(shooter?.id))return false;
   if (!shooter?.alive || phase !== 'playing' ||
       shooter.specialWep !== 'bazooka') return false;
   const o = vec3(msg.o), d = vec3(msg.d); if (!o || !d) return false;
@@ -377,14 +401,14 @@ function checkRoundEnd() {
 }
 function dropWeapon(target) {
   const id = 'd' + nextDropId++;
-  const wep = clampDropWep(target.w);
+  const wep = ['frag','stun'].includes(target.w)?clampDropWep(target.weaponSlots?.[0]):clampDropWep(target.w);
   const def = WD[wep] || WD.smg;
   const remaining = Math.max(0, Math.floor(Number(target.ammoBudget?.[wep] || 0)));
   // El cliente puede reportar su distribución cargador/reserva para el HUD,
   // pero el total que queda en el arma es exclusivamente el del servidor.
   const mag = Math.min(def.mag || 0, remaining);
   const res = Math.min(def.reserve || 0, Math.max(0, remaining - mag));
-  const d = { wep: clampDropWep(target.w), x: target.x, z: target.z, y: target.y || 0,
+  const d = { wep, x: target.x, z: target.z, y: target.y || 0,
     team: target.team, mag, res, t: DROP_LIFE };
   drops.set(id, d); broadcastRaw({ t: 'dropA', id, wep: d.wep, x: d.x, z: d.z, y: d.y, team: d.team, mag, res, life: DROP_LIFE });
 }
@@ -405,6 +429,7 @@ function validatedFirePose(shooter, raw) {
 }
 
 function registerFire(shooter, msg, isBotFire = false) {
+  if(prototypes.stunned(shooter?.id))return false;
   if (!shooter?.alive || phase !== 'playing') return false;
   const o = vec3(msg.o), pt = vec3(msg.p); if (!o || !pt) return false;
   const weapon = FIREABLE.has(msg.w) ? msg.w : 'smg', rule = FIRE_RULES[weapon], now = nowSec();
@@ -577,10 +602,10 @@ function commitAuthoritativeDamage(shooter, target, shot, msg, dist, authoritati
       w: 'melee', dmg: Math.round(dmg), p });
   }
   if (target.hp > 0) {
-    if (shot.wep === 'bazooka') {
+    if (shot.wep === 'bazooka' || shot.wep === 'frag') {
       const p = vec3(msg.p) || [target.x, (target.y || 0) + 1, target.z];
       broadcastRaw({ t: 'hitConfirm', target: target.id, from: shooter.id,
-        w: 'bazooka', dmg: Math.round(dmg), p, ep: shot.origin });
+        w: shot.wep, dmg: Math.round(dmg), p, ep: shot.origin });
     }
     return { applied: true, killed: false };
   }
@@ -600,7 +625,7 @@ function commitAuthoritativeDamage(shooter, target, shot, msg, dist, authoritati
     hs: sniperHeadshot ? 1 : 0, ex: explosiveLevel, w: shot.wep,
     dist: +dist.toFixed(2), dmg: Math.round(dmg), part, respawn: respawnDelay,
     ...(deathPoint ? { p: deathPoint } : {}),
-    ...(shot.wep === 'bazooka' ? { ep: shot.origin } : {}),
+    ...(['bazooka','frag'].includes(shot.wep) ? { ep: shot.origin } : {}),
     kn: shooter.name, kt: shooter.team, vn: target.name, vt: target.team });
   dropWeapon(target);
   target.specialWep = null;
@@ -693,10 +718,12 @@ function detonateRocket(rocket, distance, kind, directTarget = null) {
     if (target.team === rocket.team && !self) continue;
     const point = [target.x, (target.y || 0) + 0.9, target.z];
     const dist = distance3(blast, point);
-    if (dist > WD.bazooka.splashRadius ||
-        mapLineBlocked(settings.map, blast, point, 0.22)) continue;
+    const resultBlast=evaluateBlast(WD.bazooka,{x:blast[0],y:blast[1],z:blast[2]},target,
+      (a,b)=>mapLineBlocked(settings.map,[a.x,a.y,a.z],[b.x,b.y,b.z],.015),
+      {self,direct:target.id===directTarget?.id});
+    if(resultBlast.damage<=0)continue;
     const authoritative = {
-      dmg: rocketSplashDamage(WD.bazooka, dist, self), part: 'body',
+      dmg: resultBlast.damage, part: 'body',
     };
     const result = commitAuthoritativeDamage(rocket.shooter, target, shot,
       { p: point, gib: 0 }, dist, authoritative, now, true);
@@ -789,6 +816,16 @@ wss.on('connection', (ws) => {
       console.log(`+ ${me.name} (${me.team}) — ${players.size} humanos, ${bots.size} bots`); return;
     }
     if (!me) return;
+    if(msg.t==='protoClaim'){prototypes.claim(me.id,String(msg.id),msg.manual===true);return;}
+    if(msg.t==='protoFire'){
+      if(!me.weaponSlots?.includes(msg.kind)||me.w!==msg.kind||['melee','dive','slide','mantle'].includes(me.st))return;
+      const o=vec3(msg.o),d=vec3(msg.d);
+      if(o&&d)prototypes.fire(me.id,msg.kind,{x:o[0],y:o[1],z:o[2]},{x:d[0],y:d[1],z:d[2]});
+      const s=prototypes.state(me.id);
+      if(['frag','stun'].includes(msg.kind))send(ws,{t:'protoInventory',id:me.id,kind:msg.kind,count:msg.kind==='frag'?s.frag:s.stunAmmo});
+      return;
+    }
+    if(prototypes.stunned(me.id)&&['takeDrop','takeSpecial','crate','takeCrate','reload'].includes(msg.t))return;
     if (msg.t === 'lobbySettings') {
       if (!isHost(me) || phase !== 'lobby') { lobbyError(ws, 'host-only'); return; }
       settings = normalizeLobbySettings({ ...settings, ...msg.settings }); broadcastLobby(); return;
@@ -833,6 +870,10 @@ wss.on('connection', (ws) => {
       startMatch(); return;
     }
     if (msg.t === 's') {
+      if(prototypes.stunned(me.id)){
+        me.aim=0;me.sp=0;
+        send(ws,{t:'correction',x:me.x,y:me.y||0,z:me.z,reason:'stun'});return;
+      }
       if (phase !== 'playing' || !me.alive) {
         me.st = 'idle'; me.aim = 0; me.ae = 0; me.cl = 0; me.ce = 1; me.ck = null;
         me.sp = 0; return;
@@ -852,7 +893,7 @@ wss.on('connection', (ws) => {
       me.ce = Number.isFinite(msg.ce) ? clamp(msg.ce, 0, 1) : 1;
       me.ck = VALID_COVER_KINDS.has(String(msg.ck)) ? String(msg.ck) : null;
       const requestedWep = clampWep(msg.w);
-      me.w = SPECIAL_WEAPONS.has(requestedWep) && me.specialWep !== requestedWep ? 'smg' : requestedWep;
+      me.w = (['frag','stun'].includes(requestedWep)&&!me.weaponSlots.includes(requestedWep)) || SPECIAL_WEAPONS.has(requestedWep) && me.specialWep !== requestedWep ? 'smg' : requestedWep;
       const def = WD[me.w] || WD.smg;
       me.am = clamp(msg.am, 0, def.mag || 0); me.ar = clamp(msg.ar, 0, def.reserve || 0);
       me.sp = clamp(msg.sp, 0, 1); recordPose(me, stateNow); return;
@@ -862,6 +903,7 @@ wss.on('connection', (ws) => {
       const stateNow = nowSec();
       for (const s of msg.bots.slice(0, MAX_PLAYERS)) {
         const b = bots.get(s.id); if (!b || !b.alive) continue;
+        if(prototypes.stunned(b.id))continue;
         if (![s.x, s.y, s.z, s.yaw].every((v) => typeof v === 'number' && Number.isFinite(v))) continue;
         const next = { x: clamp(s.x, -60, 60), z: clamp(s.z, -60, 60), y: clamp(s.y, 0, 20) };
         if (!acceptMovement(b, next, stateNow, ALLOW_TEST_TELEPORTS)) continue;
@@ -964,9 +1006,20 @@ wss.on('connection', (ws) => {
   });
 });
 
+let prototypeLastTick=performance.now();
 setInterval(() => {
   const now = nowSec();
   if (phase === 'playing') { tickRockets(now); tickSmoke(now); }
+  prototypes.setRound(`${settings.map}:${round}`,phase==='playing');
+  const prototypeNow=performance.now();prototypes.tick((prototypeNow-prototypeLastTick)/1000);prototypeLastTick=prototypeNow;
+  for(const p of allSlots()){
+    if(!p.alive||!prototypes.stunned(p.id)){p.stunVy=0;continue;}
+    const floor=serverMapPhysics(settings.map).groundHeight(p,.38,p.y||0);
+    p.stunVy=(p.stunVy||0)-TUNING.jump.gravity/TICK_HZ;
+    p.y=Math.max(floor,(p.y||0)+p.stunVy/TICK_HZ);p.aim=0;p.sp=0;
+    if(!String(p.st).includes('cover'))p.st='idle';
+  }
+  if(players.size&&inMatch())broadcastRaw({t:'protoState',...prototypes.snapshot()});
   if (phase === 'playing') for (const p of allSlots()) {
     if (p.alive && p.hp < HP && now - p.lastDamage > REGEN_DELAY) p.hp = Math.min(HP, p.hp + REGEN_RATE / TICK_HZ);
     if (!p.alive && p.respawnAt > 0 && now >= p.respawnAt) {

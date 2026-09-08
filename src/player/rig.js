@@ -469,13 +469,28 @@ export function buildBazooka(teamColor) {
 
 // Registro central de constructores + escalas de presentación (silueta
 // legible desde atrás). drops.js y el rig montan modelos desde aquí.
+export function buildFrag(teamColor){
+  const g=buildGrenade(teamColor);
+  g.children[0].material=platedMaterial(0x3f512d);
+  g.children[0].scale.set(.16,.17,.16);
+  for(const y of [-.055,0,.055])g.add(rod(.084,.016,DARK,0,y,0));
+  g.add(glowBox(.025,.025,.022,0xffa52f,0,.14,-.028));
+  return g;
+}
+export function buildStun(teamColor){
+  const g=buildPistol(teamColor);
+  for(const z of [-.14,-.19,-.24])g.add(glowTube(.035,.016,0x65dfff,0,.067,z));
+  g.add(gunBox(.13,.08,.12,DARK,0,.08,-.12));
+  for(const x of [-.07,.07])g.add(glowBox(.012,.038,.10,0x65dfff,x,.08,-.12));
+  return g;
+}
 export const WEAPON_BUILDERS = {
   smg: buildSMG, shotgun: buildShotgun, pistol: buildPistol,
-  grenade: buildGrenade, sniper: buildSniper, bazooka: buildBazooka,
+  grenade: buildGrenade, frag:buildFrag, stun:buildStun, sniper: buildSniper, bazooka: buildBazooka,
 };
 export const WEAPON_SCALES = {
   smg: [1.24, 1.24, 1.24], shotgun: [1.24, 1.24, 1.24], pistol: [1.22, 1.22, 1.22],
-  grenade: [1.16, 1.16, 1.16], sniper: [1.18, 1.18, 1.18], bazooka: [1.22, 1.22, 1.22],
+  grenade: [1.16, 1.16, 1.16],frag:[1.16,1.16,1.16],stun:[1.22,1.22,1.22], sniper: [1.18, 1.18, 1.18], bazooka: [1.22, 1.22, 1.22],
 };
 
 // El root del arma es funcional: contiene el muzzle que alimenta disparos,
@@ -1241,6 +1256,7 @@ export class Rig {
 
   // p: {state, speed, aim, aimPitch, twist}
   update(dt, p) {
+    if(this.stunned&&p.state!=='dead')p={...p,aim:false,speed:0,state:String(p.state).includes('cover')?p.state:'idle'};
     if (p.state !== 'dead' && !this.rag) this._pendingBlenderSoldier?.();
     // Convenciones (el personaje mira a -Z local):
     //   torso.x: − adelante, + atrás   |   head.x: + mirar arriba
@@ -1476,7 +1492,7 @@ export class Rig {
         damp = 30;
         const localPhase = Number.isFinite(p.meleePhase) ? p.meleePhase : null;
         const ph = Math.min(1, localPhase ?? this._meleeT / TUNING.melee.time);
-        const compact = this._wep === 'pistol' || this._wep === 'grenade';
+        const compact = ['pistol','grenade','frag','stun'].includes(this._wep);
         const heavy = this._wep === 'bazooka' || this._wep === 'sniper';
         const contact = ph < 0.27 ? ph / 0.27
           : ph < 0.5 ? 1
@@ -1563,7 +1579,8 @@ export class Rig {
     // aquí peleaba con ella (temblor) si un remoto llegaba con st+aim juntos
     if (p.aim && p.state !== 'dead' && p.state !== 'dive' && p.state !== 'slide' &&
         p.state !== 'roadie' && p.state !== 'blind_over' && p.state !== 'melee') {
-      const adsPose = ADS_WEAPON_POSES[this._wep] ?? ADS_WEAPON_POSES.smg;
+      const poseKey=this._wep==='stun'?'pistol':this._wep==='frag'?'grenade':this._wep;
+      const adsPose = ADS_WEAPON_POSES[poseKey] ?? ADS_WEAPON_POSES.smg;
       damp = adsPose.damp;
       leftOnGun = true;
       // Trasladar el conjunto completo (hombros, brazos y arma), no solo el
@@ -1669,9 +1686,9 @@ export class Rig {
       set(this.aimRig.rotation, 'y', 0);
       leftOnGun = false;
       // el bote ya voló: la mano queda vacía el resto del gesto
-      if (this.guns.grenade) this.guns.grenade.visible = !p.throwReleased;
-    } else if (this.guns.grenade && !this.rag) {
-      this.guns.grenade.visible = true;
+      if (this.activeGun.userData.thrown) this.activeGun.visible = !p.throwReleased;
+    } else if (this.activeGun.userData.thrown && !this.rag) {
+      this.activeGun.visible = true;
     }
 
     // recarga: el arma se inclina y la mano izquierda baja al cargador
@@ -1700,6 +1717,11 @@ export class Rig {
       if (q >= 1) this._hitReact = null;
     }
 
+    if(this.stunned&&p.state!=='dead'){
+      this._stunPhase=(this._stunPhase??0)+dt;
+      add(this.torso.rotation,'z',Math.sin(this._stunPhase*26)*.025);
+      add(this.head.rotation,'x',.08+Math.sin(this._stunPhase*22)*.025);
+    }
     // recoil: empuja el conjunto brazos+arma hacia atrás
     this._recoil = Math.max(0, this._recoil - dt * 6);
     this.aimRig.position.z = this._recoil * 0.06;

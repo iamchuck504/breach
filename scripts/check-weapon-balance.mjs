@@ -37,6 +37,6 @@ assert.deepEqual(
 );
 assert.equal(damageFalloff(W.shotgun, 19), 0);
 assert.equal(rocketSplashDamage(W.bazooka, 0), 115);
-assert.ok(Math.abs(rocketSplashDamage(W.bazooka, 4.2) - 28.75) < 1e-9);
+assert.equal(rocketSplashDamage(W.bazooka, 4.2),0,'outer edge fades to zero');
 
-console.log('WEAPON BALANCE OK · SMG 10→8 @35–80m · resto del arsenal intacto');
+console.log('WEAPON BALANCE OK · firearms unchanged · rocket falloff reaches zero at outer edge');

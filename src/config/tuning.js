@@ -132,6 +132,17 @@ export const TUNING = {
       recoil: 0.55, range: 60, pellets: 1, auto: false,
       oneHand: true,
     },
+    stun: {
+      nameKey:'weapon.stun',rpm:40,dmg:1,headMult:1,mag:4,reserve:0,reloadTime:1.5,
+      spreadAim:0,spreadHip:1,spreadBlind:2,recoil:.35,range:50,pellets:1,auto:false,
+      oneHand:true,special:true,experimental:true,stunDuration:3,stunImmunity:2,projSpeed:36,
+    },
+    frag: {
+      nameKey:'weapon.frag',rpm:40,dmg:110,headMult:1,mag:2,reserve:0,reloadTime:0,
+      spreadAim:0,spreadHip:0,spreadBlind:0,recoil:.2,range:0,pellets:0,auto:false,
+      oneHand:true,thrown:true,special:true,throwSpeed:12,throwUp:4.2,throwTime:.5,throwRelease:.24,
+      fuse:2.4,splashRadius:3.3,blastCore:.6,selfDamage:1,
+    },
     grenade: {
       nameKey: 'weapon.grenade', rpm: 40, dmg: 0, headMult: 1,
       mag: 2, reserve: 0, reloadTime: 0,
@@ -166,7 +177,7 @@ export const TUNING = {
       spreadAim: 0.4, spreadHip: 1.8, spreadBlind: 3.0,
       recoil: 2.8, range: 110, pellets: 1, auto: false,
       special: true, projectile: true,
-      projSpeed: 26, splashRadius: 4.2, // el splash también daña al tirador
+      projSpeed: 26, splashRadius: 4.2, blastCore:.8,directDamage:180,selfDamage:.85,
     },
   },
   melee: {

@@ -113,6 +113,7 @@ const en = {
   'lobby.error.locked': 'THE LOBBY IS LOCKED', 'lobby.error.bot-missing': 'THAT BOT IS NO LONGER AVAILABLE',
   'flow.bestOfN': 'BEST OF {count}',
   'weapon.pistol': 'PISTOL', 'weapon.grenade': 'SMOKE GRENADE',
+  'weapon.frag':'EXPLOSIVE GRENADE','weapon.fragShort':'FRAG','weapon.stun':'STUN PISTOL','weapon.stunShort':'STUN',
   'weapon.sniper': 'SNIPER RIFLE', 'weapon.bazooka': 'BAZOOKA',
   'weapon.smgShort': 'SMG', 'weapon.shotgunShort': 'SHTG', 'weapon.pistolShort': 'PSTL',
   'weapon.grenadeShort': 'SMK', 'weapon.sniperShort': 'SNPR', 'weapon.bazookaShort': 'RCKT',
@@ -233,6 +234,7 @@ const es = {
   'lobby.error.locked': 'EL LOBBY ESTÁ BLOQUEADO', 'lobby.error.bot-missing': 'ESE BOT YA NO ESTÁ DISPONIBLE',
   'flow.bestOfN': 'MEJOR DE {count}',
   'weapon.pistol': 'PISTOLA', 'weapon.grenade': 'GRANADA DE HUMO',
+  'weapon.frag':'GRANADA EXPLOSIVA','weapon.fragShort':'EXPLOSIVA','weapon.stun':'PISTOLA ELÉCTRICA','weapon.stunShort':'STUN',
   'weapon.sniper': 'FRANCOTIRADOR', 'weapon.bazooka': 'BAZOOKA',
   'weapon.smgShort': 'SMG', 'weapon.shotgunShort': 'ESC', 'weapon.pistolShort': 'PST',
   'weapon.grenadeShort': 'HUMO', 'weapon.sniperShort': 'FRAN', 'weapon.bazookaShort': 'BAZ',
@@ -641,6 +643,8 @@ Object.assign(it, { 'menu.zoomSensitivity': 'SENS. ZOOM' });
 Object.assign(zh, { 'menu.zoomSensitivity': '缩放灵敏度' });
 
 const DICTIONARIES = Object.freeze({ en, es, pt, fr, ja, it, zh });
+const prototypeNames={pt:['GRANADA EXPLOSIVA','FRAG','PISTOLA ELÉTRICA','STUN'],fr:['GRENADE EXPLOSIVE','FRAG','PISTOLET ÉLECTRIQUE','STUN'],ja:['破片手榴弾','手榴弾','スタンピストル','スタン'],it:['GRANATA ESPLOSIVA','FRAG','PISTOLA ELETTRICA','STUN'],zh:['破片手雷','手雷','电击手枪','电击']};
+for(const [lang,names] of Object.entries(prototypeNames))['frag','fragShort','stun','stunShort'].forEach((key,i)=>DICTIONARIES[lang]['weapon.'+key]=names[i]);
 for (const dict of Object.values(DICTIONARIES)) dict['map.calle2'] = dict['map.calle'];
 const valid = new Set(LANGUAGES.map((l) => l.code));
 const storage = typeof globalThis.localStorage !== 'undefined' ? globalThis.localStorage : null;

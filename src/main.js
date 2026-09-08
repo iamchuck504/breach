@@ -15,7 +15,11 @@ import { RemotePlayer } from './player/remote.js';
 import { Dummies } from './player/practice.js';
 import { Weapons } from './combat/weapons.js';
 import { resolveShot, applySpread, applyPelletPattern } from './combat/ballistics.js';
-import { damageFalloff, rocketSplashDamage } from './combat/damage.js';
+import { damageFalloff } from './combat/damage.js';
+import {evaluateBlast} from './combat/blast.js';
+import {CombatPrototypes} from './combat/prototypes.js';
+import {PrototypeView} from './combat/prototype-view.js';
+import {BlastDebug} from './combat/blast-debug.js';
 import {
   deathImpactPoint, isSniperHeadshotDeath, rocketDeathLevel,
 } from './combat/death-reactions.js';
@@ -1413,6 +1417,8 @@ function deepCopy(src, dst) {
 let startSeq = 0; // n° de arranque de partida: invalida continuaciones tardías
 
 function teardown({ keepNet = false, keepLobby = true } = {}) {
+  G.protoView?.clear();G.protoEngine=null;G.protoSnapshot=null;G.protoStun=0;
+  G.blastDebug?.dispose();G.blastDebug=null;
   resetSpectator();
   if (G.rig) { G.rig.dispose(scene); G.rig = null; }
   if (G.dummies) { G.dummies.dispose(); G.dummies = null; }
@@ -1493,7 +1499,7 @@ function rocketDeathFx(victimPos, team, ctx, floorY = 0) {
 // determinó el daño; aquí solo traducimos ese daño a lectura corporal sin
 // convertir la bazooka en una fuente de launch/exploits de movimiento.
 function applyRocketImpact(position, y, yaw, rig, ctx, damage, radius = PLAYER_R) {
-  if (!position || ctx?.weapon !== 'bazooka') return false;
+  if (!position || !['bazooka','frag'].includes(ctx?.weapon)) return false;
   const raw = ctx.explosionPoint;
   const ep = Array.isArray(raw)
     ? { x: raw[0], y: raw[1], z: raw[2] }
@@ -1529,7 +1535,7 @@ function damagePlayerLocal(dmg, fromName, shooter, hitCtx = null) {
   audio.hurt();
   shoulderCam.addShake(0.35);
   input.pad.rumble(120, 0.4, 0.6);
-  if (G.selfHp > 0 && hitCtx?.weapon === 'bazooka') {
+  if (G.selfHp > 0 && ['bazooka','frag'].includes(hitCtx?.weapon)) {
     applyRocketImpact(G.player.pos, G.player.y, G.player.yaw, G.rig,
       hitCtx, dmg);
   }
@@ -1585,7 +1591,7 @@ function damagePlayerLocal(dmg, fromName, shooter, hitCtx = null) {
     // ACTUAL del cadáver; antes aparecía 60 ms tarde en el punto inicial.
     const dropAt = { x: G.player.pos.x, z: G.player.pos.z, y: world.groundHeight(G.player.pos, PLAYER_R, G.player.y) };
     // la granada no es un arma soltable: si estaba en mano, cae la primaria
-    const dropWep = G.weapons.def.thrown ? G.weapons.primary : G.weapons.cur;
+    const dropWep = G.weapons.def.thrown || G.weapons.cur==='stun' ? G.weapons.primary : G.weapons.cur;
     const wep = dropWep, mag = G.weapons.state[dropWep].mag, res = G.weapons.state[dropWep].reserve;
     const id = 'p' + G.dropSeq++;
     const deathRig = G.rig, deathDrops = G.drops;
@@ -2068,6 +2074,9 @@ function bindNet(net) {
     if (r) { r.dispose(scene); G.remotes.delete(m.id); }
     G.onlineRows = G.onlineRows.filter((row) => row.id !== m.id);
   });
+  net.on('protoState',m=>{if(alive())G.protoSnapshot=m;});
+  net.on('protoInventory',m=>{if(alive()&&m.id===net.id)prototypeInventory(m);});
+  net.on('protoEvent',m=>{if(alive())prototypeEvent(m);});
   net.on('snap', (m) => {
     if (!alive()) return;
     G.onlinePhase = m.phase || G.onlinePhase;
@@ -2132,11 +2141,11 @@ function bindNet(net) {
     // imposible. Limpiar momentum evita enviar de nuevo el mismo salto.
     G.player.pos.x = m.x; G.player.pos.z = m.z; G.player.y = m.y;
     G.player.vel.x = 0; G.player.vel.z = 0; G.player.vy = 0;
-    G.player.cover = null; G.player.coverEntry = null;
+    if(m.reason!=='stun'){G.player.cover = null; G.player.coverEntry = null;}
   });
   net.on('hitConfirm', (m) => {
     if (!alive()) return;
-    if (m.w === 'bazooka') {
+    if (m.w === 'bazooka' || m.w === 'frag') {
       if (!Array.isArray(m.ep) || m.ep.length !== 3) return;
       const victimSelf = m.target === net.id;
       const victimRemote = victimSelf ? null : G.remotes.get(m.target);
@@ -2149,7 +2158,7 @@ function bindNet(net) {
         : victimBot?.yaw;
       const victimRig = victimSelf ? G.rig : (victimRemote?.rig || victimBot?.rig);
       if (!victimPos) return;
-      const ctx = { weapon: 'bazooka', explosionPoint: m.ep };
+      const ctx = { weapon: m.w, explosionPoint: m.ep };
       // Solo el dueño de una entidad modifica su posición. Los demás clientes
       // reproducen la reacción del torso y dejan la posición a su snapshot.
       if (victimSelf || victimBot) {
@@ -2305,7 +2314,7 @@ function bindNet(net) {
     // `ex` también es autoritativo: el cliente solo presenta el nivel que el
     // servidor derivó de arma, distancia real a la explosión y daño letal.
     const explosiveLevel = rocketDeathLevel({
-      weapon: m.w, rocketDeathLevel: m.w === 'bazooka' ? m.ex : 0,
+      weapon: m.w, rocketDeathLevel: ['bazooka','frag'].includes(m.w) ? m.ex : 0,
     });
     const killer = m.from === net.id
       ? { x: G.player.pos.x, z: G.player.pos.z }
@@ -2816,7 +2825,7 @@ function spawnSpecialForRound() {
 // atraviesa paredes) y AUTODAÑO — dispararla cerca es un riesgo real.
 function explodeRocket(pos, mine = true, owner = null, boomInfo = null) {
   const d = TUNING.weapons.bazooka;
-  const R = d.splashRadius;
+  G.blastDebug?.show(pos,d,prototypeActors(),prototypeBlocked);
   _v1.set(pos.x, pos.y, pos.z);
   const visualPos = boomInfo?.visualPos || pos;
   _v3.set(visualPos.x, visualPos.y, visualPos.z);
@@ -2839,158 +2848,34 @@ function explodeRocket(pos, mine = true, owner = null, boomInfo = null) {
       Math.min(0.72, 0.28 + feedback * 0.16),
       Math.min(1, 0.45 + feedback * 0.22));
   }
-  // el cohete de OTRO jugador solo se ve y se oye: su daño lo reclama su
-  // dueño contra el servidor (si no, cada cliente aplicaría el splash)
-  if (!G.mode || !mine) return;
-  const splash = (dist) => rocketSplashDamage(d, dist);
-  const deathContext = (targetId, dist, dmg) => {
-    const direct = !!boomInfo?.direct && boomInfo?.targetId === targetId;
-    return {
-      weapon: 'bazooka', distance: dist, damage: dmg, part: 'body',
-      direct, explosionPoint: { x: pos.x, y: pos.y, z: pos.z }, gib: false,
-    };
-  };
-  const onlineSplash = [];
-
-  // En online, los bots pertenecen al host pero el disparo sigue siendo del
-  // bot. Registrar fire/hit con su id evita atribuir el splash al host.
-  if (owner && G.mode === 'online' && G.net && G.onlineBots) {
-    const losOK = (x, y, z) => {
-      _v2.set(x - pos.x, y - pos.y, z - pos.z);
-      const len = _v2.length();
-      return len <= 0.4 || world.raycast(_v1, _v2.normalize(), len - 0.2) === null;
-    };
-    for (const tg of allCharacterTargets()) {
-      if (tg.alive === false || tg.id === owner.id || tg.team === owner.team) continue;
-      const ty = (tg.y ?? 0) + 0.9;
-      const dist = Math.hypot(tg.x - pos.x, ty - pos.y, tg.z - pos.z);
-      if (dist > R || !losOK(tg.x, ty, tg.z)) continue;
-      onlineSplash.push({ id: tg.id, dmg: splash(dist), point: { x: tg.x, y: ty, z: tg.z } });
-    }
-    const self = G.onlineBots.botById(owner.id);
-    let selfHit = null;
-    if (self?.alive) {
-      const sy = self.y + 0.9;
-      const sd = Math.hypot(self.pos.x - pos.x, sy - pos.y, self.pos.z - pos.z);
-      if (sd < R && losOK(self.pos.x, sy, self.pos.z)) {
-        selfHit = { id: self.id, dmg: splash(sd) * 0.7, point: { x: self.pos.x, y: sy, z: self.pos.z } };
-      }
-    }
-    _v2.copy(_v1);
-    G.net.botFire(owner.id, _v1, _v2, 'bazooka', []);
-    for (const c of onlineSplash) G.net.botHit(owner.id, c.id, c.dmg, 'body', false, c.point);
-    if (selfHit) G.net.botHit(owner.id, selfHit.id, selfHit.dmg, 'body', false, selfHit.point);
-    return;
-  }
-
-  // Cohete lanzado por un BOT: daña al bando contrario (jugador incluido) y
-  // a su propio dueño si se pasó de cerca. No toca a sus compañeros.
-  if (owner && G.mode === 'bots' && G.botMatch) {
-    const losOK = (x, y, z) => {
-      _v2.set(x - pos.x, y - pos.y, z - pos.z);
-      const len = _v2.length();
-      return len <= 0.4 || world.raycast(_v1, _v2.normalize(), len - 0.2) === null;
-    };
-    for (const b of G.botMatch.bots) {
-      if (!b.alive || b.team === owner.team) continue;
-      const by = b.y + 0.9;
-      const dist = Math.hypot(b.pos.x - pos.x, by - pos.y, b.pos.z - pos.z);
-      if (dist > R || !losOK(b.pos.x, by, b.pos.z)) continue;
-      const dmg = splash(dist);
-      const ctx = deathContext(b.id, dist, dmg);
-      G.botMatch.damageBot(b.id, dmg, owner.id, false, false, ctx);
-    }
-    // al jugador solo si es del bando contrario
-    const p = G.player;
-    if (p && G.selfAlive && !p.dead && G.team !== owner.team) {
-      const sy = p.y + 0.9;
-      const sd = Math.hypot(p.pos.x - pos.x, sy - pos.y, p.pos.z - pos.z);
-      if (sd < R && losOK(p.pos.x, sy, p.pos.z)) {
-        const dmg = splash(sd);
-        const died = damagePlayerLocal(dmg, owner.name ?? 'BOT', { x: pos.x, z: pos.z },
-          deathContext('player', sd, dmg));
-        if (died) G.botMatch._onDeath('player', owner.id, false);
-      }
-    }
-    // autodaño del bot que lo disparó (mismo riesgo que el jugador)
-    const self = G.botMatch.bots.find((b) => b.id === owner.id);
-    if (self?.alive) {
-      const sy = self.y + 0.9;
-      const sd = Math.hypot(self.pos.x - pos.x, sy - pos.y, self.pos.z - pos.z);
-      if (sd < R && losOK(self.pos.x, sy, self.pos.z)) {
-        const dmg = splash(sd) * 0.7;
-        G.botMatch.damageBot(self.id, dmg, self.id, false, true,
-          deathContext(self.id, sd, dmg));
-      }
-    }
-    return;
-  }
-  const losClear = (x, y, z) => {
-    _v2.set(x - pos.x, y - pos.y, z - pos.z);
-    const len = _v2.length();
-    return len <= 0.4 || world.raycast(_v1, _v2.normalize(), len - 0.2) === null;
-  };
-  for (const tg of currentTargets()) {
-    if (tg.alive === false) continue;
-    const ty = (tg.y ?? 0) + 0.9;
-    const dist = Math.hypot(tg.x - pos.x, ty - pos.y, tg.z - pos.z);
-    if (dist > R || !losClear(tg.x, ty, tg.z)) continue;
-    const dmg = splash(dist);
-    const ctx = deathContext(tg.id, dist, dmg);
-    if (G.mode === 'practice' && G.dummies) {
-      effects.blood(_v3.set(tg.x, ty, tg.z), TEAM_HEX.blue);
-      const killed = G.dummies.damage(tg.id, dmg, (dd) => {
-        dd.rig.setDeathContext({
-          impact: { x: dd.x - pos.x, z: dd.z - pos.z },
-          power: Math.min(1, dmg / 55), vel: { x: 0, z: 0 }, state: 'run',
-          rocketDeathLevel: rocketDeathLevel(ctx), ...ctx,
-        });
-        rocketDeathFx({ x: dd.x, y: 0, z: dd.z }, 'blue', ctx, 0);
-        G.scores.red++;
-        hud.score(G.scores.red, G.scores.blue);
-        hud.kill(G.name, 'red', dd.name, 'blue');
-        audio.kill();
+  // Online explosions are entirely server-owned. Offline uses the same body
+  // samples and damage profile; presentation never bypasses map collision.
+  if (!G.mode || !mine || G.mode === 'online') return;
+  const ownerId=owner?.id??'player',team=owner?.team??G.team;
+  for(const target of prototypeActors()){
+    const self=target.id===ownerId;
+    if(!target.alive||target.protected||(target.team===team&&!self))continue;
+    const direct=!!boomInfo?.direct&&boomInfo?.targetId===target.id;
+    const result=evaluateBlast(d,pos,target,prototypeBlocked,{self,direct});
+    const dmg=result.damage;if(dmg<=.01)continue;
+    const ctx={weapon:'bazooka',distance:result.distance,damage:dmg,part:'body',
+      direct,explosionPoint:{x:pos.x,y:pos.y,z:pos.z},gib:false};
+    if(target.id==='player'){
+      if(G.mode==='practice')continue;
+      const died=damagePlayerLocal(dmg,owner?.name??G.name,ctx.explosionPoint,ctx);
+      if(died){if(self)G.botMatch?.playerSelfDeath();else G.botMatch?._onDeath('player',ownerId,false);}
+    }else if(G.botMatch){
+      const killed=G.botMatch.damageBot(target.id,dmg,ownerId,false,self,ctx);
+      if(!owner&&killed!==null){hud.hitmarker();if(!killed)audio.hit();}
+    }else if(G.dummies){
+      effects.blood(_v3.set(target.x,(target.y??0)+.9,target.z),TEAM_HEX.blue);
+      const killed=G.dummies.damage(target.id,dmg,dd=>{
+        dd.rig.setDeathContext({...ctx,impact:{x:dd.x-pos.x,z:dd.z-pos.z},
+          power:Math.min(1,dmg/55),vel:{x:0,z:0},state:'idle',rocketDeathLevel:rocketDeathLevel(ctx)});
+        rocketDeathFx({x:dd.x,y:0,z:dd.z},'blue',ctx,0);
+        G.scores.red++;hud.score(G.scores.red,G.scores.blue);hud.kill(G.name,'red',dd.name,'blue');audio.kill();
       });
-      hud.hitmarker();
-      if (!killed) audio.hit();
-    } else if (G.mode === 'bots' && G.botMatch) {
-      const killed = G.botMatch.damageBot(tg.id, dmg, 'player', false, false, ctx);
-      if (killed !== null) { hud.hitmarker(); if (!killed) audio.hit(); }
-    } else if (G.net) {
-      const r = G.remotes.get(tg.id);
-      const b = G.onlineBots?.botById(tg.id);
-      if ((!r && !b) || r?.inv || b?.protT > 0) continue;
-      effects.blood(_v3.set(tg.x, ty, tg.z), TEAM_HEX[r?.team || b.team]);
-      onlineSplash.push({ id: tg.id, dmg, point: { x: tg.x, y: ty, z: tg.z } });
-      hud.hitmarker();
-    }
-  }
-  // el server valida el disparo (explosión) y luego cada reclamo de daño
-  const p = G.player;
-  if (G.net) {
-    _v2.set(pos.x, pos.y, pos.z);
-    G.net.fire(_v1, _v2, 'bazooka', []);
-    for (const c of onlineSplash) G.net.hit(c.id, c.dmg, 'body', false, c.point);
-    if (p && G.selfAlive && !p.dead) {
-      const sy = p.y + 0.9;
-      const sd = Math.hypot(p.pos.x - pos.x, sy - pos.y, p.pos.z - pos.z);
-      if (sd < R && losClear(p.pos.x, sy, p.pos.z)) {
-        G.net.hit(G.net.id, splash(sd) * 0.7, 'body', false,
-          { x: p.pos.x, y: sy, z: p.pos.z });
-      }
-    }
-  }
-  // autodaño (70% del splash) — solo donde hay muerte real del jugador
-  if (G.mode === 'bots' && p && G.selfAlive && !p.dead) {
-    const sy = p.y + 0.9;
-    const sd = Math.hypot(p.pos.x - pos.x, sy - pos.y, p.pos.z - pos.z);
-    if (sd < R && losClear(p.pos.x, sy, p.pos.z)) {
-      const dmg = splash(sd) * 0.7;
-      const died = damagePlayerLocal(dmg, G.name, { x: pos.x, z: pos.z },
-        deathContext('player', sd, dmg));
-      // el suicidio también consume vida y agenda respawn (sin esto el
-      // jugador quedaba espectando para siempre)
-      if (died && G.botMatch) G.botMatch.playerSelfDeath();
+      hud.hitmarker();if(!killed)audio.hit();
     }
   }
 }
@@ -2998,6 +2883,94 @@ function explodeRocket(pos, mine = true, owner = null, boomInfo = null) {
 // Lanzar la granada de humo: sale de la mano con arco balístico. La nube la
 // gestiona SmokeSystem (rebotes, delay, disipación). Si era la última, el
 // personaje vuelve solo a su primaria.
+function prototypeActors(){
+  const p=G.player,localId=G.net?.id??'player';
+  const out=p?[{id:localId,x:p.pos.x,y:p.y,z:p.pos.z,team:G.team,alive:G.selfAlive&&!p.dead,protected:G.spawnProt>0,st:p.animState()}]:[];
+  const bots=G.mode==='online'?G.onlineBots?.bots:G.botMatch?.bots;
+  for(const b of bots??[])out.push({id:b.id,x:b.pos.x,y:b.y,z:b.pos.z,team:b.team,alive:b.alive,protected:b.protT>0,st:b.state==='cover'?(b.cover?.low?'cover_low':'cover_high'):b.state});
+  if(G.mode==='practice')for(const a of G.dummies?.targets()??[])out.push({...a,y:a.y??0,team:'blue',alive:a.alive!==false});
+  if(G.mode==='online')for(const r of G.remotes.values())out.push({...r,protected:!!r.inv});
+  return out;
+}
+function prototypeInventory(item){
+  if(!G.weapons)return;const w=G.weapons,k=item.kind;
+  if(!['frag','stun'].includes(k))return;
+  const slot=k==='frag'?3:2;
+  if(w.slots[slot]!==k)w.replaceSlot(slot,k,item.count,0);
+  w.state[k].mag=item.count;w.state[k].reserve=0;hud.weaponWheel(w);
+}
+function prototypeEvent(e){
+  if(e.kind==='explosion'){
+   G.blastDebug?.show(e.p,TUNING.weapons.frag,prototypeActors(),prototypeBlocked);
+   const p=new THREE.Vector3(e.p.x,e.p.y,e.p.z);
+   effects.rocketExplosion(p,{direct:false,floorY:world.groundHeight(e.p,.1,e.p.y)});audio.explosion({position:p});
+  }else if(e.kind==='stun'){audio.electric({position:e.p});}
+  else if(e.kind==='fuse')audio.grenadeTick({position:e.p});
+  else if(e.kind==='launch'){
+    if(e.weapon==='stun')audio.electric({position:e.p});else audio.whoosh();
+    const remote=G.remotes.get(e.owner);remote?.applyFirePose(null,e.weapon);
+    if(remote&&e.weapon==='stun'){effects.muzzleFlash(new THREE.Vector3(e.p.x,e.p.y,e.p.z));remote.rig.kick(.2);}
+  }
+}
+function prototypeBlocked(a,b){
+ const origin=new THREE.Vector3(a.x,a.y,a.z),dir=new THREE.Vector3(b.x-a.x,b.y-a.y,b.z-a.z),len=dir.length();
+ return len>.02&&world.raycast(origin,dir.normalize(),len-.015)!==null;
+}
+function updatePrototypes(dt){
+ if(!G.mode||!G.player)return;
+ G.protoView??=new PrototypeView(scene);
+ if(import.meta.env.DEV&&new URLSearchParams(location.search).has('blastDebug'))G.blastDebug??=new BlastDebug(scene);
+ G.blastDebug?.update(dt);
+ if(G.mode!=='online'){
+  G.protoEngine??=new CombatPrototypes({actors:prototypeActors,physics:world,blocked:prototypeBlocked,
+   experimental:new URLSearchParams(location.search).get('combatPrototype')==='1',event:prototypeEvent,
+   inventory:(id,item)=>{if(id==='player')prototypeInventory(item);},
+   damage:(owner,id,dmg,ctx)=>{
+    if(id==='player'){
+     const died=damagePlayerLocal(dmg,G.name,ctx.explosionPoint,ctx);
+     if(died)G.botMatch?.playerSelfDeath();
+    }else if(G.botMatch)G.botMatch.damageBot(id,dmg,owner,false,false,ctx);
+    else G.dummies?.damage(id,dmg,dd=>{dd.rig.setDeathContext(ctx);});
+   }});
+  const active=G.mode==='practice'||G.botMatch?.phase==='playing';
+  G.protoEngine.setRound(`${world.layout}:${G.botMatch?.round??0}`,active);
+  G.protoEngine.tick(dt);G.protoSnapshot=G.protoEngine.snapshot();
+ }
+ const snap=G.protoSnapshot,states=snap?.active?snap.states??[]:[];
+ G.protoStun=states.find(s=>s.id===(G.net?.id??'player'))?.remaining??0;
+ if(!G.selfAlive||G.player.dead)G.protoStun=0;
+ if(G.rig)G.rig.stunned=G.protoStun>0;
+ for(const d of G.dummies?.list??[])d.rig.stunned=d.alive&&(states.find(s=>s.id===d.id)?.remaining??0)>0;
+ for(const b of (G.mode==='online'?G.onlineBots?.bots:G.botMatch?.bots)??[]){
+  b.protoStunned=b.alive&&(states.find(s=>s.id===b.id)?.remaining??0)>0;b.rig.stunned=b.protoStunned;
+ }
+ for(const r of G.remotes.values())if(r.rig)r.rig.stunned=r.alive&&(states.find(s=>s.id===r.id)?.remaining??0)>0;
+ G.protoView.update(snap,prototypeActors(),performance.now()/1000);
+}
+function prototypePickup(){
+ if(!G.protoSnapshot?.active||!G.selfAlive||G.protoStun>0)return false;
+ const p=G.player;
+ if(G.weapons.swapping||G.weapons.reloading||G.throwT>0||['melee','dive','slide','mantle'].includes(p.state))return false;
+ const item=G.protoSnapshot.pickups.find(a=>a.count>0&&Math.hypot(a.x-p.pos.x,a.z-p.pos.z)<1.15&&Math.abs(a.y-p.y)<.7);
+ if(!item)return false;
+ const w=G.weapons,slot=item.kind==='frag'?3:2;
+ if(item.kind==='frag'&&w.slots[3]==='frag'&&w.state.frag.mag>=2)return false;
+ if(item.kind==='stun'&&w.slots[2]==='stun'&&w.state.stun.mag>0)return false;
+ const manual=w.slots[slot]!==item.kind||item.kind==='stun';
+ const button=input.lastDevice==='pad'?padBtnName(BINDS.pad.evade):keyLabel(BINDS.kb.evade);
+ hud.pickupPrompt(manual?`[${button}] ${t('weapon.'+w.slots[slot])} → ${item.count} × ${t('weapon.'+item.kind)}`:`+ ${item.count} × ${t('weapon.'+item.kind)}`);
+ if(!manual||input.evadePressed){
+  input.evadePressed=false;
+  if(G.mode==='online'){
+   if((G.protoClaimAt??0)<performance.now()){G.net.send({t:'protoClaim',id:item.id,manual});G.protoClaimAt=performance.now()+350;}
+  }else G.protoEngine.claim('player',item.id,manual);
+ }
+ return true;
+}
+function prototypeFire(kind,o,d){
+ if(G.mode==='online')G.net.send({t:'protoFire',kind,o:[o.x,o.y,o.z],d:[d.x,d.y,d.z]});
+ else G.protoEngine?.fire('player',kind,o,d);
+}
 function throwSmoke() {
   const p = G.player;
   const d = TUNING.weapons.grenade;
@@ -3006,6 +2979,10 @@ function throwSmoke() {
   const dir = p.aim
     ? currentFireDirection(muzzle, 60).clone()
     : barrelDirection(new THREE.Vector3());
+  if(G.weapons.cur==='frag'){
+    prototypeFire('frag',muzzle,dir);input.pad.rumble(45,.25,.35);G.rig.kick(.5);
+    if(G.weapons.st.mag<=0)G.weapons.startSwap(G.weapons.primary);return;
+  }
   const o = { x: muzzle.x, y: muzzle.y, z: muzzle.z };
   const v = {
     x: dir.x * d.throwSpeed,
@@ -3211,6 +3188,10 @@ function fireShot() {
   // ADS usa la intención óptica central; hip/blindfire conservan el eje físico.
   // En ambos casos el origen balístico sigue siendo el muzzle.
   const baseDir = aiming ? ray.dir.clone() : barrelDirection(new THREE.Vector3());
+  if(w.cur==='stun'){
+    const dir=applySpread(aiming?currentFireDirection(muzzle,def.range).clone():baseDir,spread);
+    prototypeFire('stun',muzzle,dir);effects.muzzleFlash(muzzle);G.rig.kick(.2);return;
+  }
 
   // bazooka: proyectil REAL, sin hitscan — el cohete hace el daño al explotar
   if (def.projectile) {
@@ -3449,6 +3430,22 @@ function simStep(dt) {
   hud.pickupPrompt('');
   const p = G.player;
   if (!p) return;
+  updatePrototypes(dt);
+  if(G.protoStun>0&&!p.dead){
+    G.weapons.cancelActions();G.fireBuffer=0;G.pendingShots=0;G.pendingRays.length=0;G.pendingThrows=0;G.throwT=0;G.throwPending=false;
+    p.aim=false;p.vel.x=0;p.vel.z=0;p.firingBlind=0;
+    // Keep the exact cover anchor; cancel transient evade/melee gestures.
+    if(p.state!=='cover')p.state='idle';
+    p.dive=null;p.slide=null;p.mantle=null;p.flip=null;p.coverEntry=null;
+    const stunFloor=world.groundHeight(p.pos,PLAYER_R,p.y);
+    if(!p.grounded||p.y>stunFloor+.01){p.vy=Math.min(0,p.vy)-TUNING.jump.gravity*dt;p.y+=p.vy*dt;}
+    if(p.y<=stunFloor+.001){p.y=stunFloor;p.vy=0;p.grounded=true;}
+    shoulderCam.setScoped(false);G.scopeActive=false;hud.sniperScope(false);
+    hud.hint(`⚡ STUN ${G.protoStun.toFixed(1)}s`,100);
+    G.botMatch?.update(dt);
+    if(G.net){G.net.tickState(dt,p,G.weapons);G.net.tickBotState(dt,G.onlineBots?.bots);}
+    input.consumeEdges();return;
+  }
 
   // Una sola puerta de control gobierna intro, countdown, intermedio y cierre.
   // La simulación visual sigue viva, pero jugador, armas, pickups y bots no
@@ -3512,12 +3509,13 @@ function simStep(dt) {
   const hasAmmo = (!G.weapons.reloading || canInterruptReload) &&
     (G.weapons.st.mag > 0 || G.weapons.st.reserve > 0 || G.weapons.infinite);
   hud.pickupPrompt('');
+  const prototypeNearby=prototypePickup();
   const nearbyDrop = G.selfAlive && !p.dead && !G.weapons.swapping && G.drops
     ? [...G.drops.drops.entries()].filter(([, d]) => !d.claimed &&
       canReplaceDrop(G.weapons.slots, d.wep) && Math.abs(p.y - d.y) < 0.8 &&
       Math.hypot(p.pos.x - d.x, p.pos.z - d.z) < 1.1)
       .sort((a, b) => Math.hypot(p.pos.x - a[1].x, p.pos.z - a[1].z) - Math.hypot(p.pos.x - b[1].x, p.pos.z - b[1].z))[0] : null;
-  if (nearbyDrop) {
+  if (nearbyDrop&&!prototypeNearby) {
     const [id, d] = nearbyDrop;
     const slot = replacementSlot(G.weapons.slots, G.weapons.cur);
     const old = G.weapons.slots[slot];
@@ -3538,7 +3536,7 @@ function simStep(dt) {
   }
   // pickup del arma ESPECIAL: junto al pedestal, evadir se convierte en
   // "tomar" (se consume el edge para no rodar encima) y hay que MANTENERLO
-  if (!nearbyDrop && specials.active && G.selfAlive && !p.dead && p.grounded &&
+  if (!prototypeNearby && !nearbyDrop && specials.active && G.selfAlive && !p.dead && p.grounded &&
       specials.near(p.pos.x, p.pos.z, p.y)) {
     const holding = input.keys.has(BINDS.kb.evade) || input.pad.pressed.has(BINDS.pad.evade);
     input.evadePressed = false;
@@ -3668,7 +3666,7 @@ function simStep(dt) {
   if (G.mode === 'practice') {
     for (const k of G.weapons.slots) {
       const d = TUNING.weapons[k];
-      if (d.thrown) { if (G.weapons.state[k].mag <= 0) G.weapons.state[k].mag = d.mag; }
+      if (d.thrown && k!=='frag') { if (G.weapons.state[k].mag <= 0) G.weapons.state[k].mag = d.mag; }
       else if (!d.special) G.weapons.state[k].reserve = d.reserve;
     }
   }

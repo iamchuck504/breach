@@ -52,6 +52,9 @@ function buildSharedCollision(world, layout, styles) {
         if(face.n.x===-Math.sign(x))face.standOff=1.20;
       }
     }
+    if(layout==='azoteas'&&Math.abs(x)===25&&Math.abs(z)===6.8&&w===2.4){
+      for(const face of world.faces.slice(firstFace))face.standOff=.82;
+    }
   }
 }
 const HIT_N = {

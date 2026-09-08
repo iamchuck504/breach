@@ -2,6 +2,7 @@
 // evita que una build online aplique números distintos a los que presenta el
 // juego local.
 
+import {blastFactor} from './blast.js';
 export function damageFalloff(def, distance) {
   const start = Number(def?.falloffStart);
   const end = Number(def?.falloffEnd);
@@ -26,6 +27,6 @@ export function firearmDamage(def, distance, part = 'body', pellets = 1,
 
 export function rocketSplashDamage(def, distance, selfDamage = false) {
   const radius = Math.max(0.001, def?.splashRadius || 0.001);
-  const factor = Math.max(0.25, 1 - (Math.max(0, distance) / radius) * 0.75);
-  return Math.max(0, (def?.dmg || 0) * factor * (selfDamage ? 0.7 : 1));
+  const factor = blastFactor(Math.max(0,distance),radius,def?.blastCore??.7);
+  return Math.max(0, (def?.dmg || 0) * factor * (selfDamage ? def?.selfDamage??.85 : 1));
 }

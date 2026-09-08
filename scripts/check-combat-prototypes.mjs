@@ -1,0 +1,58 @@
+import assert from 'node:assert/strict';
+import {CombatPrototypes} from '../src/combat/prototypes.js';
+import {evaluateBlast,blastFactor} from '../src/combat/blast.js';
+import {TUNING} from '../src/config/tuning.js';
+import {Weapons,DEFAULT_LOADOUT,SPECIAL_WEAPONS} from '../src/combat/weapons.js';
+import {serverMapPhysics} from '../server/map-geometry.js';
+for(const map of ['fortaleza','azoteas','calle2']){
+ const physics=serverMapPhysics(map),e=new CombatPrototypes({actors:()=>[],physics,blocked:()=>false,damage(){},experimental:true});e.setRound(map,true);
+ assert.equal(e.pickups.filter(p=>p.kind==='frag').length,2,`${map} paired pickups`);assert.equal(e.pickups.length,3,`${map} experimental pickup`);
+ for(const p of e.pickups){const q={x:p.x,z:p.z};physics.resolveCircle(q,.65,p.y);assert.ok(Math.hypot(q.x-p.x,q.z-p.z)<.02,`${map} pickup intersects geometry`);}
+}
+const actors=[{id:'a',x:-6,y:0,z:-8,team:'red',alive:true},{id:'b',x:-6,y:0,z:-4,team:'blue',alive:true}];
+let blocked=()=>false;const events=[],damage=[];
+const engine=new CombatPrototypes({actors:()=>actors,physics:{resolveCircle(){},groundHeight(){return 0;}},blocked:(a,b)=>blocked(a,b),damage:(...a)=>damage.push(a),event:e=>events.push(e),experimental:true});
+engine.setRound('a',true);
+assert.equal(engine.pickups.filter(p=>p.kind==='frag').length,2);
+assert.equal(engine.claim('a','frag:-1',false),false);
+assert.equal(engine.claim('a','frag:-1',true),true);
+assert.equal(engine.state('a').frag,2);
+assert.equal(engine.claim('a','frag:-1',true),false);
+assert.equal(engine.fire('a','frag',{x:-6,y:1,z:-8},{x:0,y:0,z:1}),true);
+assert.equal(engine.state('a').frag,1);
+assert.equal(engine.fire('a','frag',{x:-6,y:1,z:-8},{x:0,y:0,z:1}),false);
+engine.pickups[0].count=2;engine.pickups[0].ready=0;
+assert.equal(engine.claim('a','frag:-1',false),true);
+assert.equal(engine.pickups[0].count,1,'partial remains');
+actors[1].x=-6;actors[1].z=-8;
+assert.equal(engine.claim('b','frag:-1',true),true);
+assert.equal(engine.state('b').frag,1,'no double claim');
+for(let i=0;i<239;i++)engine.tick(.01);
+assert.equal(events.filter(e=>e.kind==='explosion').length,0);
+engine.tick(.02);assert.equal(events.filter(e=>e.kind==='explosion').length,1);
+assert.equal(engine.projectiles.length,0);
+const d=TUNING.weapons.bazooka,o={x:0,y:.85,z:0},target={x:1,y:0,z:0};
+assert.equal(evaluateBlast(d,o,target,()=>true).damage,0);
+const exposed=evaluateBlast(d,o,target,()=>false).damage;
+const partial=evaluateBlast(d,o,target,(a,b)=>b.y<1).damage;
+assert.ok(partial>0&&partial<exposed);
+assert.equal(evaluateBlast(d,o,{...target,x:10},()=>false).damage,0);
+assert.ok(evaluateBlast(d,o,target,()=>false,{direct:true}).damage>exposed);
+assert.ok(evaluateBlast(d,o,target,()=>false,{self:true}).damage<exposed);
+let last=1;for(let r=0;r<5;r+=.01){const f=blastFactor(r,4.2,.8);assert.ok(f<=last+1e-10&&f>=0);last=f;}
+assert.equal(engine.applyStun(actors[1]),true);
+const until=engine.state('b').until;
+engine.tick(.25);assert.equal(engine.applyStun(actors[1]),false);assert.equal(engine.state('b').until,until);
+assert.equal(engine.fire('b','frag',{x:-6,y:1,z:-8},{x:0,y:0,z:1}),false);
+assert.equal(engine.claim('b','frag:-1',true),false);
+while(engine.time<until-.001)engine.tick(Math.min(.1,until-engine.time));
+assert.equal(engine.stunned('b'),false);assert.equal(engine.applyStun(actors[1]),false);
+for(let i=0;i<21;i++)engine.tick(.1);
+assert.equal(engine.applyStun(actors[1]),true);
+actors[1].alive=false;engine.tick(.01);assert.equal(engine.stunned('b'),false);
+engine.setRound('a',false);assert.equal(engine.projectiles.length,0);assert.equal(engine.states.size,0);
+engine.setRound('b',true);assert.equal(engine.state('a').frag,0);
+const w=new Weapons();assert.deepEqual(w.slots,DEFAULT_LOADOUT);assert.ok(!SPECIAL_WEAPONS.includes('stun'));
+w.replaceSlot(3,'frag',2,0);w.cur='frag';w.infinite=true;w.update(.01,true,true,true);assert.equal(w.st.mag,1);w.refill();assert.equal(w.st.mag,1);
+w.replaceSlot(2,'stun',0,0);w.cur='stun';assert.equal(w.startReload(),false);w.refill();assert.equal(w.st.mag,0);
+console.log('Combat prototypes OK: claims, capacity, fuse, falloff, occlusion, stun 3s + immunity, death/round, finite ammo');

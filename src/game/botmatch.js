@@ -492,6 +492,14 @@ export class Bot {
       this.rig.update(dt, { state: 'dead', speed: 0, aim: false, aimPitch: 0 });
       return;
     }
+    if(this.protoStunned){
+      const floor=this.world.groundHeight(this.pos,.38,this.y);
+      if(this.y>floor+.01){this.vy-=TUNING.jump.gravity*dt;this.y=Math.max(floor,this.y+Math.min(0,this.vy)*dt);}else{this.y=floor;this.vy=0;this.grounded=true;}
+      this.rig.stunned=true;this.muzzleT=0;this.burstT=0;this.protT=Math.max(0,this.protT-dt);
+      this.rig.setTransform(this.pos.x,this.pos.z,this.yaw,this.y);
+      this.rig.update(dt,{state:this.state==='cover'?(this.cover?.low?'cover_low':'cover_high'):'idle',speed:0,aim:false});
+      return;
+    }
     this.lastDamage += dt; this.recentHit += dt;
     if (this.lastThreat && (this.lastThreat.age += dt) > 4) this.lastThreat = null;
     this.protT = Math.max(0, this.protT - dt);
@@ -1898,7 +1906,7 @@ export class BotMatch {
       b.commitMove = false; // vuelve a evaluar: ya no sigue corriendo ciego
       b.decisionT = 0;
     }
-    if (b.hp > 0 && hitCtx?.weapon === 'bazooka') {
+    if (b.hp > 0 && ['bazooka','frag'].includes(hitCtx?.weapon)) {
       const raw = hitCtx.explosionPoint;
       const blast = Array.isArray(raw)
         ? { x: raw[0], z: raw[2] }

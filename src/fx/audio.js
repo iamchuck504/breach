@@ -602,6 +602,13 @@ export class Audio {
   hit() { this._tone('sine', 1150, 900, 0.14, 0.045); }
   kill() { this._tone('sine', 500, 150, 0.3, 0.25); this._noiseShot(0.2, 0.2, 900, 200); }
   whoosh() { this._noiseShot(0.22, 0.16, 500, 2400, 0.6); }
+  electric(options=null){
+    const out=this._eventOutput(.55,options,'impact',this.combatBus||this.master);if(!out)return;
+    this._tone('sawtooth',1250,130,.10,.22,out);this._noiseShot(.12,.16,3500,700,1.6,out);
+  }
+  grenadeTick(options=null){
+    const out=this._eventOutput(.22,options,'impact',this.combatBus||this.master);if(out)this._tone('square',1450,1700,.08,.055,out);
+  }
   thump() { this._tone('sine', 110, 55, 0.4, 0.11); this._noiseShot(0.12, 0.07, 500, 150); }
   meleeImpact(options = null, lethal = false) {
     const out = this._eventOutput(lethal ? 0.78 : 0.66, options,

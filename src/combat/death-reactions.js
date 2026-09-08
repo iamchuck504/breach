@@ -21,6 +21,7 @@ export function isSniperHeadshotDeath(ctxOrWeapon, part = null) {
 export function rocketDeathLevel(ctxOrWeapon, distance = null, damage = null,
   direct = false) {
   if (typeof ctxOrWeapon === 'string') {
+    if(ctxOrWeapon==='frag')return Number(distance)<=.85&&Number(damage)>=75?1:0;
     if (ctxOrWeapon !== 'bazooka') return 0;
     const dist = Number(distance);
     const dmg = Number(damage);
@@ -29,7 +30,7 @@ export function rocketDeathLevel(ctxOrWeapon, distance = null, damage = null,
     return 0;
   }
   const ctx = ctxOrWeapon || {};
-  if (ctx.weapon !== 'bazooka') return 0;
+  if (!['bazooka','frag'].includes(ctx.weapon)) return 0;
   // Multiplayer entrega un nivel explícito calculado por el servidor. Un 0
   // explícito gana sobre cualquier dato cliente/legado.
   if (Object.prototype.hasOwnProperty.call(ctx, 'rocketDeathLevel')) {

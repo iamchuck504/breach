@@ -17,7 +17,7 @@ assert.deepEqual(offenders, [],
   `scripts con navegador ligado a una PC específica: ${offenders.join(', ')}`);
 
 const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
-assert.equal(pkg.scripts.pretest, 'npm run build',
+assert.equal(pkg.scripts.pretest.split('&&')[0].trim(), 'npm run build',
   'npm test debe generar dist antes de iniciar los harness de navegador');
 assert(!/npm run build/.test(pkg.scripts.verify),
   'verify no debe duplicar el build que ya ejecuta pretest');

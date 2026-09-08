@@ -14,6 +14,8 @@
     "check:animation-fluidity": "node scripts/check-animation-fluidity.mjs",
     "check:shop-recess": "node scripts/check-shop-recess.mjs",
     "check:storefront-cover": "node scripts/check-storefront-cover.mjs",
+    "check:combat-prototypes": "node scripts/check-combat-prototypes.mjs && node scripts/check-combat-prototypes-net.mjs && node scripts/check-combat-prototypes-ui.mjs",
+    "check:rooftop-cover": "node scripts/check-rooftop-cover.mjs",
     "check:gallery-support": "node scripts/check-gallery-support.mjs",
     "check:controller": "node scripts/check-controller.mjs",
     "check:blender": "node scripts/check-blender-soldier.mjs",

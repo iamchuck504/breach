@@ -154,7 +154,7 @@ export class Weapons {
 
   startReload() {
     const s = this.st, d = this.def;
-    if (d.thrown) return false; // la granada no recarga
+    if (d.thrown || this.cur==='stun') return false;
     if (s.reload > 0 || this.swapT > 0 || s.mag >= d.mag ||
         (!this.infinite && s.reserve <= 0)) return false;
     s.reload = d.reloadTime;
@@ -248,7 +248,7 @@ export class Weapons {
     if (s.mag <= 0) return false; // seco total (la auto-recarga ya corrió arriba)
     s.mag--;
     // la granada no recarga: en práctica se repone sola al lanzarla
-    if (this.infinite && d.thrown) s.mag = d.mag;
+    if (this.infinite && d.thrown && this.cur!=='frag') s.mag = d.mag;
     s.cd = 60 / d.rpm;
     return true;
   }
