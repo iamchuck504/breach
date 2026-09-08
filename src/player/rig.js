@@ -1588,6 +1588,7 @@ export class Rig {
       // ni separar las manos de grip/forend.
       aimRigX = adsPose.center;
       const lean = p.coverLean ?? 0; // asomarse en la orilla de pared alta
+      if(p.state==='cover_high')aimRigX += lean * .38;
       const coverPose = p.state === 'cover_low'
         ? coverAimPose({ kind: p.coverKind, h: 1.1 }, pitch,
           p.coverAimExposure ?? 1)

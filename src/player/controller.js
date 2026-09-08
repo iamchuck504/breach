@@ -680,10 +680,11 @@ export class Controller {
         const entryCarry = this.coverEntry
           ? this.coverEntry.tangentSpeed * Math.exp(-C.enterMomentumDamp * this.coverEntry.t)
           : 0;
-        u += (lat * M.coverStrafe + entryCarry) * dt + aimLeanSide * 1.3 * dt;
-        const leanOut = aimLeanSide !== 0 ? 0.45 : 0;
-        u = Math.max(PLAYER_R * 0.7 - (aimLeanSide < 0 ? leanOut : 0),
-          Math.min(len - PLAYER_R * 0.7 + (aimLeanSide > 0 ? leanOut : 0), u));
+        const firingEdge = aimLeanSide || blindEdgeSide;
+        u += (lat * M.coverStrafe + entryCarry) * dt + firingEdge * 2.6 * dt;
+        const leanOut = firingEdge !== 0 ? 0.45 : 0;
+        u = Math.max(PLAYER_R * 0.7 - (firingEdge < 0 ? leanOut : 0),
+          Math.min(len - PLAYER_R * 0.7 + (firingEdge > 0 ? leanOut : 0), u));
         const standOff=Math.max(PLAYER_R,f.standOff??0);
         if(f.standOff){
           const probe={x:f.a.x+ux*u+n.x*standOff,z:f.a.z+uz*u+n.z*standOff};
@@ -724,19 +725,19 @@ export class Controller {
         // Blindfire gira más pesado para conservar la lectura del cover y no
         // invertir cuerpo/cañón de un frame al siguiente.
         if (this.aim || (this.firingBlind > 0 && this.blindMode)) {
-          this._turnToCamera(dt, !this.aim);
+          this._turnToCamera(dt * 2, !this.aim);
         } else {
           this.yaw = approachAngle(this.yaw, yawFromDir(n.x, n.z),
             TUNING.combat.bodyTurnFollowDeg * Math.PI / 180 * dt);
         }
 
-        // Señal de lean contra el frame de intención de la cámara, no contra el
-        // yaw corporal que todavía está interpolando. Así el rig elige desde el
-        // primer frame el brazo correcto para ESA orilla y no invierte la pose
-        // a mitad de la transición del cuerpo.
+        // The wall's outward normal fixes the opening's left/right frame.
+        // Neither camera orbit nor the turning body may switch that opening.
         const poseEdgeSide = aimLeanSide || blindEdgeSide;
         if (poseEdgeSide !== 0) {
-          const rx = Math.cos(this.cam.yaw), rz = -Math.sin(this.cam.yaw);
+          // Left/right belongs to the opening, not the orbiting camera. A
+          // camera crossing the wall tangent must not swap hands/exits.
+          const rx = n.z, rz = -n.x;
           this.coverLeanAnim = (ux * poseEdgeSide) * rx + (uz * poseEdgeSide) * rz >= 0 ? 1 : -1;
           if (blindEdgeSide) this.blindMode = this.coverLeanAnim > 0 ? 'right' : 'left';
         } else this.coverLeanAnim = 0;

@@ -59,9 +59,9 @@ export const TUNING = {
     cornerLean: 0.55,     // margen del borde para lean en esquinas
     lowHeight: 1.4,       // altura máxima que cuenta como cobertura baja (popover)
     edgeExitBoost: 0.85,  // % de runSpeed del impulso al salir por el extremo
-    aimEnterRate: 48,     // ~50 ms to reach the cover aim readiness threshold
-    firePoseRate: 48,     // visual joints follow the same fast cover intent
-    blindEnterRate: 60,   // fast response; muzzle clearance still gates the shot
+    aimEnterRate: 96,     // twice the cover-entry response, same readiness threshold
+    firePoseRate: 96,     // visual joints follow the same fast cover intent
+    blindEnterRate: 120,  // twice the response; physical collision remains active
     blindExitRate: 32,
     blindFireReady: 0.62, // clearance físico sigue siendo obligatorio
   },
