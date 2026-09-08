@@ -910,7 +910,10 @@ export class Controller {
       // Los demás obstáculos siguen resolviéndose con normalidad.
       this.world.resolveCircle(this.pos, PLAYER_R, this.y,
         this.state === 'cover' ? this.cover?.collider : null);
-      if(this.state!=='cover')this.world.resolveFacadeBody?.(this.pos,PLAYER_R,this.y);
+      // The accepted slide target uses cover's own stand-off. Keep the body
+      // envelope for every OTHER facade; solid collision is still enforced.
+      if(this.state!=='cover')this.world.resolveFacadeBody?.(this.pos,PLAYER_R,this.y,
+        this.state==='slide'?this.slide?.face:null);
     }
 
     // Nunca subir un desnivel grande solo porque groundHeight cambió bajo el

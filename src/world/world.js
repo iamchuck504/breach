@@ -5745,11 +5745,11 @@ export class World {
 
   // Fixed living-body envelope, independent of animation/recoil. Never used by
   // projectiles or ragdolls; cover keeps its own lean-aware contact solver.
-  resolveFacadeBody(p, r, y = 0) {
+  resolveFacadeBody(p, r, y = 0, entryFace = null) {
     for(let iteration=0;iteration<3;iteration++){
       let moved=false;
       for(const f of this.faces){
-        if(!f.bodyStandOff || y>=f.topY-.05 || y+1.63<=(f.baseY??0))continue;
+        if(f===entryFace || !f.bodyStandOff || y>=f.topY-.05 || y+1.63<=(f.baseY??0))continue;
         const tx=f.b.x-f.a.x,tz=f.b.z-f.a.z,len=Math.hypot(tx,tz);
         if(len<1e-6)continue;
         const dx=p.x-f.a.x,dz=p.z-f.a.z;
