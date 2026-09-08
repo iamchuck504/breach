@@ -1590,7 +1590,8 @@ export class Rig {
       // ni separar las manos de grip/forend.
       aimRigX = adsPose.center;
       const lean = p.coverLean ?? 0; // asomarse en la orilla de pared alta
-      if(p.state==='cover_high'||p.state==='cover_low')aimRigX += lean * .38;
+      const aimingFromCover=p.state==='cover_high'||p.state==='cover_low';
+      if(aimingFromCover)aimRigX += lean * .12;
       const coverPose = p.state === 'cover_low'
         ? (lean ? {hipsY:.18,aimRigY:.68,gunForward:0,torsoLean:0}
           : coverAimPose({ kind: p.coverKind, h: 1.1 }, pitch,
@@ -1604,8 +1605,8 @@ export class Rig {
       R(this.head, pitch * adsPose.head, 0, lean * 0.08);
       // Pistola extendida, armas largas apoyadas y bazooka alta al hombro.
       // Cero rotación local evita que el modelo prometa otra dirección.
-      M(adsPose.mount[0], adsPose.mount[1],
-        adsPose.mount[2] - (coverPose?.gunForward ?? 0), 0, 0, 0);
+      M(adsPose.mount[0], adsPose.mount[1] - (aimingFromCover&&poseKey!=='bazooka'?.12:0),
+        adsPose.mount[2] - (coverPose?.gunForward ?? 0) - (aimingFromCover&&poseKey!=='pistol'&&poseKey!=='bazooka'?.18:0), 0, 0, 0);
       if (coverPose) {
         hipsY = coverPose.hipsY;
         aimRigY = coverPose.aimRigY;
