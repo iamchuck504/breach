@@ -174,8 +174,13 @@ export class World {
     if (this.customMap) this._buildFromData(this.customMap);
     else this._runBuilder(layout);
     if(this.galleryEnabled&&this.customMap?.decor!==false)addFortalezaGalleries(this);
-    if (!this.customMap) polishArchitecture(this, layout);
-    if (!this.customMap) addMapIdentity(this, layout);
+    // Pulido e identidad son decoración pura (sin colisión ni cover): un clon
+    // con DECOR encendido los hereda de su base igual que fachadas y GLBs.
+    const decorBase = this.customMap
+      ? (this.customMap.base && this.customMap.decor !== false ? this.customMap.base : null)
+      : layout;
+    if (decorBase) polishArchitecture(this, decorBase);
+    if (decorBase) addMapIdentity(this, decorBase);
     this._addMapPeriphery(theme);
     this._flushBoxBatch();
     this._buildSpawns();
