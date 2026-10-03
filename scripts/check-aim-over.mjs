@@ -51,6 +51,12 @@ await page.evaluate(() => {
   for (const d of G.dummies.list) d.alive = false;
   G.weapons.cur = 'smg';
   G.weapons.st.mag = 50; G.weapons.st.cd = 0;
+  // (14,14) roza el bloque HIGH real x14..15/z8.75..15.25 de Fortaleza; desde
+  // 730aa49 su envolvente de cuerpo (0.82) empuja al jugador y cambia cámara y
+  // cañón contra la caja sintética. Se retira para que sea campo abierto.
+  const wall = (c) => c.minx >= 13.99 && c.maxx <= 15.01 && c.minz >= 8.74 && c.maxz <= 15.26 && c.h >= 2.9;
+  for (let i = W.colliders.length - 1; i >= 0; i--) if (wall(W.colliders[i])) W.colliders.splice(i, 1);
+  for (let i = W.faces.length - 1; i >= 0; i--) if (W.faces[i].collider && wall(W.faces[i].collider)) W.faces.splice(i, 1);
   G.player.pos.x = 14; G.player.pos.z = 14;
   G.player.yaw = 0; G.player.cam.yaw = 0;
   window.__baseColliders = W.colliders.length;
