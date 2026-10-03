@@ -165,7 +165,7 @@ try {
   await page.evaluate(() => {
     const G = window.BREACH, W = window.BREACH_WORLD;
     // cara LOW mirando a -z (el jugador se cubre desde el sur): buscar una
-    const f = W.faces.find((c) => c.h <= 1.2 && c.n.z < -0.9);
+    const f = W.faces.find((c) => c.h <= 1.2 && c.n.z < -0.9 && !c.baseY);
     const mx = (c => (c.a.x + c.b.x) / 2)(f), mz = (c => (c.a.z + c.b.z) / 2)(f);
     G.player.pos.x = mx; G.player.pos.z = mz - 1.2;
     G.player.cam.yaw = Math.PI; // mirando a +z (hacia el bloque)
@@ -205,7 +205,7 @@ try {
   // ---- EDGE-EXIT: correr + stick más allá del extremo = salir corriendo ----
   await page.evaluate(() => {
     const G = window.BREACH, W = window.BREACH_WORLD;
-    const f = W.faces.find((c) => c.h <= 1.2 && c.n.z < -0.9);
+    const f = W.faces.find((c) => c.h <= 1.2 && c.n.z < -0.9 && !c.baseY);
     const mx = (f.a.x + f.b.x) / 2, mz = (f.a.z + f.b.z) / 2;
     const P = G.player;
     P.pos.x = mx; P.pos.z = mz - 1.2; P.y = 0;

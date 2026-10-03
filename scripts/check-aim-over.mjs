@@ -33,6 +33,17 @@ await page.evaluate(() => document.getElementById('btn-enter')?.click());
 await page.waitForSelector('#splash.off', { state: 'attached' });
 await page.evaluate(() => document.getElementById('btn-practice').click());
 await page.waitForTimeout(1800);
+// Esperar convergencia, no tiempo fijo: la carga de la escena mete frames de
+// ~250 ms que, en pleno barrido, separan la promesa de la cruz del disparo.
+await page.evaluate(() => new Promise((res) => {
+  let last = performance.now(), calm = 0;
+  const t0 = last;
+  const f = (t) => {
+    calm = t - last < 40 ? calm + 1 : 0; last = t;
+    if (calm >= 45 || t - t0 > 8000) res(); else requestAnimationFrame(f);
+  };
+  requestAnimationFrame(f);
+}));
 
 // escenario: campo abierto de fortaleza + caja de colisión sintética delante
 await page.evaluate(() => {

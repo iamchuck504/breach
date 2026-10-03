@@ -54,7 +54,9 @@ camera.yaw = Math.PI;
 const before = player.yaw;
 player.update(DT, input, true);
 const firstStep = Math.abs(delta(player.yaw, before));
-const blindMax = TUNING.combat.bodyTurnBlindDeg * Math.PI / 180 * DT;
+// En cover el giro de disparo corre al doble (82f7a60, controller: dt*2);
+// sigue acotado por frame: un 180° nunca se resuelve en un solo paso.
+const blindMax = TUNING.combat.bodyTurnBlindDeg * Math.PI / 180 * DT * 2;
 check(firstStep <= blindMax + 1e-8,
   `blindfire giró ${firstStep * 180 / Math.PI}° en un frame`);
 check(!player.fireAligned(), '180° quedó habilitado para disparar de inmediato');
@@ -89,7 +91,7 @@ input.aimHeld = true;
 const adsBefore = player.yaw;
 player.update(DT, input, true);
 const adsStep = Math.abs(delta(player.yaw, adsBefore));
-const adsMax = TUNING.combat.bodyTurnAimDeg * Math.PI / 180 * DT;
+const adsMax = TUNING.combat.bodyTurnAimDeg * Math.PI / 180 * DT * 2; // cover: mismo dt*2
 check(adsStep <= adsMax + 1e-8, `ADS hizo snap de ${adsStep}`);
 check(!player.fireAligned(), 'ADS de 180° ignoró la coherencia cuerpo/cámara');
 

@@ -79,7 +79,7 @@ check('dentro del humo no ve a NADIE', !!smokeRes && smokeRes.inside === 0, JSON
 const meleeCover = await page.evaluate(async () => {
   const G = window.BREACH, W = window.BREACH_WORLD;
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-  const f = W.faces.find((c) => c.h <= 1.2 && c.n.z < -0.9);
+  const f = W.faces.find((c) => c.h <= 1.2 && c.n.z < -0.9 && !c.baseY);
   if (!f) return { why: 'sin cara LOW' };
   const mx = (f.a.x + f.b.x) / 2, mz = (f.a.z + f.b.z) / 2;
   const p = G.player;

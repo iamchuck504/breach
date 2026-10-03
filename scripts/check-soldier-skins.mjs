@@ -86,5 +86,6 @@ try{
   });
   for(const [name,url] of Object.entries(report.images))await fs.writeFile(`${out}/${name}.png`,Buffer.from(url.split(',')[1],'base64'));
   delete report.images;console.log(JSON.stringify({...report,errors},null,2));
-  if(report.maxPoseError>1e-8||report.maxMuzzleError>1e-8||!report.opaque||!report.shared||!report.samePalette||errors.length||new Set(report.rows.map(r=>r.name)).size!==5)process.exitCode=1;
+  // matrices float32: ~1 ulp a 8 m es 1e-6; 1e-5 = 0.01 mm sigue exigiendo la misma pose
+  if(report.maxPoseError>1e-5||report.maxMuzzleError>1e-6||!report.opaque||!report.shared||!report.samePalette||errors.length||new Set(report.rows.map(r=>r.name)).size!==5)process.exitCode=1;
 }finally{await browser.close();}

@@ -172,7 +172,7 @@ await flush('pared');
 const coverExitTest = async (tag, keys, expect, holdMs) => {
   await page.evaluate(() => {
     const W = window.BREACH_WORLD, P = window.BREACH.player;
-    const f = W.faces.find((c) => c.h <= 1.2 && c.n.z < -0.9);
+    const f = W.faces.find((c) => c.h <= 1.2 && c.n.z < -0.9 && !c.baseY);
     const x = (f.a.x + f.b.x) / 2 + f.n.x * 0.38;
     const z = (f.a.z + f.b.z) / 2 + f.n.z * 0.38;
     window.__tp(x, z, Math.PI);
@@ -282,7 +282,7 @@ const dieIn = async (tag, prep, expectState = null, keepPosition = false) => {
 const gotoLowFace = async () => {
   await page.evaluate(() => {
     const W = window.BREACH_WORLD;
-    const f = W.faces.find((c) => c.h <= 1.2 && c.n.z < -0.9);
+    const f = W.faces.find((c) => c.h <= 1.2 && c.n.z < -0.9 && !c.baseY);
     const mx = (f.a.x + f.b.x) / 2, mz = (f.a.z + f.b.z) / 2;
     window.__tp(mx, mz - 1.2, Math.PI);
   });

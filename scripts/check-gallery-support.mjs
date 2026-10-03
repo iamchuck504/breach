@@ -5,7 +5,7 @@ import {Controller,PLAYER_R} from '../src/player/controller.js';
 import {galleryHeight} from '../src/world/fortaleza-galleries.js';
 
 const world=Object.create(World.prototype);
-Object.assign(world,{layout:'fortaleza',galleryEnabled:true,colliders:expandedCollisionBoxes('fortaleza'),segmentColliders:[],surfaceZones:[],fx:26,fz:26.6});
+Object.assign(world,{layout:'fortaleza',galleryEnabled:true,colliders:expandedCollisionBoxes('fortaleza'),segmentColliders:[],surfaceZones:[],faces:[],fx:26,fz:26.6});
 const camera={yaw:0,pitch:0,flatForward:()=>({x:0,z:-1}),flatRight:()=>({x:1,z:0})};
 const input={aimHeld:false,sprintHeld:false,jumpPressed:false,evadePressed:false,moveVec:()=>({x:0,z:0})};
 let samples=0;

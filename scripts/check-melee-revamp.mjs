@@ -30,6 +30,17 @@ try {
   await page.evaluate(() => { window.BREACH.mapChoice = 'fortaleza'; });
   await page.evaluate(() => document.getElementById('btn-practice').click());
   await page.waitForTimeout(1400);
+  // Esperar convergencia, no tiempo fijo: la carga de la escena (kits/soldado
+  // Blender) mete un frame de ~250 ms que caía encima del primer gesto medido.
+  await page.evaluate(() => new Promise((res) => {
+    let last = performance.now(), calm = 0;
+    const t0 = last;
+    const f = (t) => {
+      calm = t - last < 40 ? calm + 1 : 0; last = t;
+      if (calm >= 45 || t - t0 > 8000) res(); else requestAnimationFrame(f);
+    };
+    requestAnimationFrame(f);
+  }));
 
   await page.evaluate(() => {
     window.__meleeSetup = (distance = 1.12) => {
