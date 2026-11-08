@@ -73,9 +73,16 @@ try {
     marked: document.querySelector('.menu-nav-focus')?.dataset?.navKey || document.querySelector('.menu-nav-focus')?.id || '',
     mode: document.body.classList.contains('using-controller') ? 'controller' : 'keyboard',
   }));
-  const expectFocus = async (expected, message) => {
-    const got = await active();
-    if (!Object.entries(expected).every(([k, v]) => got[k] === v)) {
+  // Espera acotada: sin GPU (CI) un frame puede durar ~700 ms y la
+  // restauración del foco llega uno o dos frames después del gesto.
+  const expectFocus = async (expected, message, timeout = 2500) => {
+    const matches = (got) => Object.entries(expected).every(([k, v]) => got[k] === v);
+    let got = await active();
+    for (const t0 = Date.now(); !matches(got) && Date.now() - t0 < timeout;) {
+      await page.waitForTimeout(50);
+      got = await active();
+    }
+    if (!matches(got)) {
       const log = await page.evaluate(() => window.__focusLog.slice(-15).join(' | '));
       throw new Error(`${message}: ${JSON.stringify(got)}\nfoco reciente: ${log}`);
     }
