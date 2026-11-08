@@ -177,12 +177,16 @@ try {
     // aún en tránsito hace que el tiro real nazca lejos del punto capturado
     // (a fps altos el lerp exponencial sigue moviéndose cientos de ms)
     {
-      let last = G.player.cam.aimRay().origin.clone();
+      // origen Y dirección: con solo el origen quieto, el pitch aún podía
+      // asentarse y la cruz quedaba ~30 px fuera del punto capturado
+      // (fallo intermitente ~1 de cada 5 corridas)
+      let last = G.player.cam.aimRay();
+      last = { origin: last.origin.clone(), dir: last.dir.clone() };
       for (let i = 0; i < 60; i++) {
         await new Promise((resolve) => setTimeout(resolve, 40));
-        const now2 = G.player.cam.aimRay().origin.clone();
-        if (now2.distanceTo(last) < 0.004) break;
-        last = now2;
+        const now2 = G.player.cam.aimRay();
+        if (now2.origin.distanceTo(last.origin) < 0.004 && now2.dir.angleTo(last.dir) < 0.0005) break;
+        last = { origin: now2.origin.clone(), dir: now2.dir.clone() };
       }
     }
 

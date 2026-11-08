@@ -98,7 +98,10 @@ try {
     while (G.player.state === 'melee' && performance.now() - t0 < 1000) await wait(8);
     return { endMs: performance.now() - t0, connected: G.player.meleeConnected };
   });
-  check('fallar penaliza más que conectar', !miss.connected && miss.endMs > hit.endMs + 70,
+  // Nominal (TUNING.melee): ~105 ms de diferencia. Se mide en reloj de pared
+  // con sondeo de 8-12 ms y frames headless irregulares; 70 ms fallaba ~1 de
+  // cada 5 corridas sin cambio de juego. 40 ms sigue cazando un miss ≈ hit.
+  check('fallar penaliza más que conectar', !miss.connected && miss.endMs > hit.endMs + 40,
     `hit=${Math.round(hit.endMs)}ms miss=${Math.round(miss.endMs)}ms`);
 
   // Una sola pulsación no se repite al quedar disponible de nuevo.
