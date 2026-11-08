@@ -7,7 +7,7 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -17,6 +17,6 @@ jobs:
           cache: npm
       - run: npm ci
       # Chromium completo (no el headless shell): ver scripts/lib-chrome.mjs
-      - run: npx playwright-core install --with-deps chromium
+      - run: npx playwright-core install chromium
       - run: npm test
       - run: npm run test:dev
