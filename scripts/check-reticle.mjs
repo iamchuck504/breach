@@ -182,10 +182,13 @@ try {
       // (fallo intermitente ~1 de cada 5 corridas)
       let last = G.player.cam.aimRay();
       last = { origin: last.origin.clone(), dir: last.dir.clone() };
-      for (let i = 0; i < 60; i++) {
+      // 3 muestras quietas seguidas, hasta ~6 s: en CI un frame dura cientos
+      // de ms y dos muestras iguales pueden caer dentro del mismo frame
+      for (let i = 0, still = 0; i < 150 && still < 3; i++) {
         await new Promise((resolve) => setTimeout(resolve, 40));
         const now2 = G.player.cam.aimRay();
-        if (now2.origin.distanceTo(last.origin) < 0.004 && now2.dir.angleTo(last.dir) < 0.0005) break;
+        const quiet = now2.origin.distanceTo(last.origin) < 0.004 && now2.dir.angleTo(last.dir) < 0.0005;
+        still = quiet ? still + 1 : 0;
         last = { origin: now2.origin.clone(), dir: now2.dir.clone() };
       }
     }
