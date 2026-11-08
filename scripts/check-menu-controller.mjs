@@ -29,6 +29,13 @@ try {
       state.buttons[i].pressed = down; state.buttons[i].value = down ? 1 : 0;
     };
     window.__padAxis = (i, value) => { state.axes[i] = value; };
+    // Historial de foco para diagnosticar fallos que solo ocurren en CI.
+    window.__focusLog = [];
+    document.addEventListener('focusin', (e) => {
+      const el = e.target;
+      window.__focusLog.push(`${Math.round(performance.now())} ${el.id || el.dataset?.navKey || el.tagName}`);
+      if (window.__focusLog.length > 40) window.__focusLog.shift();
+    }, true);
   });
   await page.goto(`http://127.0.0.1:${port}/?nolock=1`, { waitUntil: 'networkidle' });
 
@@ -69,7 +76,8 @@ try {
   const expectFocus = async (expected, message) => {
     const got = await active();
     if (!Object.entries(expected).every(([k, v]) => got[k] === v)) {
-      throw new Error(`${message}: ${JSON.stringify(got)}`);
+      const log = await page.evaluate(() => window.__focusLog.slice(-15).join(' | '));
+      throw new Error(`${message}: ${JSON.stringify(got)}\nfoco reciente: ${log}`);
     }
   };
   const tilt = async (axis, value, duration = 150) => {
