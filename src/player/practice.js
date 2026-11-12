@@ -27,6 +27,7 @@ export class Dummies {
     this.list = PATROLS.map((base, i) => {
       const path = base.map(fit);
       const rig = new Rig(scene, 'blue', 'DUMMY-' + (i + 1), (Math.random() * 5) | 0);
+      rig.setNameTagThroughWalls(false); // son rivales: su etiqueta no atraviesa muros
       if (world) {
         rig.groundFn = (x, z, y) => world.groundHeight({ x, z }, 0.38, y);
         rig.collideFn = (p, y, r = RAGDOLL_R) => world.resolveCircle(p, r, y);

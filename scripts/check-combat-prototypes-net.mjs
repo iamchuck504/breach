@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import WebSocket from 'ws';
 const wait=ms=>new Promise(r=>setTimeout(r,ms)),port=8857;
-const server=spawn(process.execPath,['server/server.js'],{env:{...process.env,PORT:String(port),INTRO_TIME:'0',COUNTDOWN_TIME:'0',NODE_ENV:'test',ALLOW_TEST_TELEPORTS:'1',BREACH_EXPERIMENTAL_STUN:'1'},stdio:['ignore','pipe','pipe']});
+const server=spawn(process.execPath,['server/server.js'],{env:{...process.env,BREACH_FILL_BOTS: '0',PORT:String(port),INTRO_TIME:'0',COUNTDOWN_TIME:'0',NODE_ENV:'test',ALLOW_TEST_TELEPORTS:'1',BREACH_EXPERIMENTAL_STUN:'1'},stdio:['ignore','pipe','pipe']});
 let log='';server.stdout.on('data',d=>log+=d);server.stderr.on('data',d=>log+=d);
 class Peer{
  async open(name){this.history=[];this.ws=new WebSocket(`ws://127.0.0.1:${port}`);this.ws.on('message',s=>this.history.push(JSON.parse(s)));await new Promise((r,j)=>{this.ws.once('open',r);this.ws.once('error',j);});this.send({t:'join',action:name==='PROTO-A'?'create':'join',name,v:0});this.id=(await this.next(m=>m.t==='welcome')).id;}

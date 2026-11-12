@@ -10,7 +10,7 @@ import { MAPS, MAP_RUNTIME } from '../src/game/lobby-rules.js';
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const port = 8799;
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
-  env: { ...process.env, PORT: String(port), INTRO_TIME: '0', COUNTDOWN_TIME: '0',
+  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: String(port), INTRO_TIME: '0', COUNTDOWN_TIME: '0',
     NODE_ENV: 'test', ALLOW_TEST_TELEPORTS: '1' },
   stdio: 'ignore',
 });

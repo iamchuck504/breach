@@ -96,19 +96,15 @@ function mainGraph(scope) {
 
   const modes = ['#btn-bots', '#btn-practice', '#btn-online'].map((s) => query(scope, s));
   const name = query(scope, '#in-name'), map = query(scope, '#btn-map');
-  const server = query(scope, '#in-server'), create = query(scope, '#btn-lobby-create');
-  const join = query(scope, '#btn-lobby-join'), character = query(scope, '#btn-character');
+  const character = query(scope, '#btn-character');
   const options = query(scope, '#btn-options'), fullscreen = query(scope, '#btn-fullscreen');
   linkLine(graph, modes, 'down');
-  linkLine(graph, [name, map, server, create, character], 'down');
-  link(graph, create, 'right', join);
+  linkLine(graph, [name, map, character], 'down');
   link(graph, character, 'right', options);
   link(graph, options, 'right', fullscreen);
-  setRoute(graph, join, 'up', server); setRoute(graph, join, 'down', options);
-  setRoute(graph, fullscreen, 'up', join);
-  [[modes[0], name], [modes[1], map], [modes[2], server]].forEach(([a, b]) => link(graph, a, 'right', b));
-  setRoute(graph, create, 'left', modes[2]);
-  setRoute(graph, character, 'left', modes[2]);
+  setRoute(graph, options, 'up', map); setRoute(graph, fullscreen, 'up', map);
+  [[modes[0], name], [modes[1], map], [modes[2], character]].forEach(([a, b]) => link(graph, a, 'right', b));
+  setRoute(graph, map, 'left', modes[1]);
   return graph;
 }
 

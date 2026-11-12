@@ -163,7 +163,7 @@ const G = {
   selfAlive: true,
   scores: { red: 0, blue: 0 },
   team: 'red',
-  name: 'CHUCK',
+  name: 'PLAYER',
   charVariant: (() => {
     const v = parseInt(localStorage.getItem('breach.character'), 10);
     return v >= 0 && v <= 4 ? v : 0;
@@ -531,13 +531,29 @@ loadBinds();
 
 const inName = document.getElementById('in-name');
 const inServer = document.getElementById('in-server');
-const netStatus = document.getElementById('net-status');
+// Los avisos de red se muestran donde esté el jugador: en el menú principal
+// y en la pantalla de multijugador (el mismo texto en ambos sitios).
+const netStatus = {
+  els: [document.getElementById('net-status'), document.getElementById('online-msg')],
+  set textContent(value) { for (const el of this.els) el.textContent = value; },
+  get textContent() { return this.els[0].textContent; },
+};
 const splash = document.getElementById('splash');
 const btnEnter = document.getElementById('btn-enter');
-inName.value = localStorage.getItem('breach.name') || 'CHUCK';
+// Sin nombre por defecto: cada jugador escribe el suyo (online es obligatorio).
+inName.value = localStorage.getItem('breach.name') || '';
 const isSecure = location.protocol === 'https:';
-inServer.value = localStorage.getItem('breach.server') ||
-  (isSecure ? '' : `ws://${location.hostname}:8787`);
+// Servidor por defecto. VITE_BREACH_SERVER se fija al compilar:
+//  - 'same-origin': el propio server del juego sirve este cliente detrás de
+//    TLS (imagen Docker) → mismo host, wss/ws según el protocolo de la página.
+//  - una URL wss://…: cliente estático (Vercel) apuntando al server público.
+// Sin variable: LAN por http en :8787; en https queda vacío (un wss ajeno
+// no se puede adivinar y ws:// está bloqueado por contenido mixto).
+const builtServer = (import.meta.env.VITE_BREACH_SERVER || '').trim();
+const defaultServer = builtServer === 'same-origin'
+  ? `${isSecure ? 'wss' : 'ws'}://${location.host}`
+  : builtServer || (isSecure ? '' : `ws://${location.hostname}:8787`);
+inServer.value = localStorage.getItem('breach.server') || defaultServer;
 
 const mainCard = document.getElementById('main-card');
 const controlsCard = document.getElementById('controls-card');
@@ -780,7 +796,8 @@ function leaveLobby() {
 
 document.getElementById('btn-bots').addEventListener('click', openLocalLobby);
 document.getElementById('btn-practice').addEventListener('click', () => startPractice());
-document.getElementById('btn-online').addEventListener('click', () => { inServer.focus(); netStatus.textContent = t('lobby.create') + ' / ' + t('lobby.join'); });
+document.getElementById('btn-online').addEventListener('click', () => showOnline(true));
+document.getElementById('btn-online-back').addEventListener('click', () => showOnline(false));
 document.getElementById('btn-lobby-create').addEventListener('click', () => connectOnlineLobby('create'));
 document.getElementById('btn-lobby-join').addEventListener('click', () => connectOnlineLobby('join'));
 
@@ -1020,10 +1037,138 @@ const videoCard = document.getElementById('video-card');
 const languageCard = document.getElementById('language-card');
 const optionSubCards = [audioCard, videoCard, languageCard];
 
+const onlineCard = document.getElementById('online-card');
+
 function hideOptionCards() {
   optionsCard.style.display = 'none';
   for (const c of optionSubCards) c.style.display = 'none';
+  onlineCard.style.display = 'none'; // su sondeo se detiene solo al ocultarse
 }
+
+// ---------- Multijugador: pantalla de entrada con el estado de la sala ----------
+// Antes de conectar, el jugador ve qué hay en el server (nadie / sala abierta
+// con quién / partida en curso) y recibe UNA acción acorde: crear o unirse.
+const inOnlineName = document.getElementById('in-online-name');
+const onlineEl = {
+  box: document.getElementById('online-status'),
+  state: document.getElementById('online-state'),
+  count: document.getElementById('online-count'),
+  detail: document.getElementById('online-detail'),
+  roster: document.getElementById('online-roster'),
+  host: document.getElementById('online-server-host'),
+  create: document.getElementById('btn-lobby-create'),
+  join: document.getElementById('btn-lobby-join'),
+  server: document.getElementById('server-field'),
+};
+const ONLINE_POLL_MS = 3000;
+// Un host gratuito dormido tarda cerca de un minuto en despertar.
+const ONLINE_STATUS_TIMEOUT_MS = 75000;
+let onlineStatus = { kind: 'checking' };
+let onlinePollSeq = 0;
+
+function onlineStatusUrl(wsUrl) {
+  if (!/^wss?:\/\/[^/]/i.test(wsUrl)) return null;
+  try {
+    const u = new URL(wsUrl.replace(/^ws/i, 'http'));
+    return `${u.origin}/status`;
+  } catch { return null; }
+}
+
+async function fetchOnlineStatus(wsUrl) {
+  if (!wsUrl) return { kind: 'noServer' };
+  const url = onlineStatusUrl(wsUrl);
+  if (!url) return { kind: 'offline' };
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), ONLINE_STATUS_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { signal: abort.signal, cache: 'no-store' });
+    // server sin /status (versión anterior): se puede intentar a ciegas
+    if (!res.ok) return { kind: 'unknown' };
+    const data = await res.json();
+    if (!['empty', 'lobby', 'match'].includes(data?.state)) return { kind: 'unknown' };
+    // 'joinable' lo decide el server (relevar a un bot, lugar libre…); un
+    // server anterior no lo informa y se deduce del cupo
+    const joinable = typeof data.joinable === 'boolean' ? data.joinable
+      : data.state !== 'match' && data.slots < data.maxPlayers;
+    return { kind: data.state === 'lobby' && !joinable ? 'full' : data.state, data, joinable };
+  } catch { return { kind: 'offline' }; }
+  finally { clearTimeout(timer); }
+}
+
+function renderOnlineStatus() {
+  const { kind, data, joinable } = onlineStatus;
+  const openMatch = kind === 'match' && joinable;
+  onlineEl.box.dataset.state = kind;
+  onlineEl.box.dataset.joinable = openMatch || kind === 'lobby' || kind === 'empty' ? '1' : '0';
+  onlineEl.state.textContent = t(`online.state.${kind}`);
+  onlineEl.count.textContent = data && kind !== 'empty' ? `${data.players} / ${data.maxPlayers}` : '';
+  onlineEl.detail.textContent = t(`online.detail.${openMatch ? 'matchJoin' : kind}`, data ? {
+    host: data.host ?? '—', map: t(`map.${data.map}`), bots: data.bots,
+    round: Math.max(1, data.round), red: data.wins?.red ?? 0, blue: data.wins?.blue ?? 0,
+  } : {});
+  onlineEl.roster.replaceChildren(...(data && kind !== 'empty' ? data.names : []).map((name) => {
+    const li = document.createElement('li'); li.textContent = name; return li;
+  }));
+  // Una sola acción según el estado; a ciegas ('unknown') se ofrecen ambas.
+  const canCreate = kind === 'empty' || kind === 'unknown';
+  const canJoin = kind === 'lobby' || kind === 'unknown' || openMatch;
+  const showJoin = canJoin || kind === 'full' || kind === 'match';
+  onlineEl.create.style.display = canCreate ? '' : 'none';
+  onlineEl.join.style.display = showJoin ? '' : 'none';
+  onlineEl.join.disabled = !canJoin;
+  onlineEl.join.textContent = t(kind === 'match' ? 'online.joinMatch' : 'lobby.join');
+  const url = inServer.value.trim();
+  let host = url;
+  try { host = new URL(url).host; } catch { /* se muestra tal cual */ }
+  onlineEl.host.textContent = host;
+  if (kind === 'noServer') onlineEl.server.open = true;
+}
+
+async function pollOnlineStatus() {
+  const seq = ++onlinePollSeq;
+  const active = () => seq === onlinePollSeq && onlineCard.style.display === 'block';
+  while (active()) {
+    // pestaña oculta: no sondear (tampoco mantiene despierto un host gratuito)
+    if (!document.hidden) {
+      const url = inServer.value.trim();
+      const result = await fetchOnlineStatus(url);
+      if (!active()) return;
+      if (inServer.value.trim() === url) { onlineStatus = result; renderOnlineStatus(); }
+    }
+    await new Promise((resolve) => setTimeout(resolve, ONLINE_POLL_MS));
+  }
+}
+
+function restartOnlineStatus() {
+  onlineStatus = { kind: inServer.value.trim() ? 'checking' : 'noServer' };
+  renderOnlineStatus();
+  pollOnlineStatus();
+}
+
+function showOnline(on) {
+  mainCard.style.display = on ? 'none' : 'block';
+  hideOptionCards();
+  controlsCard.style.display = 'none';
+  charCard.style.display = 'none';
+  onlineCard.style.display = on ? 'block' : 'none';
+  hud.el.menu.scrollTop = 0;
+  if (!on) { onlinePollSeq++; return; }
+  inOnlineName.value = inName.value;
+  netStatus.textContent = '';
+  restartOnlineStatus();
+  if (!inOnlineName.value.trim() && input.lastDevice !== 'pad') inOnlineName.focus();
+}
+inOnlineName.addEventListener('input', () => {
+  inName.value = inOnlineName.value;
+  if (inOnlineName.value.trim()) netStatus.textContent = '';
+});
+inOnlineName.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  const action = [onlineEl.create, onlineEl.join].find((b) => b.style.display !== 'none' && !b.disabled);
+  action?.click();
+});
+inServer.addEventListener('change', () => { if (onlineCard.style.display === 'block') restartOnlineStatus(); });
+onLanguageChange(() => { if (onlineCard.style.display === 'block') renderOnlineStatus(); });
 
 function showOptions(on) {
   mainCard.style.display = on ? 'none' : 'block';
@@ -1128,6 +1273,7 @@ function navigateMenuBack() {
   if (controlsCard.style.display === 'block') { showOptions(true); return true; }
   if (optionsCard.style.display === 'block') { showOptions(false); return true; }
   if (charCard.style.display === 'block') { showChar(false); return true; }
+  if (onlineCard.style.display === 'block') { showOnline(false); return true; }
   if (!lobbyUI.root.classList.contains('off')) { leaveLobby(); return true; }
   if (G.mode && menuIsOpen()) { closeMenu(); return true; }
   return false;
@@ -1188,7 +1334,9 @@ function updateCharSel() {
 // no falsea el tamaño relativo de ningún soldado.
 async function renderCharPreviews() {
   const pr = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-  pr.setSize(176, 224);
+  // Se renderiza holgado y grande; el recorte final ajusta al soldado.
+  pr.setPixelRatio(1);
+  pr.setSize(1056, 1344);
   const ps = new THREE.Scene();
   ps.add(new THREE.HemisphereLight(0xd9e6f0, 0x97876e, 2.2));
   const dl = new THREE.DirectionalLight(0xffe9c4, 1.6);
@@ -1197,9 +1345,8 @@ async function renderCharPreviews() {
   const fill = new THREE.DirectionalLight(0xdfe8f0, 0.9); // relleno hacia la cara
   fill.position.set(2.2, 1.4, -1.4);
   ps.add(fill);
-  const pc = new THREE.PerspectiveCamera(30, 176 / 224, 0.1, 10);
-  pc.position.set(0.52, 1.47, -2.75);
-  pc.lookAt(0, 0.84, 0);
+  const pc = new THREE.PerspectiveCamera(30, 176 / 224, 0.1, 20);
+  const rigs = [];
   for (let v = 0; v < 5; v++) {
     const r = new Rig(ps, 'red', null, v);
     await r.visualReady;
@@ -1216,12 +1363,95 @@ async function renderCharPreviews() {
     }
     r.root.rotation.y = -0.18;
     r.root.updateWorldMatrix(true, true);
-    pr.render(ps, pc);
-    const img = charSlots.querySelector(`button[data-v="${v}"] img`);
-    if (img) img.src = pr.domElement.toDataURL();
-    r.dispose(ps);
+    rigs.push(r);
   }
+  // El encuadre se MIDE sobre los cinco soldados (casco más alto incluido):
+  // una cámara fija por números cortaba la cabeza al cambiar el modelo.
+  const bounds = new THREE.Box3();
+  for (const r of rigs) bounds.union(visibleBounds(r.root, _frameBox));
+  frameCameraOn(pc, bounds, PREVIEW_VIEW_DIR);
+  for (const r of rigs) r.root.visible = false;
+  const shots = rigs.map((r) => {
+    r.root.visible = true;
+    pr.render(ps, pc);
+    r.root.visible = false;
+    return snapshotCanvas(pr.domElement);
+  });
+  // mismo recorte para los cinco: el selector no falsea tamaños relativos
+  cropToContent(shots, 352, 448).forEach((src, v) => {
+    const img = charSlots.querySelector(`button[data-v="${v}"] img`);
+    if (img) img.src = src;
+  });
+  for (const r of rigs) r.dispose(ps);
   pr.dispose();
+}
+
+// Copia inmediata del canvas WebGL (su buffer no sobrevive al siguiente frame).
+function snapshotCanvas(source) {
+  const copy = document.createElement('canvas');
+  copy.width = source.width; copy.height = source.height;
+  copy.getContext('2d', { willReadFrequently: true }).drawImage(source, 0, 0);
+  return copy;
+}
+
+// Recorta un grupo de renders al contenido SÓLIDO que comparten (el halo
+// translúcido no cuenta), con margen y la proporción de salida. Medir los
+// píxeles dibujados es inmune a mallas auxiliares que inflan una caja 3D.
+function cropToContent(shots, outW, outH, pad = 0.07) {
+  const w = shots[0].width, h = shots[0].height;
+  let x0 = w, y0 = h, x1 = -1, y1 = -1;
+  for (const shot of shots) {
+    const data = shot.getContext('2d').getImageData(0, 0, w, h).data;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      if (data[(y * w + x) * 4 + 3] < 200) continue;
+      if (x < x0) x0 = x; if (x > x1) x1 = x;
+      if (y < y0) y0 = y; if (y > y1) y1 = y;
+    }
+  }
+  if (x1 < 0) return shots.map((shot) => shot.toDataURL());
+  let bw = (x1 - x0 + 1) * (1 + pad * 2), bh = (y1 - y0 + 1) * (1 + pad * 2);
+  if (bw / bh < outW / outH) bw = bh * outW / outH; else bh = bw * outH / outW;
+  const sx = (x0 + x1 + 1) / 2 - bw / 2, sy = (y0 + y1 + 1) / 2 - bh / 2;
+  return shots.map((shot) => {
+    const out = document.createElement('canvas');
+    out.width = outW; out.height = outH;
+    const ctx = out.getContext('2d');
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(shot, sx, sy, bw, bh, 0, 0, outW, outH);
+    return out.toDataURL();
+  });
+}
+
+// Caja de lo que realmente se dibuja (mallas visibles; sin etiquetas ni
+// armas ocultas) y cámara que la contiene entera con un margen.
+const PREVIEW_VIEW_DIR = new THREE.Vector3(0.52, 0.63, -2.75).normalize();
+const _frameBox = new THREE.Box3(), _framePart = new THREE.Box3();
+const _frameCenter = new THREE.Vector3(), _frameSize = new THREE.Vector3();
+function visibleBounds(root, out) {
+  out.makeEmpty();
+  root.updateWorldMatrix(true, true);
+  const visit = (o) => {
+    if (!o.visible) return;
+    if (o.isMesh && o.geometry) {
+      if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+      out.union(_framePart.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld));
+    }
+    for (const child of o.children) visit(child);
+  };
+  visit(root);
+  return out;
+}
+function frameCameraOn(camera, box, viewDir, margin = 1.1) {
+  if (box.isEmpty()) return;
+  box.getCenter(_frameCenter); box.getSize(_frameSize);
+  const half = Math.tan(camera.fov * Math.PI / 360);
+  const width = Math.max(_frameSize.x, _frameSize.z);
+  // la cara cercana de la caja es la que manda en perspectiva: se suma media
+  // profundidad para que hombros y casco no rocen el borde
+  const dist = Math.max(_frameSize.y / 2 / half, width / 2 / (half * camera.aspect)) * margin + width / 2;
+  camera.position.copy(_frameCenter).addScaledVector(viewDir, dist);
+  camera.lookAt(_frameCenter);
+  camera.updateProjectionMatrix();
 }
 
 const portraitCache = new Map();
@@ -1230,21 +1460,21 @@ function renderCharacterPortrait(variant = 0, team = 'red') {
   if (portraitCache.has(key)) return portraitCache.get(key);
   const pr = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   pr.setPixelRatio(1);
-  pr.setSize(240, 320);
+  pr.setSize(720, 960); // holgado; el recorte final ajusta al soldado
   const ps = new THREE.Scene();
   ps.add(new THREE.HemisphereLight(0xe2eaf0, 0x5b6169, 2.25));
   const keyLight = new THREE.DirectionalLight(team === 'red' ? 0xffd8bd : 0xc8dcff, 1.8);
   keyLight.position.set(2.4, 3.6, -2.8); ps.add(keyLight);
   const rim = new THREE.DirectionalLight(team === 'red' ? 0xd94f3f : 0x4f8de0, 1.15);
   rim.position.set(-2.2, 2, 1.8); ps.add(rim);
-  const pc = new THREE.PerspectiveCamera(28, 240 / 320, .1, 10);
-  pc.position.set(.58, 1.42, -2.72); pc.lookAt(0, .9, 0);
+  const pc = new THREE.PerspectiveCamera(28, 240 / 320, .1, 20);
   const rig = new Rig(ps, team, null, variant | 0);
   for (let i = 0; i < 35; i++) rig.update(1 / 30, { state: 'idle', speed: 0, aim: false, aimPitch: 0 });
   rig.root.rotation.y = -.2;
   rig.root.updateWorldMatrix(true, true);
+  frameCameraOn(pc, visibleBounds(rig.root, _frameBox), PREVIEW_VIEW_DIR);
   pr.render(ps, pc);
-  const data = pr.domElement.toDataURL('image/png');
+  const data = cropToContent([snapshotCanvas(pr.domElement)], 480, 640)[0];
   rig.dispose(ps); pr.dispose();
   portraitCache.set(key, data);
   return data;
@@ -1857,11 +2087,22 @@ function startPractice({ fullscreen = true } = {}) {
 
 async function connectOnlineLobby(action) {
   dismissSplash();
+  // El nombre es obligatorio para jugar con otras personas: sin él no se
+  // conecta, se abre la pantalla de multijugador y se pide ahí.
+  const fromCard = onlineCard.style.display === 'block';
+  const typed = (fromCard ? inOnlineName : inName).value.trim();
+  if (!typed) {
+    if (!fromCard) showOnline(true);
+    netStatus.textContent = t('online.nameRequired');
+    inOnlineName.focus();
+    return;
+  }
+  inName.value = typed;
   audio.ensure();
   enterFullscreen();
   G.name = saveName();
   const url = inServer.value.trim();
-  if (!url) { netStatus.textContent = t('msg.serverUrl'); return; }
+  if (!url) { netStatus.textContent = t('msg.serverUrl'); onlineEl.server.open = true; return; }
   localStorage.setItem('breach.server', url);
   netStatus.textContent = t('msg.connecting');
   const net = new NetClient();
@@ -1953,15 +2194,18 @@ function setupOnlineMatch(m) {
 }
 
 function saveName() {
-  const n = (inName.value.trim() || 'CHUCK').toUpperCase();
-  localStorage.setItem('breach.name', n);
-  return n;
+  // Los modos locales toleran el campo vacío con un nombre genérico que NO se
+  // guarda: el online lo sigue pidiendo la primera vez.
+  const n = inName.value.trim().toUpperCase();
+  if (n) localStorage.setItem('breach.name', n);
+  return n || 'PLAYER';
 }
 
 function addRemote(p) {
   const prev = G.remotes.get(p.id);
   if (prev) prev.dispose(scene); // id repetido: no dejar rigs huérfanos
   const r = new RemotePlayer(scene, p.id, p.name, p.team, p.v | 0);
+  r.rig.setNameTagThroughWalls(p.team === G.team); // solo compañeros a través de muros
   r.rig.groundFn = (x, z, y) => world.groundHeight({ x, z }, PLAYER_R, y);
   r.rig.collideFn = (pt, y, radius = RAGDOLL_R) => world.resolveCircle(pt, radius, y);
   r.alive = p.alive !== false;
@@ -2060,19 +2304,44 @@ function bindNet(net) {
       setupOnlineBots(roster);
     }
   });
+  // Cambios de roster con la partida empezada. El servidor decide quién
+  // releva a quién; aquí solo se reflejan (y se avisa a todos).
+  const rowOf = (p) => ({ id: p.id, name: p.name, team: p.team, bot: p.bot ? 1 : 0,
+    variant: p.v | 0, kills: p.kills || 0, deaths: p.deaths || 0, score: (p.kills || 0) * 100 });
+  const dropSlot = (id) => {
+    const name = G.onlineRows.find((row) => row.id === id)?.name ?? null;
+    const r = G.remotes.get(id);
+    if (r) { r.dispose(scene); G.remotes.delete(id); }
+    G.onlineBots?.removeExternalBot(id);
+    G.onlineRows = G.onlineRows.filter((row) => row.id !== id);
+    return name;
+  };
   net.on('joined', (m) => {
     if (!alive() || m.id === net.id) return;
+    // quien entra releva a un bot: el bot sale del mundo en este mismo paso
+    const botName = m.replaced ? dropSlot(m.replaced) : null;
     addRemote(m);
-    if (!G.onlineRows.some((r) => r.id === m.id)) G.onlineRows.push({
-      id: m.id, name: m.name, team: m.team, variant: m.v | 0, kills: 0, deaths: 0, score: 0,
-    });
-    hud.hint(t('msg.joined', { name: m.name }), 1400);
+    if (!G.onlineRows.some((r) => r.id === m.id)) G.onlineRows.push(rowOf(m));
+    if (!G.mode) return;
+    hud.hint(botName ? t('msg.joinedFor', { name: m.name, bot: botName })
+      : t('msg.joined', { name: m.name }), 3200);
+    audio.lobbyEnter();
   });
   net.on('left', (m) => {
     if (!alive()) return;
-    const r = G.remotes.get(m.id);
-    if (r) { r.dispose(scene); G.remotes.delete(m.id); }
-    G.onlineRows = G.onlineRows.filter((row) => row.id !== m.id);
+    const name = m.name ?? dropSlot(m.id);
+    dropSlot(m.id);
+    const bot = m.bot;
+    if (bot) {
+      // un bot cubre el lugar: lo simula el anfitrión, los demás lo ven remoto
+      G.onlineRows.push(rowOf(bot));
+      if (G.mode && G.lobby?.hostId === net.id && G.onlineBots) {
+        G.onlineBots.addExternalBot({ id: bot.id, name: bot.name, team: bot.team, variant: bot.v,
+          alive: bot.alive, spawn: { x: bot.x, z: bot.z, yaw: bot.team === 'red' ? Math.PI : 0 } });
+      } else if (G.mode) addRemote(bot);
+    }
+    if (!G.mode || !name) return;
+    hud.hint(bot ? t('msg.leftFor', { name, bot: bot.name }) : t('msg.left', { name }), 3200);
   });
   net.on('protoState',m=>{if(alive())G.protoSnapshot=m;});
   net.on('protoInventory',m=>{if(alive()&&m.id===net.id)prototypeInventory(m);});
@@ -2896,8 +3165,12 @@ function prototypeInventory(item){
   if(!G.weapons)return;const w=G.weapons,k=item.kind;
   if(!['frag','stun'].includes(k))return;
   const slot=k==='frag'?3:2;
+  const gained=w.slots[slot]!==k||item.count>(w.state[k]?.mag??0);
   if(w.slots[slot]!==k)w.replaceSlot(slot,k,item.count,0);
-  w.state[k].mag=item.count;w.state[k].reserve=0;hud.weaponWheel(w);
+  w.state[k].mag=item.count;w.state[k].reserve=0;
+  // La rueda de armas solo avisa al RECOGER. Abrirla también al lanzar tapaba
+  // el centro de la pantalla justo cuando hay que seguir la granada.
+  if(gained)hud.weaponWheel(w);
 }
 function prototypeEvent(e){
   if(e.kind==='explosion'){
@@ -3823,8 +4096,16 @@ function frame(now) {
   if (G.flowLockedPrev && !flowLocked && (G.mode === 'online' || G.mode === 'bots')) {
     grantSpawnProtection();
   }
+  const flowUnlocked = G.flowLockedPrev && !flowLocked;
   G.flowLockedPrev = flowLocked;
   input.suppress = menuOpen || flowLocked; // presentación y menú bloquean el gameplay
+  // Antes de la ronda (intro / cuenta regresiva) el cursor ya se captura: si
+  // se esperaba a la salida, el ratón quedaba muerto hasta el reintento de
+  // captura y el teclado no contaba. Resultados y pantalla final no capturan.
+  const preRound = G.mode === 'online' ? ['intro', 'countdown'].includes(G.onlinePhase)
+    : G.mode === 'bots' && ['starting', 'countdown'].includes(G.botMatch?.phase);
+  input.presentation = flowLocked && !menuOpen && preRound;
+  if (flowUnlocked && !menuOpen && !input.locked) input.requestLock();
   input.pollPad(dt, !!G.mode && !menuOpen && !flowLocked);
   menuNavigator.poll(input.pad, dt, input.rebinding);
 

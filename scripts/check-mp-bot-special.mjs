@@ -10,7 +10,7 @@ const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const port = 8800;
 import { CHROME as chrome } from './lib-chrome.mjs';
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
-  env: { ...process.env, PORT: String(port), INTRO_TIME: '1', COUNTDOWN_TIME: '0',
+  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: String(port), INTRO_TIME: '1', COUNTDOWN_TIME: '0',
     NODE_ENV: 'test', ALLOW_TEST_TELEPORTS: '1' },
   stdio: 'ignore',
 });
@@ -23,7 +23,10 @@ page.on('pageerror', (e) => errors.push(e.message));
 try {
   await page.goto(`http://127.0.0.1:${port}/?nolock=1`, { waitUntil: 'networkidle' });
   await page.evaluate(() => document.getElementById('btn-enter')?.click());
-  await page.evaluate((p) => { document.getElementById('in-server').value = `ws://127.0.0.1:${p}`; }, port);
+  await page.evaluate((p) => {
+    document.getElementById('in-name').value = 'HOST'; // el online exige nombre
+    document.getElementById('in-server').value = `ws://127.0.0.1:${p}`;
+  }, port);
   await page.evaluate(() => document.getElementById('btn-lobby-create').click());
   await page.waitForFunction(() => window.BREACH?.net?.connected && window.BREACH?.lobby?.hostId);
   await page.evaluate(() => window.BREACH.net.lobbyAddBot('blue'));

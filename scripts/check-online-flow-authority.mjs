@@ -13,7 +13,7 @@ const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')],
   cwd: root,
   // La ventana debe superar holgadamente el arranque de dos contextos bajo
   // carga de CI. El test mide autoridad de fase, no velocidad de Playwright.
-  env: { ...process.env, PORT: String(PORT), INTRO_TIME: '4', COUNTDOWN_TIME: '1',
+  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: String(PORT), INTRO_TIME: '4', COUNTDOWN_TIME: '1',
     NODE_ENV: 'test', ALLOW_TEST_TELEPORTS: '1' },
   stdio: 'ignore',
 });

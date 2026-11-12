@@ -14,7 +14,7 @@ const root = path.join(__dirname, '..');
 import { CHROME } from './lib-chrome.mjs';
 
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
-  env: { ...process.env, PORT: '8795' }, stdio: 'ignore',
+  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: '8795' }, stdio: 'ignore',
 });
 await new Promise((r) => setTimeout(r, 900));
 

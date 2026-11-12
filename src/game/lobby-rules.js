@@ -54,6 +54,9 @@ export const DEFAULT_LOBBY_SETTINGS = Object.freeze({
   rounds: 3,
   lives: 15,
   postMatch: 'lobby',
+  // Online: los lugares vacíos se rellenan con bots, un jugador que entra
+  // toma el lugar de un bot y uno que sale deja un bot en el suyo.
+  fillBots: true,
 });
 
 // Los mapas del editor viven en el cliente ('custom:<id>'). El lobby LOCAL
@@ -73,6 +76,7 @@ export function normalizeLobbySettings(value = {}, { allowCustom = false } = {})
     lives: LIFE_OPTIONS.includes(lives) ? lives : DEFAULT_LOBBY_SETTINGS.lives,
     postMatch: POST_MATCH_OPTIONS.includes(value.postMatch)
       ? value.postMatch : DEFAULT_LOBBY_SETTINGS.postMatch,
+    fillBots: typeof value.fillBots === 'boolean' ? value.fillBots : DEFAULT_LOBBY_SETTINGS.fillBots,
   };
 }
 

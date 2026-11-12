@@ -12,7 +12,7 @@ const root = path.join(__dirname, '..');
 import { CHROME } from './lib-chrome.mjs';
 
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
-  env: { ...process.env, PORT: '8798', INTRO_TIME: '2', COUNTDOWN_TIME: '1',
+  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: '8798', INTRO_TIME: '2', COUNTDOWN_TIME: '1',
     NODE_ENV: 'test', ALLOW_TEST_TELEPORTS: '1' },
   stdio: 'ignore',
 });

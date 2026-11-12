@@ -1,9 +1,8 @@
-// AIM-OVER (ADS): un borde cercano que tapa el cañón pero no el círculo se
-// libra ALZANDO el arma (la bala sigue naciendo del muzzle real, la retícula
-// jamás se mueve/recolorea). Desde 8fdb817 el gatillo SIEMPRE responde: si ni
-// el tope de alzada libra, el tiro sale igual y pega lo que físicamente hay
-// (límite documentado). TUNING.aimOver.enabled=0 restaura el comportamiento
-// anterior en vivo (kill switch). Colliders sintéticos: geometría exacta.
+// AIM-OVER (ADS) bajo el MODELO GEARS: el daño viaja por el eje óptico de la
+// cámara (la retícula es la verdad y jamás se mueve/recolorea); un borde
+// cercano que taparía el cañón se libra ALZANDO el arma como acomodo VISUAL,
+// y el gatillo nunca se niega. TUNING.aimOver.enabled=0 apaga solo ese
+// acomodo en vivo (kill switch). Colliders sintéticos: geometría exacta.
 import { chromium } from 'playwright-core';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -218,34 +217,38 @@ const tortura = await page.evaluate(async () => {
   let nearSlams = 0, shots = 0, legitClose = 0, atMaxLift = 0;
   const W = window.BREACH_WORLD, V3 = window.THREE.Vector3;
   const oldTracer = E.tracer;
-  // BUG = PARALAJE puro: la bala pega CERCA mientras el círculo prometía
-  // LEJOS *y* la cámara con el MISMO desvío del tiro también libraba. Si la
-  // versión de cámara del rayo desviado pega igual, es dispersión visible
-  // desde el círculo (cono real del arma): legítimo, no cuenta. Pegar la
-  // caja cuando el círculo apunta A la caja tampoco cuenta (veraz).
+  // MODELO GEARS (da7060f): el daño viaja por el EJE ÓPTICO con la dispersión
+  // del arma, así que el contrato se mide DESDE LA CÁMARA. Un impacto cercano
+  // es veraz si (a) cae dentro del cono de dispersión que dibuja el círculo y
+  // (b) la cámara lo VE: nada tapa la línea cámara→impacto. Rozar el canto de
+  // la caja con el cono es dispersión legítima. BUG = la bala pega cerca en
+  // un punto fuera del cono o que la cámara no ve (paralaje / nacer dentro).
+  // La métrica anterior proyectaba el desvío desde el CAÑÓN (contrato previo
+  // al modelo Gears) y marcaba como estampado ese roce legítimo del canto.
+  const coneRad = (G.weapons.def.spreadAim + 0.6) * Math.PI / 180;
   E.tracer = function (o, p2, em) {
     shots++;
     const shotDist = p2.distanceTo(o);
     if (shotDist < 3) {
       // misma fuente que fireShot: aimRay (cámara colisionada, SIN shake)
       const ray = G.player.cam.aimRay();
-      const cast = (origin, d2) => W.raycastHit(origin, d2, 60)?.t ??
-        W.raycast(origin, d2, 60) ?? 60;
-      const camCentral = cast(ray.origin, ray.dir);
-      const shotDir = p2.clone().sub(o).normalize();
-      const camAlongShot = cast(ray.origin, shotDir);
-      // pared RASANTE: si la cámara con el mismo desvío pega la misma
-      // superficie (aunque más adelante — la distancia al impacto es
-      // inestable en rasantes), es dispersión visible, no paralaje engañoso
-      if (camCentral > shotDist + 1.8 &&
-          camAlongShot > Math.max(shotDist + 1.8, shotDist * 3)) {
-        if (G.aimOver.lift >= maxLift - 0.005) atMaxLift++;
-        else nearSlams++;
+      const cast = (origin, d2, max) => W.raycastHit(origin, d2, max)?.t ??
+        W.raycast(origin, d2, max) ?? max;
+      const camCentral = cast(ray.origin, ray.dir, 60);
+      const toHit = p2.clone().sub(ray.origin);
+      const camDist = toHit.length();
+      toHit.multiplyScalar(1 / camDist);
+      const offAxis = Math.acos(Math.min(1, toHit.dot(ray.dir)));
+      const camAlongShot = cast(ray.origin, toHit, camDist + 1);
+      const seen = camAlongShot >= camDist - 0.12;
+      if (offAxis > coneRad || !seen) {
+        nearSlams++;
         (window.__slams ??= []).push({
           o: [+o.x.toFixed(2), +o.y.toFixed(2), +o.z.toFixed(2)],
           p2: [+p2.x.toFixed(2), +p2.y.toFixed(2), +p2.z.toFixed(2)],
           shotDist: +shotDist.toFixed(2),
-          camCentral: +camCentral.toFixed(1), camAlongShot: +camAlongShot.toFixed(1),
+          camCentral: +camCentral.toFixed(1), camAlongShot: +camAlongShot.toFixed(2),
+          camDist: +camDist.toFixed(2), offAxisDeg: +(offAxis * 180 / Math.PI).toFixed(2),
           lift: +G.aimOver.lift.toFixed(3),
           pitch: +G.player.cam.pitch.toFixed(3), yaw: +G.player.cam.yaw.toFixed(3),
           state: G.player.state, wep: G.weapons.cur,
@@ -271,7 +274,7 @@ const tortura = await page.evaluate(async () => {
   await new Promise((r) => setTimeout(r, 400));
   return { nearSlams, atMaxLift, shots, legitClose, slams: window.__slams ?? [] };
 });
-check('TORTURA: cero balas estampadas con margen de alzada (círculo lejos, bala cerca) en 4s de barrido+spam',
+check('TORTURA: cero balas fuera del cono o invisibles para la cámara en 4s de barrido+spam',
   tortura.nearSlams === 0 && tortura.shots > 10,
   JSON.stringify(tortura));
 if (tortura.atMaxLift) {

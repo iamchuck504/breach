@@ -45,8 +45,6 @@
     display: none; }
   #crosshair.aim { display: block; }
   #crosshair svg { position: absolute; left: -200px; top: -200px; display: block; }
-  #crosshair.blocked circle { stroke: #ff8a3d; }
-  #crosshair.blocked circle:last-child { fill: #ff8a3d; }
 
   /* Scope del sniper: zoom real lo hace la cámara. La cruz óptica siempre
      queda centrada; una obstrucción del cañón solo cambia su color. */
@@ -62,7 +60,6 @@
     transform: translate(-50%,-50%); color: rgba(230,238,241,.94);
     filter: drop-shadow(0 1px 2px rgba(0,0,0,.9)); }
   #scope-reticle svg { width: 100%; height: 100%; overflow: visible; }
-  #scope-reticle.blocked { color: #ff8a3d; }
   @keyframes scope-in { from { opacity: 0; } to { opacity: 1; } }
 
   #barrel-dot { position: fixed; left: -100px; top: -100px; width: 14px; height: 14px;
@@ -551,7 +548,7 @@
 
   /* ---------- panel de controles ---------- */
   #controls-card { width: min(900px, calc(100vw - 48px)); display: none; }
-  #options-card, #audio-card, #video-card, #language-card { width: min(560px, calc(100vw - 48px)); display: none; }
+  #options-card, #audio-card, #video-card, #language-card, #online-card { width: min(560px, calc(100vw - 48px)); display: none; }
   .options-list { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
   .options-list .btn { display: flex; justify-content: space-between; align-items: center; }
   #controls-card .menu-title, #char-card .menu-title { margin-bottom: 8px; }
@@ -642,7 +639,7 @@
     #btn-pause, #btn-fs { top: 10px; transform: scale(.88); transform-origin: top left; }
     #btn-pause { left: 10px; } #btn-fs { left: 53px; }
     #menu { padding: 12px; align-items: flex-start; }
-    .menu-card, #controls-card, #char-card, #options-card, #audio-card, #video-card, #language-card { width: calc(100vw - 24px); padding: 20px; }
+    .menu-card, #controls-card, #char-card, #options-card, #audio-card, #video-card, #language-card, #online-card { width: calc(100vw - 24px); padding: 20px; }
     .menu-grid, .cols { grid-template-columns: 1fr; }
     .utility-row, .settings-grid { grid-template-columns: 1fr; }
     #char-slots { overflow-x: auto; grid-template-columns: repeat(5,112px); padding-bottom: 4px; }
@@ -762,8 +759,8 @@
     </div>
     <div class="menu-grid">
       <section>
-        <div class="menu-kicker" id="menu-kicker">SELECT A MODE</div>
-        <h1 class="menu-title" id="menu-title">PLAY</h1>
+        <div class="menu-kicker" id="menu-kicker" data-i18n="menu.selectMode">SELECT A MODE</div>
+        <h1 class="menu-title" id="menu-title" data-i18n="common.play">PLAY</h1>
         <div class="mode-list">
           <button class="btn primary" id="btn-resume" style="display:none">
             <span class="btn-copy" data-i18n="common.resume">RESUME</span><span class="btn-num">→</span>
@@ -789,7 +786,7 @@
         <div class="prep-head"><strong data-i18n="menu.preparation">LOADOUT</strong><span data-i18n="common.localSave">LOCAL SAVE</span></div>
         <div class="field">
           <label for="in-name" data-i18n="menu.name">NAME</label>
-          <input id="in-name" maxlength="14" spellcheck="false" />
+          <input id="in-name" maxlength="14" spellcheck="false" autocomplete="off" data-i18n-placeholder="online.namePlaceholder" />
         </div>
         <div class="field">
           <span class="field-label" data-i18n="menu.map">MAP</span>
@@ -798,14 +795,6 @@
             <button class="btn" id="btn-map"><span id="map-label">MAP: FORTRESS</span><span class="btn-num" data-i18n="common.change">CHANGE</span></button>
           </div>
           <div class="field-note" data-i18n="menu.mapNote">Default map for new local lobbies and Practice.</div>
-        </div>
-        <div class="field" id="server-field">
-          <label for="in-server" data-i18n="menu.server">MULTIPLAYER SERVER</label>
-          <input id="in-server" spellcheck="false" placeholder="ws://192.168.x.x:8787" />
-          <div class="online-actions">
-            <button class="btn" id="btn-lobby-create" data-i18n="lobby.create">CREATE LOBBY</button>
-            <button class="btn" id="btn-lobby-join" data-i18n="lobby.join">JOIN LOBBY</button>
-          </div>
         </div>
         <div class="utility-row">
           <button class="btn" id="btn-character" data-i18n="common.character">CHARACTER</button>
@@ -819,6 +808,37 @@
       <span><b>WASD</b> <span data-i18n="menu.move">MOVE</span> · <b>Shift</b> <span data-i18n="menu.run">RUN</span> · <b>Space</b> <span data-i18n="menu.coverEvade">COVER / EVADE</span></span>
       <span><b>Esc / MENU</b> <span data-i18n="menu.pauseHint">PAUSE</span></span>
     </div>
+  </div>
+
+  <div class="menu-card" id="online-card">
+    <div class="menu-top"><div class="logo">BRE<em>A</em>CH</div><div class="tag" data-i18n="lobby.onlineSession">ONLINE SESSION</div></div>
+    <div class="menu-kicker" data-i18n="online.kicker">PLAY WITH OTHER PEOPLE</div>
+    <h1 class="menu-title" data-i18n="menu.multiplayer">MULTIPLAYER</h1>
+    <div class="field">
+      <label for="in-online-name" data-i18n="online.nameLabel">YOUR NAME</label>
+      <input id="in-online-name" maxlength="14" spellcheck="false" autocomplete="off" data-i18n-placeholder="online.namePlaceholder" />
+      <div class="field-note" data-i18n="online.nameNote">This is how other players will see you.</div>
+    </div>
+    <div class="online-status" id="online-status" data-state="checking" role="status" aria-live="polite">
+      <div class="online-status-head">
+        <span class="online-dot" aria-hidden="true"></span>
+        <strong id="online-state"></strong>
+        <span id="online-count"></span>
+      </div>
+      <p id="online-detail"></p>
+      <ul id="online-roster"></ul>
+    </div>
+    <div id="online-msg" role="alert"></div>
+    <div class="control-actions">
+      <button class="btn primary" id="btn-lobby-create" data-i18n="lobby.create" data-nav-default>CREATE LOBBY</button>
+      <button class="btn primary" id="btn-lobby-join" data-nav-default>JOIN LOBBY</button>
+      <button class="btn" id="btn-online-back" data-i18n="common.back">BACK</button>
+    </div>
+    <details class="online-server" id="server-field">
+      <summary><span data-i18n="menu.server">MULTIPLAYER SERVER</span><span id="online-server-host"></span></summary>
+      <input id="in-server" spellcheck="false" autocomplete="off" placeholder="wss://…" aria-label="Server" data-i18n-aria-label="menu.server" />
+      <div class="field-note" data-i18n="online.serverNote">Only change this to play on another server.</div>
+    </details>
   </div>
 
   <div class="menu-card off" id="lobby-card">

@@ -12,7 +12,7 @@ const root = path.join(__dirname, '..');
 import { CHROME } from './lib-chrome.mjs';
 
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
-  env: { ...process.env, PORT: '8791' },
+  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: '8791' },
   stdio: 'ignore',
 });
 await new Promise((r) => setTimeout(r, 900));
@@ -553,11 +553,13 @@ try {
   await page.waitForTimeout(600);
   // flujo de lobby online: p1 crea, p2 se une, p1 (host) inicia
   await page.evaluate(() => {
+    document.getElementById('in-name').value = 'SMOKE-A';
     document.getElementById('in-server').value = 'ws://localhost:8791';
     document.getElementById('btn-lobby-create').click();
   });
   await page.waitForTimeout(900);
   await p2.evaluate(() => {
+    document.getElementById('in-name').value = 'SMOKE-B';
     document.getElementById('in-server').value = 'ws://localhost:8791';
     document.getElementById('btn-lobby-join').click();
   });

@@ -140,7 +140,7 @@ export const TUNING = {
     frag: {
       nameKey:'weapon.frag',rpm:40,dmg:110,headMult:1,mag:2,reserve:0,reloadTime:0,
       spreadAim:0,spreadHip:0,spreadBlind:0,recoil:.2,range:0,pellets:0,auto:false,
-      oneHand:true,thrown:true,special:true,throwSpeed:12,throwUp:4.2,throwTime:.5,throwRelease:.24,
+      oneHand:true,thrown:true,special:true,throwSpeed:12,throwUp:4.2,throwTime:.5,throwRelease:.28,
       fuse:2.4,splashRadius:3.3,blastCore:.6,selfDamage:1,
     },
     grenade: {
@@ -151,7 +151,7 @@ export const TUNING = {
       oneHand: true, thrown: true,
       throwSpeed: 12, throwUp: 4.2,   // velocidad inicial del lanzamiento
       throwTime: 0.5,                 // duración del gesto de lanzamiento
-      throwRelease: 0.24,             // instante en que el bote sale de la mano
+      throwRelease: 0.28,             // instante en que el bote sale de la mano (brazo ya al frente)
       fuse: 1.5,                      // seg desde el lanzamiento hasta activarse
       smokeTime: 7,                   // seg de nube plena
       smokeRadius: 2.9,               // radio de la nube (bloquea visión)

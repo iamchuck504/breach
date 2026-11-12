@@ -29,7 +29,8 @@ export class LobbyUI {
     this.root.addEventListener('change', (e) => {
       if (!e.target.dataset.setting) return;
       const key = e.target.dataset.setting;
-      const value = key === 'rounds' || key === 'lives' ? Number(e.target.value) : e.target.value;
+      const value = key === 'rounds' || key === 'lives' ? Number(e.target.value)
+        : key === 'fillBots' ? e.target.value === 'on' : e.target.value;
       actions.settings({ [key]: value });
     });
   }
@@ -39,7 +40,7 @@ export class LobbyUI {
     document.getElementById('main-card').style.display = 'none';
     document.getElementById('char-card').style.display = 'none';
     document.getElementById('controls-card').style.display = 'none';
-    for (const id of ['options-card', 'audio-card', 'video-card', 'language-card']) {
+    for (const id of ['options-card', 'audio-card', 'video-card', 'language-card', 'online-card']) {
       document.getElementById(id).style.display = 'none';
     }
     this.root.classList.remove('off');
@@ -68,20 +69,25 @@ export class LobbyUI {
   teamMarkup(team, slots, cap, me, host) {
     const members = slots.filter((p) => p.team === team);
     const other = team === 'red' ? 'blue' : 'red';
+    // ONLINE: los bots no se colocan uno por uno; el ajuste "Bots" decide si
+    // rellenan los lugares vacíos. La administración manual queda en local.
+    const manualBots = this.kind !== 'online';
+    const autoFill = !manualBots && !!this.state.settings?.fillBots;
     let rows = members.map((p) => {
       const badges = [p.bot ? t('lobby.bot') : t('lobby.player')];
       if (p.id === this.localId) badges.push(t('lobby.you'));
       if (p.id === this.state.hostId) badges.push(t('lobby.host'));
-      const botActions = host && p.bot
+      const botActions = manualBots && host && p.bot
         ? `<div class="lobby-slot-actions"><button class="lobby-mini" data-action="move" data-id="${esc(p.id)}" data-team="${other}" data-nav-key="move:${esc(p.id)}">${esc(t('lobby.move'))}</button><button class="lobby-mini" data-action="remove" data-id="${esc(p.id)}" data-nav-key="remove:${esc(p.id)}">×</button></div>` : '';
       return `<div class="lobby-slot"><div><div class="lobby-name">${esc(p.name)}</div><div class="lobby-badges">${badges.map((b, i) => `<span class="lobby-badge ${i && p.id === this.state.hostId ? 'host' : ''}">${esc(b)}</span>`).join('')}</div></div>${botActions}</div>`;
     }).join('');
     for (let i = members.length; i < cap; i++) rows += `<div class="lobby-slot empty"><span>${esc(t('lobby.openSlot'))}</span></div>`;
     const full = members.length >= cap;
-    const canSwapBot = host && me?.team !== team && full && members.some((p) => p.bot);
+    // con relleno cualquiera puede pasar a un equipo que aún tenga un bot
+    const canSwapBot = (host || autoFill) && me?.team !== team && full && members.some((p) => p.bot);
     const teamDisabled = me?.team === team || (full && !canSwapBot);
     const teamAction = canSwapBot ? t('lobby.swapBot') : full ? t('lobby.teamFull') : t('lobby.joinTeam');
-    return `<div class="lobby-team-head"><span>${esc(t(team === 'red' ? 'lobby.teamRed' : 'lobby.teamBlue'))}</span><span>${members.length}/${cap}</span></div><div class="lobby-slots">${rows}</div><button class="lobby-mini lobby-add" data-action="team" data-team="${team}" data-nav-key="team:${team}" ${teamDisabled ? 'disabled' : ''}>${esc(teamAction)}</button>${host ? `<button class="lobby-mini lobby-add" data-action="add" data-team="${team}" data-nav-key="add:${team}" ${full ? 'disabled' : ''}>+ ${esc(t('lobby.addBot'))}</button>` : ''}`;
+    return `<div class="lobby-team-head"><span>${esc(t(team === 'red' ? 'lobby.teamRed' : 'lobby.teamBlue'))}</span><span>${members.length}/${cap}</span></div><div class="lobby-slots">${rows}</div><button class="lobby-mini lobby-add" data-action="team" data-team="${team}" data-nav-key="team:${team}" ${teamDisabled ? 'disabled' : ''}>${esc(teamAction)}</button>${host && manualBots ? `<button class="lobby-mini lobby-add" data-action="add" data-team="${team}" data-nav-key="add:${team}" ${full ? 'disabled' : ''}>+ ${esc(t('lobby.addBot'))}</button>` : ''}`;
   }
 
   // Los mapas creados en el editor son jugables en LOCAL. El lobby online
@@ -105,6 +111,7 @@ export class LobbyUI {
       <div class="lobby-field"><label>${esc(t('lobby.rounds'))}</label><select data-setting="rounds" data-nav-key="setting:rounds" ${disabled}>${opts(ROUND_OPTIONS, s.rounds, String)}</select></div>
       <div class="lobby-field"><label>${esc(t('lobby.lives'))}</label><select data-setting="lives" data-nav-key="setting:lives" ${disabled}>${opts(LIFE_OPTIONS, s.lives, String)}</select></div>
       <div class="lobby-field"><label>${esc(t('lobby.afterMatch'))}</label><select data-setting="postMatch" data-nav-key="setting:postMatch" ${disabled}><option value="lobby" ${s.postMatch === 'lobby' ? 'selected' : ''}>${esc(t('lobby.returnLobby'))}</option><option value="next-map" ${s.postMatch === 'next-map' ? 'selected' : ''}>${esc(t('lobby.nextMap'))}</option></select></div>
+      ${this.kind === 'online' ? `<div class="lobby-field"><label>${esc(t('lobby.bots'))}</label><select data-setting="fillBots" data-nav-key="setting:fillBots" ${disabled}><option value="on" ${s.fillBots ? 'selected' : ''}>${esc(t('lobby.botsFill'))}</option><option value="off" ${s.fillBots ? '' : 'selected'}>${esc(t('lobby.botsOff'))}</option></select></div>` : ''}
       <div class="lobby-validation ${errors.length ? '' : 'ok'}">${esc(status)}</div>
     </div>`;
   }

@@ -402,9 +402,9 @@ export class HUD {
   // barrel porque su cañón puede estar fuera de esa línea central.
   reticle(aiming, barrelXY, aimInfo = null) {
     this.el.crosshair.classList.toggle('aim', aiming);
-    // ADS siempre usa el mismo estado óptico. La geometría física decide el
-    // impacto, pero no hace que la cruz salte o cambie de color entre frames.
-    this.el.crosshair.classList.remove('blocked');
+    // ADS siempre usa el mismo estado óptico: el daño viaja por el eje de la
+    // cámara, así que la cruz nunca necesita avisar de una obstrucción ni
+    // saltar o cambiar de color entre frames.
     if (aiming && aimInfo) {
       this.el.crossRing.setAttribute('r', Math.max(5, aimInfo.r).toFixed(1));
       // fuera del rango efectivo del arma: el anillo se atenúa
@@ -429,7 +429,6 @@ export class HUD {
     root.classList.toggle('on', !!on);
     root.setAttribute('aria-hidden', on ? 'false' : 'true');
     this.el.hud.classList.toggle('scoped', !!on);
-    reticle.classList.remove('blocked');
     reticle.classList.remove('out-range');
     reticle.style.left = '50%';
     reticle.style.top = '50%';

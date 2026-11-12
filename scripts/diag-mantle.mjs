@@ -9,7 +9,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
 import { CHROME } from './lib-chrome.mjs';
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
-  env: { ...process.env, PORT: '8785' }, stdio: 'ignore',
+  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: '8785' }, stdio: 'ignore',
 });
 await new Promise((r) => setTimeout(r, 900));
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });

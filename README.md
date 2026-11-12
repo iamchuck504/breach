@@ -23,6 +23,38 @@ npm run server     # sirve el juego + WebSocket en :8787
 Comparte `http://TU-IP-LOCAL:8787` — el cliente se autoconecta. El server es
 autoridad de vida/muertes/respawn/marcador (una sala, 8 jugadores).
 
+### Entrar a una partida online
+
+El botón **Multijugador** abre una pantalla propia: pide el nombre del jugador
+(obligatorio, sin valor por defecto; el server distingue repetidos con un
+sufijo) y muestra el estado de la sala consultando `GET /status` cada 3 s:
+sin sala → crear; sala abierta → unirse; partida en curso → unirse si hay
+lugar. La dirección del server queda plegada al fondo.
+
+El ajuste **Bots** del lobby online (activo por defecto) rellena los lugares
+vacíos hasta 4v4. Con él, quien entra —en el lobby o con la partida ya
+empezada— toma el lugar de un bot, y quien se va deja un bot en el suyo; todos
+ven el aviso. En "Sin bots" la sala juega solo con humanos. Los bots ya no se
+agregan uno por uno en online (el lobby local conserva ese control).
+`BREACH_FILL_BOTS=0` arranca el server sin relleno; lo usan las suites que
+arman alineaciones exactas.
+
+### Server público (https/wss)
+
+Desde una página https el navegador solo acepta `wss://`, así que el server
+necesita un host que termine TLS. El repo trae un `Dockerfile` que compila
+el cliente y arranca el server en `$PORT` (http/ws plano; el TLS lo pone el
+proveedor). `GET /healthz` responde `ok` para el health check.
+
+- **Todo en el host:** la imagen se compila con `VITE_BREACH_SERVER=same-origin`
+  y el cliente servido desde ahí se conecta solo a su mismo host.
+- **Cliente en Vercel + server aparte:** definir `VITE_BREACH_SERVER=wss://HOST`
+  en las variables de entorno del proyecto de Vercel; el campo de servidor del
+  menú sale prellenado con ese valor.
+
+Sin la variable nada cambia: LAN por `ws://IP:8787` y, en https, el campo
+queda vacío para escribir la URL a mano.
+
 ## Modos
 
 - **VS Bots (4v4):** TDM por rondas (5 min, mejor de 3, 15 vidas por equipo)
@@ -161,5 +193,5 @@ salir (ver comentarios en `scripts/lib-clip.mjs`).
 ## Tuning
 
 Todos los valores de game feel viven en `src/config/tuning.js` — panel en
-vivo con **F10** dentro del juego. **F9** invierte el eje Y (invertido por
-defecto). Deploy: push a `main` → Vercel (proyecto `breach`).
+vivo con **F10** dentro del juego. **F9** invierte el eje Y (normal por
+defecto; la preferencia se guarda por jugador en su navegador). Deploy: push a `main` → Vercel (proyecto `breach`).

@@ -17,7 +17,7 @@ assert.equal(MAX_PLAYERS, 8);
 const port = 19000 + Math.floor(Math.random() * 1000);
 const child = spawn(process.execPath, ['server/server.js'], {
   cwd: new URL('..', import.meta.url),
-  env: { ...process.env, PORT: String(port), INTRO_TIME: '.05', COUNTDOWN_TIME: '.05', INTERMISSION_TIME: '.05', FINAL_PRESENTATION_TIME: '.05' },
+  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: String(port), INTRO_TIME: '.05', COUNTDOWN_TIME: '.05', INTERMISSION_TIME: '.05', FINAL_PRESENTATION_TIME: '.05' },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 
@@ -95,9 +95,23 @@ try {
   assert.equal(started.players.filter((p) => p.bot).length, 6);
   await a.wait('start');
 
+  // Partida empezada: quien llega ya no es rechazado; releva a un bot, recibe
+  // la partida en su fase real y los demás son avisados de a quién sustituye.
   const late = await client('LATE', 'join');
-  assert.equal((await late.wait('lobbyError')).code, 'in-progress');
+  const lw = await late.wait('welcome');
+  const sync = await late.wait('matchStart');
+  assert.equal(sync.late, 1);
+  assert.equal(sync.phase, 'playing');
+  assert.equal(sync.players.length, 8);
+  assert.equal(sync.players.filter((p) => p.bot).length, 5);
+  const joined = await a.wait('joined', (m) => m.id === lw.id);
+  assert.ok(started.players.some((p) => p.bot && p.id === joined.replaced), 'debe relevar a un bot del roster');
+  assert.equal(joined.team, started.players.find((p) => p.id === joined.replaced).team);
+  // Esta sala corre sin relleno (BREACH_FILL_BOTS=0): al irse no deja bot.
   late.ws.close();
+  const left = await a.wait('left', (m) => m.id === lw.id);
+  assert.equal(left.name, 'LATE');
+  assert.equal(left.bot, null);
 
   a.ws.close();
   const host = await b.wait('host');
