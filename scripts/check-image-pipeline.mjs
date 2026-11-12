@@ -71,6 +71,17 @@ try {
     check('high: hay imagen (no negro ni plano)', sHigh.mean > 6 && sHigh.dev > 4, JSON.stringify(sHigh));
     check('high: brillo cercano al render directo', Math.abs(sHigh.mean - sOff.mean) < Math.max(12, sOff.mean * 0.35),
       `off ${sOff.mean.toFixed(1)} · high ${sHigh.mean.toFixed(1)}`);
+    // un blanco muy por encima de 1 (faros, sol) tiene que salir blanco
+    for (const grade of ['calle', 'fortaleza', 'azoteas']) {
+      const px = await high.evaluate((grade) => {
+        const s = new THREE.Scene(); s.background = new THREE.Color(6, 6, 6);
+        window.BREACH_PIPELINE.render(s, window.BREACH_CAM, grade);
+        const gl = window.BREACH_RENDERER.getContext(), out = new Uint8Array(4);
+        gl.readPixels(gl.drawingBufferWidth >> 1, gl.drawingBufferHeight >> 1, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, out);
+        return [...out];
+      }, grade);
+      check(`blanco saturado sigue blanco (${grade})`, Math.min(px[0], px[1], px[2]) > 200, px.join(','));
+    }
     check('estadísticas de dibujo cuentan el cuadro entero', info.calls > 20, `calls ${info.calls}`);
   }
   // tope de píxeles: en una ventana grande, 'low' dibuja menos que 'ultra'

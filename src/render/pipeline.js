@@ -104,7 +104,9 @@ void main() {
   c = clamp(c, 0.0, 1.0);
   c = mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c));
   float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
-  c *= mix(uShadows, uHighs, smoothstep(0.08, 0.78, l));
+  // el tinte de luces pasa de 1 en un blanco puro: sin recortar, el
+  // contraste de abajo eleva un negativo a una potencia y el píxel sale negro
+  c = clamp(c * mix(uShadows, uHighs, smoothstep(0.08, 0.78, l)), 0.0, 1.0);
   // contraste con pivote propio del mapa: una S centrada en 0.5 hundiria
   // los mapas nocturnos, que viven casi enteros por debajo
   vec3 lo = uPivot * pow(c / uPivot, vec3(1.0 + uContrast));
