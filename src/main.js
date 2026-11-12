@@ -89,6 +89,7 @@ function renderFrame() {
   const every = pipeline.active ? pipeline.quality.shadowEvery : 1;
   renderer.shadowMap.autoUpdate = every <= 1;
   if (every > 1 && frameIndex++ % every === 0) renderer.shadowMap.needsUpdate = true;
+  pipeline.sun = world.sun;
   pipeline.render(scene, camera, world.theme ?? world.layout);
 }
 // El filtro de sombras va compilado dentro de cada material: al cambiarlo

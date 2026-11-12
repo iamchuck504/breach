@@ -191,6 +191,17 @@ la luna de Azoteas) fija dónde va el halo; sin él, el disco sale en la
 dirección de la luz. La oclusión ambiental se calcula a media resolución desde
 la profundidad y se apaga con la distancia.
 
+En el mismo pase van los haces de luz: cada píxel recorre su rayo preguntando
+al mapa de sombras del sol si el aire está iluminado, así que la luz se cuela
+entre muros y se nota sobre todo mirando hacia el sol. Su fuerza por mapa es
+el campo `shafts` de `GRADES`; sin sombras (o en Baja) no hay haces.
+
+Los suelos usan `_applyMacroVariation` (`src/world/world.js`): ruido en
+coordenadas de mundo que varía el tono a gran escala. Con `wet`, las zonas
+bajas del ruido son charcos: más oscuros, lisos y reflectantes (Calle
+Cerrada y, más tímidos, Azoteas). Esto es del mapa, no de la cadena: también
+se ve en Clásico.
+
 Si la ventana supera el tope, baja la resolución interna. Sin GPU real
 (render por software) o sin buffers flotantes, el juego usa Clásico. Las
 suites automatizadas también corren en Clásico por defecto (los runners son

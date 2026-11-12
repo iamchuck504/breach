@@ -109,6 +109,32 @@ try {
       return { mean: sum / n, min, max, bad };
     });
     check('oclusión: valores válidos, con contraste y sin ennegrecer', ao.bad === 0 && ao.mean > 0.8 && ao.min < 0.9 && ao.max > 0.98, JSON.stringify(ao));
+    // haces de luz: activos con el sol proyectando sombra, valores entre 0 y
+    // 1, y apagados si el jugador desactiva las sombras
+    const beams = await high.evaluate(async () => {
+      const p = window.BREACH_PIPELINE, r = window.BREACH_RENDERER, rt = p.aoBlurRT;
+      const frames = async (n) => { for (let i = 0; i < n; i++) await new Promise((res) => requestAnimationFrame(res)); };
+      await frames(3);
+      const buf = new Uint16Array(rt.width * rt.height * 4);
+      r.readRenderTargetPixels(rt, 0, 0, rt.width, rt.height, buf);
+      let max = 0, bad = 0;
+      for (let i = 2; i < buf.length; i += 4) { const v = THREE.DataUtils.fromHalfFloat(buf[i]); if (!(v >= 0 && v <= 1.001)) bad++; max = Math.max(max, v); }
+      const on = p.mAO.uniforms.uShafts.value;
+      const chk = document.getElementById('chk-shadows');
+      chk.checked = false; chk.dispatchEvent(new Event('change')); await frames(3);
+      const offNoShadow = p.mAO.uniforms.uShafts.value;
+      chk.checked = true; chk.dispatchEvent(new Event('change')); await frames(2);
+      localStorage.removeItem('breach.video.shadows');
+      return { on, offNoShadow, max, bad };
+    });
+    check('haces de luz: activos, en rango, y apagados sin sombras',
+      beams.on === 1 && beams.offNoShadow === 0 && beams.bad === 0 && beams.max > 0.01, JSON.stringify(beams));
+    const wet = await high.evaluate(() => {
+      let found = null;
+      window.BREACH_WORLD.mapGroup.traverse((o) => { if (!found && o.geometry?.type === 'PlaneGeometry' && o.material?.userData?.breachMacro) found = o.material.customProgramCacheKey(); });
+      return found;
+    });
+    check('suelo de Azoteas con desgaste y charcos', /breach-macro-nn0\.55/.test(wet ?? ''), String(wet));
     check('estadísticas de dibujo cuentan el cuadro entero', info.calls > 20, `calls ${info.calls}`);
   }
   // tope de píxeles: en una ventana grande, 'low' dibuja menos que 'ultra'
