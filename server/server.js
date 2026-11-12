@@ -100,6 +100,14 @@ const server = http.createServer((req, res) => {
   if (urlPath.includes('\0')) { textResponse(res, 400, 'bad request'); return; }
   // sonda de vida para el host (health check del proveedor); sin estado interno
   if (urlPath === '/healthz') { textResponse(res, 200, 'ok'); return; }
+  // estado de la sala; CORS abierto porque el cliente puede vivir en otro
+  // dominio (sitio estático) y solo expone lo que ya ve cualquiera que entre
+  if (urlPath === '/status') {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8',
+      'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' });
+    res.end(req.method === 'HEAD' ? undefined : JSON.stringify(publicStatus()));
+    return;
+  }
   if (urlPath === '/') urlPath = '/index.html';
   const file = path.resolve(DIST, urlPath.replace(/^[\\/]+/, ''));
   const relative = path.relative(DIST, file);
@@ -216,6 +224,29 @@ function lobbyPayload() {
     validation: validateLobby(slots, settings), maxPlayers: MAX_PLAYERS, teamCapacity: TEAM_CAPACITY };
 }
 function broadcastLobby() { if (players.size) broadcastRaw(lobbyPayload()); }
+// Dos jugadores con el mismo nombre serían indistinguibles en marcador y
+// killfeed: el segundo recibe un sufijo numérico dentro del tope de 14.
+function uniqueName(name) {
+  const taken = new Set(allSlots().map((p) => p.name));
+  if (!taken.has(name)) return name;
+  for (let n = 2; n < 100; n++) {
+    const suffix = ` ${n}`, candidate = name.slice(0, 14 - suffix.length).trimEnd() + suffix;
+    if (!taken.has(candidate)) return candidate;
+  }
+  return name;
+}
+// Estado público de la sala para la pantalla de entrada: se consulta por
+// HTTP ANTES de conectar, así el jugador sabe si va a crear, unirse o esperar.
+function publicStatus() {
+  const humans = [...players.values()];
+  const state = !humans.length ? 'empty' : phase === 'lobby' ? 'lobby' : 'match';
+  return {
+    state, players: humans.length, bots: bots.size, slots: allSlots().length,
+    maxPlayers: MAX_PLAYERS, names: humans.map((p) => p.name),
+    host: players.get(hostId)?.name ?? null,
+    map: settings.map, round, rounds: settings.rounds, wins: { ...wins },
+  };
+}
 function lobbyError(ws, code, detail = '') { send(ws, { t: 'lobbyError', code, detail }); }
 function clearTimer() { if (phaseTimer) clearTimeout(phaseTimer); phaseTimer = null; }
 // Arma ESPECIAL del mapa: una por ronda, alternando (impar sniper, par
@@ -809,7 +840,7 @@ wss.on('connection', (ws) => {
       if (allSlots().length >= MAX_PLAYERS) { lobbyError(ws, 'lobby-full'); return; }
       const id = 'p' + nextId++;
       me = { ws, id, bot: false, team: assignTeam(), joinedAt: Date.now(),
-        name: String(msg.name || 'ANON').slice(0, 14).toUpperCase(),
+        name: uniqueName(String(msg.name || '').trim().slice(0, 14).toUpperCase() || 'ANON'),
         v: Math.min(4, Math.max(0, Math.round(num(msg.v)))), hp: HP, alive: true,
         kills: 0, deaths: 0, w: 'smg', specialWep: null,
         lastFireAt: -Infinity, pendingShot: null };

@@ -163,7 +163,7 @@ const G = {
   selfAlive: true,
   scores: { red: 0, blue: 0 },
   team: 'red',
-  name: 'CHUCK',
+  name: 'PLAYER',
   charVariant: (() => {
     const v = parseInt(localStorage.getItem('breach.character'), 10);
     return v >= 0 && v <= 4 ? v : 0;
@@ -531,10 +531,17 @@ loadBinds();
 
 const inName = document.getElementById('in-name');
 const inServer = document.getElementById('in-server');
-const netStatus = document.getElementById('net-status');
+// Los avisos de red se muestran donde esté el jugador: en el menú principal
+// y en la pantalla de multijugador (el mismo texto en ambos sitios).
+const netStatus = {
+  els: [document.getElementById('net-status'), document.getElementById('online-msg')],
+  set textContent(value) { for (const el of this.els) el.textContent = value; },
+  get textContent() { return this.els[0].textContent; },
+};
 const splash = document.getElementById('splash');
 const btnEnter = document.getElementById('btn-enter');
-inName.value = localStorage.getItem('breach.name') || 'CHUCK';
+// Sin nombre por defecto: cada jugador escribe el suyo (online es obligatorio).
+inName.value = localStorage.getItem('breach.name') || '';
 const isSecure = location.protocol === 'https:';
 // Servidor por defecto. VITE_BREACH_SERVER se fija al compilar:
 //  - 'same-origin': el propio server del juego sirve este cliente detrás de
@@ -789,7 +796,8 @@ function leaveLobby() {
 
 document.getElementById('btn-bots').addEventListener('click', openLocalLobby);
 document.getElementById('btn-practice').addEventListener('click', () => startPractice());
-document.getElementById('btn-online').addEventListener('click', () => { inServer.focus(); netStatus.textContent = t('lobby.create') + ' / ' + t('lobby.join'); });
+document.getElementById('btn-online').addEventListener('click', () => showOnline(true));
+document.getElementById('btn-online-back').addEventListener('click', () => showOnline(false));
 document.getElementById('btn-lobby-create').addEventListener('click', () => connectOnlineLobby('create'));
 document.getElementById('btn-lobby-join').addEventListener('click', () => connectOnlineLobby('join'));
 
@@ -1029,10 +1037,132 @@ const videoCard = document.getElementById('video-card');
 const languageCard = document.getElementById('language-card');
 const optionSubCards = [audioCard, videoCard, languageCard];
 
+const onlineCard = document.getElementById('online-card');
+
 function hideOptionCards() {
   optionsCard.style.display = 'none';
   for (const c of optionSubCards) c.style.display = 'none';
+  onlineCard.style.display = 'none'; // su sondeo se detiene solo al ocultarse
 }
+
+// ---------- Multijugador: pantalla de entrada con el estado de la sala ----------
+// Antes de conectar, el jugador ve qué hay en el server (nadie / sala abierta
+// con quién / partida en curso) y recibe UNA acción acorde: crear o unirse.
+const inOnlineName = document.getElementById('in-online-name');
+const onlineEl = {
+  box: document.getElementById('online-status'),
+  state: document.getElementById('online-state'),
+  count: document.getElementById('online-count'),
+  detail: document.getElementById('online-detail'),
+  roster: document.getElementById('online-roster'),
+  host: document.getElementById('online-server-host'),
+  create: document.getElementById('btn-lobby-create'),
+  join: document.getElementById('btn-lobby-join'),
+  server: document.getElementById('server-field'),
+};
+const ONLINE_POLL_MS = 3000;
+// Un host gratuito dormido tarda cerca de un minuto en despertar.
+const ONLINE_STATUS_TIMEOUT_MS = 75000;
+let onlineStatus = { kind: 'checking' };
+let onlinePollSeq = 0;
+
+function onlineStatusUrl(wsUrl) {
+  if (!/^wss?:\/\/[^/]/i.test(wsUrl)) return null;
+  try {
+    const u = new URL(wsUrl.replace(/^ws/i, 'http'));
+    return `${u.origin}/status`;
+  } catch { return null; }
+}
+
+async function fetchOnlineStatus(wsUrl) {
+  if (!wsUrl) return { kind: 'noServer' };
+  const url = onlineStatusUrl(wsUrl);
+  if (!url) return { kind: 'offline' };
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), ONLINE_STATUS_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { signal: abort.signal, cache: 'no-store' });
+    // server sin /status (versión anterior): se puede intentar a ciegas
+    if (!res.ok) return { kind: 'unknown' };
+    const data = await res.json();
+    if (!['empty', 'lobby', 'match'].includes(data?.state)) return { kind: 'unknown' };
+    const full = data.state === 'lobby' && data.slots >= data.maxPlayers;
+    return { kind: full ? 'full' : data.state, data };
+  } catch { return { kind: 'offline' }; }
+  finally { clearTimeout(timer); }
+}
+
+function renderOnlineStatus() {
+  const { kind, data } = onlineStatus;
+  onlineEl.box.dataset.state = kind;
+  onlineEl.state.textContent = t(`online.state.${kind}`);
+  onlineEl.count.textContent = data && kind !== 'empty' ? `${data.slots} / ${data.maxPlayers}` : '';
+  onlineEl.detail.textContent = t(`online.detail.${kind}`, data ? {
+    host: data.host ?? '—', map: t(`map.${data.map}`), bots: data.bots,
+    round: Math.max(1, data.round), red: data.wins?.red ?? 0, blue: data.wins?.blue ?? 0,
+  } : {});
+  onlineEl.roster.replaceChildren(...(data && kind !== 'empty' ? data.names : []).map((name) => {
+    const li = document.createElement('li'); li.textContent = name; return li;
+  }));
+  // Una sola acción según el estado; a ciegas ('unknown') se ofrecen ambas.
+  const canCreate = kind === 'empty' || kind === 'unknown';
+  const canJoin = kind === 'lobby' || kind === 'unknown';
+  const showJoin = canJoin || kind === 'full' || kind === 'match';
+  onlineEl.create.style.display = canCreate ? '' : 'none';
+  onlineEl.join.style.display = showJoin ? '' : 'none';
+  onlineEl.join.disabled = !canJoin;
+  const url = inServer.value.trim();
+  let host = url;
+  try { host = new URL(url).host; } catch { /* se muestra tal cual */ }
+  onlineEl.host.textContent = host;
+  if (kind === 'noServer') onlineEl.server.open = true;
+}
+
+async function pollOnlineStatus() {
+  const seq = ++onlinePollSeq;
+  const active = () => seq === onlinePollSeq && onlineCard.style.display === 'block';
+  while (active()) {
+    // pestaña oculta: no sondear (tampoco mantiene despierto un host gratuito)
+    if (!document.hidden) {
+      const url = inServer.value.trim();
+      const result = await fetchOnlineStatus(url);
+      if (!active()) return;
+      if (inServer.value.trim() === url) { onlineStatus = result; renderOnlineStatus(); }
+    }
+    await new Promise((resolve) => setTimeout(resolve, ONLINE_POLL_MS));
+  }
+}
+
+function restartOnlineStatus() {
+  onlineStatus = { kind: inServer.value.trim() ? 'checking' : 'noServer' };
+  renderOnlineStatus();
+  pollOnlineStatus();
+}
+
+function showOnline(on) {
+  mainCard.style.display = on ? 'none' : 'block';
+  hideOptionCards();
+  controlsCard.style.display = 'none';
+  charCard.style.display = 'none';
+  onlineCard.style.display = on ? 'block' : 'none';
+  hud.el.menu.scrollTop = 0;
+  if (!on) { onlinePollSeq++; return; }
+  inOnlineName.value = inName.value;
+  netStatus.textContent = '';
+  restartOnlineStatus();
+  if (!inOnlineName.value.trim() && input.lastDevice !== 'pad') inOnlineName.focus();
+}
+inOnlineName.addEventListener('input', () => {
+  inName.value = inOnlineName.value;
+  if (inOnlineName.value.trim()) netStatus.textContent = '';
+});
+inOnlineName.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  const action = [onlineEl.create, onlineEl.join].find((b) => b.style.display !== 'none' && !b.disabled);
+  action?.click();
+});
+inServer.addEventListener('change', () => { if (onlineCard.style.display === 'block') restartOnlineStatus(); });
+onLanguageChange(() => { if (onlineCard.style.display === 'block') renderOnlineStatus(); });
 
 function showOptions(on) {
   mainCard.style.display = on ? 'none' : 'block';
@@ -1137,6 +1267,7 @@ function navigateMenuBack() {
   if (controlsCard.style.display === 'block') { showOptions(true); return true; }
   if (optionsCard.style.display === 'block') { showOptions(false); return true; }
   if (charCard.style.display === 'block') { showChar(false); return true; }
+  if (onlineCard.style.display === 'block') { showOnline(false); return true; }
   if (!lobbyUI.root.classList.contains('off')) { leaveLobby(); return true; }
   if (G.mode && menuIsOpen()) { closeMenu(); return true; }
   return false;
@@ -1866,11 +1997,22 @@ function startPractice({ fullscreen = true } = {}) {
 
 async function connectOnlineLobby(action) {
   dismissSplash();
+  // El nombre es obligatorio para jugar con otras personas: sin él no se
+  // conecta, se abre la pantalla de multijugador y se pide ahí.
+  const fromCard = onlineCard.style.display === 'block';
+  const typed = (fromCard ? inOnlineName : inName).value.trim();
+  if (!typed) {
+    if (!fromCard) showOnline(true);
+    netStatus.textContent = t('online.nameRequired');
+    inOnlineName.focus();
+    return;
+  }
+  inName.value = typed;
   audio.ensure();
   enterFullscreen();
   G.name = saveName();
   const url = inServer.value.trim();
-  if (!url) { netStatus.textContent = t('msg.serverUrl'); return; }
+  if (!url) { netStatus.textContent = t('msg.serverUrl'); onlineEl.server.open = true; return; }
   localStorage.setItem('breach.server', url);
   netStatus.textContent = t('msg.connecting');
   const net = new NetClient();
@@ -1962,9 +2104,11 @@ function setupOnlineMatch(m) {
 }
 
 function saveName() {
-  const n = (inName.value.trim() || 'CHUCK').toUpperCase();
-  localStorage.setItem('breach.name', n);
-  return n;
+  // Los modos locales toleran el campo vacío con un nombre genérico que NO se
+  // guarda: el online lo sigue pidiendo la primera vez.
+  const n = inName.value.trim().toUpperCase();
+  if (n) localStorage.setItem('breach.name', n);
+  return n || 'PLAYER';
 }
 
 function addRemote(p) {

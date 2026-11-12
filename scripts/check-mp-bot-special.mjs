@@ -23,7 +23,10 @@ page.on('pageerror', (e) => errors.push(e.message));
 try {
   await page.goto(`http://127.0.0.1:${port}/?nolock=1`, { waitUntil: 'networkidle' });
   await page.evaluate(() => document.getElementById('btn-enter')?.click());
-  await page.evaluate((p) => { document.getElementById('in-server').value = `ws://127.0.0.1:${p}`; }, port);
+  await page.evaluate((p) => {
+    document.getElementById('in-name').value = 'HOST'; // el online exige nombre
+    document.getElementById('in-server').value = `ws://127.0.0.1:${p}`;
+  }, port);
   await page.evaluate(() => document.getElementById('btn-lobby-create').click());
   await page.waitForFunction(() => window.BREACH?.net?.connected && window.BREACH?.lobby?.hostId);
   await page.evaluate(() => window.BREACH.net.lobbyAddBot('blue'));

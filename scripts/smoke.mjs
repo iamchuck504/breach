@@ -553,11 +553,13 @@ try {
   await page.waitForTimeout(600);
   // flujo de lobby online: p1 crea, p2 se une, p1 (host) inicia
   await page.evaluate(() => {
+    document.getElementById('in-name').value = 'SMOKE-A';
     document.getElementById('in-server').value = 'ws://localhost:8791';
     document.getElementById('btn-lobby-create').click();
   });
   await page.waitForTimeout(900);
   await p2.evaluate(() => {
+    document.getElementById('in-name').value = 'SMOKE-B';
     document.getElementById('in-server').value = 'ws://localhost:8791';
     document.getElementById('btn-lobby-join').click();
   });
