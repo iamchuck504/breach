@@ -2,6 +2,7 @@
 // programas y tiempo de cuadro desde poses fijas de cámara. Sirve para
 // comparar antes/después de un cambio de arte o iluminación.
 //   node scripts/bench-map.mjs [mapa] [carpeta de capturas]
+// GFX=off|low|medium|high|ultra fuerza el nivel de calidad gráfica.
 // Sirve dist/: correr `npm run build` antes. El tiempo de cuadro depende de la
 // máquina y del navegador sin ventana: úsese para comparar corridas hechas en
 // las mismas condiciones, no como cifra absoluta.
@@ -41,7 +42,7 @@ page.on('console', (m) => { if (m.type() === 'error' || /THREE\.WebGLProgram|sha
 page.on('crash', () => console.log('LA PÁGINA SE CAYÓ'));
 const results = [];
 try {
-  await page.goto(`http://127.0.0.1:${PORT}/?nolock=1`, { waitUntil: 'networkidle' });
+  await page.goto(`http://127.0.0.1:${PORT}/?nolock=1${process.env.GFX ? `&gfx=${process.env.GFX}` : ''}`, { waitUntil: 'networkidle' });
   await page.evaluate(() => document.getElementById('btn-enter')?.click());
   await page.waitForSelector('#splash.off', { state: 'attached' });
   await page.evaluate(() => document.getElementById('btn-practice').click());

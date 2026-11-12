@@ -165,6 +165,28 @@ directo "BREACH Editor" del escritorio).
 El acceso se instala o repara con `npm run editor:shortcut`; `npm run editor`
 abre el editor y arranca su servidor local oculto si todavía no está activo.
 
+## Imagen y calidad gráfica
+
+`src/render/pipeline.js` es la cadena de imagen: la escena se dibuja a un
+buffer HDR con MSAA y un pase final aplica bloom, curva de tono (Khronos PBR
+Neutral: no toca los tonos medios), gradación por ambiente, viñeta y dither.
+La gradación de cada mapa vive en la tabla `GRADES` de ese archivo.
+
+Opciones → Video → Calidad gráfica elige el nivel (se guarda por jugador):
+
+| Nivel | MSAA | Bloom | Tope de píxeles |
+|---|---|---|---|
+| Ultra | 4× | sí | sin tope |
+| Alta (por defecto en escritorio) | 4× | sí | 2.6 M |
+| Media (por defecto en táctil) | 2× | sí | 1.6 M |
+| Baja | 2× | no | 1.0 M |
+| Clásico | — | — | render directo, sin efectos |
+
+Si la ventana supera el tope, baja la resolución interna. Sin GPU real
+(render por software) o sin buffers flotantes, el juego usa Clásico.
+`?gfx=off|low|medium|high|ultra` fuerza un nivel sin tocar lo guardado;
+`GFX=high node scripts/bench-map.mjs <mapa> <carpeta>` mide y captura con él.
+
 ## Validación (headless, sin abrir ventana)
 
 Fortaleza incorpora dos galerías techadas con 10 ventanas y cuatro escaleras

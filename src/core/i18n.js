@@ -125,7 +125,7 @@ const en = {
   'msg.weaponRecovered': '{weapon} RECOVERED',
   'menu.options': 'OPTIONS', 'menu.optionsKicker': 'GAME CONFIGURATION',
   'menu.audio': 'AUDIO', 'menu.video': 'VIDEO',
-  'menu.videoShadows': 'SHADOWS', 'menu.videoScale': 'RENDER RESOLUTION',
+  'menu.videoShadows': 'SHADOWS', 'menu.videoScale': 'RENDER RESOLUTION', 'menu.videoQuality': 'GRAPHICS QUALITY', 'menu.gfxUltra': 'ULTRA', 'menu.gfxHigh': 'HIGH', 'menu.gfxMedium': 'MEDIUM', 'menu.gfxLow': 'LOW', 'menu.gfxOff': 'CLASSIC (NO EFFECTS)',
   'menu.dpadWeapons': 'D-PAD: ↑ GRENADE · ↓ PISTOL · ← SHOTGUN · → SMG',
   'map.calle': 'CLOSED STREET', 'map.metro': 'SUBWAY STATION',
   'map.prision': 'PRISON', 'map.pueblo': 'ABANDONED TOWN',
@@ -268,7 +268,7 @@ const es = {
   'msg.weaponRecovered': 'RECUPERASTE {weapon}',
   'menu.options': 'OPCIONES', 'menu.optionsKicker': 'CONFIGURACIÓN DEL JUEGO',
   'menu.audio': 'AUDIO', 'menu.video': 'VIDEO',
-  'menu.videoShadows': 'SOMBRAS', 'menu.videoScale': 'RESOLUCIÓN DE RENDER',
+  'menu.videoShadows': 'SOMBRAS', 'menu.videoScale': 'RESOLUCIÓN DE RENDER', 'menu.videoQuality': 'CALIDAD GRÁFICA', 'menu.gfxUltra': 'ULTRA', 'menu.gfxHigh': 'ALTA', 'menu.gfxMedium': 'MEDIA', 'menu.gfxLow': 'BAJA', 'menu.gfxOff': 'CLÁSICO (SIN EFECTOS)',
   'menu.dpadWeapons': 'D-PAD: ↑ GRANADA · ↓ PISTOLA · ← ESCOPETA · → SMG',
   'map.calle': 'CALLE CERRADA', 'map.metro': 'ESTACIÓN DE METRO',
   'map.prision': 'PRISIÓN', 'map.pueblo': 'PUEBLO ABANDONADO',
@@ -376,7 +376,7 @@ Object.assign(zh, {
 Object.assign(pt, {
   'weapon.pistol':'PISTOLA','weapon.grenade':'GRANADA DE FUMAÇA','weapon.sniper':'RIFLE DE PRECISÃO','weapon.bazooka':'BAZUCA',
   'binding.melee':'CORPO A CORPO','binding.slot1':'ARMA 1','binding.slot2':'ARMA 2','binding.slot3':'ARMA 3','binding.slot4':'ARMA 4',
-  'menu.options':'OPÇÕES','menu.optionsKicker':'CONFIGURAÇÃO DO JOGO','menu.videoShadows':'SOMBRAS','menu.videoScale':'RESOLUÇÃO DE RENDER',
+  'menu.options':'OPÇÕES','menu.optionsKicker':'CONFIGURAÇÃO DO JOGO','menu.videoShadows':'SOMBRAS','menu.videoScale':'RESOLUÇÃO DE RENDER', 'menu.videoQuality': 'QUALIDADE GRÁFICA', 'menu.gfxUltra': 'ULTRA', 'menu.gfxHigh': 'ALTA', 'menu.gfxMedium': 'MÉDIA', 'menu.gfxLow': 'BAIXA', 'menu.gfxOff': 'CLÁSSICO (SEM EFEITOS)',
   'map.calle':'RUA FECHADA','map.metro':'ESTAÇÃO DE METRÔ','map.prision':'PRISÃO','map.pueblo':'VILA ABANDONADA',
   'menu.audio':'ÁUDIO','menu.video':'VÍDEO',
   'menu.dpadWeapons':'D-PAD: ↑ GRANADA · ↓ PISTOLA · ← ESCOPETA · → SMG',
@@ -388,7 +388,7 @@ Object.assign(pt, {
 Object.assign(fr, {
   'weapon.pistol':'PISTOLET','weapon.grenade':'GRENADE FUMIGÈNE','weapon.sniper':'FUSIL DE PRÉCISION','weapon.bazooka':'BAZOOKA',
   'binding.melee':'CORPS À CORPS','binding.slot1':'ARME 1','binding.slot2':'ARME 2','binding.slot3':'ARME 3','binding.slot4':'ARME 4',
-  'menu.options':'OPTIONS','menu.optionsKicker':'CONFIGURATION DU JEU','menu.videoShadows':'OMBRES','menu.videoScale':'RÉSOLUTION DE RENDU',
+  'menu.options':'OPTIONS','menu.optionsKicker':'CONFIGURATION DU JEU','menu.videoShadows':'OMBRES','menu.videoScale':'RÉSOLUTION DE RENDU', 'menu.videoQuality': 'QUALITÉ GRAPHIQUE', 'menu.gfxUltra': 'ULTRA', 'menu.gfxHigh': 'ÉLEVÉE', 'menu.gfxMedium': 'MOYENNE', 'menu.gfxLow': 'BASSE', 'menu.gfxOff': 'CLASSIQUE (SANS EFFETS)',
   'map.calle':'RUE FERMÉE','map.metro':'STATION DE MÉTRO','map.prision':'PRISON','map.pueblo':'VILLAGE ABANDONNÉ',
   'menu.audio':'AUDIO','menu.video':'VIDÉO',
   'menu.dpadWeapons':'CROIX: ↑ GRENADE · ↓ PISTOLET · ← FUSIL · → SMG',
@@ -400,7 +400,7 @@ Object.assign(fr, {
 Object.assign(it, {
   'weapon.pistol':'PISTOLA','weapon.grenade':'GRANATA FUMOGENA','weapon.sniper':'FUCILE DI PRECISIONE','weapon.bazooka':'BAZOOKA',
   'binding.melee':'CORPO A CORPO','binding.slot1':'ARMA 1','binding.slot2':'ARMA 2','binding.slot3':'ARMA 3','binding.slot4':'ARMA 4',
-  'menu.options':'OPZIONI','menu.optionsKicker':'CONFIGURAZIONE DI GIOCO','menu.videoShadows':'OMBRE','menu.videoScale':'RISOLUZIONE DI RENDER',
+  'menu.options':'OPZIONI','menu.optionsKicker':'CONFIGURAZIONE DI GIOCO','menu.videoShadows':'OMBRE','menu.videoScale':'RISOLUZIONE DI RENDER', 'menu.videoQuality': 'QUALITÀ GRAFICA', 'menu.gfxUltra': 'ULTRA', 'menu.gfxHigh': 'ALTA', 'menu.gfxMedium': 'MEDIA', 'menu.gfxLow': 'BASSA', 'menu.gfxOff': 'CLASSICO (SENZA EFFETTI)',
   'map.calle':'STRADA CHIUSA','map.metro':'STAZIONE DELLA METRO','map.prision':'PRIGIONE','map.pueblo':'PAESE ABBANDONATO',
   'menu.audio':'AUDIO','menu.video':'VIDEO',
   'menu.dpadWeapons':'D-PAD: ↑ GRANATA · ↓ PISTOLA · ← FUCILE · → SMG',
@@ -412,7 +412,7 @@ Object.assign(it, {
 Object.assign(ja, {
   'weapon.pistol':'ピストル','weapon.grenade':'スモークグレネード','weapon.sniper':'スナイパーライフル','weapon.bazooka':'バズーカ',
   'binding.melee':'近接攻撃','binding.slot1':'武器 1','binding.slot2':'武器 2','binding.slot3':'武器 3','binding.slot4':'武器 4',
-  'menu.options':'オプション','menu.optionsKicker':'ゲーム設定','menu.videoShadows':'影','menu.videoScale':'レンダリング解像度',
+  'menu.options':'オプション','menu.optionsKicker':'ゲーム設定','menu.videoShadows':'影','menu.videoScale':'レンダリング解像度', 'menu.videoQuality': 'グラフィック品質', 'menu.gfxUltra': 'ウルトラ', 'menu.gfxHigh': '高', 'menu.gfxMedium': '中', 'menu.gfxLow': '低', 'menu.gfxOff': 'クラシック(エフェクトなし)',
   'map.calle':'封鎖された通り','map.metro':'地下鉄駅','map.prision':'刑務所','map.pueblo':'廃村',
   'menu.audio':'オーディオ','menu.video':'映像',
   'menu.dpadWeapons':'十字キー: ↑ グレネード · ↓ ピストル · ← ショットガン · → SMG',
@@ -425,7 +425,7 @@ Object.assign(ja, {
 Object.assign(zh, {
   'weapon.pistol':'手枪','weapon.grenade':'烟雾弹','weapon.sniper':'狙击步枪','weapon.bazooka':'火箭筒',
   'binding.melee':'近战','binding.slot1':'武器 1','binding.slot2':'武器 2','binding.slot3':'武器 3','binding.slot4':'武器 4',
-  'menu.options':'选项','menu.optionsKicker':'游戏设置','menu.videoShadows':'阴影','menu.videoScale':'渲染分辨率',
+  'menu.options':'选项','menu.optionsKicker':'游戏设置','menu.videoShadows':'阴影','menu.videoScale':'渲染分辨率', 'menu.videoQuality': '画质', 'menu.gfxUltra': '极高', 'menu.gfxHigh': '高', 'menu.gfxMedium': '中', 'menu.gfxLow': '低', 'menu.gfxOff': '经典(无特效)',
   'map.calle':'封锁街道','map.metro':'地铁站','map.prision':'监狱','map.pueblo':'废弃小镇',
   'menu.audio':'音频','menu.video':'画面',
   'menu.dpadWeapons':'十字键: ↑ 烟雾弹 · ↓ 手枪 · ← 霰弹枪 · → 冲锋枪',
