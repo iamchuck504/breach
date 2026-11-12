@@ -52,7 +52,8 @@ function buildSharedCollision(world, layout, styles) {
       for(const face of world.faces.slice(firstFace))face.bodyStandOff=.82;
     }
     // The shop frame projects in front of the structural wall. Reserve room
-    // for the visible backpack/slung weapon, without adding a bullet collider.
+    // for the visible backpack/slung weapon. The frame's own bullet skin is a
+    // separate cover-less box ('shop-frame' in calle-expansion.js).
     if(layout==='calle2'&&box.expansionKind==='wall-cover'&&Math.abs(x)===18.85&&w===5.4){
       for(const face of world.faces.slice(firstFace)){
         if(face.n.z!==0){

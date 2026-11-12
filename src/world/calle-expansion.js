@@ -42,11 +42,37 @@ export function calle2AccessOffset(key) {
   return [0,0];
 }
 
+// Shopfront relief on the avenue side of the building strips. The drawn
+// facade stands .23-.40 m proud of the structural wall (|x| = 16.15); a .30 m
+// skin makes bullets, grenades and the camera stop where the frames are seen.
+// It carries no cover faces: cover, body stand-off and peek margins stay on
+// the structural wall. Shop windows count too: their glass pane sits .33 m
+// proud. Spans below are where the facade is flush with the wall (service
+// doors, building ends), measured on the drawn meshes and guarded by
+// scripts/audit-hitboxes.mjs; the skin is left out there.
+export const SHOP_SKIN = Object.freeze({ depth: .30, h: 3 });
+const SHOP_STRIPS = [[-42,-20.2],[-15.8,15.8],[20.2,42]];
+const SHOP_RECESS = [[-42,-41.78],[-30.22,-27.78],[-8.22,-7.68],[7.68,8.22],[27.78,30.22],[41.78,42]];
+export function shopSkinSpans() {
+  const holes=SHOP_RECESS;
+  const out=[];
+  for(const [a,b] of SHOP_STRIPS){
+    let from=a;
+    for(const [h0,h1] of holes){
+      if(h1<=from||h0>=b)continue;
+      if(h0>from)out.push([from,h0]);
+      from=Math.max(from,h1);
+    }
+    if(from<b)out.push([from,b]);
+  }
+  return out;
+}
+
 export function expansionBoxes() {
   const out = [];
   const add = (x,z,w,d,h,cover=false,kind='wall') => out.push({
     x,z,w,d,h,style:'expansion',mirror:false,visual:false,cover,
-    surface:['wall','wall-cover','building','outer-facade'].includes(kind)?'concrete':'metal',expansionKind:kind,
+    surface:['wall','wall-cover','building','outer-facade','shop-frame'].includes(kind)?'concrete':'metal',expansionKind:kind,
   });
   const wall=(x,z,w,d)=>{
     add(x,z,w,d,3,true,'wall-cover');
@@ -58,6 +84,8 @@ export function expansionBoxes() {
       add(side*18.85,-side*(a+b)/2,5.4,b-a,h,false,'building');
       add(side*18.85,-side*(a+b)/2,5.4,b-a,3,true,'wall-cover');
     }
+    for (const [a,b] of shopSkinSpans())
+      add(side*(16.15-SHOP_SKIN.depth/2),(a+b)/2,SHOP_SKIN.depth,b-a,SHOP_SKIN.h,false,'shop-frame');
     // Closed ends stop lateral routes from reaching the spawn pockets.
     for (const dir of [-1,1]) wall(side*25.275,dir*20.6,7.45,.8);
     wall(side*29.4,0,.8,42);
