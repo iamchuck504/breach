@@ -98,6 +98,8 @@ const server = http.createServer((req, res) => {
   try { urlPath = decodeURIComponent(String(req.url || '/').split('?')[0]); }
   catch { textResponse(res, 400, 'bad request'); return; }
   if (urlPath.includes('\0')) { textResponse(res, 400, 'bad request'); return; }
+  // sonda de vida para el host (health check del proveedor); sin estado interno
+  if (urlPath === '/healthz') { textResponse(res, 200, 'ok'); return; }
   if (urlPath === '/') urlPath = '/index.html';
   const file = path.resolve(DIST, urlPath.replace(/^[\\/]+/, ''));
   const relative = path.relative(DIST, file);

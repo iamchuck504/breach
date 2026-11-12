@@ -536,8 +536,17 @@ const splash = document.getElementById('splash');
 const btnEnter = document.getElementById('btn-enter');
 inName.value = localStorage.getItem('breach.name') || 'CHUCK';
 const isSecure = location.protocol === 'https:';
-inServer.value = localStorage.getItem('breach.server') ||
-  (isSecure ? '' : `ws://${location.hostname}:8787`);
+// Servidor por defecto. VITE_BREACH_SERVER se fija al compilar:
+//  - 'same-origin': el propio server del juego sirve este cliente detrás de
+//    TLS (imagen Docker) → mismo host, wss/ws según el protocolo de la página.
+//  - una URL wss://…: cliente estático (Vercel) apuntando al server público.
+// Sin variable: LAN por http en :8787; en https queda vacío (un wss ajeno
+// no se puede adivinar y ws:// está bloqueado por contenido mixto).
+const builtServer = (import.meta.env.VITE_BREACH_SERVER || '').trim();
+const defaultServer = builtServer === 'same-origin'
+  ? `${isSecure ? 'wss' : 'ws'}://${location.host}`
+  : builtServer || (isSecure ? '' : `ws://${location.hostname}:8787`);
+inServer.value = localStorage.getItem('breach.server') || defaultServer;
 
 const mainCard = document.getElementById('main-card');
 const controlsCard = document.getElementById('controls-card');

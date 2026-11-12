@@ -23,6 +23,22 @@ npm run server     # sirve el juego + WebSocket en :8787
 Comparte `http://TU-IP-LOCAL:8787` — el cliente se autoconecta. El server es
 autoridad de vida/muertes/respawn/marcador (una sala, 8 jugadores).
 
+### Server público (https/wss)
+
+Desde una página https el navegador solo acepta `wss://`, así que el server
+necesita un host que termine TLS. El repo trae un `Dockerfile` que compila
+el cliente y arranca el server en `$PORT` (http/ws plano; el TLS lo pone el
+proveedor). `GET /healthz` responde `ok` para el health check.
+
+- **Todo en el host:** la imagen se compila con `VITE_BREACH_SERVER=same-origin`
+  y el cliente servido desde ahí se conecta solo a su mismo host.
+- **Cliente en Vercel + server aparte:** definir `VITE_BREACH_SERVER=wss://HOST`
+  en las variables de entorno del proyecto de Vercel; el campo de servidor del
+  menú sale prellenado con ese valor.
+
+Sin la variable nada cambia: LAN por `ws://IP:8787` y, en https, el campo
+queda vacío para escribir la URL a mano.
+
 ## Modos
 
 - **VS Bots (4v4):** TDM por rondas (5 min, mejor de 3, 15 vidas por equipo)
