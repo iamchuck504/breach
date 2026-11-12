@@ -36,6 +36,10 @@ try {
       caster.set(o, d.clone().normalize()); caster.far = far;
       for (const h of caster.intersectObjects(W.mapGroup.children, true)) {
         if (!h.object.isMesh) continue;
+        // Raycaster no mira `visible`: una malla oculta (ella o un ancestro) no es dibujo
+        let hidden = false;
+        for (let o = h.object; o; o = o.parent) if (o.visible === false) { hidden = true; break; }
+        if (hidden) continue;
         const m = Array.isArray(h.object.material) ? h.object.material[0] : h.object.material;
         if (m?.transparent) continue;
         return h;

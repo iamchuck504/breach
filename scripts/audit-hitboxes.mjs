@@ -47,9 +47,12 @@ const report = await page.evaluate(async ([layout, TOL]) => {
   const caster = new T.Raycaster();
   caster.far = 500;
   caster.camera = window.BREACH_CAM; // los Sprite.raycast exigen cámara
+  // Raycaster NO mira `visible`: sin este filtro contaban como "dibujo"
+  // mallas que el juego oculta a propósito (en Calle 2, las plantas bajas de
+  // las fachadas clonadas detrás del muro de servicio: puertas que nadie ve).
   const skip = (obj) => {
     for (let o = obj; o; o = o.parent) {
-      if (o.name === 'editor-overlay') return true;
+      if (o.name === 'editor-overlay' || o.visible === false) return true;
     }
     return false;
   };
