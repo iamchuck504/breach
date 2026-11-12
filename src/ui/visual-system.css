@@ -46,8 +46,8 @@ button:disabled{cursor:not-allowed;opacity:.48}
 #online-roster{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-wrap:wrap;gap:6px}
 #online-roster:empty{display:none}
 #online-roster li{font:500 12px/1.4 var(--sans);padding:4px 9px;border:1px solid var(--line);border-radius:3px;background:var(--surface)}
-.online-status[data-state=empty],.online-status[data-state=lobby]{border-left-color:var(--accent)}
-.online-status[data-state=empty] .online-dot,.online-status[data-state=lobby] .online-dot{background:var(--accent)}
+.online-status[data-joinable="1"]{border-left-color:var(--accent)}
+.online-status[data-joinable="1"] .online-dot{background:var(--accent)}
 .online-status[data-state=checking] .online-dot{animation:online-pulse 1.1s ease-in-out infinite}
 #online-msg{min-height:20px;margin-top:12px;color:var(--accent);font:500 13px/1.5 var(--sans)}
 #online-card .control-actions{margin-top:8px}

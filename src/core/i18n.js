@@ -146,7 +146,12 @@ const en = {
   'online.detail.empty': 'Nobody is here. Create the lobby and the others can join you.',
   'online.detail.lobby': 'Host: {host} · {map} · Bots: {bots}',
   'online.detail.full': 'Host: {host} · {map}. A slot opens when someone leaves.',
-  'online.detail.match': 'Round {round} · Red {red} – Blue {blue} · {map}. You can join when it ends; this updates on its own.',
+  'online.detail.match': 'Round {round} · Red {red} – Blue {blue} · {map}. No free slot right now; this updates on its own.',
+  'online.detail.matchJoin': 'Round {round} · Red {red} – Blue {blue} · {map}. You can jump in now.',
+  'online.joinMatch': 'JOIN MATCH',
+  'lobby.bots': 'BOTS', 'lobby.botsFill': 'FILL EMPTY SLOTS', 'lobby.botsOff': 'NO BOTS',
+  'msg.joinedFor': '{name} JOINED — REPLACES {bot}',
+  'msg.left': '{name} LEFT', 'msg.leftFor': '{name} LEFT — {bot} TAKES OVER',
 };
 
 const es = {
@@ -284,7 +289,12 @@ const es = {
   'online.detail.empty': 'No hay nadie. Crea la sala y los demás podrán unirse.',
   'online.detail.lobby': 'Anfitrión: {host} · {map} · Bots: {bots}',
   'online.detail.full': 'Anfitrión: {host} · {map}. Se libera un lugar cuando alguien salga.',
-  'online.detail.match': 'Ronda {round} · Rojo {red} – Azul {blue} · {map}. Podrás unirte cuando termine; esto se actualiza solo.',
+  'online.detail.match': 'Ronda {round} · Rojo {red} – Azul {blue} · {map}. No hay lugar libre por ahora; esto se actualiza solo.',
+  'online.detail.matchJoin': 'Ronda {round} · Rojo {red} – Azul {blue} · {map}. Puedes entrar ahora.',
+  'online.joinMatch': 'UNIRSE A LA PARTIDA',
+  'lobby.bots': 'BOTS', 'lobby.botsFill': 'RELLENAR LUGARES VACÍOS', 'lobby.botsOff': 'SIN BOTS',
+  'msg.joinedFor': '{name} ENTRÓ — REEMPLAZA A {bot}',
+  'msg.left': '{name} SALIÓ', 'msg.leftFor': '{name} SALIÓ — {bot} TOMA SU LUGAR',
 };
 
 const pt = { ...en,
@@ -511,6 +521,37 @@ Object.assign(zh, {
   'online.detail.lobby':'房主：{host} · {map} · 机器人：{bots}',
   'online.detail.full':'房主：{host} · {map}。有人离开后会空出位置。',
   'online.detail.match':'第 {round} 回合 · 红队 {red} – 蓝队 {blue} · {map}。比赛结束后即可加入，此处会自动更新。',
+});
+// Entrar/salir con la partida empezada y relleno con bots
+Object.assign(pt, {
+  'online.detail.match':'Rodada {round} · Vermelho {red} – Azul {blue} · {map}. Não há vaga agora; isto se atualiza sozinho.',
+  'online.detail.matchJoin':'Rodada {round} · Vermelho {red} – Azul {blue} · {map}. Você pode entrar agora.',
+  'online.joinMatch':'ENTRAR NA PARTIDA','lobby.bots':'BOTS','lobby.botsFill':'PREENCHER VAGAS','lobby.botsOff':'SEM BOTS',
+  'msg.joinedFor':'{name} ENTROU — SUBSTITUI {bot}','msg.left':'{name} SAIU','msg.leftFor':'{name} SAIU — {bot} ASSUME',
+});
+Object.assign(fr, {
+  'online.detail.match':'Manche {round} · Rouge {red} – Bleu {blue} · {map}. Aucune place libre pour l’instant ; ceci se met à jour tout seul.',
+  'online.detail.matchJoin':'Manche {round} · Rouge {red} – Bleu {blue} · {map}. Vous pouvez entrer maintenant.',
+  'online.joinMatch':'REJOINDRE LA PARTIE','lobby.bots':'BOTS','lobby.botsFill':'REMPLIR LES PLACES VIDES','lobby.botsOff':'SANS BOTS',
+  'msg.joinedFor':'{name} A REJOINT — REMPLACE {bot}','msg.left':'{name} EST PARTI','msg.leftFor':'{name} EST PARTI — {bot} PREND LE RELAIS',
+});
+Object.assign(it, {
+  'online.detail.match':'Round {round} · Rosso {red} – Blu {blue} · {map}. Nessun posto libero per ora; si aggiorna da solo.',
+  'online.detail.matchJoin':'Round {round} · Rosso {red} – Blu {blue} · {map}. Puoi entrare adesso.',
+  'online.joinMatch':'ENTRA IN PARTITA','lobby.bots':'BOT','lobby.botsFill':'RIEMPI I POSTI VUOTI','lobby.botsOff':'SENZA BOT',
+  'msg.joinedFor':'{name} È ENTRATO — SOSTITUISCE {bot}','msg.left':'{name} È USCITO','msg.leftFor':'{name} È USCITO — SUBENTRA {bot}',
+});
+Object.assign(ja, {
+  'online.detail.match':'ラウンド {round} · レッド {red} – ブルー {blue} · {map}。現在空きがありません。表示は自動で更新されます。',
+  'online.detail.matchJoin':'ラウンド {round} · レッド {red} – ブルー {blue} · {map}。今すぐ参加できます。',
+  'online.joinMatch':'マッチに参加','lobby.bots':'BOT','lobby.botsFill':'空き枠を埋める','lobby.botsOff':'BOTなし',
+  'msg.joinedFor':'{name} が参加 — {bot} と交代','msg.left':'{name} が退出','msg.leftFor':'{name} が退出 — {bot} が引き継ぎ',
+});
+Object.assign(zh, {
+  'online.detail.match':'第 {round} 回合 · 红队 {red} – 蓝队 {blue} · {map}。目前没有空位，此处会自动更新。',
+  'online.detail.matchJoin':'第 {round} 回合 · 红队 {red} – 蓝队 {blue} · {map}。现在即可加入。',
+  'online.joinMatch':'加入比赛','lobby.bots':'机器人','lobby.botsFill':'填满空位','lobby.botsOff':'不使用机器人',
+  'msg.joinedFor':'{name} 已加入 — 接替 {bot}','msg.left':'{name} 已离开','msg.leftFor':'{name} 已离开 — {bot} 接替',
 });
 
 const EDITOR_KEYS = [

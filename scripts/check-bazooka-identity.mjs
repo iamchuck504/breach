@@ -99,7 +99,7 @@ check('impacto directo conserva efecto reforzado', effects.items.length >= 6,
 effects.update(3);
 
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
-  env: { ...process.env, PORT }, stdio: 'ignore',
+  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT }, stdio: 'ignore',
 });
 await new Promise((resolve) => setTimeout(resolve, 900));
 

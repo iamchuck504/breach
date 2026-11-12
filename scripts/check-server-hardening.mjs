@@ -12,7 +12,7 @@ const port = 8810;
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
   cwd: root,
-  env: { ...process.env, PORT: String(port), INTRO_TIME: '0', COUNTDOWN_TIME: '0' },
+  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: String(port), INTRO_TIME: '0', COUNTDOWN_TIME: '0' },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let serverLog = '';

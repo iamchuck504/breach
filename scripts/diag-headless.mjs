@@ -22,7 +22,7 @@ const readClip = (label) => {
 };
 
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
-  env: { ...process.env, PORT: '8798' }, stdio: 'ignore',
+  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: '8798' }, stdio: 'ignore',
 });
 await new Promise((r) => setTimeout(r, 900));
 

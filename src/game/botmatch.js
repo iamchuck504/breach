@@ -2147,6 +2147,37 @@ export class BotMatch {
 
   botById(id) { return this.bots.find((b) => b.id === id) || null; }
 
+  // ONLINE, partida empezada: el servidor cambia el roster cuando un humano
+  // releva a un bot o cuando un bot cubre a quien se fue. El anfitrión, que
+  // simula a los bots, los da de baja y de alta sin reiniciar la partida.
+  removeExternalBot(id) {
+    const i = this.bots.findIndex((b) => b.id === id);
+    if (i < 0) return false;
+    const [bot] = this.bots.splice(i, 1);
+    this.coverClaims.delete(id);
+    this.releaseTacticalClaim(id);
+    for (const team of ['red', 'blue']) {
+      if (this.specialSeeker[team] === id) this.specialSeeker[team] = null;
+    }
+    this.respawnQueue = this.respawnQueue.filter((q) => q.id !== id);
+    this.stats.delete(id);
+    bot.dispose(this.scene);
+    return true;
+  }
+
+  addExternalBot(slot) {
+    if (this.botById(String(slot.id))) return null;
+    const team = slot.team === 'blue' ? 'blue' : 'red';
+    const spawn = slot.spawn || this.world.spawns[team][0];
+    const bot = new Bot(this.scene, this.world, String(slot.id), String(slot.name), team, spawn, slot.variant);
+    this.bots.push(bot);
+    this.stats.set(bot.id, { name: bot.name, team, kills: 0, deaths: 0, variant: bot.variant });
+    // cubre a un jugador eliminado: espera el turno de reaparición del server
+    if (slot.alive === false) { bot.alive = false; bot.hp = 0; }
+    else this._assignRespawnPlan(bot);
+    return bot;
+  }
+
   respawnExternal(id, spawn) {
     const bot = this.botById(id);
     if (!bot) return;

@@ -1,6 +1,6 @@
 // Input unificado: teclado + ratón (pointer lock) + gamepad, con bindings
-// configurables (BINDS). Y invertido por default (preferencia de Chuck),
-// toggle F9 persistido en localStorage.
+// configurables (BINDS). Eje Y normal por defecto; la inversión (F9 o
+// Opciones → Controles) se guarda por jugador en localStorage.
 import { BINDS, PAD_DPAD_SLOTS } from './bindings.js';
 import { PadInput } from './gamepad.js';
 
@@ -34,9 +34,11 @@ export class Input {
     this.suppress = false; // true con el menú abierto: los inputs de juego se ignoran
     this.onLockedMouseDown = null;
     this.onLockedMouseUp = null;
-    // invert Y separado por dispositivo (ambos default ON, preferencia de Chuck)
-    this.invertY = localStorage.getItem('breach.invertY') !== 'false';       // ratón (F9)
-    this.invertYPad = localStorage.getItem('breach.invertYPad') !== 'false'; // control
+    // invert Y separado por dispositivo. Por defecto NO invertido (lo que
+    // espera un jugador nuevo); quien lo prefiera invertido lo activa una vez
+    // y queda guardado en su navegador.
+    this.invertY = localStorage.getItem('breach.invertY') === 'true';       // ratón (F9)
+    this.invertYPad = localStorage.getItem('breach.invertYPad') === 'true'; // control
     this.kbLocked = false;  // main: true si navigator.keyboard.lock fue CONCEDIDO
     this.rebinding = false; // main: true durante un rebind (Esc/botón pausa no actúan)
     // ?nolock=1 (suites headless): JAMÁS pedir pointer lock — MEDIDO: hasta un

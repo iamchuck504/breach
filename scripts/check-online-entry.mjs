@@ -16,7 +16,7 @@ const SHOT_DIR = process.env.SHOT_DIR || '';
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
   cwd: root,
-  env: { ...process.env, PORT: String(PORT), INTRO_TIME: '4', COUNTDOWN_TIME: '1', NODE_ENV: 'test' },
+  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: String(PORT), INTRO_TIME: '4', COUNTDOWN_TIME: '1', NODE_ENV: 'test' },
   stdio: 'ignore',
 });
 await wait(750);
@@ -107,7 +107,7 @@ try {
   await waitState(b, 'lobby');
   const b0 = await view(b);
   check('sala abierta: se ve quién está y cuántos lugares hay',
-    b0.roster.includes('ANA') && b0.count === `${s1.slots} / 8`, JSON.stringify(b0));
+    b0.roster.includes('ANA') && b0.count === `${s1.players} / 8`, JSON.stringify(b0));
   check('sala abierta: solo se ofrece UNIRSE', b0.join && !b0.joinDisabled && !b0.create);
   await shot(b, 'online-lobby');
   await typeName(b, 'Ana');
@@ -120,7 +120,7 @@ try {
     await b.evaluate(() => localStorage.getItem('breach.name')) === 'ANA');
 
   // --- el anfitrión inicia → C, que miraba la sala, ve el cambio EN VIVO a
-  //     partida en curso y ya no puede entrar
+  //     partida en curso; sin relleno quedan lugares libres y puede entrar
   const c = await client();
   await openCard(c);
   await waitState(c, 'lobby');
@@ -133,8 +133,8 @@ try {
   await c.waitForFunction(() => document.getElementById('online-status').dataset.state === 'match',
     null, { timeout: 20000 });
   const c0 = await view(c);
-  check('partida en curso: se actualiza sola y no se puede entrar',
-    c0.join && c0.joinDisabled && !c0.create && c0.roster.length === 2, JSON.stringify(c0));
+  check('partida en curso: se actualiza sola y ofrece entrar si hay lugar',
+    c0.join && !c0.joinDisabled && !c0.create && c0.roster.length === 2, JSON.stringify(c0));
   await shot(c, 'online-match');
 
   // --- volver al menú detiene el sondeo y restaura el menú principal

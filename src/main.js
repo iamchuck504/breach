@@ -1086,18 +1086,23 @@ async function fetchOnlineStatus(wsUrl) {
     if (!res.ok) return { kind: 'unknown' };
     const data = await res.json();
     if (!['empty', 'lobby', 'match'].includes(data?.state)) return { kind: 'unknown' };
-    const full = data.state === 'lobby' && data.slots >= data.maxPlayers;
-    return { kind: full ? 'full' : data.state, data };
+    // 'joinable' lo decide el server (relevar a un bot, lugar libre…); un
+    // server anterior no lo informa y se deduce del cupo
+    const joinable = typeof data.joinable === 'boolean' ? data.joinable
+      : data.state !== 'match' && data.slots < data.maxPlayers;
+    return { kind: data.state === 'lobby' && !joinable ? 'full' : data.state, data, joinable };
   } catch { return { kind: 'offline' }; }
   finally { clearTimeout(timer); }
 }
 
 function renderOnlineStatus() {
-  const { kind, data } = onlineStatus;
+  const { kind, data, joinable } = onlineStatus;
+  const openMatch = kind === 'match' && joinable;
   onlineEl.box.dataset.state = kind;
+  onlineEl.box.dataset.joinable = openMatch || kind === 'lobby' || kind === 'empty' ? '1' : '0';
   onlineEl.state.textContent = t(`online.state.${kind}`);
-  onlineEl.count.textContent = data && kind !== 'empty' ? `${data.slots} / ${data.maxPlayers}` : '';
-  onlineEl.detail.textContent = t(`online.detail.${kind}`, data ? {
+  onlineEl.count.textContent = data && kind !== 'empty' ? `${data.players} / ${data.maxPlayers}` : '';
+  onlineEl.detail.textContent = t(`online.detail.${openMatch ? 'matchJoin' : kind}`, data ? {
     host: data.host ?? '—', map: t(`map.${data.map}`), bots: data.bots,
     round: Math.max(1, data.round), red: data.wins?.red ?? 0, blue: data.wins?.blue ?? 0,
   } : {});
@@ -1106,11 +1111,12 @@ function renderOnlineStatus() {
   }));
   // Una sola acción según el estado; a ciegas ('unknown') se ofrecen ambas.
   const canCreate = kind === 'empty' || kind === 'unknown';
-  const canJoin = kind === 'lobby' || kind === 'unknown';
+  const canJoin = kind === 'lobby' || kind === 'unknown' || openMatch;
   const showJoin = canJoin || kind === 'full' || kind === 'match';
   onlineEl.create.style.display = canCreate ? '' : 'none';
   onlineEl.join.style.display = showJoin ? '' : 'none';
   onlineEl.join.disabled = !canJoin;
+  onlineEl.join.textContent = t(kind === 'match' ? 'online.joinMatch' : 'lobby.join');
   const url = inServer.value.trim();
   let host = url;
   try { host = new URL(url).host; } catch { /* se muestra tal cual */ }
@@ -2213,19 +2219,44 @@ function bindNet(net) {
       setupOnlineBots(roster);
     }
   });
+  // Cambios de roster con la partida empezada. El servidor decide quién
+  // releva a quién; aquí solo se reflejan (y se avisa a todos).
+  const rowOf = (p) => ({ id: p.id, name: p.name, team: p.team, bot: p.bot ? 1 : 0,
+    variant: p.v | 0, kills: p.kills || 0, deaths: p.deaths || 0, score: (p.kills || 0) * 100 });
+  const dropSlot = (id) => {
+    const name = G.onlineRows.find((row) => row.id === id)?.name ?? null;
+    const r = G.remotes.get(id);
+    if (r) { r.dispose(scene); G.remotes.delete(id); }
+    G.onlineBots?.removeExternalBot(id);
+    G.onlineRows = G.onlineRows.filter((row) => row.id !== id);
+    return name;
+  };
   net.on('joined', (m) => {
     if (!alive() || m.id === net.id) return;
+    // quien entra releva a un bot: el bot sale del mundo en este mismo paso
+    const botName = m.replaced ? dropSlot(m.replaced) : null;
     addRemote(m);
-    if (!G.onlineRows.some((r) => r.id === m.id)) G.onlineRows.push({
-      id: m.id, name: m.name, team: m.team, variant: m.v | 0, kills: 0, deaths: 0, score: 0,
-    });
-    hud.hint(t('msg.joined', { name: m.name }), 1400);
+    if (!G.onlineRows.some((r) => r.id === m.id)) G.onlineRows.push(rowOf(m));
+    if (!G.mode) return;
+    hud.hint(botName ? t('msg.joinedFor', { name: m.name, bot: botName })
+      : t('msg.joined', { name: m.name }), 3200);
+    audio.lobbyEnter();
   });
   net.on('left', (m) => {
     if (!alive()) return;
-    const r = G.remotes.get(m.id);
-    if (r) { r.dispose(scene); G.remotes.delete(m.id); }
-    G.onlineRows = G.onlineRows.filter((row) => row.id !== m.id);
+    const name = m.name ?? dropSlot(m.id);
+    dropSlot(m.id);
+    const bot = m.bot;
+    if (bot) {
+      // un bot cubre el lugar: lo simula el anfitrión, los demás lo ven remoto
+      G.onlineRows.push(rowOf(bot));
+      if (G.mode && G.lobby?.hostId === net.id && G.onlineBots) {
+        G.onlineBots.addExternalBot({ id: bot.id, name: bot.name, team: bot.team, variant: bot.v,
+          alive: bot.alive, spawn: { x: bot.x, z: bot.z, yaw: bot.team === 'red' ? Math.PI : 0 } });
+      } else if (G.mode) addRemote(bot);
+    }
+    if (!G.mode || !name) return;
+    hud.hint(bot ? t('msg.leftFor', { name, bot: bot.name }) : t('msg.left', { name }), 3200);
   });
   net.on('protoState',m=>{if(alive())G.protoSnapshot=m;});
   net.on('protoInventory',m=>{if(alive()&&m.id===net.id)prototypeInventory(m);});

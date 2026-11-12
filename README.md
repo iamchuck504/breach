@@ -23,6 +23,22 @@ npm run server     # sirve el juego + WebSocket en :8787
 Comparte `http://TU-IP-LOCAL:8787` — el cliente se autoconecta. El server es
 autoridad de vida/muertes/respawn/marcador (una sala, 8 jugadores).
 
+### Entrar a una partida online
+
+El botón **Multijugador** abre una pantalla propia: pide el nombre del jugador
+(obligatorio, sin valor por defecto; el server distingue repetidos con un
+sufijo) y muestra el estado de la sala consultando `GET /status` cada 3 s:
+sin sala → crear; sala abierta → unirse; partida en curso → unirse si hay
+lugar. La dirección del server queda plegada al fondo.
+
+El ajuste **Bots** del lobby online (activo por defecto) rellena los lugares
+vacíos hasta 4v4. Con él, quien entra —en el lobby o con la partida ya
+empezada— toma el lugar de un bot, y quien se va deja un bot en el suyo; todos
+ven el aviso. En "Sin bots" la sala juega solo con humanos. Los bots ya no se
+agregan uno por uno en online (el lobby local conserva ese control).
+`BREACH_FILL_BOTS=0` arranca el server sin relleno; lo usan las suites que
+arman alineaciones exactas.
+
 ### Server público (https/wss)
 
 Desde una página https el navegador solo acepta `wss://`, así que el server
@@ -177,5 +193,5 @@ salir (ver comentarios en `scripts/lib-clip.mjs`).
 ## Tuning
 
 Todos los valores de game feel viven en `src/config/tuning.js` — panel en
-vivo con **F10** dentro del juego. **F9** invierte el eje Y (invertido por
-defecto). Deploy: push a `main` → Vercel (proyecto `breach`).
+vivo con **F10** dentro del juego. **F9** invierte el eje Y (normal por
+defecto; la preferencia se guarda por jugador en su navegador). Deploy: push a `main` → Vercel (proyecto `breach`).

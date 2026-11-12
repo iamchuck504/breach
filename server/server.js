@@ -132,7 +132,11 @@ const players = new Map(), bots = new Map(), drops = new Map();
 const activeRockets = new Map(), activeNades = new Map(), activeSmokes = new Map();
 let nextId = 1, nextBotId = 1, nextDropId = 1;
 let nextRocketId = 1, nextNadeId = 1, hostId = null;
-let settings = { ...DEFAULT_LOBBY_SETTINGS }, phase = 'empty', phaseTimer = null, startAt = 0, round = 0;
+// BREACH_FILL_BOTS=0 arranca las salas sin relleno automático (lo usan las
+// suites que montan rosters exactos); el anfitrión puede cambiarlo en el lobby.
+const roomDefaults = () => ({ ...DEFAULT_LOBBY_SETTINGS,
+  fillBots: process.env.BREACH_FILL_BOTS !== '0' && DEFAULT_LOBBY_SETTINGS.fillBots });
+let settings = roomDefaults(), phase = 'empty', phaseTimer = null, startAt = 0, round = 0;
 const prototypes=new CombatPrototypes({
  experimental:process.env.BREACH_EXPERIMENTAL_STUN==='1',
  actors:()=>allSlots().map(p=>({...p,protected:p.prot>nowSec()})),
@@ -242,6 +246,7 @@ function publicStatus() {
   const state = !humans.length ? 'empty' : phase === 'lobby' ? 'lobby' : 'match';
   return {
     state, players: humans.length, bots: bots.size, slots: allSlots().length,
+    fillBots: settings.fillBots, joinable: state === 'empty' || canAdmitHuman(),
     maxPlayers: MAX_PLAYERS, names: humans.map((p) => p.name),
     host: players.get(hostId)?.name ?? null,
     map: settings.map, round, rounds: settings.rounds, wins: { ...wins },
@@ -276,18 +281,69 @@ function resetWorld() {
 function resetRoom() {
   clearTimer(); players.clear(); bots.clear(); drops.clear(); activeRockets.clear();
   activeNades.clear(); activeSmokes.clear(); hostId = null;
-  settings = { ...DEFAULT_LOBBY_SETTINGS }; phase = 'empty'; startAt = 0; round = 0;
+  settings = roomDefaults(); phase = 'empty'; startAt = 0; round = 0;
   wins = { red: 0, blue: 0 }; pools = { red: 0, blue: 0 }; resetWorld();
 }
+// Con relleno automático los bots no ocupan lugar de cara a un humano: ceden
+// su puesto. Sin relleno, cada bot colocado a mano cuenta como ocupante.
+const humanSlots = () => [...players.values()];
+const seatPool = () => (settings.fillBots ? humanSlots() : allSlots());
 function assignTeam() {
-  const c = teamCounts(allSlots());
+  const c = teamCounts(seatPool());
   if (c.red >= TEAM_CAPACITY) return 'blue';
   if (c.blue >= TEAM_CAPACITY) return 'red';
   return c.red <= c.blue ? 'red' : 'blue';
 }
 function canJoinTeam(entity, team) {
   if (team !== 'red' && team !== 'blue') return false;
-  return allSlots().filter((p) => p.id !== entity.id && p.team === team).length < TEAM_CAPACITY;
+  const pool = entity.bot ? allSlots() : seatPool();
+  return pool.filter((p) => p.id !== entity.id && p.team === team).length < TEAM_CAPACITY;
+}
+function makeBot(team) {
+  const id = 'b' + nextBotId++, occupied = allSlots().map((p) => p.name);
+  const bot = { id, bot: true, team, name: makeBotName(team, occupied), v: (nextBotId - 2) % 5,
+    hp: HP, alive: true, kills: 0, deaths: 0, w: 'smg', specialWep: null,
+    lastFireAt: -Infinity, pendingShot: null };
+  bots.set(id, bot);
+  return bot;
+}
+// LOBBY con relleno: cada equipo se completa con bots hasta su capacidad y se
+// retiran los que sobran cuando entra un humano o alguien cambia de equipo.
+function syncLobbyBots() {
+  if (!settings.fillBots) return;
+  for (const team of ['red', 'blue']) {
+    const humans = humanSlots().filter((p) => p.team === team).length;
+    const mine = [...bots.values()].filter((b) => b.team === team);
+    const want = Math.max(0, TEAM_CAPACITY - humans);
+    for (const extra of mine.slice(want)) bots.delete(extra.id);
+    for (let i = mine.length; i < want; i++) makeBot(team);
+  }
+}
+// ¿Cabe un humano más AHORA? En partida empezada entra si puede relevar a un
+// bot o si queda un lugar libre; la pantalla final no admite a nadie.
+function canAdmitHuman() {
+  if (players.size >= MAX_PLAYERS || phase === 'final') return false;
+  if (inMatch()) return bots.size > 0 || allSlots().length < MAX_PLAYERS;
+  return seatPool().length < MAX_PLAYERS;
+}
+// Bot que cede su lugar a quien entra con la partida empezada: del equipo
+// con menos humanos y, de preferencia, uno vivo para que juegue de inmediato.
+function botToRelieve() {
+  const humans = teamCounts(humanSlots());
+  const order = humans.red <= humans.blue ? ['red', 'blue'] : ['blue', 'red'];
+  for (const team of order) {
+    const mine = [...bots.values()].filter((b) => b.team === team);
+    if (mine.length) return mine.find((b) => b.alive) || mine[0];
+  }
+  return null;
+}
+function lateJoinPayload() {
+  const now = nowSec();
+  return { t: 'matchStart', late: 1, phase, startAt, round,
+    startsIn: Math.max(0, startAt - now),
+    settings: { ...settings }, wins: { ...wins }, lives: livesState(),
+    players: allSlots().map(pub), rows: statRows(),
+    special: { wep: special.taken ? null : special.wep } };
 }
 function freshCombatState(p, spawn) {
   Object.assign(p, { x: spawn.x, z: spawn.z, y: 0, yaw: spawn.yaw, st: 'idle', aim: 0,
@@ -409,9 +465,9 @@ function finishMatch() {
   if (!players.size) { resetRoom(); return; }
   if (settings.postMatch === 'next-map') {
     settings = { ...settings, map: nextLobbyMap(settings.map) };
-    phase = 'lobby'; broadcastLobby(); startMatch();
+    phase = 'lobby'; syncLobbyBots(); broadcastLobby(); startMatch();
   } else {
-    phase = 'lobby'; startAt = 0;
+    phase = 'lobby'; startAt = 0; syncLobbyBots();
     for (const p of allSlots()) { p.alive = true; p.hp = HP; p.respawnAt = 0; }
     broadcastRaw({ t: 'returnLobby' }); broadcastLobby();
   }
@@ -836,17 +892,44 @@ wss.on('connection', (ws) => {
       const action = msg.action === 'create' ? 'create' : 'join';
       if (action === 'create' && players.size) { lobbyError(ws, 'lobby-exists'); return; }
       if (action === 'join' && !players.size) { lobbyError(ws, 'no-lobby'); return; }
-      if (inMatch()) { lobbyError(ws, 'in-progress'); return; }
-      if (allSlots().length >= MAX_PLAYERS) { lobbyError(ws, 'lobby-full'); return; }
+      const late = inMatch();
+      if (phase === 'final') { lobbyError(ws, 'in-progress'); return; }
+      if (!canAdmitHuman()) { lobbyError(ws, late ? 'in-progress' : 'lobby-full'); return; }
+      // Partida empezada: quien entra releva a un bot (hereda su equipo y su
+      // turno de reaparición); sin bots ocupa un lugar libre.
+      const relieved = late ? botToRelieve() : null;
+      const team = relieved ? relieved.team : assignTeam();
+      if (!relieved && !canJoinTeam({ id: '' }, team)) { lobbyError(ws, 'lobby-full'); return; }
       const id = 'p' + nextId++;
-      me = { ws, id, bot: false, team: assignTeam(), joinedAt: Date.now(),
+      me = { ws, id, bot: false, team, joinedAt: Date.now(),
         name: uniqueName(String(msg.name || '').trim().slice(0, 14).toUpperCase() || 'ANON'),
         v: Math.min(4, Math.max(0, Math.round(num(msg.v)))), hp: HP, alive: true,
         kills: 0, deaths: 0, w: 'smg', specialWep: null,
         lastFireAt: -Infinity, pendingShot: null };
+      if (relieved) bots.delete(relieved.id);
       players.set(id, me); if (!hostId) { hostId = id; phase = 'lobby'; }
-      send(ws, { t: 'welcome', id, team: me.team, lobby: lobbyPayload() }); broadcastLobby();
-      console.log(`+ ${me.name} (${me.team}) — ${players.size} humanos, ${bots.size} bots`); return;
+      if (!late) {
+        syncLobbyBots();
+        send(ws, { t: 'welcome', id, team: me.team, lobby: lobbyPayload() }); broadcastLobby();
+        console.log(`+ ${me.name} (${me.team}) — ${players.size} humanos, ${bots.size} bots`); return;
+      }
+      const joinedAt = nowSec();
+      freshCombatState(me, pickSpawn(team));
+      me.prot = Math.max(startAt, joinedAt) + SPAWN_PROT;
+      if (relieved && !relieved.alive) {
+        // el bot estaba eliminado: no se regala una vida, se espera su turno
+        Object.assign(me, { alive: false, hp: 0, respawnAt: relieved.respawnAt || 0,
+          x: relieved.x ?? me.x, z: relieved.z ?? me.z, y: relieved.y || 0 });
+      }
+      send(ws, { t: 'welcome', id, team: me.team, lobby: lobbyPayload() });
+      send(ws, lateJoinPayload());
+      CRATES.forEach((c, i) => { if (!c.up) send(ws, { t: 'crate', i, up: 0 }); });
+      for (const [dropId, d] of drops) send(ws, { t: 'dropA', id: dropId, wep: d.wep, x: d.x, z: d.z,
+        y: d.y, team: d.team, mag: d.mag, res: d.res, life: d.t });
+      broadcastRawExcept(ws, { t: 'joined', ...pub(me), replaced: relieved?.id ?? null });
+      broadcastLobby();
+      console.log(`+ ${me.name} (${me.team}) entra con la partida empezada${relieved ? ` por ${relieved.name}` : ''}`);
+      return;
     }
     if (!me) return;
     if(msg.t==='protoClaim'){prototypes.claim(me.id,String(msg.id),msg.manual===true);return;}
@@ -861,12 +944,23 @@ wss.on('connection', (ws) => {
     if(prototypes.stunned(me.id)&&['takeDrop','takeSpecial','crate','takeCrate','reload'].includes(msg.t))return;
     if (msg.t === 'lobbySettings') {
       if (!isHost(me) || phase !== 'lobby') { lobbyError(ws, 'host-only'); return; }
-      settings = normalizeLobbySettings({ ...settings, ...msg.settings }); broadcastLobby(); return;
+      const hadFill = settings.fillBots;
+      settings = normalizeLobbySettings({ ...settings, ...msg.settings });
+      // "sin bots" los retira todos; "rellenar" completa ambos equipos
+      if (hadFill && !settings.fillBots) bots.clear();
+      syncLobbyBots();
+      broadcastLobby(); return;
     }
     if (msg.t === 'lobbyTeam') {
       if (phase !== 'lobby') { lobbyError(ws, 'locked'); return; }
       const team = msg.team === 'blue' ? 'blue' : 'red';
       if (me.team === team) return;
+      if (settings.fillBots) {
+        // con relleno, cualquiera cambia de equipo mientras haya menos de 4
+        // humanos allá: el bot sobrante pasa al equipo que se deja
+        if (!canJoinTeam(me, team)) { lobbyError(ws, 'team-full'); return; }
+        me.team = team; syncLobbyBots(); broadcastLobby(); return;
+      }
       if (!canJoinTeam(me, team)) {
         // Una selección explícita puede intercambiar el slot con un bot del
         // destino. No se elimina ni reasigna silenciosamente a nadie y el
@@ -880,17 +974,17 @@ wss.on('connection', (ws) => {
     }
     if (msg.t === 'lobbyBotAdd') {
       if (!isHost(me) || phase !== 'lobby') { lobbyError(ws, 'host-only'); return; }
+      // con relleno automático los bots no se administran a mano
+      if (settings.fillBots) { broadcastLobby(); return; }
       if (allSlots().length >= MAX_PLAYERS) { lobbyError(ws, 'lobby-full'); return; }
-      const team = msg.team === 'blue' ? 'blue' : 'red', probe = { id: '', team };
+      const team = msg.team === 'blue' ? 'blue' : 'red', probe = { id: '', team, bot: true };
       if (!canJoinTeam(probe, team)) { lobbyError(ws, 'team-full'); return; }
-      const id = 'b' + nextBotId++, occupied = allSlots().map((p) => p.name);
-      bots.set(id, { id, bot: true, team, name: makeBotName(team, occupied), v: (nextBotId - 2) % 5,
-        hp: HP, alive: true, kills: 0, deaths: 0, w: 'smg', specialWep: null,
-        lastFireAt: -Infinity, pendingShot: null });
+      makeBot(team);
       broadcastLobby(); return;
     }
     if (msg.t === 'lobbyBotRemove' || msg.t === 'lobbyBotTeam') {
       if (!isHost(me) || phase !== 'lobby') { lobbyError(ws, 'host-only'); return; }
+      if (settings.fillBots) { broadcastLobby(); return; }
       const bot = bots.get(msg.id); if (!bot) { lobbyError(ws, 'bot-missing'); return; }
       if (msg.t === 'lobbyBotRemove') bots.delete(bot.id);
       else { if (!canJoinTeam(bot, msg.team)) { lobbyError(ws, 'team-full'); return; } bot.team = msg.team; }
@@ -898,6 +992,7 @@ wss.on('connection', (ws) => {
     }
     if (msg.t === 'lobbyStart') {
       if (!isHost(me) || phase !== 'lobby') { lobbyError(ws, 'host-only'); return; }
+      syncLobbyBots();
       const validity = validateLobby(allSlots(), settings);
       if (!validity.ok) { lobbyError(ws, 'invalid', validity.errors.join(',')); broadcastLobby(); return; }
       startMatch(); return;
@@ -1028,13 +1123,29 @@ wss.on('connection', (ws) => {
   });
   ws.on('close', () => {
     if (!me || !players.has(me.id)) return;
-    players.delete(me.id); broadcastRaw({ t: 'left', id: me.id });
+    players.delete(me.id);
     if (!players.size) { resetRoom(); me = null; return; }
+    // Con relleno, quien abandona una partida empezada deja un bot en su
+    // lugar: mismo equipo, misma posición y mismo estado (vivo, o eliminado
+    // esperando el turno que le tocaba), así el equipo no queda en desventaja.
+    let stand = null;
+    if (settings.fillBots && inMatch() && phase !== 'final') {
+      stand = makeBot(me.team);
+      freshCombatState(stand, { x: me.x ?? 0, z: me.z ?? 0, yaw: me.yaw || 0 });
+      stand.y = me.y || 0;
+      if (me.alive) stand.hp = Math.max(1, me.hp ?? HP);
+      else Object.assign(stand, { alive: false, hp: 0, respawnAt: me.respawnAt || 0 });
+      resetMovementGuard(stand, nowSec());
+      resetPoseHistory(stand);
+    }
+    broadcastRaw({ t: 'left', id: me.id, name: me.name, bot: stand ? pub(stand) : null });
     if (hostId === me.id) {
       hostId = [...players.values()].sort((a, b) => a.joinedAt - b.joinedAt)[0].id;
       broadcastRaw({ t: 'host', id: hostId });
     }
-    if (phase === 'playing') checkRoundEnd(); else if (phase === 'lobby') broadcastLobby();
+    if (phase === 'playing') checkRoundEnd();
+    else if (phase === 'lobby') syncLobbyBots();
+    broadcastLobby();
     me = null;
   });
 });

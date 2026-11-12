@@ -63,6 +63,7 @@ const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')],
   cwd: root,
   env: {
     ...process.env,
+    BREACH_FILL_BOTS: '0',
     PORT: String(PORT),
     INTRO_TIME: '0.05',
     COUNTDOWN_TIME: '0.05',
