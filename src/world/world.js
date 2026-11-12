@@ -154,7 +154,13 @@ export class World {
       metro: ['tile', 'tileTop'],
       prision: ['concrete', 'concreteTop'],
       pueblo: ['brick', 'brickTop'],
+      fortaleza: ['fortStone', 'fortStoneTop'],
     }[theme] ?? ['stone', 'stoneTop'];
+    // Fortaleza: arte propio (textura de doble periodo, variación a gran
+    // escala y sombra de contacto). El resto de mapas no cambia.
+    this._fortLook = theme === 'fortaleza';
+    this._batchUvScale = this._fortLook ? 3.4 : 1.7;
+    this._contactBoxes = this._fortLook ? [] : null;
     // cajas de munición por mapa: en azoteas van sobre el eje del helipuerto,
     // libres de cover (las ±7,0 por defecto chocaban con el anillo)
     const runtime = MAP_RUNTIME[layout];
@@ -183,6 +189,7 @@ export class World {
     if (decorBase) addMapIdentity(this, decorBase);
     this._addMapPeriphery(theme);
     this._flushBoxBatch();
+    if (this._fortLook) this._weatherFortaleza();
     this._buildSpawns();
     this.navigation = layout === 'calle2' ? new CalleNavigation(this) : this.galleryEnabled ? new FortalezaNavigation(this) : null;
 
@@ -255,6 +262,9 @@ export class World {
       stone: this._stoneCanvas(4, 3, false),   // sillares de muro
       stoneTop: this._stoneCanvas(3, 3, true), // losas planas para los topes
       floor: this._floorCanvas(),
+      fortStone: this._fortStoneCanvas(false),    // Fortaleza: sillares con variación
+      fortStoneTop: this._fortStoneCanvas(true),
+      fortFloor: this._fortFloorCanvas(),         // Fortaleza: losas del patio
       banner: this._bannerCanvas(),
       gate: this._gateCanvas(),                 // portón de madera/hierro
       crack: this._crackCanvas(),               // daño mural (alphaTest)
@@ -369,6 +379,226 @@ export class World {
       }
     }
     return cv;
+  }
+
+  // ---------- FORTALEZA: piedra y losas con variación real ----------
+  // Las texturas genéricas repetían 12 sillares casi idénticos cada 1.7 m: de
+  // cerca, un muro era una retícula beige uniforme. Estas cubren el DOBLE de
+  // superficie por repetición (48 sillares) con el mismo tamaño de piedra y la
+  // misma nitidez (≈150 px/m), y cada piedra tiene tono, desgaste y defectos
+  // propios. Siguen siendo UNA textura por material: cero draw calls nuevos.
+  _fortStoneCanvas(flat) {
+    const s = 512, rows = 6, cols = 8;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = s;
+    const g = cv.getContext('2d');
+    const rnd = (a, b) => a + Math.random() * (b - a);
+    g.fillStyle = flat ? '#6b655b' : '#5f584e'; g.fillRect(0, 0, s, s); // mortero
+    const rh = s / rows, cw = s / cols;
+    for (let r = 0; r < rows; r++) {
+      const off = (r % 2) * cw * 0.5;
+      for (let c = -1; c < cols; c++) {
+        const j = 2.5 + Math.random() * 1.5; // junta irregular
+        const x = c * cw + off + j, y = r * rh + j, w = cw - j * 2, h = rh - j * 2;
+        // familias de piedra: la mayoría arenisca, algunas oscuras, alguna rojiza
+        const kind = Math.random();
+        const hue = kind > 0.93 ? rnd(20, 27) : rnd(33, 46);
+        const sat = (flat ? 7 : 11) + rnd(0, 8);
+        const lum = kind < 0.09 ? rnd(51, 59) : rnd(63, 85);
+        g.fillStyle = `hsl(${hue}, ${sat}%, ${lum}%)`;
+        g.fillRect(x, y, w, h);
+        // moteado: vetas y manchas pequeñas dentro de cada piedra
+        for (let i = 0, n = 5 + (Math.random() * 6 | 0); i < n; i++) {
+          g.fillStyle = Math.random() < 0.5 ? `rgba(255,248,232,${rnd(0.04, 0.10)})` : `rgba(40,33,24,${rnd(0.05, 0.12)})`;
+          g.fillRect(x + rnd(2, w - 14), y + rnd(2, h - 8), rnd(5, 22), rnd(2, 7));
+        }
+        // canto superior iluminado y sombra inferior (relieve sin blur)
+        g.fillStyle = 'rgba(255,255,255,0.22)'; g.fillRect(x, y, w, 3);
+        g.fillStyle = 'rgba(32,26,18,0.30)'; g.fillRect(x, y + h - 3, w, 3);
+        // esquina desportillada: el mortero muerde la piedra
+        if (Math.random() < 0.16) {
+          const bite = rnd(6, 13), right = Math.random() < 0.5, bottom = Math.random() < 0.5;
+          const cx = right ? x + w : x, cy = bottom ? y + h : y;
+          g.fillStyle = flat ? '#6b655b' : '#5f584e';
+          g.beginPath(); g.moveTo(cx, cy);
+          g.lineTo(cx + (right ? -bite : bite), cy); g.lineTo(cx, cy + (bottom ? -bite : bite));
+          g.closePath(); g.fill();
+        }
+        // grieta fina
+        if (Math.random() < 0.12) {
+          g.strokeStyle = 'rgba(38,31,22,0.42)'; g.lineWidth = 1;
+          g.beginPath();
+          let px = x + rnd(8, w - 8), py = y + 3;
+          g.moveTo(px, py);
+          while (py < y + h - 4) { px += rnd(-7, 7); py += rnd(6, 14); g.lineTo(px, Math.min(py, y + h - 3)); }
+          g.stroke();
+        }
+      }
+    }
+    if (!flat) {
+      // escurrimientos: humedad que baja por varias hiladas (lejos del borde
+      // del canvas para que la repetición no muestre costura)
+      for (let i = 0; i < 5; i++) {
+        const x = rnd(30, s - 70), y = rnd(20, s * 0.45), w = rnd(14, 34), h = rnd(90, 210);
+        const grad = g.createLinearGradient(0, y, 0, Math.min(s - 12, y + h));
+        grad.addColorStop(0, 'rgba(34,30,22,0)');
+        grad.addColorStop(0.25, `rgba(34,30,22,${rnd(0.10, 0.18)})`);
+        grad.addColorStop(1, 'rgba(34,30,22,0)');
+        g.fillStyle = grad; g.fillRect(x, y, w, Math.min(s - 12, y + h) - y);
+      }
+    }
+    return cv;
+  }
+
+  // Losas del patio de Fortaleza: 64 losas por repetición (antes 16), algunas
+  // partidas en dos, con manchas grandes que cruzan varias y musgo en juntas.
+  _fortFloorCanvas() {
+    const s = 512, n = 8, cell = s / n;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = s;
+    const g = cv.getContext('2d');
+    const rnd = (a, b) => a + Math.random() * (b - a);
+    g.fillStyle = '#746d61'; g.fillRect(0, 0, s, s); // junta
+    const slab = (x, y, w, h) => {
+      g.fillStyle = `hsl(${rnd(36, 47)}, ${rnd(9, 17)}%, ${Math.random() < 0.1 ? rnd(56, 62) : rnd(66, 81)}%)`;
+      g.fillRect(x + 2, y + 2, w - 4, h - 4);
+      for (let i = 0; i < 4; i++) {
+        g.fillStyle = Math.random() < 0.5 ? `rgba(255,248,230,${rnd(0.03, 0.08)})` : `rgba(44,37,27,${rnd(0.04, 0.10)})`;
+        g.fillRect(x + rnd(4, w - 18), y + rnd(4, h - 10), rnd(6, 20), rnd(2, 6));
+      }
+      g.fillStyle = 'rgba(255,255,255,0.13)'; g.fillRect(x + 2, y + 2, w - 4, 2);
+      g.fillStyle = 'rgba(40,34,26,0.16)'; g.fillRect(x + 2, y + h - 4, w - 4, 2);
+    };
+    for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) {
+      const x = c * cell, y = r * cell;
+      if (Math.random() < 0.2) { // losa partida: dos adoquines rectangulares
+        if (Math.random() < 0.5) { slab(x, y, cell / 2, cell); slab(x + cell / 2, y, cell / 2, cell); }
+        else { slab(x, y, cell, cell / 2); slab(x, y + cell / 2, cell, cell / 2); }
+      } else slab(x, y, cell, cell);
+      if (Math.random() < 0.3) { // grieta
+        g.strokeStyle = 'rgba(48,41,32,0.30)'; g.lineWidth = 1;
+        g.beginPath();
+        g.moveTo(x + rnd(8, cell - 8), y + 5); g.lineTo(x + rnd(8, cell - 8), y + cell * 0.5);
+        g.lineTo(x + rnd(8, cell - 8), y + cell - 6); g.stroke();
+      }
+      if (Math.random() < 0.22) { // musgo en la junta
+        g.fillStyle = `rgba(74,92,48,${rnd(0.35, 0.6)})`;
+        for (let i = 0; i < 5; i++) g.fillRect(x + rnd(0, cell - 6), y + rnd(-1, 2), rnd(3, 9), 2);
+      }
+    }
+    // manchas amplias de humedad/uso (lejos del borde: sin costura al repetir)
+    for (let i = 0; i < 7; i++) {
+      const x = rnd(70, s - 70), y = rnd(70, s - 70), rad = rnd(30, 66);
+      const grad = g.createRadialGradient(x, y, 2, x, y, rad);
+      grad.addColorStop(0, `rgba(42,36,27,${rnd(0.10, 0.18)})`);
+      grad.addColorStop(1, 'rgba(42,36,27,0)');
+      g.fillStyle = grad; g.fillRect(x - rad, y - rad, rad * 2, rad * 2);
+    }
+    return cv;
+  }
+
+  // Ruido suave y REPETIBLE (suma de ondas de frecuencia entera) en dos
+  // canales. Se muestrea en coordenadas de MUNDO a gran escala para que dos
+  // muros con la misma textura no se vean iguales.
+  _macroNoiseTexture() {
+    if (this._macroTex) return this._macroTex;
+    const s = 128;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = s;
+    const g = cv.getContext('2d');
+    const image = g.createImageData(s, s);
+    // Ruido de valor en tres octavas sobre retículas que envuelven en el
+    // borde: manchas irregulares sin dirección dominante. (Sumar pocas ondas
+    // senoidales dejaba un rayado diagonal visible al muestrearlo fino.)
+    const channel = () => {
+      const octaves = [8, 16, 32].map((cells) => ({
+        cells, values: Float32Array.from({ length: cells * cells }, () => Math.random()),
+      }));
+      const smooth = (t) => t * t * (3 - 2 * t);
+      const sample = ({ cells, values }, x, y) => {
+        const fx = x / s * cells, fy = y / s * cells;
+        const x0 = Math.floor(fx), y0 = Math.floor(fy);
+        const tx = smooth(fx - x0), ty = smooth(fy - y0);
+        const at = (cx, cy) => values[((cy + cells) % cells) * cells + ((cx + cells) % cells)];
+        const top = at(x0, y0) + (at(x0 + 1, y0) - at(x0, y0)) * tx;
+        const bottom = at(x0, y0 + 1) + (at(x0 + 1, y0 + 1) - at(x0, y0 + 1)) * tx;
+        return top + (bottom - top) * ty;
+      };
+      return (x, y) => THREE.MathUtils.clamp(
+        0.5 + (sample(octaves[0], x, y) * 0.55 + sample(octaves[1], x, y) * 0.30 + sample(octaves[2], x, y) * 0.15 - 0.5) * 1.7, 0, 1);
+    };
+    const red = channel(), green = channel();
+    for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
+      const i = (y * s + x) * 4;
+      image.data[i] = red(x, y) * 255; image.data[i + 1] = green(x, y) * 255;
+      image.data[i + 2] = 128; image.data[i + 3] = 255;
+    }
+    g.putImageData(image, 0, 0);
+    const t = new THREE.CanvasTexture(cv);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.colorSpace = THREE.NoColorSpace;
+    t.userData.cached = true;
+    this._macroTex = t;
+    return t;
+  }
+
+  // Variación a gran escala sobre un material estándar: dos lecturas de la
+  // textura de ruido en coordenadas de mundo modulan el tono (zonas más
+  // claras, más oscuras y húmedas). Costo: dos muestras de textura por
+  // fragmento; ni luces, ni pases, ni geometría adicionales.
+  //   grain: añade dos lecturas finas (veteado de piedra) para materiales SIN
+  //          textura, como los del kit de Blender, que son color plano.
+  //   damp:  oscurece y verdea las zonas húmedas (pie de muro, charcos del
+  //          patio). Solo tiene sentido en piedra.
+  // La orientación de cada cara se toma de su normal en mundo, así sirve
+  // igual para muros, suelos y piezas sin coordenadas UV.
+  _applyMacroVariation(material, { grain = false, damp = true } = {}) {
+    if (material.userData.breachMacro) return material;
+    material.userData.breachMacro = true;
+    const macro = this._macroNoiseTexture();
+    material.onBeforeCompile = (shader) => {
+      shader.uniforms.uMacro = { value: macro };
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vMacroPos;\nvarying vec3 vMacroNormal;')
+        .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\nvMacroNormal = normalize(mat3(modelMatrix) * objectNormal);')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvMacroPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\nuniform sampler2D uMacro;\nvarying vec3 vMacroPos;\nvarying vec3 vMacroNormal;')
+        .replace('#include <color_fragment>', `#include <color_fragment>
+        {
+          vec3 macroAxis = abs(vMacroNormal);
+          bool macroFlat = macroAxis.y > 0.6;
+          vec2 macroUv = macroFlat ? vMacroPos.xz
+            : (macroAxis.x > macroAxis.z ? vec2(vMacroPos.z, vMacroPos.y * 1.25) : vec2(vMacroPos.x, vMacroPos.y * 1.25));
+          float broad = texture2D(uMacro, macroUv * 0.083).r;
+          float mid = texture2D(uMacro, macroUv * 0.29 + 0.37).g;
+          diffuseColor.rgb *= mix(0.82, 1.12, broad) * mix(0.93, 1.06, mid);
+          ${grain ? `float fine = texture2D(uMacro, macroUv * 1.7 + 0.11).r;
+          float finer = texture2D(uMacro, macroUv * 5.9).g;
+          diffuseColor.rgb *= mix(0.90, 1.08, fine) * mix(0.95, 1.04, finer);` : ''}
+          ${damp ? `float macroDamp = macroFlat ? smoothstep(0.52, 0.24, broad) * 0.55
+            : smoothstep(1.25, 0.0, vMacroPos.y) * smoothstep(0.66, 0.28, mid);
+          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.80, 0.89, 0.72), macroDamp * 0.6);` : ''}
+        }`);
+    };
+    material.customProgramCacheKey = () => `breach-macro-${grain ? 'g' : 'n'}${damp ? 'd' : 'n'}`;
+    material.needsUpdate = true;
+    return material;
+  }
+
+  // Fortaleza: el kit de Blender y el pulido de arquitectura son materiales
+  // de color plano. Reciben la misma variación en coordenadas de mundo que
+  // los bloques, así muro, galería y cobertura envejecen como un solo lugar.
+  _weatherFortaleza() {
+    this.mapGroup.traverse((o) => {
+      if (!o.isMesh || o.isInstancedMesh) return;
+      for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+        if (!m.isMeshStandardMaterial || m.map || m.transparent || m.metalness > 0.2) continue;
+        if (m.emissive && m.emissive.getHex() !== 0) continue; // brasas, faroles
+        const stone = /stone|limestone|mortar/i.test(m.name) || !m.name;
+        this._applyMacroVariation(m, { grain: true, damp: stone });
+      }
+    });
   }
 
   // Estandarte vertical: campo claro (el material lo tiñe del color del
@@ -912,9 +1142,10 @@ export class World {
   _batchBox(x, z, w, d, h, sideColor, topColor) {
     const x0 = x - w / 2, x1 = x + w / 2;
     const z0 = z - d / 2, z1 = z + d / 2;
-    const S = 1.7;
+    const S = this._batchUvScale ?? 1.7;
     const uw = w / S, ud = d / S, vh = h / S;
     const b = this._boxBatch;
+    this._contactBoxes?.push([x0, x1, z0, z1]);
     // AO falso gratis: zócalo oscuro y borde superior claro dentro del mismo
     // atributo de color; no agrega geometría, materiales ni draw calls.
     const bottom = new THREE.Color(sideColor).multiplyScalar(0.74).getHex();
@@ -950,18 +1181,21 @@ export class World {
       g.computeBoundingSphere();
       const surface = {
         stone: [0.88, 0.01, 0.040], stoneTop: [0.84, 0.01, 0.028],
+        fortStone: [0.90, 0.01, 0.046], fortStoneTop: [0.86, 0.01, 0.030],
         concrete: [0.80, 0.03, 0.026], concreteTop: [0.76, 0.03, 0.018],
         tile: [0.58, 0.08, 0.014], tileTop: [0.52, 0.08, 0.010],
         brick: [0.90, 0.01, 0.038], brickTop: [0.87, 0.01, 0.026],
       }[texture] ?? [0.82, 0.02, 0.022];
-      const mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
+      const material = new THREE.MeshStandardMaterial({
         map: this._tex(texture),
         bumpMap: this._detailTex(texture),
         bumpScale: surface[2],
         roughness: surface[0],
         metalness: surface[1],
         vertexColors: true,
-      }));
+      });
+      if (this._fortLook) this._applyMacroVariation(material);
+      const mesh = new THREE.Mesh(g, material);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       mesh.name = name; // identificable para tooling/tests (editor, clonador)
@@ -970,6 +1204,43 @@ export class World {
     build(this._boxBatch.sides, this._batchTexIds[0], 'box-batch-sides');
     build(this._boxBatch.tops, this._batchTexIds[1], 'box-batch-tops');
     this._boxBatch = null;
+    this._buildContactShadows();
+  }
+
+  // SOMBRA DE CONTACTO: una franja oscura que se desvanece sobre el piso al
+  // pie de cada bloque. Asienta la geometría en el suelo (sin ella los
+  // bloques parecen posados encima) y cuesta UNA llamada de dibujo para todo
+  // el mapa: cuatro trapecios por bloque en un solo mesh, sin luces ni pases.
+  _buildContactShadows() {
+    const boxes = this._contactBoxes;
+    this._contactBoxes = null;
+    if (!boxes?.length) return;
+    const reach = 0.5, y = 0.012, dark = 0.34;
+    const pos = [], col = [], idx = [];
+    const quad = (a, b, c, d) => { // a,b = borde junto al bloque; c,d = borde exterior
+      const base = pos.length / 3;
+      for (const [p, alpha] of [[a, dark], [b, dark], [c, 0], [d, 0]]) { pos.push(p[0], y, p[1]); col.push(1, 1, 1, alpha); }
+      idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    };
+    for (const [x0, x1, z0, z1] of boxes) {
+      // trapecios que se tocan en la diagonal de cada esquina: sin solapes
+      quad([x1, z1], [x1, z0], [x1 + reach, z0 - reach], [x1 + reach, z1 + reach]);
+      quad([x0, z0], [x0, z1], [x0 - reach, z1 + reach], [x0 - reach, z0 - reach]);
+      quad([x0, z1], [x1, z1], [x1 + reach, z1 + reach], [x0 - reach, z1 + reach]);
+      quad([x1, z0], [x0, z0], [x0 - reach, z0 - reach], [x1 + reach, z0 - reach]);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 4));
+    g.setIndex(idx);
+    g.computeBoundingSphere();
+    const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
+      color: 0x1a140d, vertexColors: true, transparent: true, depthWrite: false, side: THREE.DoubleSide,
+      polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+    }));
+    mesh.name = 'contact-shadows';
+    mesh.renderOrder = 1;
+    this.mapGroup.add(mesh);
   }
 
   _buildLights() {
@@ -1014,13 +1285,18 @@ export class World {
   _applyEnvironment(layout) {
     if (layout === 'fortaleza') {
       // Hora dorada: contraste cálido/frío para separar piedra y jugadores.
-      this.hemi.color.setHex(0x8fb4d0);
-      this.hemi.groundColor.setHex(0x7a634b);
-      this.hemi.intensity = 1.48;
-      this.amb.color.setHex(0xffd8aa);
-      this.amb.intensity = 0.24;
-      this.sun.color.setHex(0xffc77f);
-      this.sun.intensity = 2.15;
+      // El relleno (cielo + ambiente) sumaba casi tanto como el sol: las
+      // caras en sombra quedaban apenas más oscuras que las iluminadas y los
+      // volúmenes se leían planos. Se baja el relleno, se enfría, y el sol
+      // sube: sombras azuladas y profundas contra piedra cálida al sol.
+      // Mismas tres luces y el mismo mapa de sombras: costo idéntico.
+      this.hemi.color.setHex(0x7fa6d6);
+      this.hemi.groundColor.setHex(0x6a5540);
+      this.hemi.intensity = 1.22;
+      this.amb.color.setHex(0xffd2a0);
+      this.amb.intensity = 0.14;
+      this.sun.color.setHex(0xffc27a);
+      this.sun.intensity = 2.7;
       this.sun.position.set(-18, 20, -11);
       this._setSky([
         [0, '#435f7d'], [0.47, '#7f9bb0'], [0.78, '#c7a27f'], [1, '#e7b36f'],
@@ -1123,7 +1399,7 @@ export class World {
     // piso por TEMA: [textura, escala de repetición, tinte]
     const [texId, cell, tint] = {
       azoteas: ['roofFloor', 4.2, 0xcdd0d4],   // grava/brea de techo urbano
-      fortaleza: ['floor', 2.6, 0xc3b79f],     // losas de arenisca
+      fortaleza: ['fortFloor', 5.2, 0xc3b79f], // losas de arenisca (doble periodo, mismo tamaño de losa)
       calle: ['asphalt', 3.6, 0xc4c4c4],       // asfalto de avenida
       metro: ['tileTop', 3.2, 0xb9c2c6],       // andén de azulejo
       prision: ['concreteTop', 3.4, 0xb4b6b8], // patio de concreto
@@ -1143,6 +1419,7 @@ export class World {
       roughness: floorSurface[0],
       metalness: floorSurface[1],
     });
+    if ((this.theme ?? this.layout) === 'fortaleza') this._applyMacroVariation(floorMat);
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(this.fx * 2, this.fz * 2), floorMat);
     floor.rotation.x = -Math.PI / 2;
     floor.receiveShadow = true;
@@ -1192,8 +1469,15 @@ export class World {
       if (this._suppressBoxes) return;
       // variación sutil de tono por caja: rompe la monotonía sin romper la paleta
       const jit = 0.95 + Math.random() * 0.1;
-      const c = new THREE.Color(color).multiplyScalar(jit).getHex();
-      const t = new THREE.Color(top).multiplyScalar(jit).getHex();
+      const tone = (hex) => {
+        const out = new THREE.Color(hex).multiplyScalar(jit);
+        // Fortaleza: además del brillo, cada bloque vira un poco a cálido o a
+        // frío. Va en el color por vértice que ya existía: no cuesta nada.
+        if (this._fortLook) { const warm = (Math.random() - 0.5) * 0.07; out.r *= 1 + warm; out.b *= 1 - warm; }
+        return out.getHex();
+      };
+      const c = tone(color);
+      const t = tone(top);
       if (visual && !minY) this._batchBox(px, pz, w, d, h, c, t);
       else if(visual){
         const mesh=new THREE.Mesh(new THREE.BoxGeometry(w,h-minY,d),new THREE.MeshLambertMaterial({color:c}));
