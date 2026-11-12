@@ -3681,6 +3681,7 @@ let last = performance.now();
 window.BREACH = G;
 window.BREACH_INPUT = input;
 window.BREACH_CAM = camera;
+window.BREACH_RENDERER = renderer; // scripts/bench-map.mjs: draw calls, triángulos, texturas
 window.BREACH_AUDIO = audio;
 window.BREACH_WORLD = world;
 window.BREACH_EFFECTS = effects;
