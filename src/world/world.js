@@ -1281,6 +1281,9 @@ export class World {
     sky.colorSpace = THREE.SRGBColorSpace;
     this._skyTex = sky;
     this.scene.background = sky;
+    // la cúpula de cielo (render/sky.js) relee esto cuando cambia
+    this.skyStops = stops;
+    this.skyVersion = (this.skyVersion ?? 0) + 1;
   }
 
   _applyEnvironment(layout) {
@@ -4679,6 +4682,7 @@ export class World {
       new THREE.SphereGeometry(3.2, 14, 8),
       new THREE.MeshBasicMaterial({ color: 0xffca78, fog: false }));
     sunDisk.position.set(-58, 28, -76);
+    sunDisk.name = 'sky-body'; // la cúpula de cielo pone su halo aquí
     this.mapGroup.add(sunDisk);
 
     // Carril de asedio (este): cajas al pie de la muralla, fuera de la ruta.
@@ -5078,6 +5082,7 @@ export class World {
       new THREE.MeshBasicMaterial({ color: 0xf2ecd8 })
     );
     moon.position.set(44, 44, -74);
+    moon.name = 'sky-body';
     this.mapGroup.add(moon);
 
     // Señalización de acceso y conduits de mantenimiento en los extremos. La

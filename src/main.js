@@ -28,6 +28,7 @@ import { Effects } from './fx/effects.js';
 import { Audio, selectAudioListener } from './fx/audio.js';
 import { HUD } from './ui/hud.js';
 import { ImagePipeline, QUALITY } from './render/pipeline.js';
+import { SkyEnvironment } from './render/sky.js';
 import { NetClient } from './net/client.js';
 import { BotMatch } from './game/botmatch.js';
 import { SmokeSystem } from './game/smoke.js';
@@ -80,18 +81,36 @@ function applyRenderSize() {
   renderer.setPixelRatio(pipeline.pixelRatio(BASE_PIXEL_RATIO * renderScale, innerWidth, innerHeight));
   renderer.setSize(innerWidth, innerHeight);
 }
+let frameIndex = 0;
 function renderFrame() {
   renderer.info.reset();
+  sky.update(world, camera, pipeline.active);
+  // mapa de sombras: en los niveles bajos se redibuja cuadro por medio
+  const every = pipeline.active ? pipeline.quality.shadowEvery : 1;
+  renderer.shadowMap.autoUpdate = every <= 1;
+  if (every > 1 && frameIndex++ % every === 0) renderer.shadowMap.needsUpdate = true;
   pipeline.render(scene, camera, world.theme ?? world.layout);
+}
+// El filtro de sombras va compilado dentro de cada material: al cambiarlo
+// hay que recompilarlos.
+function applyShadowFilter() {
+  const type = pipeline.active && pipeline.quality.softShadows ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+  if (renderer.shadowMap.type === type) return;
+  renderer.shadowMap.type = type;
+  renderer.shadowMap.needsUpdate = true;
+  scene?.traverse((o) => {
+    for (const m of Array.isArray(o.material) ? o.material : o.material ? [o.material] : []) m.needsUpdate = true;
+  });
 }
 window.BREACH_PIPELINE = pipeline;
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFShadowMap; // bordes de sombra nítidos, sin suavizado
+renderer.shadowMap.type = pipeline.active && pipeline.quality.softShadows ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(TUNING.cam.fovNormal, 1, 0.1, 200);
 // Antes de una partida, Azotea funciona como backdrop 3D deliberado del menú.
 // Al jugar, setLayout reutiliza este mismo World con el mapa elegido.
+const sky = new SkyEnvironment(renderer, scene);
 const world = new World(scene, 'azoteas');
 const effects = new Effects(scene, world);
 const audio = new Audio();
@@ -1268,6 +1287,7 @@ selQuality.addEventListener('change', () => {
   gfxQuality = QUALITY[selQuality.value] ? selQuality.value : 'high';
   localStorage.setItem('breach.video.quality', gfxQuality);
   pipeline.setQuality(gfxQuality);
+  applyShadowFilter();
   applyRenderSize();
 });
 

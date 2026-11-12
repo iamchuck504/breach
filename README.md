@@ -174,13 +174,22 @@ La gradación de cada mapa vive en la tabla `GRADES` de ese archivo.
 
 Opciones → Video → Calidad gráfica elige el nivel (se guarda por jugador):
 
-| Nivel | MSAA | Bloom | Tope de píxeles |
-|---|---|---|---|
-| Ultra | 4× | sí | sin tope |
-| Alta (por defecto en escritorio) | 4× | sí | 2.6 M |
-| Media (por defecto en táctil) | 2× | sí | 1.6 M |
-| Baja | 2× | no | 1.0 M |
-| Clásico | — | — | render directo, sin efectos |
+| Nivel | MSAA | Bloom | Oclusión | Sombras | Tope de píxeles |
+|---|---|---|---|---|---|
+| Ultra | 4× | sí | 12 muestras | suaves | sin tope |
+| Alta (por defecto en escritorio) | 4× | sí | 8 muestras | suaves | 2.6 M |
+| Media (por defecto en táctil) | 2× | sí | 6 muestras | suaves, cuadro por medio | 1.6 M |
+| Baja | 2× | no | no | duras, cuadro por medio | 1.0 M |
+| Clásico | — | — | — | duras | render directo, sin efectos |
+
+Con la cadena activa, `src/render/sky.js` cambia el degradado de fondo (pegado
+a la pantalla) por una cúpula de cielo que gira con la cámara: mismo degradado
+del tema de cenit a horizonte, halo del sol o la luna y estrellas de noche. De
+esa cúpula sale el mapa de entorno con el que los materiales reciben luz y
+reflejo del cielo. Un objeto del mapa llamado `sky-body` (el sol de Fortaleza,
+la luna de Azoteas) fija dónde va el halo; sin él, el disco sale en la
+dirección de la luz. La oclusión ambiental se calcula a media resolución desde
+la profundidad y se apaga con la distancia.
 
 Si la ventana supera el tope, baja la resolución interna. Sin GPU real
 (render por software) o sin buffers flotantes, el juego usa Clásico. Las
