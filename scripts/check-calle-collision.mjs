@@ -79,4 +79,27 @@ assert.notEqual(hit([14.43, 1.35, -9.8], [0, 0, 1], 2.6), null,
 assert.equal(hit([14.35, 2.25, -9.8], [0, 0, 1], 2.6), null,
   'por encima del carrito el tiro pasa limpio');
 
-console.log('CALLE COLLISION OK · vehículos por silueta · kioscos abiertos · coffee LOW');
+// Calle 2: los escaparates dibujados sobresalen del muro estructural
+// (|x| = 16.15). Una piel de .30 m sin cobertura detiene la bala donde se ve
+// el marco o el vidrio; en puertas de servicio y pasajes, al ras, no existe.
+const hit2 = (origin, direction, distance) => firstMapIntersection('calle2',
+  { x: origin[0], y: origin[1], z: origin[2] },
+  { x: direction[0], y: direction[1], z: direction[2] }, distance);
+const skin = collisionBoxesFor('calle2').filter((b) => b.expansionKind === 'shop-frame');
+assert(skin.length >= 8 && skin.every((b) => b.cover === false && b.w === 0.3 &&
+  Math.abs(Math.abs(b.x) - 16) < 1e-9),
+  'la piel de escaparate es fina, sin cobertura y pegada al muro');
+for (const side of [-1, 1]) {
+  assert.notEqual(hit2([side * 14, 1.5, 10.9], [side, 0, 0], 1.95), null,
+    'la vidriera detiene el tiro donde se ve el vidrio, no .30 m detrás');
+  assert.equal(hit2([side * 14, 1.5, 10.9], [side, 0, 0], 1.75), null,
+    'la piel no flota delante del escaparate');
+  assert.equal(hit2([side * 14, 1.5, 7.95], [side, 0, 0], 1.95), null,
+    'la puerta de servicio al ras no tiene piel delante');
+  assert.notEqual(hit2([side * 14, 1.5, 7.95], [side, 0, 0], 2.25), null,
+    'detrás de la puerta sigue el muro estructural');
+  assert.equal(hit2([side * 14, 1.5, 18], [side, 0, 0], 6), null,
+    'el pasaje lateral sigue abierto');
+}
+
+console.log('CALLE COLLISION OK · vehículos por silueta · kioscos abiertos · coffee LOW · piel de escaparates');
