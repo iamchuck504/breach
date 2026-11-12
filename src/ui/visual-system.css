@@ -113,6 +113,19 @@ input[type=checkbox]{width:19px;height:19px;accent-color:var(--accent);vertical-
 .mf-card,.mf-result-card{background:#101923f5;border-radius:8px;clip-path:none;border:1px solid var(--line);max-height:90vh;overflow:auto;box-shadow:var(--ui-shadow)}
 .mf-title,.mf-result-title{line-height:1.08;overflow-wrap:anywhere}.mf-kicker,.mf-result-label{font-size:13px;letter-spacing:.08em}.mf-sub{font-size:15px;line-height:1.5}.mf-chip,.mf-wait{font-size:12px;letter-spacing:.03em}.mf-player{font-size:13px;line-height:1.5}.mf-mvp-stat span{font-size:12px}.mf-portrait{border-radius:5px}.mf-stat-head{font-size:11px}
 #spectator{max-width:min(660px,92vw);width:max-content}.spec-card{border-radius:6px;clip-path:none;backdrop-filter:none;padding:12px 22px}.spec-kicker{font-size:12px}.spec-name{font:600 23px/1.3 var(--sans);letter-spacing:0;overflow-wrap:anywhere}.spec-meta{font:500 13px/1.5 var(--sans);letter-spacing:.02em;flex-wrap:wrap}.spec-respawn{color:#ffcb99;font-variant-numeric:tabular-nums}
+/* La tarjeta de despliegue ganó fondo y borde pero no margen interior: el texto quedaba pegado al canto. */
+.mf-card{padding:8px 28px 22px}.mf-card::before{left:28px}
+/* Lobby: las acciones siguen a la vista aunque la tarjeta no quepa (720p, portátiles). */
+.lobby-actions{position:sticky;bottom:0;z-index:2;margin-top:16px;padding:14px 0 2px;background:linear-gradient(#111a2400,#111a24 22%)}
+/* ESCALA DE INTERFAZ: menús y HUD estaban dibujados en píxeles fijos pensados para 720p;
+   en 1080p/1440p/4K quedaban diminutos. Se amplían por tramos según el tamaño de la ventana.
+   Retícula, mira y punto del cañón NO se escalan: su posición la calcula el juego en píxeles reales.
+   Para volver al tamaño fijo anterior basta borrar este bloque. */
+@media(min-width:1700px) and (min-height:950px){:root{--ui-zoom:1.25}}
+@media(min-width:2300px) and (min-height:1250px){:root{--ui-zoom:1.6}}
+@media(min-width:3400px) and (min-height:1900px){:root{--ui-zoom:2.3}}
+.menu-card,#lobby-card,.splash-content,#menu-prompts,#score,#round-pips,#weapon,#weapon-wheel,#feed,#center-msg,#context-hint,#pickup-prompt,#btn-pause,#btn-fs,#scoreboard,#spectator,.mf-card,.mf-result-card{zoom:var(--ui-zoom,1)}
+@media(max-height:800px){#map-preview{height:92px}}
 @keyframes panel-enter{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
 @media(max-width:1000px){.lobby-grid{grid-template-columns:1fr 1fr}.lobby-settings{grid-column:1/-1;grid-row:2}.lobby-settings-body{grid-template-columns:repeat(3,minmax(0,1fr))}.lobby-validation{grid-column:1/-1}.menu-grid{gap:24px}.menu-top .tag{max-width:45%;text-align:right}}
 @media(max-width:760px){#menu{padding:14px;align-items:flex-start}.menu-card,#lobby-card,#controls-card,#char-card{width:100%;padding:20px}.menu-grid,.cols{grid-template-columns:1fr}.menu-title{font-size:36px}.menu-top{margin-bottom:20px}.settings-grid{grid-template-columns:1fr}.lobby-settings-body{grid-template-columns:1fr 1fr}.lobby-head{flex-wrap:wrap}.lobby-summary{text-align:left}.utility-row{grid-template-columns:1fr 1fr}.menu-top .tag{font-size:10px}.mode-detail{min-height:0;margin-bottom:18px}#char-slots{grid-template-columns:repeat(5,140px);overflow-x:auto}.char-slot img{height:160px}#weapon{width:220px;right:10px;bottom:10px}#weapon .mag{font-size:36px}#score{grid-template-columns:80px 62px 80px}#feed{max-width:40vw;font-size:11px}#weapon-wheel{transform:translate(-50%,-50%) scale(.85)}#weapon-wheel.on{transform:translate(-50%,-50%) scale(.88)}#pickup-prompt{max-width:80vw}.select-row{grid-template-columns:1fr}.spec-meta{font-size:12px}.mf-result-top{flex-wrap:wrap}.sb-cols{grid-template-columns:1fr}}

@@ -436,11 +436,6 @@ Object.assign(zh, {
   'weapon.grenadeShort':'烟雾','weapon.sniperShort':'狙击','weapon.bazookaShort':'火箭',
 });
 
-// Vite elimina este bloque completo del build de producción. En Node se
-// conserva para las auditorías directas de traducción.
-if (import.meta.env?.DEV ?? true) {
-// Editor de mapas: vocabulario compacto compartido por toda la herramienta.
-// Mantener el mismo orden permite añadir idiomas sin dispersar textos por la UI.
 // Pantalla de entrada al multijugador
 Object.assign(pt, {
   'online.kicker':'JOGUE COM OUTRAS PESSOAS','online.nameLabel':'SEU NOME','online.namePlaceholder':'DIGITE SEU NOME',
@@ -554,6 +549,11 @@ Object.assign(zh, {
   'msg.joinedFor':'{name} 已加入 — 接替 {bot}','msg.left':'{name} 已离开','msg.leftFor':'{name} 已离开 — {bot} 接替',
 });
 
+// Vite elimina este bloque completo del build de producción. En Node se
+// conserva para las auditorías directas de traducción.
+if (import.meta.env?.DEV ?? true) {
+// Editor de mapas: vocabulario compacto compartido por toda la herramienta.
+// Mantener el mismo orden permite añadir idiomas sin dispersar textos por la UI.
 const EDITOR_KEYS = [
   'select','move','rotate','scale','grid','undo','redo','duplicate','delete','mirrorX','mirrorZ',
   'cover','nav','route','topView','save','playtest','exit','map','name','new','saveAs','open',

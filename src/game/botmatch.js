@@ -1132,6 +1132,7 @@ export class BotMatch {
       const team = slot.team === 'blue' ? 'blue' : 'red';
       const spawn = slot.spawn || world.spawns[team][spawnIndex[team]++ % 4];
       const bot = new Bot(scene, world, String(slot.id), String(slot.name), team, spawn, slot.variant);
+      bot.rig.setNameTagThroughWalls(team === this.playerTeam); // solo compañeros a través de muros
       this.bots.push(bot);
       this.stats.set(bot.id, { name: bot.name, team, kills: 0, deaths: 0, variant: bot.variant });
     }
@@ -2170,6 +2171,7 @@ export class BotMatch {
     const team = slot.team === 'blue' ? 'blue' : 'red';
     const spawn = slot.spawn || this.world.spawns[team][0];
     const bot = new Bot(this.scene, this.world, String(slot.id), String(slot.name), team, spawn, slot.variant);
+    bot.rig.setNameTagThroughWalls(team === this.playerTeam);
     this.bots.push(bot);
     this.stats.set(bot.id, { name: bot.name, team, kills: 0, deaths: 0, variant: bot.variant });
     // cubre a un jugador eliminado: espera el turno de reaparición del server

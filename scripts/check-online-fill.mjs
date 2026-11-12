@@ -144,6 +144,18 @@ try {
     JSON.stringify({ a: [a2.hosted.length, a2.remotes.length, a2.rows], b: [b2.remotes.length, b2.rows], c: [c2.remotes.length, c2.rows] }));
   check('quien entra recibe la partida en su fase real (jugando, no en intro)', c2.phase === 'playing' && c2.mode === 'online');
 
+  // --- etiquetas de nombre: compañeros a través de muros, enemigos NO
+  const tags = async (page) => page.evaluate(() => {
+    const G = window.BREACH;
+    const all = [...G.remotes.values(), ...(G.onlineBots?.bots ?? [])].filter((x) => x.rig?.nameTag);
+    const wrong = all.filter((x) => x.rig.nameTag.material.depthTest !== (x.team !== G.team)).map((x) => x.name);
+    return { total: all.length, wrong };
+  });
+  const ta = await tags(a), tb = await tags(b), tc = await tags(c);
+  check('la etiqueta de un enemigo no se dibuja a través de las paredes (la de un compañero sí)',
+    ta.total === 7 && tb.total === 7 && tc.total === 7 && !ta.wrong.length && !tb.wrong.length && !tc.wrong.length,
+    JSON.stringify({ a: ta, b: tb, c: tc }));
+
   // --- alguien se va: un bot toma su lugar
   await c.context().close();
   const s4 = await statusWhen((s) => s.players === 2);

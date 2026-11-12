@@ -2205,6 +2205,7 @@ function addRemote(p) {
   const prev = G.remotes.get(p.id);
   if (prev) prev.dispose(scene); // id repetido: no dejar rigs huérfanos
   const r = new RemotePlayer(scene, p.id, p.name, p.team, p.v | 0);
+  r.rig.setNameTagThroughWalls(p.team === G.team); // solo compañeros a través de muros
   r.rig.groundFn = (x, z, y) => world.groundHeight({ x, z }, PLAYER_R, y);
   r.rig.collideFn = (pt, y, radius = RAGDOLL_R) => world.resolveCircle(pt, radius, y);
   r.alive = p.alive !== false;

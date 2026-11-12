@@ -1139,6 +1139,15 @@ export class Rig {
     this.nameTag = sp;
   }
 
+  // La etiqueta de un COMPAÑERO se ve a través de las paredes (saber dónde
+  // está tu escuadra); la de un ENEMIGO no: dibujarla sin prueba de
+  // profundidad delataba su posición detrás de cualquier muro.
+  setNameTagThroughWalls(on) {
+    if (!this.nameTag) return;
+    this.nameTag.material.depthTest = !on;
+    this.nameTag.material.needsUpdate = true;
+  }
+
   // construye (y cachea) el modelo de un arma con su merge y escala
   _gunModel(wep) {
     let g = this.guns[wep];

@@ -76,6 +76,31 @@ try {
     first.state === 'empty' && first.players === 0 && first.maxPlayers === 8 &&
     head.headers.get('access-control-allow-origin') === '*', JSON.stringify(first));
 
+  // --- idioma en el BUILD de producción: las traducciones deben llegar al
+  //     bundle (un bloque solo-desarrollo las dejó fuera una vez y la
+  //     auditoría en Node no lo ve) y el título del menú debe traducirse al cargar
+  {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    await context.addInitScript(() => localStorage.setItem('breach.language', 'fr'));
+    const fr = await context.newPage();
+    await fr.goto(`http://127.0.0.1:${PORT}/?nolock=1`, { waitUntil: 'networkidle' });
+    await fr.evaluate(() => document.getElementById('btn-enter')?.click());
+    await fr.waitForSelector('#splash.off', { state: 'attached' });
+    const title = await fr.evaluate(() => document.getElementById('menu-title').textContent);
+    await fr.evaluate((p) => { document.getElementById('in-server').value = `ws://127.0.0.1:${p}`; }, PORT);
+    await openCard(fr);
+    await waitState(fr, 'empty');
+    const text = await fr.evaluate(() => ({
+      kicker: document.querySelector('#online-card .menu-kicker').textContent,
+      state: document.getElementById('online-state').textContent,
+      label: document.querySelector('label[for="in-online-name"]').textContent,
+    }));
+    check('francés en el build: menú y pantalla de multijugador traducidos',
+      title === 'JOUER' && text.state === 'PAS ENCORE DE SALON' && text.label === 'VOTRE NOM' &&
+      !/PLAY WITH/.test(text.kicker), JSON.stringify({ title, ...text }));
+    await context.close();
+  }
+
   // --- A: nadie en el server → la única acción es CREAR
   const a = await client();
   await openCard(a);
