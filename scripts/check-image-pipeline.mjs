@@ -49,9 +49,22 @@ const stats = async (page) => {
 };
 
 try {
+  // cielo, entorno, oclusión y filtro de sombras del nivel en uso
+  const look = (page) => page.evaluate(() => {
+    const scene = window.BREACH_WORLD.scene, p = window.BREACH_PIPELINE;
+    return {
+      dome: !!scene.getObjectByName('sky-dome'), background: !!scene.background, env: !!scene.environment,
+      ao: !!p.aoRT, depth: !!p.sceneRT?.depthTexture,
+      soft: window.BREACH_RENDERER.shadowMap.type === THREE.PCFSoftShadowMap,
+      autoShadow: window.BREACH_RENDERER.shadowMap.autoUpdate,
+    };
+  });
   const off = await open('&gfx=off');
   const sOff = await stats(off);
   check('off: render directo', await off.evaluate(() => window.BREACH_PIPELINE.active === false));
+  const lOff = await look(off);
+  check('off: cielo y sombras clásicos, sin entorno ni oclusión',
+    !lOff.dome && lOff.background && !lOff.env && !lOff.ao && !lOff.soft && lOff.autoShadow, JSON.stringify(lOff));
   await off.close();
 
   const high = await open('&gfx=high');
@@ -82,6 +95,46 @@ try {
       }, grade);
       check(`blanco saturado sigue blanco (${grade})`, Math.min(px[0], px[1], px[2]) > 200, px.join(','));
     }
+    const lHigh = await look(high);
+    check('high: cúpula de cielo, entorno, oclusión y sombra suave',
+      lHigh.dome && !lHigh.background && lHigh.env && lHigh.ao && lHigh.depth && lHigh.soft && lHigh.autoShadow, JSON.stringify(lHigh));
+    // la oclusión oscurece poco y nunca aclara: su textura vive entre 0 y 1
+    const ao = await high.evaluate(async () => {
+      for (let i = 0; i < 3; i++) await new Promise((r) => requestAnimationFrame(r)); // cuadros del juego, no el de la prueba anterior
+      const p = window.BREACH_PIPELINE, r = window.BREACH_RENDERER, rt = p.aoBlurRT;
+      const buf = new Uint16Array(rt.width * rt.height * 4);
+      r.readRenderTargetPixels(rt, 0, 0, rt.width, rt.height, buf);
+      let sum = 0, min = 9, max = -9, bad = 0; const n = buf.length / 4;
+      for (let i = 0; i < buf.length; i += 4) { const v = THREE.DataUtils.fromHalfFloat(buf[i]); if (!(v >= 0 && v <= 1.001)) bad++; sum += v; min = Math.min(min, v); max = Math.max(max, v); }
+      return { mean: sum / n, min, max, bad };
+    });
+    check('oclusión: valores válidos, con contraste y sin ennegrecer', ao.bad === 0 && ao.mean > 0.8 && ao.min < 0.9 && ao.max > 0.98, JSON.stringify(ao));
+    // haces de luz: activos con el sol proyectando sombra, valores entre 0 y
+    // 1, y apagados si el jugador desactiva las sombras
+    const beams = await high.evaluate(async () => {
+      const p = window.BREACH_PIPELINE, r = window.BREACH_RENDERER, rt = p.aoBlurRT;
+      const frames = async (n) => { for (let i = 0; i < n; i++) await new Promise((res) => requestAnimationFrame(res)); };
+      await frames(3);
+      const buf = new Uint16Array(rt.width * rt.height * 4);
+      r.readRenderTargetPixels(rt, 0, 0, rt.width, rt.height, buf);
+      let max = 0, bad = 0;
+      for (let i = 2; i < buf.length; i += 4) { const v = THREE.DataUtils.fromHalfFloat(buf[i]); if (!(v >= 0 && v <= 1.001)) bad++; max = Math.max(max, v); }
+      const on = p.mAO.uniforms.uShafts.value;
+      const chk = document.getElementById('chk-shadows');
+      chk.checked = false; chk.dispatchEvent(new Event('change')); await frames(3);
+      const offNoShadow = p.mAO.uniforms.uShafts.value;
+      chk.checked = true; chk.dispatchEvent(new Event('change')); await frames(2);
+      localStorage.removeItem('breach.video.shadows');
+      return { on, offNoShadow, max, bad };
+    });
+    check('haces de luz: activos, en rango, y apagados sin sombras',
+      beams.on === 1 && beams.offNoShadow === 0 && beams.bad === 0 && beams.max > 0.01, JSON.stringify(beams));
+    const wet = await high.evaluate(() => {
+      let found = null;
+      window.BREACH_WORLD.mapGroup.traverse((o) => { if (!found && o.geometry?.type === 'PlaneGeometry' && o.material?.userData?.breachMacro) found = o.material.customProgramCacheKey(); });
+      return found;
+    });
+    check('suelo de Azoteas con desgaste y charcos', /breach-macro-nn0\.55/.test(wet ?? ''), String(wet));
     check('estadísticas de dibujo cuentan el cuadro entero', info.calls > 20, `calls ${info.calls}`);
   }
   // tope de píxeles: en una ventana grande, 'low' dibuja menos que 'ultra'
@@ -92,6 +145,10 @@ try {
   await high.setViewportSize({ width: 1920, height: 1080 });
   await high.waitForTimeout(200);
   const pxUltra = await size('ultra'), pxLow = await size('low');
+  await high.waitForTimeout(250);
+  const lLow = await look(high);
+  check('low: cielo sí; sin oclusión, sombra dura y a medio ritmo',
+    lLow.dome && lLow.env && !lLow.ao && !lLow.soft && !lLow.autoShadow, JSON.stringify(lLow));
   check('tope de píxeles por nivel', pxLow <= 1.0e6 * 1.02 && pxUltra >= 1920 * 1080 * 0.99, `low ${pxLow} · ultra ${pxUltra}`);
   check('el nivel elegido se guarda', await high.evaluate(() => localStorage.getItem('breach.video.quality') === 'low'));
   await high.waitForTimeout(300);
