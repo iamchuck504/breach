@@ -7,3 +7,8 @@ scripts/shot-*.png
 .vercel
 scripts/pose-*.png
 scripts/anim/
+
+# salidas generadas por las suites (capturas, reportes); lo versionado se queda
+artifacts/*
+!artifacts/visual-ux/
+artifacts/visual-ux/**/*.png

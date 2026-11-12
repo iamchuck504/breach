@@ -24,6 +24,9 @@ await page.goto('http://localhost:8791/?nolock=1', { waitUntil: 'networkidle' })
 await page.evaluate(() => { window.BREACH.mapChoice = 'fortaleza'; });
 await page.evaluate(() => document.getElementById('btn-practice').click());
 await page.waitForTimeout(1500);
+// Práctica da munición infinita (87c67d2); este check mide el consumo real
+// de granadas y la reserva del sniper, así que la apaga.
+await page.evaluate(() => { window.BREACH.weapons.infinite = false; });
 
 const fails = [];
 const check = (name, ok, extra = '') => {
@@ -190,8 +193,11 @@ await page.keyboard.up('Space');
 s = await page.evaluate(() => window.__state());
 check('sniper tomado reemplaza primaria', s.slots.includes('sniper'), s.slots.join(','));
 check('sniper queda en mano', s.cur === 'sniper', `cur=${s.cur}`);
-const pedestalGone = await page.evaluate(() => !window.BREACH_SPECIALS.active);
-check('pedestal consumido (uno por ronda)', pedestalGone);
+// En práctica el pedestal reaparece alternando sniper↔bazooka (87c67d2):
+// el sniper tomado no puede seguir ofreciéndose.
+const pedestalNext = await page.evaluate(() => window.BREACH_SPECIALS.active?.wep ?? null);
+check('pedestal tomado: no vuelve a ofrecer el sniper', pedestalNext !== 'sniper',
+  `siguiente=${pedestalNext}`);
 
 // 8) disparo de sniper + la caja NO rellena munición especial
 await page.evaluate(() => {
@@ -211,18 +217,58 @@ check('caja NO rellena al sniper', sn.reserve === 4 && sn.mag === 1, JSON.string
 await page.evaluate(() => {
   const G = window.BREACH;
   G.weapons.giveSpecial('bazooka');
-  const t = G.dummies.targets()[0];
+  // targets() incluye dummies muertos (el melee de arriba mató uno). Fortaleza
+  // tiene bloques: se ELIGE con raycast un punto a 7 m con línea limpia (a
+  // ciegas el cohete pegaba un cover intermedio y el splash no era letal).
+  const W = window.BREACH_WORLD, T = window.THREE;
+  const o = new T.Vector3(), dir = new T.Vector3();
+  let t = null, spot = null;
+  for (const d of G.dummies.targets().filter((x) => x.alive)) {
+    for (let k = 0; k < 16 && !spot; k++) {
+      const ang = k * Math.PI / 8;
+      const px = d.x + Math.sin(ang) * 7, pz = d.z + Math.cos(ang) * 7;
+      const probe = { x: px, z: pz };
+      W.resolveCircle(probe, 0.4, 0);
+      if (Math.hypot(probe.x - px, probe.z - pz) > 0.05) continue;
+      let clear = true;
+      for (const y of [1.0, 1.6]) {
+        o.set(px, y, pz); dir.set(d.x - px, 0, d.z - pz);
+        const len = dir.length(); dir.normalize();
+        if (W.raycast(o, dir, len - 0.3) !== null) clear = false;
+      }
+      if (clear) spot = { x: px, z: pz };
+    }
+    if (spot) { t = d; break; }
+  }
   const p = G.player;
   if (t) {
-    const ang = Math.atan2(p.pos.x - t.x, p.pos.z - t.z);
-    p.pos.x = t.x + Math.sin(ang) * 7;
-    p.pos.z = t.z + Math.cos(ang) * 7;
+    p.pos.x = spot.x;
+    p.pos.z = spot.z;
     p.vel.x = 0; p.vel.z = 0;
-    p.yaw = Math.atan2(-(t.x - p.pos.x), -(t.z - p.pos.z));
-    p.cam.yaw = p.yaw;
-    p.cam.pitch = 0;
+    window.__arsenalPatrol = { t, path: t.path, seg: t.seg, u: t.u };
+    t.path = [{ x: t.x, z: t.z }, { x: t.x, z: t.z }]; t.seg = 0; t.u = 0;
+    window.__arsenalTarget = { x: t.x, z: t.z };
   }
-  window.__scoreBefore = G.scores.red;
+  // ADS: la intención óptica central (spread 0.4°) en vez del eje de cadera
+  window.BREACH_INPUT._mouseAim = true;
+});
+await page.waitForTimeout(600);
+// La cámara va sobre el HOMBRO y el tiro sigue su intención: apuntar con el
+// yaw del jugador deja el cohete pasando de largo. Se centra la mira desde
+// la posición REAL de la cámara, iterando porque el yaw la reubica.
+for (let i = 0; i < 4; i++) {
+  await page.evaluate(() => {
+    const t = window.__arsenalTarget; if (!t) return;
+    const p = window.BREACH.player, c = window.BREACH_CAM.position;
+    const dx = t.x - c.x, dz = t.z - c.z;
+    p.cam.yaw = Math.atan2(-dx, -dz);
+    p.cam.pitch = Math.atan2(1.0 - c.y, Math.hypot(dx, dz));
+    p.yaw = p.cam.yaw;
+  });
+  await page.waitForTimeout(110);
+}
+await page.evaluate(() => {
+  window.__scoreBefore = window.BREACH.scores.red;
   window.BREACH_INPUT.firePressed = true;
 });
 await page.waitForTimeout(250);
@@ -234,10 +280,18 @@ const boom = await page.evaluate(() => ({
   score: window.BREACH.scores.red,
   before: window.__scoreBefore,
   mag: window.BREACH.weapons.state.bazooka?.mag,
+  dummies: window.BREACH.dummies.list.map((d) => ({ x: +d.x.toFixed(1), z: +d.z.toFixed(1), hp: Math.round(d.hp), alive: d.alive })),
+  target: window.__arsenalTarget,
+  player: { x: +window.BREACH.player.pos.x.toFixed(1), z: +window.BREACH.player.pos.z.toFixed(1) },
 }));
+await page.evaluate(() => {
+  window.BREACH_INPUT._mouseAim = false;
+  const r = window.__arsenalPatrol; // devolver la patrulla para el resto del check
+  if (r) { r.t.path = r.path; r.t.seg = r.seg; r.t.u = r.u; }
+});
 check('cohete explotó (no quedó volando)', boom.left === 0, JSON.stringify(boom));
 check('splash de bazooka hizo daño letal', boom.score > boom.before,
-  `score ${boom.before}→${boom.score}`);
+  JSON.stringify(boom));
 
 // 10) colisión de cuerpos: superponerse a un dummy se separa suave, sin
 // teleport ni atravesarse

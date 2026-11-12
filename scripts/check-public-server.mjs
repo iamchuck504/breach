@@ -75,7 +75,8 @@ try {
   // el junction se quita como enlace ANTES de borrar: jamás se recorre el
   // node_modules real; si no se pudo quitar, el árbol temporal se deja estar
   const link = path.join(stage, 'node_modules');
-  try { fs.rmdirSync(link); } catch { /* se comprueba abajo */ }
+  // Windows: el junction se quita como directorio; macOS/Linux: es un symlink
+  try { fs.rmdirSync(link); } catch { try { fs.unlinkSync(link); } catch { /* se comprueba abajo */ } }
   if (!fs.existsSync(link)) fs.rmSync(stage, { recursive: true, force: true });
   else console.log(`AVISO: no se pudo quitar ${link}; se deja ${stage}`);
 }

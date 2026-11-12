@@ -210,7 +210,11 @@ const tortura = await page.evaluate(async () => {
   d.alive = true; d.x = 14; d.z = 6; d.respawnT = 9999;
   G.weapons.cur = 'smg';
   G.weapons.st.mag = 50; G.weapons.st.reserve = 999; G.weapons.st.cd = 0;
-  let nearSlams = 0, shots = 0, legitClose = 0;
+  // Con la alzada AL TOPE el diseño acepta el estampado (8fdb817): se cuenta
+  // aparte y solo falla un estampado con margen de alzada sin usar.
+  const { TUNING } = await import('/src/config/tuning.js');
+  const maxLift = TUNING.aimOver.maxLift;
+  let nearSlams = 0, shots = 0, legitClose = 0, atMaxLift = 0;
   const W = window.BREACH_WORLD, V3 = window.THREE.Vector3;
   const oldTracer = E.tracer;
   // MODELO GEARS (da7060f): el daño viaja por el EJE ÓPTICO con la dispersión
@@ -268,11 +272,14 @@ const tortura = await page.evaluate(async () => {
   G.player.cam.pitch = -0.02; G.player.cam.yaw = 0;
   G.weapons.st.reserve = 150;
   await new Promise((r) => setTimeout(r, 400));
-  return { nearSlams, shots, legitClose, slams: window.__slams ?? [] };
+  return { nearSlams, atMaxLift, shots, legitClose, slams: window.__slams ?? [] };
 });
 check('TORTURA: cero balas fuera del cono o invisibles para la cámara en 4s de barrido+spam',
   tortura.nearSlams === 0 && tortura.shots > 10,
   JSON.stringify(tortura));
+if (tortura.atMaxLift) {
+  console.log(`INFO límite documentado: ${tortura.atMaxLift} estampado(s) con la alzada al tope (esquina de la caja)`);
+}
 
 // ---------------------------------------------------------------------------
 // 2) SIN ATRAVESAR: un muro alto que también tapa la VISTA — el círculo

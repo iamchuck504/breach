@@ -159,6 +159,10 @@ check('ADS del sniper acerca y suelta limpio',
 const sniperDmg = await page.evaluate(async () => {
   const G = window.BREACH;
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // Práctica da munición infinita (87c67d2): apagarla aquí para medir la
+  // recarga real desde la reserva.
+  const wasInfinite = G.weapons.infinite;
+  G.weapons.infinite = false;
   G.weapons.startSwap('sniper');
   await wait(800);
   G.weapons.state.sniper.mag = 1;
@@ -194,10 +198,23 @@ const sniperDmg = await page.evaluate(async () => {
   const p = G.player;
   p.pos.x = placed.px; p.pos.z = placed.pz; p.y = 0; p.vel.x = 0; p.vel.z = 0;
   p.cover = null; p.state = 'idle';
-  p.yaw = Math.atan2(-(d.x - p.pos.x), -(d.z - p.pos.z));
-  p.cam.yaw = p.yaw; p.cam.pitch = 0; // torso
   window.BREACH_INPUT._mouseAim = true;
   await wait(600);
+  // En ADS la cámara va sobre el HOMBRO (offset lateral 0.88) y la bala sigue
+  // el eje de la cámara: apuntar con el yaw desde el jugador deja el rayo
+  // fuera del blanco. Se apunta desde la posición REAL de la cámara,
+  // iterando porque mover el yaw la reubica en su órbita.
+  const aimAt = async (ty) => {
+    for (let i = 0; i < 4; i++) {
+      const c = window.BREACH_CAM.position;
+      const dx = d.x - c.x, dz = d.z - c.z, dy = ty - c.y;
+      p.cam.yaw = Math.atan2(-dx, -dz);
+      p.cam.pitch = Math.atan2(dy, Math.hypot(dx, dz));
+      p.yaw = p.cam.yaw;
+      await wait(110);
+    }
+  };
+  await aimAt(1.0); // torso
   const hp0 = d.hp;
   window.BREACH_INPUT.firePressed = true;
   await wait(450);
@@ -212,16 +229,6 @@ const sniperDmg = await page.evaluate(async () => {
   // fijando el yaw desde el jugador deja el rayo fuera del blanco. Se apunta
   // desde la posición REAL de la cámara, iterando porque mover el yaw la
   // reubica en su órbita — igual que un jugador centrando la mira.
-  const aimAt = async (ty) => {
-    for (let i = 0; i < 4; i++) {
-      const c = window.BREACH_CAM.position;
-      const dx = d.x - c.x, dz = d.z - c.z, dy = ty - c.y;
-      p.cam.yaw = Math.atan2(-dx, -dz);
-      p.cam.pitch = Math.atan2(dy, Math.hypot(dx, dz));
-      p.yaw = p.cam.yaw;
-      await wait(110);
-    }
-  };
   let headDelta = 0, headAimY = null;
   for (const aimY of [1.52, 1.6, 1.66]) {
     d.hp = 400; d.alive = true;
@@ -236,6 +243,7 @@ const sniperDmg = await page.evaluate(async () => {
     if (delta > headDelta) { headDelta = delta; headAimY = aimY; }
   }
   window.BREACH_INPUT._mouseAim = false;
+  G.weapons.infinite = wasInfinite;
   return {
     hp0, hp1, magAfter, reloaded, alive: d.alive, hp2: d.hp,
     headDelta, headAimY,
@@ -348,16 +356,22 @@ const spectatorInputs = await page.evaluate(async () => {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   if (G.selfAlive) return { why: 'el jugador está vivo' };
   const before = G.weapons.cur;
-  for (let i = 0; i < 6; i++) {
+  // La oleada de respawn puede llegar a mitad del bucle (respawnT ~0.3 s):
+  // solo cuentan las pulsaciones hechas mientras sigue muerto.
+  let after = before, st = G.player.state, dead = G.player.dead, presses = 0;
+  for (let i = 0; i < 6 && !G.selfAlive; i++) {
     I.slotPressed = i % 4;
     I.cycleDir = 1;
     I.meleePressed = true;
     await wait(90);
+    if (G.selfAlive) break;
+    presses++; after = G.weapons.cur; st = G.player.state; dead = G.player.dead;
   }
-  return { before, after: G.weapons.cur, st: G.player.state, dead: G.player.dead };
+  return { before, after, st, dead, presses };
 });
 check('inputs de arma en espectador no cambian el arma',
-  spectatorInputs.why || (spectatorInputs.before === spectatorInputs.after && spectatorInputs.dead),
+  spectatorInputs.why || (spectatorInputs.presses > 0 &&
+    spectatorInputs.before === spectatorInputs.after && spectatorInputs.dead),
   JSON.stringify(spectatorInputs));
 
 // --- tras respawnear: loadout de fábrica y HUD coherente

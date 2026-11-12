@@ -119,6 +119,11 @@ try {
 
   const reset = await page.evaluate(async () => {
     window.BREACH.weapons.reset();
+    // el HUD se refresca por frame; en CI un frame puede durar cientos de ms
+    const slot0 = () => document.querySelector('#weapon-wheel .wheel-sector[data-slot="0"]')?.dataset.weapon;
+    for (let t0 = performance.now(); slot0() !== 'smg' && performance.now() - t0 < 2500;) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
     await new Promise((resolve) => setTimeout(resolve, 80));
     return {
       slots: window.BREACH.weapons.slots.join(','),

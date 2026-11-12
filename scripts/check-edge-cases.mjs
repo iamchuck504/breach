@@ -145,7 +145,10 @@ const blindPistol = await page.evaluate(async () => {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   G.weapons.startSwap('pistol');
   await wait(700);
-  const f = W.faces.find((c) => c.h <= 1.2 && c.n.z < -0.9);
+  // cara BAJA y ANCHA (≥2 m): la primera que cumplía h/normal es un poste de
+  // 0.8 m en el que evadir hace dive, no cover
+  const f = W.faces.find((c) => c.h <= 1.2 && c.n.z < -0.9 &&
+    Math.hypot(c.b.x - c.a.x, c.b.z - c.a.z) >= 2);
   const mx = (f.a.x + f.b.x) / 2, mz = (f.a.z + f.b.z) / 2;
   window.__tp(mx, mz - 1.0, Math.PI);
   window.BREACH_INPUT.evadePressed = true;
@@ -420,6 +423,8 @@ const pointBlank = await page.evaluate(async () => {
   G.weapons.giveSpecial('bazooka');
   window.__tp(0, -19.4, 0); // a ~1.5m del escudo de spawn, mirando -z (al muro)
   G.player.cam.pitch = 0;
+  // la partida acaba de empezar: la protección de spawn anula el splash propio
+  G.spawnProt = 0;
   const hp0 = G.selfHp;
   await wait(200);
   window.BREACH_INPUT.firePressed = true;
@@ -454,8 +459,12 @@ const deathSpecial = await page.evaluate(async () => {
   // piso ABIERTO mirando a +z: en (5,-15,yaw 0) el cohete pegaba encima de
   // la plataforma LOW y el borde del bloque bloqueaba el splash hacia el
   // pecho (regla de cover funcionando — no era bug)
-  window.__tp(5, -15, Math.PI);
-  G.player.cam.pitch = -1.0; // al suelo
+  // Al suelo (pitch -1) el cañón ya no baja tanto y el cohete estallaba a
+  // >4.2 m: sin splash propio. Mismo tiro a quemarropa que el check de
+  // arriba, contra el muro del spawn, que sí garantiza autodaño.
+  window.__tp(0, -19.4, 0);
+  G.player.cam.pitch = 0;
+  G.spawnProt = 0;
   window.BREACH_INPUT.firePressed = true;
   await wait(300);
   const early = {
@@ -467,8 +476,12 @@ const deathSpecial = await page.evaluate(async () => {
   const drops = [...G.drops.drops.values()].map((d) => d.wep);
   const died = !G.selfAlive || G.player.dead;
   window.__early = early;
-  // esperar respawn (5s + margen)
-  await wait(6500);
+  // El respawn llega en oleadas de 10 s (respawn-wave.js) y el drop dura
+  // 8 s: estirar su vida para probar la recuperación, y esperar al respawn
+  // real en vez de un tiempo fijo.
+  for (const d of G.drops.drops.values()) if (d.wep === 'bazooka') d.t = 60;
+  for (let i = 0; i < 160 && !(G.selfAlive && !G.player.dead); i++) await wait(100);
+  await wait(300);
   return {
     died, drops: drops.slice(-2), before, early,
     slots: G.weapons.slots.join(','), alive: G.selfAlive,
@@ -487,6 +500,9 @@ const recoveredSpecial = await page.evaluate(async () => {
   const drop = [...G.drops.drops.values()].find((d) => d.wep === 'bazooka');
   if (!drop) return { why: 'drop expirado antes de recogerlo' };
   window.__tp(drop.x, drop.z);
+  await wait(250);
+  // reemplazar un arma por un drop exige pulsar evadir (prompt "pickup.replace")
+  window.BREACH_INPUT.evadePressed = true;
   await wait(450);
   return {
     slots: G.weapons.slots.join(','), cur: G.weapons.cur,
@@ -527,12 +543,22 @@ const roundFlip = await page.evaluate(async () => {
   // humo activo cruzando la transición (probar limpieza/estado)
   window.BREACH_SMOKE.throwNade({ x: 0, y: 1.2, z: 5 }, { x: 0, y: 0, z: 0 });
   M.pool.blue = 0;
-  for (const b of M.bots) {
-    if (b.alive && b.team === 'blue') M.damageBot(b.id, 9999, 'player', false, true);
-  }
+  // Un bot recién respawneado tiene protección (damageBot lo rechaza) y una
+  // oleada ya agendada puede traer otro: re-matar en cada vuelta hasta que
+  // cambie la ronda (antes fallaba ~1 de cada 2 corridas).
+  const killBlue = () => {
+    for (const b of M.bots) {
+      if (!b.alive || b.team !== 'blue') continue;
+      b.protT = 0;
+      M.damageBot(b.id, 9999, 'player', false, true);
+    }
+  };
   const r0 = M.round;
   const t0 = performance.now();
-  while (M.round === r0 && performance.now() - t0 < 25000) await wait(400);
+  while (M.round === r0 && performance.now() - t0 < 25000) {
+    if (M.phase === 'playing') killBlue();
+    await wait(400);
+  }
   // esperar a que la ronda 2 libere controles y coloque pedestal
   const t1 = performance.now();
   while ((M.controlsLocked() || G.specialRound !== M.round) && performance.now() - t1 < 20000) await wait(400);

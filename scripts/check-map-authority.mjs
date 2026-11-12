@@ -13,6 +13,22 @@ const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const port = 8811;
 import { CHROME as chrome } from './lib-chrome.mjs';
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// Navegador y Node pueden diferir en el último bit de sin/cos; la geometría
+// compartida se compara con tolerancia, no bit a bit.
+const EPS = 1e-9;
+function assertGeometryEqual(actual, expected, label, at = '') {
+  if (typeof actual === 'number' && typeof expected === 'number') {
+    assert.ok(Math.abs(actual - expected) <= EPS,
+      `${label}${at}: ${actual} != ${expected}`);
+    return;
+  }
+  if (actual && expected && typeof actual === 'object' && typeof expected === 'object') {
+    assert.deepEqual(Object.keys(actual).sort(), Object.keys(expected).sort(), `${label}${at}: claves`);
+    for (const k of Object.keys(expected)) assertGeometryEqual(actual[k], expected[k], label, `${at}.${k}`);
+    return;
+  }
+  assert.equal(actual, expected, `${label}${at}`);
+}
 
 assert.equal(mapLineBlocked('fortaleza', [0, 1, -4], [0, 1, 4]), true);
 assert.equal(mapLineBlocked('fortaleza', [3, 1, -4], [3, 1, 4]), false);
@@ -86,8 +102,8 @@ try {
         segments: world.segmentColliders.map(({ a, b, n, half, h }) => ({ a, b, n, half, h })),
       };
     }, map);
-    assert.deepEqual(actual.boxes, expandedCollisionBoxes(map), `${map}: cliente/servidor difieren`);
-    assert.deepEqual(actual.segments, map === 'azoteas' ? helipadSegments() : [],
+    assertGeometryEqual(actual.boxes, expandedCollisionBoxes(map), `${map}: cliente/servidor difieren`);
+    assertGeometryEqual(actual.segments, map === 'azoteas' ? helipadSegments() : [],
       `${map}: segmentos cliente/servidor difieren`);
   }
   await browser.close(); browser = null;
