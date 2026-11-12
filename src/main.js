@@ -1334,7 +1334,9 @@ function updateCharSel() {
 // no falsea el tamaño relativo de ningún soldado.
 async function renderCharPreviews() {
   const pr = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-  pr.setSize(176, 224);
+  // Se renderiza holgado y grande; el recorte final ajusta al soldado.
+  pr.setPixelRatio(1);
+  pr.setSize(1056, 1344);
   const ps = new THREE.Scene();
   ps.add(new THREE.HemisphereLight(0xd9e6f0, 0x97876e, 2.2));
   const dl = new THREE.DirectionalLight(0xffe9c4, 1.6);
@@ -1343,9 +1345,8 @@ async function renderCharPreviews() {
   const fill = new THREE.DirectionalLight(0xdfe8f0, 0.9); // relleno hacia la cara
   fill.position.set(2.2, 1.4, -1.4);
   ps.add(fill);
-  const pc = new THREE.PerspectiveCamera(30, 176 / 224, 0.1, 10);
-  pc.position.set(0.52, 1.47, -2.75);
-  pc.lookAt(0, 0.84, 0);
+  const pc = new THREE.PerspectiveCamera(30, 176 / 224, 0.1, 20);
+  const rigs = [];
   for (let v = 0; v < 5; v++) {
     const r = new Rig(ps, 'red', null, v);
     await r.visualReady;
@@ -1362,12 +1363,95 @@ async function renderCharPreviews() {
     }
     r.root.rotation.y = -0.18;
     r.root.updateWorldMatrix(true, true);
-    pr.render(ps, pc);
-    const img = charSlots.querySelector(`button[data-v="${v}"] img`);
-    if (img) img.src = pr.domElement.toDataURL();
-    r.dispose(ps);
+    rigs.push(r);
   }
+  // El encuadre se MIDE sobre los cinco soldados (casco más alto incluido):
+  // una cámara fija por números cortaba la cabeza al cambiar el modelo.
+  const bounds = new THREE.Box3();
+  for (const r of rigs) bounds.union(visibleBounds(r.root, _frameBox));
+  frameCameraOn(pc, bounds, PREVIEW_VIEW_DIR);
+  for (const r of rigs) r.root.visible = false;
+  const shots = rigs.map((r) => {
+    r.root.visible = true;
+    pr.render(ps, pc);
+    r.root.visible = false;
+    return snapshotCanvas(pr.domElement);
+  });
+  // mismo recorte para los cinco: el selector no falsea tamaños relativos
+  cropToContent(shots, 352, 448).forEach((src, v) => {
+    const img = charSlots.querySelector(`button[data-v="${v}"] img`);
+    if (img) img.src = src;
+  });
+  for (const r of rigs) r.dispose(ps);
   pr.dispose();
+}
+
+// Copia inmediata del canvas WebGL (su buffer no sobrevive al siguiente frame).
+function snapshotCanvas(source) {
+  const copy = document.createElement('canvas');
+  copy.width = source.width; copy.height = source.height;
+  copy.getContext('2d', { willReadFrequently: true }).drawImage(source, 0, 0);
+  return copy;
+}
+
+// Recorta un grupo de renders al contenido SÓLIDO que comparten (el halo
+// translúcido no cuenta), con margen y la proporción de salida. Medir los
+// píxeles dibujados es inmune a mallas auxiliares que inflan una caja 3D.
+function cropToContent(shots, outW, outH, pad = 0.07) {
+  const w = shots[0].width, h = shots[0].height;
+  let x0 = w, y0 = h, x1 = -1, y1 = -1;
+  for (const shot of shots) {
+    const data = shot.getContext('2d').getImageData(0, 0, w, h).data;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      if (data[(y * w + x) * 4 + 3] < 200) continue;
+      if (x < x0) x0 = x; if (x > x1) x1 = x;
+      if (y < y0) y0 = y; if (y > y1) y1 = y;
+    }
+  }
+  if (x1 < 0) return shots.map((shot) => shot.toDataURL());
+  let bw = (x1 - x0 + 1) * (1 + pad * 2), bh = (y1 - y0 + 1) * (1 + pad * 2);
+  if (bw / bh < outW / outH) bw = bh * outW / outH; else bh = bw * outH / outW;
+  const sx = (x0 + x1 + 1) / 2 - bw / 2, sy = (y0 + y1 + 1) / 2 - bh / 2;
+  return shots.map((shot) => {
+    const out = document.createElement('canvas');
+    out.width = outW; out.height = outH;
+    const ctx = out.getContext('2d');
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(shot, sx, sy, bw, bh, 0, 0, outW, outH);
+    return out.toDataURL();
+  });
+}
+
+// Caja de lo que realmente se dibuja (mallas visibles; sin etiquetas ni
+// armas ocultas) y cámara que la contiene entera con un margen.
+const PREVIEW_VIEW_DIR = new THREE.Vector3(0.52, 0.63, -2.75).normalize();
+const _frameBox = new THREE.Box3(), _framePart = new THREE.Box3();
+const _frameCenter = new THREE.Vector3(), _frameSize = new THREE.Vector3();
+function visibleBounds(root, out) {
+  out.makeEmpty();
+  root.updateWorldMatrix(true, true);
+  const visit = (o) => {
+    if (!o.visible) return;
+    if (o.isMesh && o.geometry) {
+      if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+      out.union(_framePart.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld));
+    }
+    for (const child of o.children) visit(child);
+  };
+  visit(root);
+  return out;
+}
+function frameCameraOn(camera, box, viewDir, margin = 1.1) {
+  if (box.isEmpty()) return;
+  box.getCenter(_frameCenter); box.getSize(_frameSize);
+  const half = Math.tan(camera.fov * Math.PI / 360);
+  const width = Math.max(_frameSize.x, _frameSize.z);
+  // la cara cercana de la caja es la que manda en perspectiva: se suma media
+  // profundidad para que hombros y casco no rocen el borde
+  const dist = Math.max(_frameSize.y / 2 / half, width / 2 / (half * camera.aspect)) * margin + width / 2;
+  camera.position.copy(_frameCenter).addScaledVector(viewDir, dist);
+  camera.lookAt(_frameCenter);
+  camera.updateProjectionMatrix();
 }
 
 const portraitCache = new Map();
@@ -1376,21 +1460,21 @@ function renderCharacterPortrait(variant = 0, team = 'red') {
   if (portraitCache.has(key)) return portraitCache.get(key);
   const pr = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   pr.setPixelRatio(1);
-  pr.setSize(240, 320);
+  pr.setSize(720, 960); // holgado; el recorte final ajusta al soldado
   const ps = new THREE.Scene();
   ps.add(new THREE.HemisphereLight(0xe2eaf0, 0x5b6169, 2.25));
   const keyLight = new THREE.DirectionalLight(team === 'red' ? 0xffd8bd : 0xc8dcff, 1.8);
   keyLight.position.set(2.4, 3.6, -2.8); ps.add(keyLight);
   const rim = new THREE.DirectionalLight(team === 'red' ? 0xd94f3f : 0x4f8de0, 1.15);
   rim.position.set(-2.2, 2, 1.8); ps.add(rim);
-  const pc = new THREE.PerspectiveCamera(28, 240 / 320, .1, 10);
-  pc.position.set(.58, 1.42, -2.72); pc.lookAt(0, .9, 0);
+  const pc = new THREE.PerspectiveCamera(28, 240 / 320, .1, 20);
   const rig = new Rig(ps, team, null, variant | 0);
   for (let i = 0; i < 35; i++) rig.update(1 / 30, { state: 'idle', speed: 0, aim: false, aimPitch: 0 });
   rig.root.rotation.y = -.2;
   rig.root.updateWorldMatrix(true, true);
+  frameCameraOn(pc, visibleBounds(rig.root, _frameBox), PREVIEW_VIEW_DIR);
   pr.render(ps, pc);
-  const data = pr.domElement.toDataURL('image/png');
+  const data = cropToContent([snapshotCanvas(pr.domElement)], 480, 640)[0];
   rig.dispose(ps); pr.dispose();
   portraitCache.set(key, data);
   return data;
