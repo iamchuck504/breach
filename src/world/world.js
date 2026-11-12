@@ -4753,9 +4753,12 @@ export class World {
     // [x, z, giroY, ancho, alto, yCentro] — caras que miran al campo
     const ivies = [
       [-20.95, -8, Math.PI / 2, 2.6, 2.6, 1.55],   // muralla oeste
-      [-20.95, -19, Math.PI / 2, 2.1, 2.2, 1.4],   // carril jardín (oeste)
+      // Las entradas a las escaleras ocupan z 15.8..18.0 en cada extremo del
+      // muro: la hiedra va sobre piedra, nunca cruzando el vano (la del
+      // noroeste tapaba más de un metro de la puerta desde que se abrieron).
+      [-20.95, -19.25, Math.PI / 2, 2.1, 2.2, 1.4], // carril jardín (oeste)
       [-20.95, 5, Math.PI / 2, 3.4, 2.8, 1.55],
-      [-20.95, 18, Math.PI / 2, 2.3, 2.4, 1.45],
+      [-20.95, 20.3, Math.PI / 2, 2.3, 2.4, 1.45],
       [20.95, 8, -Math.PI / 2, 2.6, 2.6, 1.55],
       [-14, -this.fz + 0.05, 0, 3.0, 2.7, 1.5],    // muralla norte/sur (cara interna)
       [14, this.fz - 0.05, Math.PI, 3.0, 2.7, 1.5],

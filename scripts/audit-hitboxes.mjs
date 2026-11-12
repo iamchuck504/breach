@@ -78,6 +78,72 @@ const report = await page.evaluate(async ([layout, TOL]) => {
   };
   const physHit = (origin, dir, maxDist) => physHitFull(origin, dir, maxDist)?.t ?? null;
 
+  // ---------- ÁREA ALCANZABLE ----------
+  // Relleno desde los spawns con la física real del juego (mismo radio de
+  // cuerpo, mismos colliders, escaleras y cubiertas). Decoración que queda
+  // detrás de las murallas —torreones de esquina, torres lejanas, árboles—
+  // no puede recibir un disparo desde ningún sitio donde quepa un jugador:
+  // exigirle colisión sería inventar física fuera del mapa.
+  const BODY_R = 0.38, CELL = 0.3;
+  const gx = Math.ceil(W.fx * 2 / CELL), gz = Math.ceil(W.fz * 2 / CELL);
+  const reach = new Float32Array(gx * gz).fill(NaN); // altura del suelo por celda alcanzable
+  const cellOf = (x, z) => [Math.floor((x + W.fx) / CELL), Math.floor((z + W.fz) / CELL)];
+  const centreOf = (i, j) => [-W.fx + (i + 0.5) * CELL, -W.fz + (j + 0.5) * CELL];
+  const spawnPoints = [...(W.spawns?.red ?? []), ...(W.spawns?.blue ?? [])];
+  const queue = [];
+  for (const s of spawnPoints) {
+    const [i, j] = cellOf(s.x, s.z);
+    if (i < 0 || j < 0 || i >= gx || j >= gz || !Number.isNaN(reach[j * gx + i])) continue;
+    reach[j * gx + i] = W.groundHeight({ x: s.x, z: s.z }, BODY_R, 0);
+    queue.push([i, j]);
+  }
+  let reachable = queue.length;
+  while (queue.length) {
+    const [i, j] = queue.pop();
+    const y = reach[j * gx + i];
+    for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const a = i + di, b = j + dj;
+      if (a < 0 || b < 0 || a >= gx || b >= gz || !Number.isNaN(reach[b * gx + a])) continue;
+      const [x, z] = centreOf(a, b);
+      const q = { x, z };
+      W.resolveCircle(q, BODY_R, y);
+      if (Math.hypot(q.x - x, q.z - z) > 0.06) continue; // el cuerpo no cabe ahí
+      const g = W.groundHeight({ x, z }, BODY_R, y);
+      if (g - y > 0.3) continue;                          // escalón que exige salto
+      reach[b * gx + a] = g; reachable++;
+      queue.push([a, b]);
+    }
+  }
+  // ¿Puede salir un disparo desde algún sitio alcanzable hasta este punto?
+  // Basta una celda alcanzable a menos de 2 m con línea física despejada.
+  const _from = new T.Vector3(), _to = new T.Vector3();
+  const shootable = (x, y, z) => {
+    const [ci, cj] = cellOf(x, z), span = Math.ceil(2 / CELL);
+    for (let j = cj - span; j <= cj + span; j++) for (let i = ci - span; i <= ci + span; i++) {
+      if (i < 0 || j < 0 || i >= gx || j >= gz) continue;
+      const g = reach[j * gx + i];
+      if (Number.isNaN(g)) continue;
+      const [sx, sz] = centreOf(i, j);
+      const flat = Math.hypot(sx - x, sz - z);
+      if (flat > 2) continue;
+      _from.set(sx, Math.max(y, g + 0.3), sz);
+      _to.set(x - sx, y - _from.y, z - sz);
+      const len = _to.length();
+      if (len < 0.08) return true;
+      if (physHit(_from, _to.multiplyScalar(1 / len), len - 0.06) === null) return true;
+    }
+    return false;
+  };
+  // TOLERANCIA en cualquier dirección: un relieve que sobresale menos de TOL
+  // de un collider ya se aceptaba de frente (el rayo pega la caja poco
+  // después); visto de canto el rayo pasa paralelo a la cara y no la toca
+  // nunca. El criterio es el mismo en ambos casos: ¿hay física a menos de
+  // TOL del punto dibujado?
+  const covered = (x, y, z) => W.colliders.some((c) =>
+    x > c.minx - TOL - 1e-3 && x < c.maxx + TOL + 1e-3 && z > c.minz - TOL - 1e-3 && z < c.maxz + TOL + 1e-3 &&
+    y < c.h + TOL && y > (c.minY ?? 0) - TOL);
+  let outOfReach = 0, withinTolerance = 0;
+
   // ---------- 1) rejillas alrededor de cada collider ----------
   const boxes = W.colliders.map((c) => ({ ...c }));
   const findings = [];
@@ -120,7 +186,9 @@ const report = await page.evaluate(async ([layout, TOL]) => {
           };
           const ghostHere = p !== null && (vt === null || vt > p + TOL) &&
             (ph.collider === b || (ph.collider === null && inCell(p)));
-          let holeHere = vt !== null && (p === null || p > vt + TOL) && inCell(vt);
+          // +1 mm: una pieza que sobresale EXACTAMENTE la tolerancia no debe caer de
+          // un lado u otro por redondeo de coma flotante
+          let holeHere = vt !== null && (p === null || p > vt + TOL + 1e-3) && inCell(vt);
           // VOLADIZOS COLGANTES (letreros/banners que cuelgan de un alero,
           // por encima de la cabeza): si bajo el punto impactado hay AIRE
           // (ningún mesh en los 0.55m inferiores), una caja desde el suelo
@@ -151,6 +219,11 @@ const report = await page.evaluate(async ([layout, TOL]) => {
               if (2.9 - th.distance < 0.52) holeHere = false;
               break;
             }
+          }
+          if (holeHere) {
+            const hx = ox + dx * vt, hz = oz + dz * vt;
+            if (covered(hx, y, hz)) { holeHere = false; withinTolerance++; }
+            else if (!shootable(hx, y, hz)) { holeHere = false; outOfReach++; }
           }
           const okHere = ph?.collider === b && !ghostHere && !holeHere;
           if (!ghostHere && !holeHere && !okHere) continue;
@@ -247,6 +320,7 @@ const report = await page.evaluate(async ([layout, TOL]) => {
       const onZone = (W.surfaceZones ?? []).length > 0 &&
         W.groundHeight({ x, z }, 0.3, 3) > 0.3;
       if (!inBox && !nearSeg && !onZone) {
+        if (!shootable(x, Math.min(topY, 1.6) * 0.6, z)) { outOfReach++; continue; }
         orphan.push({ x: +x.toFixed(1), z: +z.toFixed(1), topY: +topY.toFixed(2), name });
       }
     }
@@ -266,15 +340,32 @@ const report = await page.evaluate(async ([layout, TOL]) => {
     totalFindings: findings.length,
     orphanGroups: groups.slice(0, 20),
     totalOrphans: orphan.length,
+    reach: {
+      cells: reachable, total: gx * gz, outOfReach, withinTolerance,
+      spawns: spawnPoints.length,
+      spawnsReached: spawnPoints.filter((s) => { const [i, j] = cellOf(s.x, s.z); return !Number.isNaN(reach[j * gx + i]); }).length,
+    },
   };
 }, [LAYOUT, TOL]);
 
 console.log(`=== AUDIT ${report.layout} · ${report.colliders} colliders ===`);
+// Lo que se descarta se DICE: cuántas discrepancias quedaron fuera del área
+// alcanzable y cuántas dentro de la tolerancia. Si el relleno del área
+// alcanzable fallara (pocas celdas, spawns sin alcanzar), descartaría de más
+// y la auditoría pasaría en falso: por eso eso mismo es un fallo.
+const reachPct = 100 * report.reach.cells / report.reach.total;
+console.log(`área alcanzable: ${report.reach.cells}/${report.reach.total} celdas (${reachPct.toFixed(0)}%) · ` +
+  `spawns ${report.reach.spawnsReached}/${report.reach.spawns}`);
+console.log(`descartadas: ${report.reach.outOfReach} fuera del área alcanzable · ` +
+  `${report.reach.withinTolerance} dentro de la tolerancia (${TOL} m)`);
 console.log(`\n-- Discrepancias por collider (${report.totalFindings}) --`);
 // UMBRAL: por debajo de y2.1 (altura jugable real) no se tolera NINGÚN
 // agujero y solo fantasmas marginales. Lo que quede por encima son aleros
 // y voladizos de toldos, irrepresentables con cajas que nacen del suelo.
 const failures = [];
+if (!report.reach.spawns || report.reach.spawnsReached < report.reach.spawns || reachPct < 25) {
+  failures.push(`área alcanzable sospechosa (${reachPct.toFixed(0)}% del mapa, spawns ${report.reach.spawnsReached}/${report.reach.spawns}): revisar el relleno antes de fiarse del resultado`);
+}
 for (const f of report.findings) {
   if (f.holesLow > 0) {
     failures.push(`caja(${f.box.x},${f.box.z}): ${f.holesLow} agujeros bajo y2.1`);
