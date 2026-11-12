@@ -183,7 +183,9 @@ Opciones → Video → Calidad gráfica elige el nivel (se guarda por jugador):
 | Clásico | — | — | render directo, sin efectos |
 
 Si la ventana supera el tope, baja la resolución interna. Sin GPU real
-(render por software) o sin buffers flotantes, el juego usa Clásico.
+(render por software) o sin buffers flotantes, el juego usa Clásico. Las
+suites automatizadas también corren en Clásico por defecto (los runners son
+lentos); `check-image-pipeline` prueba la cadena aparte con `?gfx=high`.
 `?gfx=off|low|medium|high|ultra` fuerza un nivel sin tocar lo guardado;
 `GFX=high node scripts/bench-map.mjs <mapa> <carpeta>` mide y captura con él.
 

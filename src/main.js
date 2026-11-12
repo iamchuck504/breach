@@ -70,7 +70,9 @@ const pipeline = new ImagePipeline(renderer);
 const gfxParam = new URLSearchParams(location.search).get('gfx');
 let gfxQuality = QUALITY[gfxParam] ? gfxParam
   : QUALITY[localStorage.getItem('breach.video.quality')] ? localStorage.getItem('breach.video.quality')
-    : ImagePipeline.softwareRenderer(renderer) ? 'off' : coarseDisplay ? 'medium' : 'high';
+    // Sin GPU real, y en navegadores automatizados (las suites, que corren en
+    // runners lentos y prueban la cadena aparte con ?gfx), el render clásico.
+    : ImagePipeline.softwareRenderer(renderer) || navigator.webdriver ? 'off' : coarseDisplay ? 'medium' : 'high';
 pipeline.setQuality(gfxQuality);
 // varios render() por cuadro: las estadísticas se reinician a mano
 renderer.info.autoReset = false;
@@ -601,7 +603,7 @@ function prepareGame() {
   const audioReady = audio.prepare();
   preparePromise = (async () => {
     await new Promise(requestAnimationFrame); // pintar PREPARANDO antes del trabajo GPU
-    await Promise.all([audioReady, effects.prepare(renderer, camera), preloadUrbanAssets()]);
+    await Promise.all([audioReady, effects.prepare(renderer, camera, pipeline.compileTarget()), preloadUrbanAssets()]);
     await new Promise(requestAnimationFrame);
   })();
   return preparePromise;

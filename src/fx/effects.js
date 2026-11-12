@@ -604,7 +604,9 @@ export class Effects {
 
   // Prepara los programas/materiales que solo aparecen al disparar o impactar.
   // Se ejecuta una vez, detrás del splash, y limpia todos los objetos de prueba.
-  async prepare(renderer, camera) {
+  // target: el buffer al que se dibuja la escena (cadena de imagen). Los
+  // programas dependen del destino; compilar contra la pantalla no serviría.
+  async prepare(renderer, camera, target = null) {
     if (this._prepared) return;
     this._prepared = true;
     const p = new THREE.Vector3(0, -1000, 0);
@@ -622,8 +624,18 @@ export class Effects {
     this.rocketDeath(q, 0xd94f3f, 2, n, -1000);
     this.meleeImpact(q, 0x4f8de0, n);
     this.dust(q);
-    if (renderer.compileAsync) await renderer.compileAsync(this.scene, camera);
-    else renderer.compile(this.scene, camera);
+    renderer.setRenderTarget(target);
+    try {
+      if (renderer.compileAsync) await renderer.compileAsync(this.scene, camera);
+      else renderer.compile(this.scene, camera);
+    } catch {
+      // compileAsync espera varios cuadros; si entretanto un efecto caduca y
+      // libera su material, su comprobación revienta. Nunca debe dejar al
+      // jugador atascado en la pantalla de carga: se compila de forma directa.
+      renderer.setRenderTarget(target);
+      renderer.compile(this.scene, camera);
+    }
+    renderer.setRenderTarget(null);
     this.update(999);
     this.clearImpacts();
     this._impactBurstBudget = 4;

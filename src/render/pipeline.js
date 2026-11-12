@@ -205,6 +205,13 @@ export class ImagePipeline {
     }
   }
 
+  // Destino contra el que hay que precompilar los materiales de la escena.
+  compileTarget() {
+    if (!this.active) return null;
+    this._ensure();
+    return this.sceneRT;
+  }
+
   _pass(material, target) {
     this.quad.material = material;
     this.renderer.setRenderTarget(target);
