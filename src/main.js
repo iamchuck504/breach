@@ -3164,8 +3164,12 @@ function prototypeInventory(item){
   if(!G.weapons)return;const w=G.weapons,k=item.kind;
   if(!['frag','stun'].includes(k))return;
   const slot=k==='frag'?3:2;
+  const gained=w.slots[slot]!==k||item.count>(w.state[k]?.mag??0);
   if(w.slots[slot]!==k)w.replaceSlot(slot,k,item.count,0);
-  w.state[k].mag=item.count;w.state[k].reserve=0;hud.weaponWheel(w);
+  w.state[k].mag=item.count;w.state[k].reserve=0;
+  // La rueda de armas solo avisa al RECOGER. Abrirla también al lanzar tapaba
+  // el centro de la pantalla justo cuando hay que seguir la granada.
+  if(gained)hud.weaponWheel(w);
 }
 function prototypeEvent(e){
   if(e.kind==='explosion'){
@@ -4091,8 +4095,16 @@ function frame(now) {
   if (G.flowLockedPrev && !flowLocked && (G.mode === 'online' || G.mode === 'bots')) {
     grantSpawnProtection();
   }
+  const flowUnlocked = G.flowLockedPrev && !flowLocked;
   G.flowLockedPrev = flowLocked;
   input.suppress = menuOpen || flowLocked; // presentación y menú bloquean el gameplay
+  // Antes de la ronda (intro / cuenta regresiva) el cursor ya se captura: si
+  // se esperaba a la salida, el ratón quedaba muerto hasta el reintento de
+  // captura y el teclado no contaba. Resultados y pantalla final no capturan.
+  const preRound = G.mode === 'online' ? ['intro', 'countdown'].includes(G.onlinePhase)
+    : G.mode === 'bots' && ['starting', 'countdown'].includes(G.botMatch?.phase);
+  input.presentation = flowLocked && !menuOpen && preRound;
+  if (flowUnlocked && !menuOpen && !input.locked) input.requestLock();
   input.pollPad(dt, !!G.mode && !menuOpen && !flowLocked);
   menuNavigator.poll(input.pad, dt, input.rebinding);
 

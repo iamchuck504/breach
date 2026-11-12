@@ -1688,17 +1688,31 @@ export class Rig {
     if (p.throwT > 0 && p.state !== 'dead') {
       const total = p.throwTotal || 0.5;
       const ph = 1 - Math.max(0, Math.min(1, p.throwT / total)); // 0→1
-      if (ph < 0.42) {
-        // armar: el brazo carga hacia atrás
-        const k = ph / 0.42;
-        R(this.torso, -0.06, 0.34 * k, 0);
-        M(0.3 + 0.08 * k, 0.28 + 0.22 * k, 0.22 * k, -1.5 * k, -0.5 * k, 0);
-      } else {
-        // latigazo y acompañamiento
-        const k = (ph - 0.42) / 0.58;
-        R(this.torso, 0.16 * (1 - k), -0.4 * k, 0);
-        M(0.28 - 0.2 * k, 0.5 - 0.6 * k, 0.22 - 0.7 * k, -1.5 + 2.2 * k, -0.5 + 0.7 * k, 0);
-      }
+      // Tres tiempos CONTINUOS y con curva: armar (0→0.36), latigazo
+      // (0.36→0.66, el bote sale a ~0.56 con el brazo ya al frente) y
+      // acompañamiento, que devuelve el cuerpo a su pose base mezclando en
+      // vez de soltarla de golpe. Antes el torso saltaba a mitad del gesto y
+      // el bote salía con el brazo todavía atrás.
+      const ease = (x) => x * x * (3 - 2 * x);
+      const wind = ease(Math.min(1, ph / 0.36));
+      const whip = ph < 0.36 ? 0 : ease(Math.min(1, (ph - 0.36) / 0.30));
+      const weight = ph < 0.66 ? ease(Math.min(1, ph / 0.1)) : 1 - ease((ph - 0.66) / 0.34);
+      const blend = (o, key, v) => {
+        const base = T.get(o)?.[key] ?? o[key];
+        set(o, key, base + (v - base) * weight);
+      };
+      blend(this.torso.rotation, 'x', -0.06 * wind + 0.22 * whip);
+      blend(this.torso.rotation, 'y', 0.34 * wind - 0.74 * whip);
+      blend(this.torso.rotation, 'z', 0);
+      blend(this.gunMount.position, 'x', 0.3 + 0.08 * wind - 0.3 * whip);
+      blend(this.gunMount.position, 'y', 0.28 + 0.22 * wind - 0.6 * whip);
+      blend(this.gunMount.position, 'z', 0.22 * wind - 0.7 * whip);
+      blend(this.gunMount.rotation, 'x', -1.5 * wind + 2.2 * whip);
+      blend(this.gunMount.rotation, 'y', -0.5 * wind + 0.7 * whip);
+      blend(this.gunMount.rotation, 'z', 0);
+      // el brazo debe SEGUIR la curva: con el suavizado normal de la pose
+      // llegaba tarde al latigazo
+      damp = Math.max(damp, 30);
       set(this.aimRig.rotation, 'x', 0);
       set(this.aimRig.rotation, 'y', 0);
       leftOnGun = false;

@@ -32,6 +32,11 @@ export class Input {
     this._wheelAcc = 0;
     this.locked = false;
     this.suppress = false; // true con el menú abierto: los inputs de juego se ignoran
+    // Presentación previa a la ronda (intro / cuenta regresiva): el gameplay
+    // sigue suprimido pero el cursor SÍ se captura, para que al dar la salida
+    // ratón y teclado ya respondan.
+    this.presentation = false;
+    this.heldRaw = new Set(); // teclas físicamente mantenidas, haya o no captura
     this.onLockedMouseDown = null;
     this.onLockedMouseUp = null;
     // invert Y separado por dispositivo. Por defecto NO invertido (lo que
@@ -92,6 +97,11 @@ export class Input {
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     document.addEventListener('pointerlockchange', () => {
       this.locked = document.pointerLockElement === canvas;
+      // Teclas que ya venían mantenidas cuando llegó la captura (p. ej. W
+      // sostenida durante la cuenta regresiva): cuentan desde este instante.
+      // Sin esto había que soltarlas y volver a pulsarlas (keydown repetido
+      // se ignora) y el personaje arrancaba la ronda clavado.
+      if (this.locked) for (const code of this.heldRaw) this.keys.add(code);
       // Chromium puede entregar un último movementX/Y del cursor anterior o
       // del warp de recaptura. Ignorarlo evita saltos de cámara al pausar.
       this.discardLookDelta(1);
@@ -121,6 +131,7 @@ export class Input {
       if (this.locked) { try { document.exitPointerLock(); } catch { /* ok */ } }
       this._mouseFire = false; this._mouseAim = false;
       this.keys.clear();
+      this.heldRaw.clear();
       this.onFocusLost?.();
     };
     window.addEventListener('blur', onFocusLoss);
@@ -142,7 +153,7 @@ export class Input {
     // Menús, presentaciones y el editor mantienen suppress=true. Nunca deben
     // recapturar el cursor al hacer clic en el canvas; el editor procesa ese
     // mismo evento con sus propios controles de selección/arrastre.
-    if (this.lockDisabled || this.suppress) return;
+    if (this.lockDisabled || (this.suppress && !this.presentation)) return;
     try {
       const q = this.canvas.requestPointerLock();
       if (q && q.catch) q.catch(() => {});
@@ -180,6 +191,7 @@ export class Input {
       if (c === 'KeyM') { this.onToggleMute?.(); }
       // (Escape ya se atendió arriba con return: NO repetir onEscape aquí,
       // duplicarlo togglearía el menú dos veces en el mismo keydown)
+      this.heldRaw.add(c); // estado físico, con o sin captura (ver pointerlockchange)
       if (!this.locked && !this.lockDisabled) return;
       this.keys.add(c);
       if (c === BINDS.kb.evade) this.evadePressed = true;
@@ -193,6 +205,7 @@ export class Input {
       if (c === BINDS.kb.slot4) this.slotPressed = 3;
     } else {
       this.keys.delete(c);
+      this.heldRaw.delete(c);
     }
   }
 

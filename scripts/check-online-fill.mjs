@@ -43,6 +43,12 @@ async function client(name) {
   await page.evaluate(() => document.getElementById('btn-enter')?.click());
   await page.waitForSelector('#splash.off', { state: 'attached' });
   await page.evaluate(([p, n]) => {
+    // historial de avisos: otro aviso (p. ej. un bot toma el arma especial)
+    // puede pisar el texto antes de que la prueba lo lea
+    window.__hints = [];
+    const hint = document.getElementById('context-hint');
+    new MutationObserver(() => { if (hint.textContent) window.__hints.push(hint.textContent); })
+      .observe(hint, { childList: true, characterData: true, subtree: true });
     document.getElementById('in-server').value = `ws://127.0.0.1:${p}`;
     document.getElementById('btn-online').click();
     const el = document.getElementById('in-online-name');
@@ -59,7 +65,7 @@ const roster = (page) => page.evaluate(() => {
     hosted: G.onlineBots?.bots.map((b) => b.id) ?? [],
     remotes: [...G.remotes.values()].map((r) => ({ id: r.id, bot: !!r.bot })),
     rows: G.onlineRows.length,
-    hint: document.getElementById('context-hint').textContent,
+    hint: window.__hints.filter((h) => /CARLA|ANA/.test(h)).at(-1) ?? '',
   };
 });
 
