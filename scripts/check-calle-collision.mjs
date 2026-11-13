@@ -100,7 +100,7 @@ for (const side of [-1, 1]) {
     'la medianera al ras no tiene piel delante');
   assert.notEqual(hit2([side * 14, 1.5, -side * 29], [side, 0, 0], 2.25), null,
     'detrás de la medianera sigue el muro estructural');
-  assert.equal(hit2([side * 14, 1.5, 3], [side, 0, 0], 20), null,
+  assert.equal(hit2([side * 14, 1.5, 4.8], [side, 0, 0], 16), null,
     'la calle transversal está abierta hasta el patio');
   assert.equal(hit2([side * 14, 1.5, 18], [side, 0, 0], 6), null,
     'el pasaje lateral sigue abierto');

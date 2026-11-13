@@ -28,10 +28,12 @@ export const CALLE_3 = Object.freeze({
 
 // These props use the same dimensions for rendering and authority collision.
 export const SIDE_PROPS = Object.freeze([
-  { kind: 'dumpster', x: -27, z: -10.5, w: 2.8, d: 1.6, h: 1.1 },
+  // v3: el del lado del auto estacionado baja hasta el final del tramo; juntos
+  // dejaban 1,5 m de paso y los bots preferían rodear por la avenida
+  { kind: 'dumpster', x: -27, z: -15, w: 2.8, d: 1.6, h: 1.1 },
   { kind: 'dumpster', x: -27, z: 10.5, w: 2.8, d: 1.6, h: 1.1 },
   { kind: 'bench', x: 27, z: -10.5, w: 2.8, d: 1.6, h: 1.1 },
-  { kind: 'bench', x: 27, z: 10.5, w: 2.8, d: 1.6, h: 1.1 },
+  { kind: 'bench', x: 27, z: 15, w: 2.8, d: 1.6, h: 1.1 },
   // v2: los callejones guardan ahora las cajas de munición. Pilas a media
   // altura junto al muro interior permiten acercarse al centro del callejón
   // sin recorrer 15 m al descubierto.
@@ -48,6 +50,11 @@ export const SIDE_PROPS = Object.freeze([
   { kind: 'toolchest', x: -32.2, z: 12.5, w: 1.6, d: 1.4, h: 1.9 },
   { kind: 'bench', x: 34.4, z: -4.4, w: 2.8, d: 1.6, h: 1.1 },
   { kind: 'bench', x: -34.4, z: 4.4, w: 2.8, d: 1.6, h: 1.1 },
+  // brazos de la calle transversal: 14 m de asfalto entre la avenida y el patio
+  { kind: 'dumpster', x: -18.6, z: 3.2, w: 2.8, d: 1.6, h: 1.1 },
+  { kind: 'dumpster', x: 18.6, z: -3.2, w: 2.8, d: 1.6, h: 1.1 },
+  { kind: 'pallets', x: -25.6, z: -2.8, w: 1.6, d: 1.4, h: 1.9 },
+  { kind: 'pallets', x: 25.6, z: 2.8, w: 1.6, d: 1.4, h: 1.9 },
   // patio trasero del spawn (esquina derecha de cada equipo)
   { kind: 'dumpster', x: -27.2, z: -30.2, w: 1.6, d: 2.8, h: 1.1 },
   { kind: 'dumpster', x: 27.2, z: 30.2, w: 1.6, d: 2.8, h: 1.1 },

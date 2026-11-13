@@ -31,7 +31,7 @@ assert(MAP_RUNTIME.calle2.crates.every(c=>Math.abs(c.x)>29.8&&Math.abs(c.x)<40&&
 for(const side of [-1,1]){
   for(const z of [-18,18])assert.equal(mapLineBlocked('calle2',[side*14,1.2,z],[side*25,1.2,z]),false);
   // la calle transversal está abierta hasta el patio; los edificios que quedan, no
-  assert.equal(mapLineBlocked('calle2',[side*15.2,1.2,3],[side*35,1.2,3]),false);
+  assert.equal(mapLineBlocked('calle2',[side*15.2,1.2,4.8],[side*31,1.2,4.8]),false);
   assert.equal(mapLineBlocked('calle2',[side*14,1.2,12],[side*25,1.2,12]),true);
   assert.equal(mapLineBlocked('calle2',[side*25,1.2,18],[side*25,1.2,38]),true);
 }
@@ -188,7 +188,7 @@ try{
         // v3: al patio de manzana por la calle transversal y al patio trasero del spawn
         [{x:side*10,z:-38},{x:side*35,z:2}],
         [{x:side*10,z:side*38},{x:side*25.3,z:side*30}],
-        [{x:side*25.3,z:side*30},{x:side*26,z:side*4}],
+        [{x:side*25.3,z:side*30},{x:side*27.4,z:side*5.6}],
       ];
       for(const [from,goal] of tasks){
         const path=world.navigation.path(from,goal);checks.paths&&=path.length>0;
