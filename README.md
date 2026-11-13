@@ -100,6 +100,56 @@ experimentales fuera de rotación, pero no se anuncian como contenido jugable.
 Hay 5 variantes de soldado por equipo en PERSONAJE y opciones de Audio, Video,
 Idioma y Controles en el menú.
 
+### Mapas v3: rediseño estructural
+
+La v2 redistribuyó cover sobre la misma planta. La v3 cambia la planta: cada
+mapa gana sectores transitables nuevos y se reorganiza para integrarlos.
+
+| Mapa | Antes | Después |
+|---|---|---|
+| Fortaleza | 51 × 53 m · 1 962 m² | 79 × 71 m · 4 396 m² |
+| Azoteas | 63 × 80 m · 4 110 m² | 104,5 × 80 m · 5 346 m² |
+| Calle Cerrada | 58 × 83,5 m · 2 693 m² | 80 × 84 m · 3 965 m² |
+
+(Superficie jugable según `scripts/map-plan.mjs`: celdas de 0,25 m donde cabe
+el cuerpo y a las que se llega andando desde un spawn.)
+
+- **Fortaleza — la ciudadela.** El patio original pasa a ser el recinto
+  interior de un anillo cerrado por una segunda muralla: patios de armas al
+  norte y al sur (ahí nacen los equipos, tras la muralla vieja, que se abre en
+  tres puertas) y lizas al este y al oeste (ruta de flanqueo con establo y
+  fragua). Las galerías se abren a la liza: una puerta a ras de suelo al pie
+  de cada escalera y una escalera exterior que entra por arriba. En el centro,
+  la torre del homenaje: una sala con cuatro puertas descentradas y el arma
+  especial dentro.
+- **Azoteas — azoteas vecinas.** A cada lado de la azotea principal, al otro
+  lado de un vacío de 4,6 m, hay una azotea vecina unida por tres puentes. El
+  pretil hacia el vacío es bajo: se dispara de una azotea a otra, pero solo se
+  cruza por los puentes. Las entreplantas pasan a las vecinas y en su lugar
+  quedan dos invernaderos (interior con techo) junto al helipuerto.
+- **Calle Cerrada — el cruce.** Caen los dos edificios centrales y queda una
+  calle transversal que llega al fondo de cada patio; los callejones se abren
+  a patios de manzana (estacionamiento con andén de carga, taller bajo
+  marquesina) y cada spawn gana una salida lateral por un patio trasero.
+
+Piezas de motor que lo hacen posible:
+
+- `src/world/grid-navigation.js`: navegación de bots genérica. Rellena una
+  rejilla desde los spawns con la física del juego y busca rutas sobre ella;
+  sustituye a los grafos escritos a mano y sirve para cualquier distribución.
+- `moveOnly` en una caja de `collision-layouts.js`: cierra el paso pero no
+  existe para balas, cámara ni línea de visión (el vacío entre azoteas).
+- `MAP_FLOORS` en `src/world/map-dims.js`: losas de suelo de un mapa que no
+  es un rectángulo. `MAP_DIMS` es la fuente única de tamaños de campo.
+- Cajas con `minY`: dinteles y techos bajo los que se pasa.
+
+```bash
+node scripts/map-plan.mjs <mapa> [dir] [rótulo]   # plano cenital a escala fija + superficie jugable
+node scripts/svg-to-png.mjs out.png a.svg [b.svg] # planos a PNG, lado a lado
+node scripts/build-fortress-kit.mjs               # tras mover cajas de Fortaleza (Blender, sin ventana)
+node scripts/build-fort-galleries.mjs             # tras tocar las galerías
+```
+
 ### Mapas v2
 
 Los tres mapas se rediseñaron midiendo con las velocidades reales del juego

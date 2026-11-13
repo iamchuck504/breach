@@ -13,6 +13,33 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { clearClip } from './lib-clip.mjs';
 import { CHROME } from './lib-chrome.mjs';
+import { MAP_DIMS } from '../src/world/map-dims.js';
+
+// Sectores de cada mapa, para saber si los espacios nuevos se usan. Va como
+// texto: se evalúa dentro de la página.
+const SECTORS = {
+  fortaleza: `(x, z, y) => { const ax = Math.abs(x), az = Math.abs(z);
+    if (y > 2 && ax > 21) return ax > 25.9 ? 'escalera exterior' : 'galería';
+    if (az > 27.4) return ax < 8.6 ? 'sala de guardia (spawn)' : 'patio de armas';
+    if (ax > 25.9) return 'liza';
+    if (ax > 21.8) return az > 18.2 ? 'liza' : 'pie de galería';
+    if (ax < 5 && az < 5) return 'torre del homenaje';
+    return 'patio'; }`,
+  azoteas: `(x, z, y) => { const ax = Math.abs(x), az = Math.abs(z);
+    if (ax > 37.2) return y > 1.5 ? 'entreplanta de vecina' : 'azotea vecina';
+    if (ax > 31.9) return 'puente';
+    if (ax > 13.5 && ax < 21.5 && az < 5) return 'invernadero';
+    if (ax < 6.3 && az < 11) return 'helipuerto';
+    if (az > 31.4) return 'spawn';
+    return 'azotea principal'; }`,
+  calle2: `(x, z, y) => { const ax = Math.abs(x), az = Math.abs(z);
+    if (ax > 29.8 && az < 20.6) return y > 0.6 ? 'andén de carga' : 'patio de manzana';
+    if (ax > 21.55 && az > 20.6) return 'patio trasero';
+    if (ax > 21.55) return az < 8.2 ? 'calle transversal (brazo)' : 'callejón';
+    if (ax > 16.15) return az < 8.2 ? 'calle transversal (brazo)' : az > 27 ? 'salida lateral del spawn' : 'portal';
+    if (az < 8.2) return 'cruce';
+    return 'avenida'; }`,
+};
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MAP = process.argv[2] || 'fortaleza';
@@ -41,10 +68,11 @@ try {
   await page.evaluate(() => document.getElementById('btn-lobby-start').click());
   await page.waitForFunction(() => !!window.BREACH.botMatch, null, { timeout: 120000 });
 
+  await page.evaluate((src) => { window.__sector = (0, eval)(src); }, SECTORS[MAP] ?? '() => "mapa"');
   await page.evaluate(() => {
     const G = window.BREACH, M = G.botMatch, W = window.BREACH_WORLD;
     const S = window.__sim = { rounds: [], deaths: [], specials: { red: 0, blue: 0 }, stuck: {}, perch: { holds: { red: 0, blue: 0 }, holdS: 0, killsFrom: 0, deathsOn: 0 },
-      idle: [], samples: 0, zoneTime: {}, first: null };
+      idle: [], samples: 0, zoneTime: {}, sectorTime: {}, first: null };
     // el jugador no participa: ni blanco, ni aliado, ni vidas
     M.cb.player = () => ({ x: 0, z: 0, y: 0, alive: false });
     M.cb.damagePlayer = () => false;
@@ -70,7 +98,7 @@ try {
         const d = { team: v.team, t: +roundT().toFixed(1), x: +v.pos.x.toFixed(1), z: +v.pos.z.toFixed(1), y: +v.y.toFixed(1),
           sinceSpawn: +((performance.now() - (spawnAt.get(v.id) ?? 0)) / 1000).toFixed(1),
           // profundidad: -1 = su propio fondo, +1 = fondo rival
-          depth: +(v.pos.z * toward / W.fz).toFixed(2),
+          depth: +(v.pos.z * toward / W.fz).toFixed(2), sector: window.__sector(v.pos.x, v.pos.z, v.y),
           range: k ? +Math.hypot(k.pos.x - v.pos.x, k.pos.z - v.pos.z).toFixed(1) : null, wep: k?.wep ?? null,
           victimPerch: v.perch?.phase ?? null, killerPerch: k?.perch?.phase ?? null };
         S.deaths.push(d); roundDeaths.push(d);
@@ -126,6 +154,8 @@ try {
             const band = Math.abs(b.pos.z) < W.fz / 3 ? 'medio' : 'fondo';
             const key = `${lane}-${band}`;
             S.zoneTime[key] = (S.zoneTime[key] ?? 0) + 1; S.samples++;
+            const sec = window.__sector(b.pos.x, b.pos.z, b.y);
+            S.sectorTime[sec] = (S.sectorTime[sec] ?? 0) + 1;
           }
         }
       }
@@ -177,10 +207,12 @@ const summary = {
   armaEspecial: data.specials, bajasConEspecial: deaths.filter((d) => d.wep && d.wep !== 'smg' && d.wep !== 'shotgun').length,
   puestos: { ...data.perch, holdS: Math.round(data.perch.holdS) },
   presenciaPorZona: Object.fromEntries(Object.entries(data.zoneTime).sort().map(([k, v]) => [k, pct(v, data.samples)])),
+  // sectores del mapa: % del tiempo de los bots vivos y % de las bajas
+  sectores: Object.fromEntries(Object.entries(data.sectorTime).sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, { presencia: pct(v, data.samples), bajas: pct(deaths.filter((d) => d.sector === k).length, deaths.length) }])),
   atascos: data.stuck, atascosContra: Object.entries(data.stuckAt ?? {}).sort((a, b) => b[1] - a[1]).slice(0, 12),
 quietosMasDe8s: data.idle.length, ejemplosQuietos: data.idle.slice(0, 5),
   erroresDePagina: errors.length,
 };
-function DIM(map) { return { fortaleza: 26, azoteas: 31.5, calle2: 29 }[map] ?? 26; }
+function DIM(map) { return MAP_DIMS[map]?.[0] ?? 26; }
 console.log(JSON.stringify(summary, null, 1));
 if (OUT) fs.writeFileSync(path.join(OUT, `${MAP}-sim${RUN ? '-' + RUN : ''}.json`), JSON.stringify({ summary, rounds: data.rounds, deaths, idle: data.idle, errors }, null, 1));
