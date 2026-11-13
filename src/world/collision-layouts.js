@@ -2,21 +2,98 @@
 // Estas cajas son la fuente única para movimiento, cover y línea de tiro.
 import { BLOCK } from './block-heights.js';
 import {galleryBoxes,galleryCourtyardWalls} from './fortaleza-galleries.js';
-import { expansionBoxes, calle2FurnitureZ, calle2VehiclePosition, calle2AccessOffset } from './calle-expansion.js';
+import { expansionBoxes, calle2FurnitureZ, calle2VehiclePosition, calle2AccessOffset, CALLE_2_V2 } from './calle-expansion.js';
 
 const { LOW, MID, HIGH } = BLOCK;
 const make = (x, z, w, d, h, style, options = {}) =>
   Object.freeze({ x, z, w, d, h, style, ...options });
 const freeze = (items) => Object.freeze(items.map(Object.freeze));
 
+// ---------- PLATAFORMAS ELEVADAS (mapas v2) ----------
+// Una plataforma es una caja normal (se puede estar encima, y desde el suelo
+// es cover de su altura), más rampas transitables y, si se piden, barandas
+// bajas que dan cover a quien está arriba. Las rampas son la única pieza
+// nueva del motor: tramos donde el suelo sube de forma continua. Cliente
+// (World.groundHeight) y servidor (serverMapPhysics) leen la misma lista.
+const RAMP_SPECS = { fortaleza: [], azoteas: [], calle: [], calle2: [] };
+const DECK_SPECS = { fortaleza: [], azoteas: [], calle: [], calle2: [] };
+const RAIL = 0.2;
+// La rampa alcanza la altura completa este tramo ANTES del borde de la
+// plataforma: el cuerpo (radio 0.38) toca la caja antes de que su centro
+// llegue arriba, y a media altura la caja lo frenaría.
+export const RAMP_LANDING = 0.5;
+// side: 'n' (+z), 's' (-z), 'e' (+x), 'w' (-x). La rampa sale de ese borde y
+// baja alejándose de la plataforma.
+function addDeck(out, layout, { x, z, w, d, h, style, ramps = [], rails = [], railStyle = style, mirror = true, kind = 'deck', body = {} }) {
+  DECK_SPECS[layout].push({ x, z, w, d, h, kind, mirror, ramps, rails });
+  out.push(make(x, z, w, d, h, style, { mirror, deck: kind, ...body }));
+  const gapOn = (side) => ramps.filter((r) => r.side === side).map((r) => [(r.offset ?? 0) - r.width / 2, (r.offset ?? 0) + r.width / 2]);
+  for (const side of rails) {
+    const alongX = side === 'n' || side === 's';
+    const half = (alongX ? w : d) / 2;
+    let from = -half;
+    const spans = [];
+    for (const [a, b] of gapOn(side).sort((p, q) => p[0] - q[0])) { if (a > from) spans.push([from, a]); from = Math.max(from, b); }
+    if (from < half) spans.push([from, half]);
+    for (const [a, b] of spans) {
+      const c = (a + b) / 2, len = b - a;
+      const edge = (alongX ? d : w) / 2 - RAIL / 2;
+      const px = alongX ? x + c : x + (side === 'e' ? edge : -edge);
+      const pz = alongX ? z + (side === 'n' ? edge : -edge) : z + c;
+      out.push(make(px, pz, alongX ? len : RAIL, alongX ? RAIL : len, h + LOW, railStyle,
+        { mirror, minY: h, coverBase: h, rail: true }));
+    }
+  }
+  for (const r of ramps) {
+    const alongZ = r.side === 'n' || r.side === 's';
+    const sign = r.side === 'n' || r.side === 'e' ? 1 : -1;
+    const off = r.offset ?? 0;
+    const cx = alongZ ? x + off : x + sign * (w / 2 + r.length / 2);
+    const cz = alongZ ? z + sign * (d / 2 + r.length / 2) : z + off;
+    const ramp = { x: cx, z: cz, w: alongZ ? r.width : r.length, d: alongZ ? r.length : r.width,
+      h, axis: alongZ ? 'z' : 'x', dir: -sign, kind };
+    RAMP_SPECS[layout].push(ramp);
+    if (mirror) RAMP_SPECS[layout].push({ ...ramp, x: -cx, z: -cz, dir: sign });
+    // relleno macizo bajo la rampa: detiene balas y vista, no el paso
+    const steps = 6;
+    for (let i = 0; i < steps; i++) {
+      const t = (i + 0.5) / steps; // 0 = pie, 1 = arriba
+      const along = sign * (r.length / 2 - t * r.length);
+      out.push(make(alongZ ? cx : cx + along, alongZ ? cz + along : cz,
+        alongZ ? r.width : r.length / steps, alongZ ? r.length / steps : r.width,
+        h * (i + 0.5) / steps, 'solid', { mirror, visual: false, cover: false, walkSurface: true, rampFill: true }));
+    }
+  }
+}
+export function rampsFor(layout) { return RAMP_SPECS[layout] || []; }
+export function decksFor(layout) { return DECK_SPECS[layout] || []; }
+// Altura del suelo sobre una rampa (0 fuera de todas). r = radio del cuerpo:
+// se apoya en cuanto la toca de lado, igual que las rampas del helipuerto.
+export function rampHeight(layout, p, r = 0) {
+  let best = 0;
+  for (const ramp of rampsFor(layout)) {
+    const alongZ = ramp.axis === 'z';
+    const across = alongZ ? p.x - ramp.x : p.z - ramp.z, along = alongZ ? p.z - ramp.z : p.x - ramp.x;
+    const len = alongZ ? ramp.d : ramp.w, wide = alongZ ? ramp.w : ramp.d;
+    if (Math.abs(across) - r > wide / 2 || Math.abs(along) > len / 2) continue;
+    const t = (along * ramp.dir + len / 2) / (len - RAMP_LANDING);
+    best = Math.max(best, ramp.h * Math.max(0, Math.min(1, t)));
+  }
+  return best;
+}
+
 const fortaleza = freeze([
   make(0, -27, 44, 0.8, HIGH, 'wall', { mirror: false }),
   make(0, 27, 44, 0.8, HIGH, 'wall', { mirror: false }),
   ...galleryCourtyardWalls(),
   ...galleryBoxes(),
-  make(0, -20.9, 8, 1, HIGH, 'high'),
-  make(-6, -20.2, 2.6, 0.9, LOW, 'low'),
-  make(6, -20.2, 2.6, 0.9, LOW, 'low'),
+  make(0, -20.9, 10.4, 1, HIGH, 'high'),
+  // v2 — CUERPO DE GUARDIA: dos muros altos cierran los costados del spawn
+  // (antes se veía desde el 9 % de la mitad rival). Los dos bloques bajos
+  // pegados al escudo se retiran: sus huecos son ahora las salidas frontales,
+  // y detrás de cada muro queda una salida lateral. Cuatro salidas en total.
+  make(-8.7, -22.9, 1, 4.2, HIGH, 'high'),
+  make(8.7, -22.9, 1, 4.2, HIGH, 'high'),
   make(-8.5, -16, 5, 1, MID, 'mid'),
   make(5.5, -17, 3, 3, LOW, 'low'),
   make(-14.5, -12, 1, 6.5, HIGH, 'high'),
@@ -60,12 +137,15 @@ const fortaleza = freeze([
   make(-15.2, -15.8, 0.8, 0.8, 0.5, 'low', { visual: false, cover: false }),
 ]);
 
-const azoteas = freeze([
+const azoteasBoxes = [
   make(0, -40.4, 65, 0.8, HIGH, 'wall', { mirror: false }),
   make(0, 40.4, 65, 0.8, HIGH, 'wall', { mirror: false }),
   make(-31.9, 0, 0.8, 82, HIGH, 'wall', { mirror: false }),
   make(31.9, 0, 0.8, 82, HIGH, 'wall', { mirror: false }),
-  make(0, -31.35, 8, 1.2, HIGH, 'hut'),
+  // v2: el escudo crece hacia la izquierda (x -8..5.5) y una caseta media
+  // guarda la salida derecha; junto con las casetas laterales tapa el spawn
+  make(-1.25, -31.35, 13.5, 1.2, HIGH, 'hut'),
+  make(7.4, -27.9, 4.6, 1.1, MID, 'hut'),
   make(-8.2, -27.7, 4, 2.2, LOW, 'ac'),
   make(-8.2, -27.7, 3.9, 2.1, 1.18, 'ac', { visual: false, cover: false }),
   make(11.5, -22.8, 3.8, 3.8, LOW, 'glass'),
@@ -109,7 +189,35 @@ const azoteas = freeze([
   // tiras de los muros este/norte.
   make(-31, -14.45, 0.6, 16.5, 0.42, 'vent', { visual: false, cover: false }),
   make(-12.4, -39.5, 15.6, 0.6, 0.42, 'vent', { visual: false, cover: false }),
-]);
+  // ---------- AZOTEAS v2 ----------
+  // SALIDA DE ESCALERA (spawn): dos casetas altas a los lados del escudo.
+  // Antes se veía un punto de aparición desde la cuarta parte de la mitad
+  // rival; ahora el bolsillo queda tapado y conserva cuatro salidas.
+  make(-9.8, -34.4, 1.2, 5.6, HIGH, 'hut'),
+  make(9.8, -34.4, 1.2, 5.6, HIGH, 'hut'),
+  // PRIMERA LÍNEA: el tramo entre el spawn y media cancha era campo abierto.
+  make(16.6, -30.4, 4.2, 2.2, LOW, 'ac'),
+  make(-17.4, -31.2, 1.2, 4.4, LOW, 'vent'),
+  make(3.6, -24.8, 4.6, 1.1, MID, 'hut'),
+  make(20.4, -17.6, 3.4, 3.4, LOW, 'glass'),
+  // SEGUNDA LÍNEA: cortes de visión entre los flancos y el helipuerto
+  make(-13.4, -11.6, 1.1, 4.6, HIGH, 'hut'),
+  make(9.8, -12.6, 3.6, 1.4, LOW, 'ac'),
+  make(-27.4, -13.2, 3.2, 1.2, LOW, 'vent'),
+  make(27.6, -14.4, 1.2, 3.4, MID, 'hut'),
+];
+// ENTREPLANTAS TÉCNICAS: una plataforma a media altura en cada flanco de
+// media cancha, donde antes había 25 m de pasillo vacío. Domina el helipuerto
+// y su flanco, pero tiene dos rampas (una hacia cada equipo), baranda baja y
+// queda a la vista de la otra plataforma y del helipuerto.
+addDeck(azoteasBoxes, 'azoteas', {
+  // estilo propio: 'hut' reserva 0.82 m de holgura corporal frente a sus
+  // caras, y esa holgura cerraría la llegada de la rampa
+  x: -17.5, z: 0, w: 7, d: 7, h: MID, style: 'deck', railStyle: 'vent', kind: 'mezzanine',
+  ramps: [{ side: 's', width: 2.6, length: 6 }, { side: 'n', width: 2.6, length: 6 }],
+  rails: ['w', 'e', 'n', 's'],
+});
+const azoteas = freeze(azoteasBoxes);
 
 function calleSpecs(expanded = false) {
   const out = [
@@ -295,6 +403,19 @@ function calleSpecs(expanded = false) {
     out.push(make(side * 14.42, z - side * 0.5, 0.4, 1.6, 0.56, 'solid', {
       ...linked, cover: false,
     }));
+  }
+  if (expanded) {
+    // ---------- CALLE CERRADA v2 ----------
+    // REMOLQUE de plataforma con rampas en ambos extremos: la única altura
+    // de la avenida. Subido se ve por encima de los autos, pero no hay
+    // baranda: quien sube queda expuesto a toda la calle.
+    addDeck(out, 'calle2', {
+      ...CALLE_2_V2.trailer, h: LOW, style: 'low', kind: 'trailer', body: { visual: false },
+      ramps: [{ side: 's', width: CALLE_2_V2.trailer.w - 0.2, length: 3 }, { side: 'n', width: CALLE_2_V2.trailer.w - 0.2, length: 3 }],
+    });
+    // PANELES PUBLICITARIOS: cortan las aceras, que eran una línea de tiro
+    // libre de 83 m de punta a punta.
+    for (const p of CALLE_2_V2.adPanels) out.push(make(p.x, p.z, p.w, p.d, p.h, 'high', { visual: false }));
   }
   return freeze(out);
 }

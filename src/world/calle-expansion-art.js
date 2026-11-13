@@ -106,6 +106,31 @@ export function decorateCalleExpansion(world, buildings) {
       floor('loading-pad',p.x,p.z,p.w+.35,p.d+.35,mat(0x73603f));
       continue;
     }
+    if(p.kind==='pallets'){
+      // Palés apilados con cajas: tres niveles de listones y carga encima.
+      const wood=mat(0x7d6243),box=mat(0x8b7a5c),wrap=mat(0x9aa7ad,{roughness:.35});
+      for(let i=0;i<3;i++){
+        const y=i*.62;
+        cube('pallet-deck',p.x,y+.07,p.z,p.w,.14,p.d,wood);
+        cube('pallet-load',p.x,y+.14+.24,p.z,p.w-.12,.48,p.d-.12,i===1?wrap:box);
+      }
+      cube('pallet-cap',p.x,p.h-.02,p.z,p.w-.12,.04,p.d-.12,box);
+      for(const dz of [-p.d*.28,p.d*.28])cube('pallet-strap',p.x,p.h/2,p.z+dz,p.w-.10,p.h-.1,.03,black);
+      floor('loading-pad',p.x,p.z,p.w+.35,p.d+.35,mat(0x73603f));
+      continue;
+    }
+    if(p.kind==='toolchest'){
+      // Armario de herramientas de taller: cuerpo rojo con cajones y remate.
+      cube('toolchest',p.x,(p.h-.06)/2,p.z,p.w,p.h-.06,p.d,red);
+      cube('toolchest top',p.x,p.h-.03,p.z,p.w+.04,.06,p.d+.04,metal);
+      const faceX=p.x+Math.sign(p.x)*(p.w/2+.006);
+      for(let i=0;i<6;i++){
+        cube('tool-drawer',faceX,.22+i*.27,p.z,.014,.22,p.d-.16,metal);
+        cube('handle',faceX+Math.sign(p.x)*.02,.22+i*.27,p.z,.03,.03,p.d*.5,black);
+      }
+      floor('loading-pad',p.x,p.z,p.w+.35,p.d+.35,mat(0x73603f));
+      continue;
+    }
     const bodyMat=p.kind==='dumpster'?green:red;
     cube(p.kind,p.x,(p.h-.05)/2,p.z,p.w,p.h-.05,p.d,bodyMat);
     cube(p.kind+' top',p.x,p.h-.025,p.z,p.w,.05,p.d,metal);

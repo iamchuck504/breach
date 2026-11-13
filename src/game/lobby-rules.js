@@ -10,12 +10,18 @@ export const MAPS = ['fortaleza', 'azoteas', 'calle2'];
 export const MAP_RUNTIME = Object.freeze({
   fortaleza: Object.freeze({
     spawnZ: 23.4,
-    crates: Object.freeze([{ x: 7, z: 0 }, { x: -7, z: 0 }]),
-    special: Object.freeze({ x: 2.8, z: 0, y: 0 }),
+    // v2: las cajas salen de la línea central (quien tomaba el centro tenía
+    // el arma especial y las dos cajas a 14 m) y van al pie de cada galería
+    crates: Object.freeze([{ x: -16.5, z: -6.5 }, { x: 16.5, z: 6.5 }]),
+    // v2: corrido a z -0.75 para que ambos equipos lleguen en el mismo tiempo
+    // (26.6 m por el suelo desde cada spawn) tras rehacer el cuerpo de guardia
+    special: Object.freeze({ x: 3, z: -0.75, y: 0 }),
   }),
   azoteas: Object.freeze({
     spawnZ: 35.1,
-    crates: Object.freeze([{ x: 0, z: -12.1 }, { x: 0, z: 12.1 }]),
+    // v2: fuera del eje central (ahí ya están el helipuerto y el arma
+    // especial); cada caja queda en el flanco propio de un equipo
+    crates: Object.freeze([{ x: -24.4, z: -18.6 }, { x: 24.4, z: 18.6 }]),
     special: Object.freeze({ x: 0, z: 0, y: 1.1 }),
   }),
   calle: Object.freeze({
@@ -25,7 +31,9 @@ export const MAP_RUNTIME = Object.freeze({
   }),
   calle2: Object.freeze({
     spawnZ: 38.4,
-    crates: Object.freeze([{ x: -14, z: 0 }, { x: 14, z: 0 }]),
+    // v2: la munición vive en el centro de cada callejón lateral. La avenida
+    // ya tiene el arma especial; los callejones eran un rodeo sin premio.
+    crates: Object.freeze([{ x: -26.4, z: 0 }, { x: 26.4, z: 0 }]),
     special: Object.freeze({ x: 0, z: 0, y: 0 }),
   }),
   metro: Object.freeze({
