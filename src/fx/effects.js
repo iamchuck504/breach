@@ -625,16 +625,18 @@ export class Effects {
     this.meleeImpact(q, 0x4f8de0, n);
     this.dust(q);
     renderer.setRenderTarget(target);
-    try {
-      if (renderer.compileAsync) await renderer.compileAsync(this.scene, camera);
-      else renderer.compile(this.scene, camera);
-    } catch {
-      // compileAsync espera varios cuadros; si entretanto un efecto caduca y
-      // libera su material, su comprobación revienta. Nunca debe dejar al
-      // jugador atascado en la pantalla de carga: se compila de forma directa.
-      renderer.setRenderTarget(target);
-      renderer.compile(this.scene, camera);
-    }
+    // No se usa renderer.compileAsync: su espera consulta el programa de cada
+    // material dentro de un temporizador, y si entretanto un efecto caduca y
+    // libera el suyo lanza un error que nadie puede capturar y la promesa no
+    // se resuelve nunca (pantalla de carga atascada). Se compila de forma
+    // directa y se espera aquí, tolerando materiales liberados y con tope.
+    const materials = renderer.compile(this.scene, camera);
+    const pending = () => [...(materials ?? [])].some((m) => {
+      const program = renderer.properties.get(m).currentProgram;
+      return !!program && !program.isReady();
+    });
+    const deadline = performance.now() + 2500;
+    while (pending() && performance.now() < deadline) await new Promise((r) => setTimeout(r, 12));
     renderer.setRenderTarget(null);
     this.update(999);
     this.clearImpacts();
