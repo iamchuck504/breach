@@ -604,7 +604,9 @@ export class Effects {
 
   // Prepara los programas/materiales que solo aparecen al disparar o impactar.
   // Se ejecuta una vez, detrás del splash, y limpia todos los objetos de prueba.
-  async prepare(renderer, camera) {
+  // target: el buffer al que se dibuja la escena (cadena de imagen). Los
+  // programas dependen del destino; compilar contra la pantalla no serviría.
+  async prepare(renderer, camera, target = null) {
     if (this._prepared) return;
     this._prepared = true;
     const p = new THREE.Vector3(0, -1000, 0);
@@ -622,8 +624,20 @@ export class Effects {
     this.rocketDeath(q, 0xd94f3f, 2, n, -1000);
     this.meleeImpact(q, 0x4f8de0, n);
     this.dust(q);
-    if (renderer.compileAsync) await renderer.compileAsync(this.scene, camera);
-    else renderer.compile(this.scene, camera);
+    renderer.setRenderTarget(target);
+    // No se usa renderer.compileAsync: su espera consulta el programa de cada
+    // material dentro de un temporizador, y si entretanto un efecto caduca y
+    // libera el suyo lanza un error que nadie puede capturar y la promesa no
+    // se resuelve nunca (pantalla de carga atascada). Se compila de forma
+    // directa y se espera aquí, tolerando materiales liberados y con tope.
+    const materials = renderer.compile(this.scene, camera);
+    const pending = () => [...(materials ?? [])].some((m) => {
+      const program = renderer.properties.get(m).currentProgram;
+      return !!program && !program.isReady();
+    });
+    const deadline = performance.now() + 2500;
+    while (pending() && performance.now() < deadline) await new Promise((r) => setTimeout(r, 12));
+    renderer.setRenderTarget(null);
     this.update(999);
     this.clearImpacts();
     this._impactBurstBudget = 4;

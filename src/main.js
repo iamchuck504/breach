@@ -27,6 +27,8 @@ import { requiredFireBuffer } from './combat/fire-control.js';
 import { Effects } from './fx/effects.js';
 import { Audio, selectAudioListener } from './fx/audio.js';
 import { HUD } from './ui/hud.js';
+import { ImagePipeline, QUALITY } from './render/pipeline.js';
+import { SkyEnvironment } from './render/sky.js';
 import { NetClient } from './net/client.js';
 import { BotMatch } from './game/botmatch.js';
 import { SmokeSystem } from './game/smoke.js';
@@ -62,15 +64,54 @@ const coarseDisplay = matchMedia('(pointer: coarse)').matches;
 const BASE_PIXEL_RATIO = Math.min(devicePixelRatio, coarseDisplay ? 1.35 : 2);
 // escala de render de Opciones → Video (persistida); 1 = resolución completa
 let renderScale = parseFloat(localStorage.getItem('breach.video.scale') || '1') || 1;
-renderer.setPixelRatio(BASE_PIXEL_RATIO * renderScale);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+// Cadena de imagen (bloom, curva de tono, gradación) y nivel de calidad.
+// ?gfx=off|low|medium|high|ultra lo fuerza sin tocar lo guardado (pruebas).
+const pipeline = new ImagePipeline(renderer);
+const gfxParam = new URLSearchParams(location.search).get('gfx');
+let gfxQuality = QUALITY[gfxParam] ? gfxParam
+  : QUALITY[localStorage.getItem('breach.video.quality')] ? localStorage.getItem('breach.video.quality')
+    // Sin GPU real, y en navegadores automatizados (las suites, que corren en
+    // runners lentos y prueban la cadena aparte con ?gfx), el render clásico.
+    : ImagePipeline.softwareRenderer(renderer) || navigator.webdriver ? 'off' : coarseDisplay ? 'medium' : 'high';
+pipeline.setQuality(gfxQuality);
+// varios render() por cuadro: las estadísticas se reinician a mano
+renderer.info.autoReset = false;
+function applyRenderSize() {
+  renderer.setPixelRatio(pipeline.pixelRatio(BASE_PIXEL_RATIO * renderScale, innerWidth, innerHeight));
+  renderer.setSize(innerWidth, innerHeight);
+}
+let frameIndex = 0;
+function renderFrame() {
+  renderer.info.reset();
+  sky.update(world, camera, pipeline.active);
+  // mapa de sombras: en los niveles bajos se redibuja cuadro por medio
+  const every = pipeline.active ? pipeline.quality.shadowEvery : 1;
+  renderer.shadowMap.autoUpdate = every <= 1;
+  if (every > 1 && frameIndex++ % every === 0) renderer.shadowMap.needsUpdate = true;
+  pipeline.sun = world.sun;
+  pipeline.render(scene, camera, world.theme ?? world.layout);
+}
+// El filtro de sombras va compilado dentro de cada material: al cambiarlo
+// hay que recompilarlos.
+function applyShadowFilter() {
+  const type = pipeline.active && pipeline.quality.softShadows ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+  if (renderer.shadowMap.type === type) return;
+  renderer.shadowMap.type = type;
+  renderer.shadowMap.needsUpdate = true;
+  scene?.traverse((o) => {
+    for (const m of Array.isArray(o.material) ? o.material : o.material ? [o.material] : []) m.needsUpdate = true;
+  });
+}
+window.BREACH_PIPELINE = pipeline;
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFShadowMap; // bordes de sombra nítidos, sin suavizado
+renderer.shadowMap.type = pipeline.active && pipeline.quality.softShadows ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(TUNING.cam.fovNormal, 1, 0.1, 200);
 // Antes de una partida, Azotea funciona como backdrop 3D deliberado del menú.
 // Al jugar, setLayout reutiliza este mismo World con el mapa elegido.
+const sky = new SkyEnvironment(renderer, scene);
 const world = new World(scene, 'azoteas');
 const effects = new Effects(scene, world);
 const audio = new Audio();
@@ -110,7 +151,7 @@ function showMenuBackdrop() {
 }
 
 function resize() {
-  renderer.setSize(innerWidth, innerHeight);
+  applyRenderSize();
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
 }
@@ -582,7 +623,7 @@ function prepareGame() {
   const audioReady = audio.prepare();
   preparePromise = (async () => {
     await new Promise(requestAnimationFrame); // pintar PREPARANDO antes del trabajo GPU
-    await Promise.all([audioReady, effects.prepare(renderer, camera), preloadUrbanAssets()]);
+    await Promise.all([audioReady, effects.prepare(renderer, camera, pipeline.compileTarget()), preloadUrbanAssets()]);
     await new Promise(requestAnimationFrame);
   })();
   return preparePromise;
@@ -1239,8 +1280,16 @@ if (selScale.selectedIndex < 0) selScale.value = '1';
 selScale.addEventListener('change', () => {
   renderScale = parseFloat(selScale.value) || 1;
   localStorage.setItem('breach.video.scale', String(renderScale));
-  renderer.setPixelRatio(BASE_PIXEL_RATIO * renderScale);
-  renderer.setSize(innerWidth, innerHeight);
+  applyRenderSize();
+});
+const selQuality = document.getElementById('sel-quality');
+selQuality.value = gfxQuality;
+selQuality.addEventListener('change', () => {
+  gfxQuality = QUALITY[selQuality.value] ? selQuality.value : 'high';
+  localStorage.setItem('breach.video.quality', gfxQuality);
+  pipeline.setQuality(gfxQuality);
+  applyShadowFilter();
+  applyRenderSize();
 });
 
 // ---------- selección de personaje ----------
@@ -4084,7 +4133,7 @@ function frame(now) {
   if (G.mode === 'editor') {
     editor.update(dt);
     effects.update(dt);
-    renderer.render(scene, camera);
+    renderFrame();
     input.endFrame();
     return;
   }
@@ -4280,7 +4329,7 @@ function frame(now) {
   // la espoleta necesita el bando de cada cuerpo: un cohete de bot no debe
   // detonar al rozar a un compañero
   rockets.update(dt, G.mode ? allCharacterTargets() : [], explodeRocket);
-  renderer.render(scene, camera);
+  renderFrame();
   input.endFrame();
 }
 requestAnimationFrame(frame);

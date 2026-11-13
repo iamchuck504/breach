@@ -165,6 +165,50 @@ directo "BREACH Editor" del escritorio).
 El acceso se instala o repara con `npm run editor:shortcut`; `npm run editor`
 abre el editor y arranca su servidor local oculto si todavía no está activo.
 
+## Imagen y calidad gráfica
+
+`src/render/pipeline.js` es la cadena de imagen: la escena se dibuja a un
+buffer HDR con MSAA y un pase final aplica bloom, curva de tono (Khronos PBR
+Neutral: no toca los tonos medios), gradación por ambiente, viñeta y dither.
+La gradación de cada mapa vive en la tabla `GRADES` de ese archivo.
+
+Opciones → Video → Calidad gráfica elige el nivel (se guarda por jugador):
+
+| Nivel | MSAA | Bloom | Oclusión | Sombras | Tope de píxeles |
+|---|---|---|---|---|---|
+| Ultra | 4× | sí | 12 muestras | suaves | sin tope |
+| Alta (por defecto en escritorio) | 4× | sí | 8 muestras | suaves | 2.6 M |
+| Media (por defecto en táctil) | 2× | sí | 6 muestras | suaves, cuadro por medio | 1.6 M |
+| Baja | 2× | no | no | duras, cuadro por medio | 1.0 M |
+| Clásico | — | — | — | duras | render directo, sin efectos |
+
+Con la cadena activa, `src/render/sky.js` cambia el degradado de fondo (pegado
+a la pantalla) por una cúpula de cielo que gira con la cámara: mismo degradado
+del tema de cenit a horizonte, halo del sol o la luna y estrellas de noche. De
+esa cúpula sale el mapa de entorno con el que los materiales reciben luz y
+reflejo del cielo. Un objeto del mapa llamado `sky-body` (el sol de Fortaleza,
+la luna de Azoteas) fija dónde va el halo; sin él, el disco sale en la
+dirección de la luz. La oclusión ambiental se calcula a media resolución desde
+la profundidad y se apaga con la distancia.
+
+En el mismo pase van los haces de luz: cada píxel recorre su rayo preguntando
+al mapa de sombras del sol si el aire está iluminado, así que la luz se cuela
+entre muros y se nota sobre todo mirando hacia el sol. Su fuerza por mapa es
+el campo `shafts` de `GRADES`; sin sombras (o en Baja) no hay haces.
+
+Los suelos usan `_applyMacroVariation` (`src/world/world.js`): ruido en
+coordenadas de mundo que varía el tono a gran escala. Con `wet`, las zonas
+bajas del ruido son charcos: más oscuros, lisos y reflectantes (Calle
+Cerrada y, más tímidos, Azoteas). Esto es del mapa, no de la cadena: también
+se ve en Clásico.
+
+Si la ventana supera el tope, baja la resolución interna. Sin GPU real
+(render por software) o sin buffers flotantes, el juego usa Clásico. Las
+suites automatizadas también corren en Clásico por defecto (los runners son
+lentos); `check-image-pipeline` prueba la cadena aparte con `?gfx=high`.
+`?gfx=off|low|medium|high|ultra` fuerza un nivel sin tocar lo guardado;
+`GFX=high node scripts/bench-map.mjs <mapa> <carpeta>` mide y captura con él.
+
 ## Validación (headless, sin abrir ventana)
 
 Fortaleza incorpora dos galerías techadas con 10 ventanas y cuatro escaleras

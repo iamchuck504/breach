@@ -553,7 +553,9 @@ export class World {
   //          patio). Solo tiene sentido en piedra.
   // La orientación de cada cara se toma de su normal en mundo, así sirve
   // igual para muros, suelos y piezas sin coordenadas UV.
-  _applyMacroVariation(material, { grain = false, damp = true } = {}) {
+  //   wet:   charcos. Donde el ruido amplio es bajo el suelo se oscurece y
+  //          se vuelve liso: refleja el cielo y las luces. Solo en suelos.
+  _applyMacroVariation(material, { grain = false, damp = true, wet = 0 } = {}) {
     if (material.userData.breachMacro) return material;
     material.userData.breachMacro = true;
     const macro = this._macroNoiseTexture();
@@ -566,6 +568,7 @@ export class World {
       shader.fragmentShader = shader.fragmentShader
         .replace('#include <common>', '#include <common>\nuniform sampler2D uMacro;\nvarying vec3 vMacroPos;\nvarying vec3 vMacroNormal;')
         .replace('#include <color_fragment>', `#include <color_fragment>
+        float macroWet = 0.0;
         {
           vec3 macroAxis = abs(vMacroNormal);
           bool macroFlat = macroAxis.y > 0.6;
@@ -580,9 +583,19 @@ export class World {
           ${damp ? `float macroDamp = macroFlat ? smoothstep(0.52, 0.24, broad) * 0.55
             : smoothstep(1.25, 0.0, vMacroPos.y) * smoothstep(0.66, 0.28, mid);
           diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.80, 0.89, 0.72), macroDamp * 0.6);` : ''}
-        }`);
+          ${wet ? `if (macroFlat) {
+            float pool = texture2D(uMacro, macroUv * 0.047 + 0.61).g * 0.6 + broad * 0.4;
+            macroWet = smoothstep(0.50, 0.34, pool) * ${wet.toFixed(2)};
+            diffuseColor.rgb *= mix(1.0, 0.62, macroWet);
+          }` : ''}
+        }`)
+        .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+        roughnessFactor = mix(roughnessFactor, 0.07, macroWet);`)
+        // un charco es plano: sin el relieve del asfalto debajo
+        .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        normal = normalize(mix(normal, nonPerturbedNormal, macroWet));`);
     };
-    material.customProgramCacheKey = () => `breach-macro-${grain ? 'g' : 'n'}${damp ? 'd' : 'n'}`;
+    material.customProgramCacheKey = () => `breach-macro-${grain ? 'g' : 'n'}${damp ? 'd' : 'n'}${wet}`;
     material.needsUpdate = true;
     return material;
   }
@@ -1281,6 +1294,9 @@ export class World {
     sky.colorSpace = THREE.SRGBColorSpace;
     this._skyTex = sky;
     this.scene.background = sky;
+    // la cúpula de cielo (render/sky.js) relee esto cuando cambia
+    this.skyStops = stops;
+    this.skyVersion = (this.skyVersion ?? 0) + 1;
   }
 
   _applyEnvironment(layout) {
@@ -1420,7 +1436,12 @@ export class World {
       roughness: floorSurface[0],
       metalness: floorSurface[1],
     });
-    if ((this.theme ?? this.layout) === 'fortaleza') this._applyMacroVariation(floorMat);
+    const floorTheme = this.theme ?? this.layout;
+    if (floorTheme === 'fortaleza') this._applyMacroVariation(floorMat);
+    // Calle: asfalto mojado con charcos. Azoteas: manchas de humedad en la
+    // grava, con charcos más tímidos. Mismo costo: lecturas de una textura.
+    else if (floorTheme === 'calle') this._applyMacroVariation(floorMat, { damp: false, wet: 0.9 });
+    else if (floorTheme === 'azoteas') this._applyMacroVariation(floorMat, { damp: false, wet: 0.55 });
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(this.fx * 2, this.fz * 2), floorMat);
     floor.rotation.x = -Math.PI / 2;
     floor.receiveShadow = true;
@@ -4679,6 +4700,7 @@ export class World {
       new THREE.SphereGeometry(3.2, 14, 8),
       new THREE.MeshBasicMaterial({ color: 0xffca78, fog: false }));
     sunDisk.position.set(-58, 28, -76);
+    sunDisk.name = 'sky-body'; // la cúpula de cielo pone su halo aquí
     this.mapGroup.add(sunDisk);
 
     // Carril de asedio (este): cajas al pie de la muralla, fuera de la ruta.
@@ -5078,6 +5100,7 @@ export class World {
       new THREE.MeshBasicMaterial({ color: 0xf2ecd8 })
     );
     moon.position.set(44, 44, -74);
+    moon.name = 'sky-body';
     this.mapGroup.add(moon);
 
     // Señalización de acceso y conduits de mantenimiento en los extremos. La
