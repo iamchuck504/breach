@@ -97,7 +97,8 @@ try {
   };
   const walk = async (from, yaw, until, maxMs = 6000, arg = null) => {
     await page.evaluate(([f, yaw]) => {
-      const p = window.BREACH.player; p.pos.x = f.x; p.pos.z = f.z; p.y = f.y ?? 0; p.vy = 0; p.grounded = true;
+      const p = window.BREACH.player; if (p.state !== 'run' && p.state !== 'idle') { p.cover = null; p.slide = null; p._setState('run'); }
+      p.pos.x = f.x; p.pos.z = f.z; p.y = f.y ?? 0; p.vy = 0; p.grounded = true;
       p.yaw = yaw; p.cam.yaw = yaw; window.__trace = { maxStep: 0, lastY: p.y, maxY: p.y };
       const tick = () => { const q = window.BREACH.player; if (!q || !window.__trace) return; const t = window.__trace;
         t.maxStep = Math.max(t.maxStep, Math.abs(q.y - t.lastY)); t.lastY = q.y; t.maxY = Math.max(t.maxY, q.y); requestAnimationFrame(tick); };
@@ -131,6 +132,21 @@ try {
     return W.faces.filter((f) => f.baseY === h && Math.abs(f.h - 1.1) < 0.01).length;
   }, deck.h);
   check('azoteas: las barandas dan cover bajo a quien está arriba', rails >= 16, `caras ${rails}`);
+  // pegarse a la baranda desde arriba: W + evadir hacia el este
+  await page.evaluate(([d]) => { const p = window.BREACH.player; p.pos.x = d.x; p.pos.z = d.z; p.y = d.h; p.vy = 0; p.grounded = true;
+    p.yaw = -Math.PI / 2; p.cam.yaw = -Math.PI / 2; p.evadeCooldown = 0; }, [deck]);
+  await page.keyboard.down('KeyW'); await page.waitForTimeout(80);
+  await page.keyboard.press('Space'); await page.waitForTimeout(120); await page.keyboard.up('KeyW');
+  await page.waitForTimeout(1100);
+  const stuck = await page.evaluate(() => { const p = window.BREACH.player, c = window.BREACH_CAM;
+    return { state: p.state, base: p.cover?.baseY ?? null, y: +p.y.toFixed(2), x: +p.pos.x.toFixed(2), camY: +c.position.y.toFixed(2) }; });
+  check('azoteas: se toma cover en la baranda estando arriba', stuck.state === 'cover' && stuck.base === deck.h && Math.abs(stuck.y - deck.h) < 0.06
+    && stuck.camY > deck.h + 0.8, JSON.stringify(stuck));
+  // la entreplanta espejo (lado azul)
+  r = await walk({ x: -deck.x, z: 10.6 }, SOUTH, () => window.BREACH.player.pos.z < 1.5);
+  check('azoteas: la entreplanta espejo también se sube', r.reached && Math.abs(r.y - deck.h) < 0.06 && r.maxStep < 0.45, JSON.stringify(r));
+  r = await walk({ x: -deck.x, z: 0, y: deck.h }, SOUTH, () => window.BREACH.player.pos.z < -10.2);
+  check('azoteas: y se baja por su otra rampa', r.reached && r.y < 0.06 && r.maxStep < 0.45, JSON.stringify(r));
 
   // --- Calle Cerrada: remolque ---
   await play('calle2');
@@ -141,6 +157,8 @@ try {
   check('calle2: se baja por la otra rampa', r.reached && r.y < 0.06 && r.maxStep < 0.45, JSON.stringify(r));
   r = await walk({ x: trailer.x, z: trailer.z + trailer.d / 2 + 4.2 }, SOUTH, (z) => window.BREACH.player.pos.z < z, 6000, trailer.z + 0.6);
   check('calle2: también se sube desde el otro lado', r.reached && Math.abs(r.y - trailer.h) < 0.06, JSON.stringify(r));
+  r = await walk({ x: -trailer.x, z: -trailer.z + trailer.d / 2 + 4.2 }, SOUTH, (z) => window.BREACH.player.pos.z < z, 6000, -trailer.z + 0.6);
+  check('calle2: el remolque espejo (lado azul) también se sube', r.reached && Math.abs(r.y - trailer.h) < 0.06 && r.maxStep < 0.45, JSON.stringify(r));
 
   check('sin errores de página', errors.length === 0, errors.slice(0, 3).join(' | '));
 } finally {

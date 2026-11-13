@@ -73,6 +73,95 @@ const report = await page.evaluate(async ([layout, TOL]) => {
     }
     return null;
   };
+  // ---------- ACELERACIÓN de las mallas grandes ----------
+  // Raycaster prueba TODOS los triángulos de cada malla cuya esfera toca el
+  // rayo. En Fortaleza (sillería de 45 000 triángulos, lotes de 1 984
+  // instancias) eso son 4 ms por rayo y la auditoría, con cientos de miles de
+  // rayos, tardaba media hora: parecía colgada. Las mallas grandes se hornean
+  // a triángulos en espacio de mundo repartidos en una rejilla XZ y solo se
+  // prueban los de las celdas que cruza el rayo. Antes de fiarse, se compara
+  // contra el raycast original en una muestra de rayos (ver `accelCheck`).
+  const ACCEL_CELL = 2;
+  const accelerate = (mesh) => {
+    const g = mesh.geometry, pos = g.attributes.position, idx = g.index;
+    const triCount = Math.floor((idx ? idx.count : pos.count) / 3);
+    const inst = mesh.isInstancedMesh ? mesh.count : 1;
+    if (mesh.isSkinnedMesh || triCount * inst < 2500) return false;
+    mesh.updateMatrixWorld(true);
+    const tris = new Float32Array(triCount * inst * 9), grid = new Map();
+    const v = new T.Vector3(), m = new T.Matrix4(), im = new T.Matrix4();
+    let k = 0;
+    for (let n = 0; n < inst; n++) {
+      if (mesh.isInstancedMesh) { mesh.getMatrixAt(n, im); m.multiplyMatrices(mesh.matrixWorld, im); } else m.copy(mesh.matrixWorld);
+      const flip = m.determinant() < 0; // un espejo invierte el sentido del triángulo
+      for (let t = 0; t < triCount; t++, k++) {
+        let minx = Infinity, maxx = -Infinity, minz = Infinity, maxz = -Infinity;
+        for (let c = 0; c < 3; c++) {
+          v.fromBufferAttribute(pos, idx ? idx.getX(t * 3 + c) : t * 3 + c).applyMatrix4(m);
+          const slot = k * 9 + (flip && c ? 3 - c : c) * 3;
+          tris[slot] = v.x; tris[slot + 1] = v.y; tris[slot + 2] = v.z;
+          minx = Math.min(minx, v.x); maxx = Math.max(maxx, v.x); minz = Math.min(minz, v.z); maxz = Math.max(maxz, v.z);
+        }
+        for (let i = Math.floor(minx / ACCEL_CELL); i <= Math.floor(maxx / ACCEL_CELL); i++)
+          for (let j = Math.floor(minz / ACCEL_CELL); j <= Math.floor(maxz / ACCEL_CELL); j++) {
+            const key = i * 8192 + j;
+            let cell = grid.get(key); if (!cell) grid.set(key, cell = []);
+            cell.push(k);
+          }
+      }
+    }
+    const mat = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+    const inverse = mesh.matrixWorld.clone().invert();
+    const a = new T.Vector3(), b = new T.Vector3(), c = new T.Vector3(), at = new T.Vector3();
+    mesh.raycast = (rc, hits) => {
+      const o = rc.ray.origin, d = rc.ray.direction, far = Math.min(rc.far, 600);
+      const reachXZ = Math.hypot(d.x, d.z) * far;
+      const steps = Math.max(1, Math.ceil(reachXZ / (ACCEL_CELL * 0.5)));
+      // rayos de la auditoría: paralelos a un eje o verticales, así que la
+      // recta pisa una sola fila de celdas; a un rayo oblicuo se le dan vecinas
+      const pad = Math.abs(d.x) > 1e-4 && Math.abs(d.z) > 1e-4 ? 1 : 0;
+      const cells = new Set(), seen = new Set();
+      for (let s = 0; s <= steps; s++) {
+        const ci = Math.floor((o.x + d.x * far * s / steps) / ACCEL_CELL), cj = Math.floor((o.z + d.z * far * s / steps) / ACCEL_CELL);
+        for (let i = ci - pad; i <= ci + pad; i++) for (let j = cj - pad; j <= cj + pad; j++) cells.add(i * 8192 + j);
+      }
+      for (const key of cells) for (const t of grid.get(key) ?? []) {
+        if (seen.has(t)) continue; seen.add(t);
+        a.fromArray(tris, t * 9); b.fromArray(tris, t * 9 + 3); c.fromArray(tris, t * 9 + 6);
+        const hit = mat.side === T.BackSide ? rc.ray.intersectTriangle(c, b, a, true, at)
+          : rc.ray.intersectTriangle(a, b, c, mat.side === T.FrontSide, at);
+        if (!hit) continue;
+        const distance = o.distanceTo(at);
+        if (distance < rc.near || distance > rc.far) continue;
+        const normal = T.Triangle.getNormal(a, b, c, new T.Vector3()).transformDirection(inverse);
+        hits.push({ distance, point: at.clone(), object: mesh, face: { normal } });
+      }
+    };
+    return true;
+  };
+  const accelCheck = { accelerated: 0, rays: 0, mismatches: 0 };
+  {
+    const sample = [];
+    const probe = new T.Raycaster(); probe.camera = window.BREACH_CAM;
+    for (let i = 0; i < 160; i++) {
+      const vertical = i % 4 === 3, alongX = i % 2 === 0;
+      const o = new T.Vector3(-W.fx + ((i * 7919) % 1000) / 1000 * W.fx * 2, vertical ? 3.4 : 0.2 + (i % 13) * 0.16, -W.fz + ((i * 104729) % 1000) / 1000 * W.fz * 2);
+      const d = vertical ? new T.Vector3(0, -1, 0) : alongX ? new T.Vector3(i % 3 ? 1 : -1, 0, 0) : new T.Vector3(0, 0, i % 3 ? 1 : -1);
+      sample.push([o, d]);
+    }
+    const shoot = () => sample.map(([o, d]) => { probe.set(o, d); probe.far = 9;
+      return probe.intersectObjects(W.mapGroup.children, true).filter((h) => h.object.isMesh).map((h) => +h.distance.toFixed(3)); });
+    const before = shoot();
+    W.mapGroup.traverse((o) => { if (o.isMesh && accelerate(o)) accelCheck.accelerated++; });
+    if (accelCheck.accelerated) {
+      const after = shoot();
+      accelCheck.rays = sample.length;
+      // misma lista de distancias, salvo impactos repetidos en una arista compartida
+      const uniq = (l) => [...new Set(l)].join(',');
+      before.forEach((l, i) => { if (uniq(l) !== uniq(after[i])) { accelCheck.mismatches++; accelCheck.first ||= { before: l.slice(0, 6), after: after[i].slice(0, 6) }; } });
+    }
+  }
+
   const physHitFull = (origin, dir, maxDist) => {
     const h = W.raycastHit(origin, dir, maxDist);
     if (h) return h;
@@ -343,6 +432,7 @@ const report = await page.evaluate(async ([layout, TOL]) => {
     totalFindings: findings.length,
     orphanGroups: groups.slice(0, 20),
     totalOrphans: orphan.length,
+    accelCheck,
     reach: {
       cells: reachable, total: gx * gz, outOfReach, withinTolerance,
       spawns: spawnPoints.length,
@@ -366,6 +456,10 @@ console.log(`\n-- Discrepancias por collider (${report.totalFindings}) --`);
 // agujero y solo fantasmas marginales. Lo que quede por encima son aleros
 // y voladizos de toldos, irrepresentables con cajas que nacen del suelo.
 const failures = [];
+if (report.accelCheck.accelerated) {
+  console.log(`mallas aceleradas: ${report.accelCheck.accelerated} · rayos de control ${report.accelCheck.rays} · diferencias ${report.accelCheck.mismatches}`);
+  if (report.accelCheck.mismatches) failures.push(`la aceleración de raycast no coincide con el original en ${report.accelCheck.mismatches} rayos de control: ${JSON.stringify(report.accelCheck.first)}`);
+}
 if (!report.reach.spawns || report.reach.spawnsReached < report.reach.spawns || reachPct < 25) {
   failures.push(`área alcanzable sospechosa (${reachPct.toFixed(0)}% del mapa, spawns ${report.reach.spawnsReached}/${report.reach.spawns}): revisar el relleno antes de fiarse del resultado`);
 }

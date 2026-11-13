@@ -2,6 +2,7 @@
 // que la colisión (plataformas y rampas en collision-layouts.js): lo que se
 // dibuja aquí es exactamente lo que detiene al jugador y a las balas.
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { decksFor, rampsFor, RAMP_LANDING } from './collision-layouts.js';
 import { CALLE_2_V2 } from './calle-expansion.js';
 
@@ -193,5 +194,37 @@ export function decorateMapV2(world, layout) {
       });
     }
   }
+  mergeStatic(root);
   return root;
+}
+
+// Las piezas lisas son decenas de cajas pequeñas: cada una costaba una
+// llamada de dibujo en la pasada de color y otra en la de sombras. Se funden
+// por material (y por si proyectan sombra); flechas y carteles, que llevan
+// textura, quedan como estaban.
+function mergeStatic(root) {
+  root.updateMatrixWorld(true);
+  const inverse = new THREE.Matrix4().copy(root.matrixWorld).invert();
+  const local = new THREE.Matrix4();
+  const buckets = new Map(), keep = [];
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    const m = o.material;
+    if (m.map || m.transparent) { if (o.parent === root) keep.push(o); return; }
+    const key = [m.type, m.color.getHex(), m.metalness ?? '', m.roughness ?? '', o.castShadow].join('|');
+    if (!buckets.has(key)) buckets.set(key, { material: m, castShadow: o.castShadow, parts: [] });
+    const g = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone();
+    g.deleteAttribute('uv');
+    g.applyMatrix4(local.multiplyMatrices(inverse, o.matrixWorld));
+    buckets.get(key).parts.push(g);
+    o.geometry.dispose();
+  });
+  root.clear();
+  for (const o of keep) root.add(o);
+  for (const { material, castShadow, parts } of buckets.values()) {
+    const mesh = new THREE.Mesh(mergeGeometries(parts), material);
+    for (const g of parts) g.dispose();
+    mesh.name = 'v2-static'; mesh.castShadow = castShadow; mesh.receiveShadow = true;
+    root.add(mesh);
+  }
 }
