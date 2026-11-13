@@ -315,7 +315,9 @@ export class Bot {
       ...best, key, collider, age: 0,
       // plazo del rodeo según su longitud: 3 s bastan para una caja, no para
       // dar la vuelta a una plataforma de 19 m con sus rampas
-      budget: Math.max(3, Math.hypot(best.x - this.pos.x, best.z - this.pos.z) / 3.2 + 1),
+      // (solo plataformas: contra una fachada larga el punto de rodeo puede ser
+      // inalcanzable y alargar el plazo dejaba al bot empujando la pared)
+      budget: key.startsWith('d:') ? Math.min(9, Math.max(3, Math.hypot(best.x - this.pos.x, best.z - this.pos.z) / 3.2 + 1)) : 3,
       forwardX: fx, forwardZ: fz, perpX: px, perpZ: pz,
       targetP: best.x * px + best.z * pz,
       goalX: goal?.x ?? null, goalZ: goal?.z ?? null,

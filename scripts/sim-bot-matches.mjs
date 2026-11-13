@@ -112,7 +112,11 @@ try {
           const a = anchor.get(b.id);
           const busy = b.state === 'cover' || b.state === 'hold' || phase === 'hold';
           if (!a || busy || Math.hypot(a.x - b.pos.x, a.z - b.pos.z) > 1) anchor.set(b.id, { x: b.pos.x, z: b.pos.z, t: 0, logged: false });
-          else { a.t += dt; if (a.t > 8 && !a.logged) { a.logged = true; S.idle.push({ id: b.id, state: b.state, role: b.role, x: +b.pos.x.toFixed(1), z: +b.pos.z.toFixed(1), y: +b.y.toFixed(1) }); } }
+          else { a.t += dt; if (a.t > 8 && !a.logged) { a.logged = true; S.idle.push({ id: b.id, state: b.state, role: b.role, x: +b.pos.x.toFixed(1), z: +b.pos.z.toFixed(1), y: +b.y.toFixed(1),
+              wp: b.wp ? [+b.wp.x.toFixed(1), +b.wp.z.toFixed(1)] : null, goal: b.tacticalGoal ? [+b.tacticalGoal.x.toFixed(1), +b.tacticalGoal.z.toFixed(1), b.tacticalGoal.role] : null,
+              recovery: b.recovery ? [+b.recovery.x.toFixed(1), +b.recovery.z.toFixed(1), +b.recovery.age.toFixed(1)] : null, perch: b.perch?.phase ?? null, exit: !!b.exitRoute,
+              navNext: (() => { const n = W.navigation && b.wp ? W.navigation.next(b.pos, b.wp, b) : null; return n ? [+n.x.toFixed(1), +n.z.toFixed(1), W.navigation.clear(b.pos, n)] : null; })(),
+              walkableHere: W.navigation ? W.navigation.walkable(b.pos) : null, goalWalkable: W.navigation && b.wp ? W.navigation.walkable(b.wp) : null, lastReason: b.lastRecoveryReason ?? null, speed: +(b.speed ?? 0).toFixed(1) }); } }
         }
         if (acc >= 0.5) {
           acc = 0;
