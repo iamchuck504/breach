@@ -70,6 +70,9 @@ try {
     await page.waitForTimeout(3500); // modelos, sombreadores y retardo de entrada
     // a partir de aquí el tiempo del juego lo marca el guion
     await page.clock.install();
+    // install() deja el reloj corriendo: sin pausarlo el juego avanza en tiempo
+    // real durante cada captura y el clip queda a saltos
+    await page.clock.pauseAt(Date.now() + 1000);
     await page.evaluate(([sc]) => {
       const G = window.BREACH, p = G.player, I = window.BREACH_INPUT;
       for (const d of G.dummies?.list ?? []) { d.alive = false; d.respawnT = 1e9; d.rig.root.visible = false; }
