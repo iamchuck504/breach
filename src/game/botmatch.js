@@ -376,7 +376,7 @@ export class Bot {
         this.recovery=null;
         // Do not look past the waypoint into a wall when the route turns at
         // this corner. The full segment was already swept with body clearance.
-        return {x:dx,z:dz,blocked:false,hit:null,stairsRoute:!!this.world.galleryEnabled};
+        return {x:dx,z:dz,blocked:false,hit:null,stairsRoute:true};
       }
     }
     _v1.set(this.pos.x, this.y + 0.7, this.pos.z);

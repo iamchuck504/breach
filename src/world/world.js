@@ -14,8 +14,8 @@ import { cloneUrbanAsset } from './urban-assets.js';
 import { HELIPAD, collisionBoxesFor, helipadSegments } from './collision-layouts.js';
 import { CALLE_2, calle2FurnitureZ, calle2VehiclePosition, calle2AccessOffset } from './calle-expansion.js';
 import { decorateCalleExpansion } from './calle-expansion-art.js';
-import { CalleNavigation } from './calle-navigation.js';
-import { FortalezaNavigation } from './fortaleza-navigation.js';
+import { GridNavigation } from './grid-navigation.js';
+import { MAP_DIMS } from './map-dims.js';
 import { calleShopDisplay } from './calle-shop-display.js';
 import { DISTRICT_FACADES } from './district-facades.js';
 import { polishCalleProp } from './calle-prop-polish.js';
@@ -142,12 +142,7 @@ export class World {
     const theme = this.customMap?.theme ?? (layout === 'calle2' ? 'calle' : layout);
     this.theme = theme;
 
-    const dims = {
-      arena: [11, 13], fortaleza: [26, 26.6], azoteas: [31.5, 40],
-      calle: [17, 42], metro: [16, 26], prision: [22, 30], pueblo: [26, 34],
-      calle2: [CALLE_2.fx, CALLE_2.fz],
-      foundry: [FIELD_X, FIELD_Z],
-    };
+    const dims = { ...MAP_DIMS, foundry: [FIELD_X, FIELD_Z] };
     if (this.customMap) [this.fx, this.fz] = [this.customMap.fx, this.customMap.fz];
     else [this.fx, this.fz] = dims[layout] ?? dims.foundry;
     // texturas del batch por mapa (piedra, concreto, azulejo o ladrillo)
@@ -195,7 +190,13 @@ export class World {
     this._flushBoxBatch();
     if (this._fortLook) this._weatherFortaleza();
     this._buildSpawns();
-    this.navigation = layout === 'calle2' ? new CalleNavigation(this) : this.galleryEnabled ? new FortalezaNavigation(this) : null;
+    // Rutas de bots: una rejilla rellenada desde los spawns con la física del
+    // juego. Sirve para cualquier distribución (ver grid-navigation.js).
+    this.navigation = new GridNavigation({
+      colliders: this.colliders, segments: this.segmentColliders, fx: this.fx, fz: this.fz,
+      seeds: [...this.spawns.red, ...this.spawns.blue],
+      baseGround: (p, r) => this.baseGround(p, r),
+    });
 
     // el frustum de sombras debe cubrir el mapa ACTUAL (con ±30 fijos, las
     // esquinas de Fortaleza quedaban sin sombra)
@@ -5986,8 +5987,8 @@ export class World {
     return ceiling;
   }
 
-  // Highest support under the feet, including continuous stair traversal.
-  groundHeight(p, r = 0, y = 0) {
+  // Suelo analítico: galerías, helipuerto y rampas. No mira las cajas.
+  baseGround(p, r = 0) {
     let g = (this.galleryEnabled||this.layout==='fortaleza')?galleryHeight(p,r):0;
     for (const zone of this.surfaceZones) {
       if (zone.kind !== 'helipad') continue;
@@ -6005,7 +6006,12 @@ export class World {
     }
     // rampas de las plataformas elevadas (un mapa de datos hereda las de su base)
     const ramp = rampHeight(this.customMap ? this.customMap.base : this.layout, p, r);
-    if (ramp > g) g = ramp;
+    return ramp > g ? ramp : g;
+  }
+
+  // Highest support under the feet, including continuous stair traversal.
+  groundHeight(p, r = 0, y = 0) {
+    let g = this.baseGround(p, r);
     const m = r * 0.5;
     for (const c of this.colliders) {
       if(c.walkSurface)continue;
