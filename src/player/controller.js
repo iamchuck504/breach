@@ -189,6 +189,8 @@ export class Controller {
       meleeConnected: this.meleeConnected,
       meleeFromCover: this.meleeFromCover,
       meleeEntrySpeed: this.meleeEntrySpeed,
+      meleeTackle: this.state === 'melee' && !!this.meleeTackle,
+      meleeLunge: this.state === 'melee' && !!this.meleeLunge,
     };
   }
 
@@ -280,6 +282,10 @@ export class Controller {
     this.meleeEntryState = previousState;
     this.meleeFromCover = fromCover;
     this.meleeTravel = 0;
+    // placaje si entra en sprint; embestida si hay un rival enganchable
+    this.meleeTackle = this.speed > TUNING.move.runSpeed * 1.15; // por velocidad real: vale aunque se suelte el sprint en ese cuadro
+    const hooked = this.ev.meleeTarget?.(this.meleeTackle ? ml.tackleAcquire : ml.lungeAcquire, ml.lungeArcDeg);
+    this.meleeLunge = hooked ? { id: hooked.id, max: this.meleeTackle ? ml.tackleMax : ml.lungeMax } : null;
     this.aim = false;
     this.firingBlind = 0;
     if (fromCover) {
@@ -541,15 +547,27 @@ export class Controller {
         let push = (ml.lungeSpeed + runFactor * ml.runLungeBonus) * wind;
         const remaining = Math.max(0, ml.maxLunge - this.meleeTravel);
         push = Math.min(push, remaining / Math.max(dt, 1e-4));
+        let f = this.facing();
+        const hook = this.meleeLunge && this.meleeT <= ml.hitAt ? this.ev.meleeTargetPos?.(this.meleeLunge.id) : null;
+        if (hook) {
+          // EMBESTIDA: cubre la distancia al rival justo para el contacto
+          const dx = hook.x - this.pos.x, dz = hook.z - this.pos.z, d = Math.hypot(dx, dz);
+          if (d > 0.01) {
+            this.yaw = approachAngle(this.yaw, Math.atan2(-dx, -dz), ml.lungeTurnDeg * Math.PI / 180 * dt);
+            f = { x: dx / d, z: dz / d };
+            const left = Math.max(dt, ml.hitAt - this.meleeT);
+            push = Math.min(this.meleeTackle ? ml.tackleTopSpeed : ml.lungeTopSpeed, Math.max(0, d - ml.lungeStop) / left,
+              Math.max(0, this.meleeLunge.max - this.meleeTravel) / Math.max(dt, 1e-4));
+          }
+        } else if (this.meleeLunge && this.meleeT <= ml.hitAt) this.meleeLunge = null;
         this.meleeTravel += push * dt;
-        const f = this.facing();
         this.vel.x = f.x * push;
         this.vel.z = f.z * push;
         // Asistencia pequeña: solo dentro de un cono frontal razonable y con
         // tope angular. Un giro de cámara de 90/180° nunca arrastra el golpe.
         const camDelta = angleDelta(this.yaw, this.cam.yaw);
         const assist = ml.assistDeg * Math.PI / 180;
-        if (this.meleeT <= ml.hitAt && Math.abs(camDelta) <= assist) {
+        if (!hook && this.meleeT <= ml.hitAt && Math.abs(camDelta) <= assist) {
           this.yaw = approachAngle(this.yaw, this.cam.yaw,
             ml.assistTurnDeg * Math.PI / 180 * dt);
         }

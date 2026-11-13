@@ -204,11 +204,23 @@ export const TUNING = {
     acquireArcDeg: 124, // cono donde puede ayudar a orientar, no lock-on
     assistDeg: 16,    // corrección máxima del cuerpo hacia cámara/objetivo
     assistTurnDeg: 300,
-    time: 0.48,       // duración máxima: golpe fallado + recovery
-    hitAt: 0.13,      // contacto temprano y reactivo
-    hitRecovery: 0.21,
-    killRecovery: 0.25,
-    missRecovery: 0.35,
+    time: 0.72,       // duración máxima: golpe fallado + recovery
+    hitAt: 0.2,       // preparación visible antes del contacto
+    hitRecovery: 0.26,
+    killRecovery: 0.3,
+    missRecovery: 0.52, // fallar se paga: queda vendido medio segundo
+    // PRUEBA melee v2. EMBESTIDA: con un rival de frente y a la vista, el
+    // golpe recorre la distancia hasta él durante la preparación.
+    lungeAcquire: 3.6,  // m a los que engancha un rival
+    lungeMax: 1.9,      // m que puede recorrer
+    lungeArcDeg: 70,    // cono frontal de enganche
+    lungeStop: 1.15,    // se detiene a esta distancia del rival
+    lungeTopSpeed: 13,
+    lungeTurnDeg: 720,
+    // PLACAJE: golpear en sprint engancha más lejos, pega más y desplaza
+    tackleAcquire: 4.6, tackleMax: 3.1, tackleTopSpeed: 17, tackleDmg: 80, tackleShove: 0.9,
+    // POR LA ESPALDA: letal
+    backstabDmg: 100, backstabArcDeg: 100,
     hitStop: 0.035,   // pausa solo del gesto local; el mundo no se congela
     inputGuard: 0.045,// separa pulsaciones sin cooldown artificial largo
     lungeSpeed: 2.05,

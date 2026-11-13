@@ -1594,15 +1594,17 @@ export class Rig {
         if (ph < 0.27) {
           // preparación breve: hombro y cadera cargan juntos.
           const k = ph / 0.27;
-          R(this.torso, -0.08 - k * 0.08, 0.38 * k, 0.12 * k);
-          R(this.head, 0.08, -0.18 * k, -0.04 * k);
+          // con embestida o placaje el cuerpo carga más atrás y se agacha
+          const big = p.meleeTackle ? 1 : p.meleeLunge ? 0.6 : 0;
+          R(this.torso, -0.08 - k * (0.08 + 0.3 * big), (0.38 + 0.3 * big) * k, 0.12 * k);
+          R(this.head, 0.08 + 0.2 * big * k, -0.18 * k, -0.04 * k);
           M(compact ? 0.2 : 0.28, compact ? 0.08 : 0.14,
             compact ? -0.18 : -0.08, compact ? 0.15 : 0.48,
             -0.3 * k, compact ? 0.55 : 0.32);
         } else if (ph < 0.5) {
           // Contacto: pistola/artefacto da un golpe corto de antebrazo; armas
           // largas cruzan la culata; las pesadas se convierten en un shove.
-          R(this.torso, heavy ? -0.34 : -0.28, heavy ? -0.32 : -0.52, -0.12);
+          R(this.torso, (heavy ? -0.34 : -0.28) - (p.meleeTackle ? 0.3 : p.meleeLunge ? 0.12 : 0), (heavy ? -0.32 : -0.52) - (p.meleeLunge ? 0.14 : 0), -0.12);
           R(this.head, 0.18, 0.16, 0.04);
           if (compact) M(-0.12, -0.03, -0.48, -0.2, 0.28, -0.62);
           else if (heavy) M(-0.03, -0.01, -0.52, -0.22, 0.05, -0.12);

@@ -549,6 +549,24 @@ const ctrlEvents = {
     audio.footstep('jump', 0.9);
     audio.whoosh();
   },
+  // Rival enganchable por la embestida: de frente, cerca, a la vista.
+  meleeTarget: (range, arcDeg) => {
+    const p = G.player, f = p.facing(), cosHalf = Math.cos(arcDeg * Math.PI / 360);
+    let best = null;
+    for (const tg of currentTargets()) {
+      if (tg.alive === false || tg.protected) continue;
+      const dx = tg.x - p.pos.x, dz = tg.z - p.pos.z, dist = Math.hypot(dx, dz);
+      if (dist > range || dist < 0.05 || Math.abs((tg.y ?? 0) - p.y) > TUNING.melee.heightTolerance) continue;
+      const dot = (dx * f.x + dz * f.z) / dist;
+      if (dot < cosHalf) continue;
+      _v1.set(p.pos.x, p.y + 1.08, p.pos.z); _v2.set(dx, 0, dz).normalize();
+      if (world.raycast(_v1, _v2, Math.max(0, dist - 0.3)) !== null) continue;
+      const score = dist + (1 - dot) * 1.2;
+      if (!best || score < best.score) best = { id: tg.id, score };
+    }
+    return best;
+  },
+  meleeTargetPos: (id) => currentTargets().find((tg) => tg.id === id && tg.alive !== false) || null,
   onMeleeStart: () => {
     // El golpe tiene prioridad sobre una recarga, pero no inventa munición:
     // conserva cargador/reserva exactamente donde estaban.
@@ -3357,7 +3375,14 @@ function resolveMelee() {
       Math.max(0, strikeLen - ml.wallPadding)) !== null) {
     return { connected: false, killed: false };
   }
-  const dmg = ml.dmg;
+  // POR LA ESPALDA (letal) > PLACAJE en sprint > golpe normal
+  const tyaw = G.mode === 'practice' ? G.dummies?.list?.find((d) => d.id === tg.id)?.yaw
+    : G.mode === 'bots' ? G.botMatch?.bots.find((b) => b.id === tg.id)?.yaw
+    : (G.remotes.get(tg.id)?.yaw ?? G.onlineBots?.botById(tg.id)?.yaw);
+  const backstab = Number.isFinite(tyaw) && dist > 0.05 &&
+    (best.dx * -Math.sin(tyaw) + best.dz * -Math.cos(tyaw)) / dist > Math.cos(ml.backstabArcDeg * Math.PI / 360);
+  const tackle = !!p.meleeTackle;
+  const dmg = backstab ? ml.backstabDmg : tackle ? ml.tackleDmg : ml.dmg;
   const point = targetPoint.clone();
   const impactDir = new THREE.Vector3(best.dx, 0.12, best.dz).normalize();
   const attackerState = p.meleeEntryState || 'idle';
@@ -3369,7 +3394,7 @@ function resolveMelee() {
   if (G.mode === 'practice' && G.dummies) {
     connected = true;
     tg.rig?.hitReact?.(best.dot < 0.75 ? Math.sign(best.dx) : 0, 1, 'melee');
-    G.dummies.recoil?.(tg.id, best.dx, best.dz, 0.16);
+    G.dummies.recoil?.(tg.id, best.dx, best.dz, tackle ? ml.tackleShove : 0.16);
     killed = G.dummies.damage(tg.id, dmg, (d) => {
       d.rig.setDeathContext({
         impact: { x: d.x - p.pos.x, z: d.z - p.pos.z },
@@ -3387,6 +3412,15 @@ function resolveMelee() {
   } else if (G.mode === 'bots' && G.botMatch) {
     const result = G.botMatch.damageBot(tg.id, dmg, 'player', false, false, ctx);
     if (result !== null) { connected = true; killed = result; if (!killed) audio.hit(); }
+    if (connected && !killed && tackle) {
+      // el placaje desplaza al rival y lo saca de su cobertura
+      const b = G.botMatch.bots.find((x) => x.id === tg.id);
+      if (b) {
+        b.pos.x += best.dx / dist * ml.tackleShove; b.pos.z += best.dz / dist * ml.tackleShove;
+        world.resolveCircle(b.pos, 0.42, b.y ?? 0);
+        if (b.cover) { b.cover = null; b.state = 'advance'; }
+      }
+    }
     victimTeam = tg.team || 'blue';
   } else if (G.net) {
     const r = G.remotes.get(tg.id);
@@ -3405,7 +3439,7 @@ function resolveMelee() {
     hud.hitmarker();
     audio.meleeImpact(null, killed);
     input.pad.rumble(killed ? 115 : 85, 0.58, killed ? 0.95 : 0.78);
-    shoulderCam.addShake(killed ? 0.48 : 0.34);
+    shoulderCam.addShake((killed ? 0.48 : 0.34) + (tackle || backstab ? 0.3 : 0));
   }
   return { connected, killed };
 }
