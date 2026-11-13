@@ -1,8 +1,9 @@
 // Geometría jugable compartida entre World (cliente) y la autoridad online.
 // Estas cajas son la fuente única para movimiento, cover y línea de tiro.
 import { BLOCK } from './block-heights.js';
+import { AZOTEAS_3 } from './map-dims.js';
 import {galleryBoxes,galleryCourtyardWalls} from './fortaleza-galleries.js';
-import { expansionBoxes, calle2FurnitureZ, calle2VehiclePosition, calle2AccessOffset, CALLE_2_V2 } from './calle-expansion.js';
+import { expansionBoxes, calle2FurnitureZ, calle2VehiclePosition, calle2AccessOffset, CALLE_2_V2, CALLE_3 } from './calle-expansion.js';
 
 const { LOW, MID, HIGH } = BLOCK;
 const make = (x, z, w, d, h, style, options = {}) =>
@@ -215,11 +216,61 @@ addDeck(fortalezaBoxes, 'fortaleza', {
 });
 const fortaleza = freeze(fortalezaBoxes);
 
+// tramos del vacío entre puentes (z), iguales a ambos lados
+const AZO_SPANS = (() => {
+  const out = []; let from = -AZOTEAS_3.annexZ;
+  for (const z of AZOTEAS_3.bridges) { out.push([from, z - AZOTEAS_3.bridgeHalf]); from = z + AZOTEAS_3.bridgeHalf; }
+  out.push([from, AZOTEAS_3.annexZ]);
+  return out;
+})();
 const azoteasBoxes = [
   make(0, -40.4, 65, 0.8, HIGH, 'wall', { mirror: false }),
   make(0, 40.4, 65, 0.8, HIGH, 'wall', { mirror: false }),
-  make(-31.9, 0, 0.8, 82, HIGH, 'wall', { mirror: false }),
-  make(31.9, 0, 0.8, 82, HIGH, 'wall', { mirror: false }),
+  // ================= AZOTEAS v3: AZOTEAS VECINAS =================
+  // La azotea principal deja de ser una caja cerrada. A cada lado, al otro
+  // lado de un vacío de 4,6 m, hay una azotea vecina (15 × 52 m) unida por
+  // tres puentes. El pretil hacia el vacío es BAJO: de una azotea a otra se
+  // dispara; se cruza solo por los puentes.
+  // muro alto solo en los tramos sin vecina
+  make(-31.9, -33.5, 0.8, 15, HIGH, 'wall', { mirror: true }),
+  make(-31.9, 33.5, 0.8, 15, HIGH, 'wall', { mirror: true }),
+  ...AZO_SPANS.flatMap(([a, b]) => [
+    // pretiles bajos a ambos lados del vacío
+    make(-31.9, (a + b) / 2, 0.8, b - a, LOW, 'parapet', { mirror: true }),
+    make(-(AZOTEAS_3.gap[1] + 0.4), (a + b) / 2, 0.8, b - a, LOW, 'parapet', { mirror: true }),
+    // el vacío: cierra el paso, no las balas
+    make(-(AZOTEAS_3.gap[0] + AZOTEAS_3.gap[1]) / 2, (a + b) / 2, AZOTEAS_3.gap[1] - AZOTEAS_3.gap[0], b - a + 0.6, HIGH, 'solid',
+      { mirror: true, visual: false, cover: false, moveOnly: true }),
+  ]),
+  // barandas de los puentes
+  ...AZOTEAS_3.bridges.flatMap((z) => [-1, 1].map((s) =>
+    make(-(AZOTEAS_3.gap[0] + AZOTEAS_3.gap[1]) / 2, z + s * (AZOTEAS_3.bridgeHalf + 0.15), AZOTEAS_3.gap[1] - AZOTEAS_3.gap[0], 0.3, LOW, 'parapet', { mirror: true }))),
+  // cierre de la azotea vecina: muro alto por fuera y en los extremos
+  make(-(AZOTEAS_3.annexX[1] + 0.4), 0, 0.8, AZOTEAS_3.annexZ * 2 + 1.6, HIGH, 'wall', { mirror: true }),
+  make(-(AZOTEAS_3.gap[1] + AZOTEAS_3.annexX[1] + 0.8) / 2, -AZOTEAS_3.annexZ - 0.4, AZOTEAS_3.annexX[1] + 0.8 - AZOTEAS_3.gap[1], 0.8, HIGH, 'wall', { mirror: true }),
+  make(-(AZOTEAS_3.gap[1] + AZOTEAS_3.annexX[1] + 0.8) / 2, AZOTEAS_3.annexZ + 0.4, AZOTEAS_3.annexX[1] + 0.8 - AZOTEAS_3.gap[1], 0.8, HIGH, 'wall', { mirror: true }),
+  // VECINA ESTE, mitad roja — centro de datos: enfriadoras y casetas
+  make(44, -21, 5, 2.4, LOW, 'ac'),
+  make(41.4, -12.4, 2.6, 5, MID, 'hut'),
+  make(49.8, -15.4, 2.4, 4, LOW, 'ac'),
+  make(43.6, -5.6, 1.2, 4, LOW, 'vent'),
+  // VECINA OESTE, mitad roja — campo de antenas y tragaluces
+  make(-47, -20.6, 2.8, 2.8, HIGH, 'hut'),
+  make(-42, -14.6, 4.4, 1.2, LOW, 'vent'),
+  make(-44.2, -8.2, 3.4, 3.4, LOW, 'glass'),
+  make(-40.4, -3.4, 2.4, 4.2, LOW, 'ac'),
+  // INVERNADERO: donde estaban las entreplantas hay ahora un pabellón de
+  // vidrio a cada lado del helipuerto. Tres puertas descentradas y techo:
+  // un interior que disputar a 7 m del arma especial.
+  make(-20.35, -5, 2.3, 0.5, HIGH, 'glass'),
+  make(-15.05, -5, 3.1, 0.5, HIGH, 'glass'),
+  make(-19.95, 5, 3.1, 0.5, HIGH, 'glass'),
+  make(-14.65, 5, 2.3, 0.5, HIGH, 'glass'),
+  make(-13.5, -3.4, 0.5, 3.7, HIGH, 'glass'),
+  make(-13.5, 3.4, 0.5, 3.7, HIGH, 'glass'),
+  make(-21.5, 0, 0.5, 10.5, HIGH, 'glass'),
+  make(-17.5, 0, 8.5, 10.5, 3.82, 'glass', { minY: 3.6, cover: false, roof: 'glass' }),
+  make(-19.4, 0.6, 1.2, 3.6, LOW, 'vent'),
   // v2: el escudo crece hacia la izquierda hasta tocar la caseta lateral
   // (x -9.2..5.5) y una caseta media guarda la salida derecha; junto con las
   // casetas laterales tapa el spawn. Antes paraba en x -8 y dejaba una
@@ -267,7 +318,7 @@ const azoteasBoxes = [
   // tubería decorativa al pie de los muros oeste/sur (cilindros medidos a
   // y0.4): las balas rastreras atravesaban el dibujo. El espejo crea las
   // tiras de los muros este/norte.
-  make(-31, -14.45, 0.6, 16.5, 0.42, 'vent', { visual: false, cover: false }),
+  make(-31, -10, 0.6, 13.5, 0.42, 'vent', { visual: false, cover: false }),
   make(-12.4, -39.5, 15.6, 0.6, 0.42, 'vent', { visual: false, cover: false }),
   // ---------- AZOTEAS v2 ----------
   // SALIDA DE ESCALERA (spawn): dos casetas altas a los lados del escudo.
@@ -286,14 +337,14 @@ const azoteasBoxes = [
   make(-27.4, -13.2, 3.2, 1.2, LOW, 'vent'),
   make(27.6, -14.4, 1.2, 3.4, MID, 'hut'),
 ];
-// ENTREPLANTAS TÉCNICAS: una plataforma a media altura en cada flanco de
-// media cancha, donde antes había 25 m de pasillo vacío. Domina el helipuerto
-// y su flanco, pero tiene dos rampas (una hacia cada equipo), baranda baja y
-// queda a la vista de la otra plataforma y del helipuerto.
+// ENTREPLANTAS TÉCNICAS: en v3 pasan a las azoteas vecinas, pegadas al muro
+// exterior. Dominan el vacío, los puentes y el flanco de la azotea principal,
+// pero tienen dos rampas (una hacia cada equipo), baranda baja y quedan a la
+// vista de todo el flanco de enfrente.
 addDeck(azoteasBoxes, 'azoteas', {
   // estilo propio: 'hut' reserva 0.82 m de holgura corporal frente a sus
   // caras, y esa holgura cerraría la llegada de la rampa
-  x: -17.5, z: 0, w: 7, d: 7, h: MID, style: 'deck', railStyle: 'vent', kind: 'mezzanine',
+  x: -48.9, z: 0, w: 6, d: 8, h: MID, style: 'deck', railStyle: 'vent', kind: 'mezzanine',
   ramps: [{ side: 's', width: 2.6, length: 6 }, { side: 'n', width: 2.6, length: 6 }],
   rails: ['w', 'e', 'n', 's'],
 });
@@ -496,6 +547,12 @@ function calleSpecs(expanded = false) {
     // PANELES PUBLICITARIOS: cortan las aceras, que eran una línea de tiro
     // libre de 83 m de punta a punta.
     for (const p of CALLE_2_V2.adPanels) out.push(make(p.x, p.z, p.w, p.d, p.h, 'high', { visual: false }));
+    // v3 — ANDÉN DE CARGA al fondo de cada brazo de la calle transversal:
+    // domina el brazo entero, pero se sube por dos rampas y no tiene baranda.
+    addDeck(out, 'calle2', {
+      ...CALLE_3.dock, h: LOW, style: 'low', kind: 'dock', body: { visual: false },
+      ramps: [{ side: 's', width: CALLE_3.dock.w - 0.2, length: 3 }, { side: 'n', width: CALLE_3.dock.w - 0.2, length: 3 }],
+    });
   }
   return freeze(out);
 }
@@ -536,6 +593,7 @@ export function expandedCollisionBoxes(layout) {
     h: box.h,
     ...(box.minY!==undefined?{minY:box.minY}:{}),
     ...(box.walkSurface?{walkSurface:true}:{}),
+    ...(box.moveOnly?{moveOnly:true}:{}),
   });
   for (const box of collisionBoxesFor(layout)) {
     place(box, box.x, box.z);

@@ -21,7 +21,9 @@ export const MAP_RUNTIME = Object.freeze({
     spawnZ: 35.1,
     // v2: fuera del eje central (ahí ya están el helipuerto y el arma
     // especial); cada caja queda en el flanco propio de un equipo
-    crates: Object.freeze([{ x: -24.4, z: -18.6 }, { x: 24.4, z: 18.6 }]),
+    // v3: una caja al desembarcar del puente central de cada azotea vecina,
+    // bajo la entreplanta
+    crates: Object.freeze([{ x: -40.4, z: 2.6 }, { x: 40.4, z: -2.6 }]),
     special: Object.freeze({ x: 0, z: 0, y: 1.1 }),
   }),
   calle: Object.freeze({
@@ -33,7 +35,9 @@ export const MAP_RUNTIME = Object.freeze({
     spawnZ: 38.4,
     // v2: la munición vive en el centro de cada callejón lateral. La avenida
     // ya tiene el arma especial; los callejones eran un rodeo sin premio.
-    crates: Object.freeze([{ x: -26.4, z: 0 }, { x: 26.4, z: 0 }]),
+    // v3: una caja en cada brazo de la calle transversal, a la vista del
+    // andén de carga y a mitad de camino entre los dos equipos.
+    crates: Object.freeze([{ x: -33.4, z: 0 }, { x: 33.4, z: 0 }]),
     special: Object.freeze({ x: 0, z: 0, y: 0 }),
   }),
   metro: Object.freeze({

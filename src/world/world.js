@@ -15,7 +15,8 @@ import { HELIPAD, collisionBoxesFor, helipadSegments } from './collision-layouts
 import { CALLE_2, calle2FurnitureZ, calle2VehiclePosition, calle2AccessOffset } from './calle-expansion.js';
 import { decorateCalleExpansion } from './calle-expansion-art.js';
 import { GridNavigation } from './grid-navigation.js';
-import { MAP_DIMS } from './map-dims.js';
+import { MAP_DIMS, MAP_FLOORS } from './map-dims.js';
+import { decorateMapV3 } from './maps-v3-art.js';
 import { calleShopDisplay } from './calle-shop-display.js';
 import { DISTRICT_FACADES } from './district-facades.js';
 import { polishCalleProp } from './calle-prop-polish.js';
@@ -186,6 +187,7 @@ export class World {
     if (decorBase) polishArchitecture(this, decorBase);
     if (decorBase) addMapIdentity(this, decorBase);
     if (decorBase) decorateMapV2(this, decorBase);
+    if (decorBase) decorateMapV3(this, decorBase);
     this._addMapPeriphery(theme);
     this._flushBoxBatch();
     if (this._fortLook) this._weatherFortaleza();
@@ -1446,23 +1448,46 @@ export class World {
     // grava, con charcos más tímidos. Mismo costo: lecturas de una textura.
     else if (floorTheme === 'calle') this._applyMacroVariation(floorMat, { damp: false, wet: 0.9 });
     else if (floorTheme === 'azoteas') this._applyMacroVariation(floorMat, { damp: false, wet: 0.55 });
-    const floor = new THREE.Mesh(new THREE.PlaneGeometry(this.fx * 2, this.fz * 2), floorMat);
-    floor.rotation.x = -Math.PI / 2;
+    // SUELO CON HUECOS: un mapa puede declarar sus losas (MAP_FLOORS). Entre
+    // ellas no hay suelo: se ve la calle de abajo. Las UV siguen el mismo
+    // reparto que el plano único, así la textura no salta entre losas.
+    const floorSpec = this.customMap ? null : MAP_FLOORS[this.layout];
+    this._floorRects = floorSpec?.rects ?? null;
+    let floor;
+    if (this._floorRects) {
+      const pos = [], uv = [];
+      for (const [x0, x1, z0, z1] of this._floorRects) {
+        for (const [x, z] of [[x0, z0], [x0, z1], [x1, z1], [x0, z0], [x1, z1], [x1, z0]]) {
+          pos.push(x, 0, z);
+          uv.push((x + this.fx) / (this.fx * 2), (this.fz - z) / (this.fz * 2));
+        }
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+      g.computeVertexNormals();
+      floor = new THREE.Mesh(g, floorMat);
+    } else {
+      floor = new THREE.Mesh(new THREE.PlaneGeometry(this.fx * 2, this.fz * 2), floorMat);
+      floor.rotation.x = -Math.PI / 2;
+    }
+    floor.name = 'map-floor';
     floor.receiveShadow = true;
     this.mapGroup.add(floor);
+    const tintW = (floorSpec?.tintHalf ?? this.fx - 0.5) * 2;
 
     // tinte de zona por equipo cerca de cada base
     for (const [color, sign] of [[0xe05545, -1], [0x4f8de0, 1]]) {
       const z = sign * (this.fz - 2.5);
       const zone = new THREE.Mesh(
-        new THREE.PlaneGeometry(this.fx * 2 - 1, 4.6),
+        new THREE.PlaneGeometry(tintW, 4.6),
         new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.10 })
       );
       zone.rotation.x = -Math.PI / 2;
       zone.position.set(0, 0.01, z);
       this.mapGroup.add(zone);
       const strip = new THREE.Mesh(
-        new THREE.PlaneGeometry(this.fx * 2 - 1, 0.22),
+        new THREE.PlaneGeometry(tintW, 0.22),
         new THREE.MeshBasicMaterial({ color })
       );
       strip.rotation.x = -Math.PI / 2;
@@ -1471,7 +1496,7 @@ export class World {
     }
     // línea central
     const mid = new THREE.Mesh(
-      new THREE.PlaneGeometry(this.fx * 2 - 1, 0.14),
+      new THREE.PlaneGeometry(tintW, 0.14),
       new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35 })
     );
     mid.rotation.x = -Math.PI / 2;
@@ -1482,7 +1507,7 @@ export class World {
   // Caja física + visual. mirror=true agrega la copia rotada 180° (-x,-z).
   _box(x, z, w, d, h, {
     mirror = true, color = 0x9a958c, top = 0xaeaaa1, cover = true, visual = true,
-    surface = null, decorLink = null, minY = 0, walkSurface = false, coverBase = 0,
+    surface = null, decorLink = null, minY = 0, walkSurface = false, coverBase = 0, moveOnly = false,
   } = {}) {
     const place = (px, pz) => {
       // CLONADO DE MAPAS: place() es el embudo por el que pasa cada caja de
@@ -1491,7 +1516,7 @@ export class World {
       // por su decoración (fachadas, GLBs, helipuerto) sin crear las cajas —
       // las del clon, ya como datos editables, ocupan su lugar.
       if (this._capture) this._capture.push({ x: px, z: pz, w, d, h, color, top, cover, visual, surface, decorLink,
-        ...(minY?{minY}:{}),...(walkSurface?{walkSurface}:{}),...(coverBase?{coverBase}:{}) });
+        ...(minY?{minY}:{}),...(walkSurface?{walkSurface}:{}),...(coverBase?{coverBase}:{}),...(moveOnly?{moveOnly}:{}) });
       if (this._suppressBoxes) return;
       // variación sutil de tono por caja: rompe la monotonía sin romper la paleta
       const jit = 0.95 + Math.random() * 0.1;
@@ -1515,6 +1540,9 @@ export class World {
       const collider = { minx, minz, maxx, maxz, h, surface: material };
       if(minY)collider.minY=minY;
       if(walkSurface)collider.walkSurface=true;
+      // VACÍO: cierra el paso (movimiento, navegación) pero no existe para
+      // balas, cámara ni línea de visión. Es el hueco entre dos azoteas.
+      if(moveOnly)collider.moveOnly=true;
       this.colliders.push(collider);
       if (cover) {
         const kind = h-coverBase <= BLOCK.LOW+.001 ? 'low' : h-coverBase <= BLOCK.MID ? 'medium' : 'high';
@@ -3301,6 +3329,9 @@ export class World {
       };
       [b[3][0],b[4][0]]=names[b[0]];
     }
+    // v3: caen el edificio central (calle transversal) y el de la esquina
+    // derecha de cada equipo (salida lateral del spawn). El resto no se mueve.
+    if (expanded) for (const z of [0, -36]) blocks.splice(blocks.findIndex((b) => b[0] === z), 1);
     for (const [z, span, h, left, right, variant] of blocks) {
       addStreetBuilding(-1, z, span, h, left[0], left[1], variant, left[2]);
       addStreetBuilding(1, -z, span, h, right[0], right[1], variant, right[2]);
@@ -3325,6 +3356,7 @@ export class World {
         const startB = blocks[i + 1][0] - blocks[i + 1][1] / 2;
         const gapC = (endA + startB) / 2;
         if (expanded && Math.abs(Math.abs(gapC) - CALLE_2.portalZ) < 0.1) continue;
+        if (expanded && startB - endA > 4) continue; // la calle transversal no es una medianera
         // Never overlap coplanar neighboring building faces: the old +.26
         // produced two competing brick surfaces along both vertical edges.
         const gapW = expanded ? startB - endA : Math.max(0.2, startB - endA) + 0.26;
@@ -3968,7 +4000,7 @@ export class World {
       ['cornerStore', 22.8, -0.5, 0.86, -Math.PI / 2],
       ['shopfrontRow', -22.2, 12.8, 0.88, Math.PI / 2],
       ['shopfrontRow', 22.2, -12.8, 0.88, -Math.PI / 2],
-    ]) this._addUrbanAsset(id, x + (expanded ? Math.sign(x) * 15 : 0), z, { scale, rotation, castShadow: false });
+    ]) this._addUrbanAsset(id, x + (expanded ? Math.sign(x) * 27 : 0), z, { scale, rotation, castShadow: false });
 
     // Skyline GLB: cuatro siluetas distintas sustituyen los prismas genéricos.
     // Siguen lejos del espacio jugable, sin collider ni sombras dinámicas.
@@ -3979,7 +4011,7 @@ export class World {
       ['waterfrontTower', -25, 12, 6, 12, 0.68, 0.34],
       ['glassSkyscraper', 24, 20, 7, 16, 0.62, Math.PI + 0.12],
     ]) {
-      const skylineX = x + (expanded ? Math.sign(x) * 15 : 0);
+      const skylineX = x + (expanded ? Math.sign(x) * 27 : 0);
       if (this._addUrbanAsset(id, skylineX, z, { scale, rotation, castShadow: false, receiveShadow: false })) continue;
       const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, 6), winMat);
       b.position.set(skylineX, h / 2 - 0.5, z);
@@ -4983,6 +5015,7 @@ export class World {
     buildSharedCollision(this, 'azoteas', {
       ac: acOpts, vent: ventOpts, hut: hutOpts, glass: glassOpts, wall: wallOpts,
       deck: { color: 0x5f6b77, top: 0x4c5762, surface: 'metal' }, // entreplantas v2
+      parapet: { color: 0x59636f, top: 0x7e8994 },                 // pretil bajo hacia el vacío (v3)
     });
 
     // Landmarks y skins se conservan aparte: solo sus huellas físicas forman
@@ -5050,8 +5083,8 @@ export class World {
     this.mapGroup.add(street);
 
     const bldgs = [
-      [-48, -18, 12, 24], [-54, 12, 14, 17], [-44, 36, 11, 12],
-      [48, 18, 12, 26], [52, -14, 13, 16], [44, -38, 11, 19],
+      [-68, -18, 12, 24], [-72, 12, 14, 17], [-56, 44, 11, 12],
+      [68, 18, 12, 26], [72, -14, 13, 16], [56, -44, 11, 19],
       [-18, -55, 13, 14], [12, -58, 15, 22], [21, 55, 13, 13],
       [-12, 58, 14, 24], [36, 50, 11, 11], [-36, -50, 12, 10],
     ];
@@ -5632,6 +5665,7 @@ export class World {
       edgeData.push([x, 39.35, 0x64a9ff, 0]);
     }
     for (let z = -32; z <= 32; z += 8) {
+      if (z === 0) continue; // ahí desemboca el puente central
       edgeData.push([-30.85, z, 0x55d5df, Math.PI / 2]);
       edgeData.push([30.85, z, 0x55d5df, Math.PI / 2]);
     }
@@ -5684,7 +5718,7 @@ export class World {
     const billboard = new THREE.Mesh(
       new THREE.PlaneGeometry(6.2, 2.32),
       new THREE.MeshBasicMaterial({ map: this._tex('billboard'), side: THREE.DoubleSide }));
-    billboard.position.set(41.9, 6.5, 18);
+    billboard.position.set(61.9, 6.5, 18);
     billboard.rotation.y = -Math.PI / 2;
     billboard.scale.set(1.3, 1.3, 1);
     this.mapGroup.add(billboard);
@@ -5722,7 +5756,7 @@ export class World {
     // piso con intención industrial, sin colisión ni estorbo a los pickups.
     const pipeMat = new THREE.MeshLambertMaterial({ color: 0x2b333e });
     for (const [px, pz, len, axis] of [
-      [-31.02, -14, 16, 'z'], [31.02, 14, 16, 'z'],
+      [-31.02, -10, 13, 'z'], [31.02, 10, 13, 'z'],
       [-12, -39.55, 14, 'x'], [12, 39.55, 14, 'x'],
     ]) {
       const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, len, 8), pipeMat);
@@ -5896,6 +5930,7 @@ export class World {
     };
 
     for (const c of this.colliders) {
+      if (c.moveOnly) continue;
       slabs([
         { o: origin.x, d: dir.x, lo: c.minx, hi: c.maxx,
           nLo: HIT_N.nx, nHi: HIT_N.px },
@@ -5962,7 +5997,7 @@ export class World {
     if (dir.y < -1e-8) {
       const t = -origin.y / dir.y;
       plane(t, HIT_N.py, groundSurface,
-        (x, z) => Math.abs(x) <= this.fx + 0.05 && Math.abs(z) <= this.fz + 0.05);
+        (x, z) => Math.abs(x) <= this.fx + 0.05 && Math.abs(z) <= this.fz + 0.05 && this._onFloor(x, z));
     }
     return best;
   }
@@ -5971,6 +6006,7 @@ export class World {
   raycast(origin, dir, maxDist, inflate = 0) {
     let best = null;
     for (const c of this.colliders) {
+      if (c.moveOnly) continue;
       const minx = c.minx - inflate, maxx = c.maxx + inflate;
       const minz = c.minz - inflate, maxz = c.maxz + inflate;
       const miny = c.minY===undefined?-0.1:c.minY-inflate, maxy = c.h + inflate;
@@ -6025,6 +6061,14 @@ export class World {
       ceiling=Math.min(ceiling,c.minY);
     }
     return ceiling;
+  }
+
+  // ¿Hay losa en (x,z)? Un mapa con huecos (MAP_FLOORS) no tiene suelo en ellos.
+  _onFloor(x, z) {
+    const rects = this._floorRects;
+    if (!rects) return true;
+    for (const [x0, x1, z0, z1] of rects) if (x >= x0 && x <= x1 && z >= z0 && z <= z1) return true;
+    return false;
   }
 
   // Suelo analítico: galerías, helipuerto y rampas. No mira las cajas.
