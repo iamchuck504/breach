@@ -742,15 +742,66 @@
     },
     {
       "x": -25.8,
-      "z": 0,
+      "z": -8.6,
       "w": 0.4,
-      "d": 36,
+      "d": 14.8,
       "h": 6,
       "style": "high",
       "mirror": false,
       "visual": false,
       "cover": false,
       "gallery": true
+    },
+    {
+      "x": -25.8,
+      "z": -17,
+      "w": 0.4,
+      "d": 2,
+      "h": 6,
+      "style": "high",
+      "mirror": false,
+      "visual": false,
+      "cover": false,
+      "gallery": true,
+      "minY": 2.4
+    },
+    {
+      "x": -25.8,
+      "z": 8.6,
+      "w": 0.4,
+      "d": 14.8,
+      "h": 6,
+      "style": "high",
+      "mirror": false,
+      "visual": false,
+      "cover": false,
+      "gallery": true
+    },
+    {
+      "x": -25.8,
+      "z": 17,
+      "w": 0.4,
+      "d": 2,
+      "h": 6,
+      "style": "high",
+      "mirror": false,
+      "visual": false,
+      "cover": false,
+      "gallery": true,
+      "minY": 2.4
+    },
+    {
+      "x": -25.8,
+      "z": 0,
+      "w": 0.4,
+      "d": 2.4,
+      "h": 6,
+      "style": "high",
+      "mirror": false,
+      "visual": false,
+      "cover": false,
+      "gallery": true,
+      "minY": 5.25
     },
     {
       "x": -21.4,
@@ -1871,15 +1922,66 @@
     },
     {
       "x": 25.8,
-      "z": 0,
+      "z": -8.6,
       "w": 0.4,
-      "d": 36,
+      "d": 14.8,
       "h": 6,
       "style": "high",
       "mirror": false,
       "visual": false,
       "cover": false,
       "gallery": true
+    },
+    {
+      "x": 25.8,
+      "z": -17,
+      "w": 0.4,
+      "d": 2,
+      "h": 6,
+      "style": "high",
+      "mirror": false,
+      "visual": false,
+      "cover": false,
+      "gallery": true,
+      "minY": 2.4
+    },
+    {
+      "x": 25.8,
+      "z": 8.6,
+      "w": 0.4,
+      "d": 14.8,
+      "h": 6,
+      "style": "high",
+      "mirror": false,
+      "visual": false,
+      "cover": false,
+      "gallery": true
+    },
+    {
+      "x": 25.8,
+      "z": 17,
+      "w": 0.4,
+      "d": 2,
+      "h": 6,
+      "style": "high",
+      "mirror": false,
+      "visual": false,
+      "cover": false,
+      "gallery": true,
+      "minY": 2.4
+    },
+    {
+      "x": 25.8,
+      "z": 0,
+      "w": 0.4,
+      "d": 2.4,
+      "h": 6,
+      "style": "high",
+      "mirror": false,
+      "visual": false,
+      "cover": false,
+      "gallery": true,
+      "minY": 5.25
     },
     {
       "x": 21.4,
@@ -2272,6 +2374,12 @@
     "height": 3,
     "wallTop": 6,
     "roofTop": 7.19,
-    "steps": 26
+    "steps": 26,
+    "liza": {
+      "upperHalf": 1.2,
+      "upperTop": 2.25,
+      "groundFrom": 16,
+      "groundTop": 2.4
+    }
   }
 }

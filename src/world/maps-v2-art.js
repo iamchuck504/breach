@@ -33,7 +33,8 @@ function wedgeGeometry(w, len, h) {
 // girar la cámara para averiguarlo. [x, z, rumbo] en el lado rojo; rumbo 0 =
 // hacia el campo (+z), ±90° = hacia un costado. El espejo crea las azules.
 const SPAWN_EXITS = {
-  fortaleza: [[-8.4, -22.4, 0], [8.4, -22.4, 0], [-11.9, -25.1, -90], [11.9, -25.1, 90]],
+  // v3: sala de guardia tras la muralla vieja. Puerta central y pasos laterales.
+  fortaleza: [[0, -29.4, 0], [-9.6, -28.6, -90], [9.6, -28.6, 90]],
   azoteas: [[7.4, -33.2, 0], [-11.6, -37.6, -90], [11.6, -37.6, 90]],
   calle2: [[-7.6, -36.6, 0], [7.6, -36.6, 0]],
 };
@@ -51,6 +52,8 @@ const LOOKS = {
   mezzanine: { ramp: 0x66727e, edge: 0xd9a441, metalness: 0.45, roughness: 0.6 },
   // Calle: remolque de plataforma con rampas de carga
   trailer: { ramp: 0x3a4248, edge: 0xc5974e, metalness: 0.55, roughness: 0.55 },
+  // Fortaleza: escalera exterior de piedra
+  stair: { ramp: 0x8a8173, edge: 0x6a6155, metalness: 0.02, roughness: 0.9 },
 };
 
 export function decorateMapV2(world, layout) {

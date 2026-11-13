@@ -3,7 +3,7 @@
 import { CALLE_2 } from './calle-expansion.js';
 
 export const MAP_DIMS = Object.freeze({
-  arena: [11, 13], fortaleza: [26, 26.6], azoteas: [31.5, 40],
+  arena: [11, 13], fortaleza: [39.6, 35.6], azoteas: [31.5, 40],
   calle: [17, 42], metro: [16, 26], prision: [22, 30], pueblo: [26, 34],
   calle2: [CALLE_2.fx, CALLE_2.fz],
 });

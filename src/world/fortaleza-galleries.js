@@ -1,7 +1,9 @@
 // Shared dimensions for art, stairs, collision and server ballistics.
 // The original courtyard remains x ±21, z ±26.6. Only side annexes expand.
 export const FORT_GALLERY=Object.freeze({x:23.7,inner:21.8,outer:25.6,width:3.8,
-  start:15.8,top:8.0,end:18.0,entry:16.4,windowRadius:2,height:3,wallTop:6.0,roofTop:7.19,steps:26});
+  start:15.8,top:8.0,end:18.0,entry:16.4,windowRadius:2,height:3,wallTop:6.0,roofTop:7.19,steps:26,
+  // puertas del muro exterior hacia la liza (v3)
+  liza:Object.freeze({upperHalf:1.2,upperTop:2.25,groundFrom:16.0,groundTop:2.4})});
 
 export function galleryHeight(p,r=0){
   const g=FORT_GALLERY,ax=Math.abs(p.x),az=Math.abs(p.z);
@@ -27,7 +29,19 @@ export function galleryBoxes(){
       // Closed upper end walls prevent direct fire into the protected spawns.
       add(x,end*(g.top+.2),g.width,.4,6,{minY:4.95});
     }
-    add(side*(g.outer+.2),0,.4,g.end*2,6);
+    // v3: el muro exterior se abre a la LIZA (el anillo entre la muralla
+    // vieja y la nueva). Una puerta al pie de cada escalera, a ras de suelo, y
+    // una en el centro a la altura de la galería, donde llega la escalera
+    // exterior. La galería deja de ser un balcón al que solo se sube por dentro.
+    const door=g.liza;
+    for(const end of [-1,1]){
+      const from=door.upperHalf,to=door.groundFrom;
+      add(side*(g.outer+.2),end*(from+to)/2,.4,to-from,6);
+      // dintel de la puerta de planta baja
+      add(side*(g.outer+.2),end*(to+g.end)/2,.4,g.end-to,6,{minY:door.groundTop});
+    }
+    // dintel de la puerta alta
+    add(side*(g.outer+.2),0,.4,door.upperHalf*2,6,{minY:g.height+door.upperTop});
     // Inner lower wall ends at the two ground entrances.
     // Continuous sill: 1.1 m cover above the 3 m gallery deck.
     add(side*21.4,0,.8,g.top*2,4.1,{cover:true,coverBase:3,visualBase:3});

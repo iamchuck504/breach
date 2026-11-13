@@ -16,7 +16,8 @@ import { expandedCollisionBoxes, collisionBoxesFor, helipadSegments, HELIPAD } f
 import { MAP_RUNTIME } from '../src/game/lobby-rules.js';
 import { pathToFileURL } from 'node:url';
 
-export const DIMS = { fortaleza: [26, 26.6], azoteas: [31.5, 40], calle2: [29, 42], calle: [17, 42] };
+import { MAP_DIMS } from '../src/world/map-dims.js';
+export const DIMS = MAP_DIMS;
 const CELL = 0.5, R = 0.38, EYE = 1.5, JOG = 4.8, SPRINT = 7.6;
 
 export function analyze(layout, override = {}) {

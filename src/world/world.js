@@ -2821,9 +2821,9 @@ export class World {
         }));
     } else if (theme === 'fortaleza') {
       const settlement = [
-        [-48, -34, 7, 4.5, 6, 0.15], [-57, -14, 6, 3.8, 5, -0.2],
-        [51, 31, 8, 5.2, 6, -0.12], [62, 9, 6, 4.1, 5, 0.18],
-        [-36, 48, 6, 3.6, 5, 0.3], [39, -49, 7, 4.4, 6, -0.25],
+        [-62, -44, 7, 4.5, 6, 0.15], [-70, -14, 6, 3.8, 5, -0.2],
+        [64, 41, 8, 5.2, 6, -0.12], [74, 9, 6, 4.1, 5, 0.18],
+        [-40, 58, 6, 3.6, 5, 0.3], [44, -59, 7, 4.4, 6, -0.25],
       ];
       addBoxes('periphery-fortaleza-settlement', settlement,
         new THREE.MeshStandardMaterial({
@@ -4468,6 +4468,9 @@ export class World {
       this.mapGroup.add(castleKit);
     }
     const courtyardX=21; // original towers/parapets do not follow annex bounds
+    // v3: el campo creció hasta la muralla exterior; el patio original (y lo
+    // que el kit de Blender dibuja sobre él) sigue en z ±26.6
+    const courtZ=26.6;
     const stoneMat = new THREE.MeshStandardMaterial({
       color: 0x898176, map: this._tex('stone', 1, 0.5),
       bumpMap: this._detailTex('stone', 1, 0.5), bumpScale: 0.042,
@@ -4483,10 +4486,10 @@ export class World {
     const pts = [];
     const step = 1.7;
     for (let x = -courtyardX + 0.4; x <= courtyardX; x += step) {
-      pts.push([x, -this.fz - 0.4, 0, HIGH]);
-      pts.push([x, this.fz + 0.4, 0, HIGH]);
+      pts.push([x, -courtZ - 0.4, 0, HIGH]);
+      pts.push([x, courtZ + 0.4, 0, HIGH]);
     }
-    for (let z = -this.fz + 0.4; z <= this.fz; z += step) {
+    for (let z = -courtZ + 0.4; z <= courtZ; z += step) {
       if(Math.abs(z)<FORT_GALLERY.end+.5)continue; // incorporated into the new roofed wall, not floating inside it
       pts.push([-courtyardX - 0.4, z, Math.PI / 2, HIGH]);
       pts.push([courtyardX + 0.4, z, Math.PI / 2, HIGH]);
@@ -4496,7 +4499,7 @@ export class World {
       pts.push([-x, 20.9, 0, HIGH]);
     }
     const towers = [[1, 1], [1, -1], [-1, 1], [-1, -1]]
-      .map(([sx, sz]) => [sx * (courtyardX + 2.6), sz * (this.fz + 2.6)]);
+      .map(([sx, sz]) => [sx * (courtyardX + 2.6), sz * (courtZ + 2.6)]);
     for (const [tx, tz] of towers) {
       for (let i = 0; i < 10; i++) {
         const a = (i / 10) * Math.PI * 2;
@@ -4538,15 +4541,43 @@ export class World {
         if(!castleKit)this.mapGroup.add(b);
       }
     }
-    // estandartes neutros (acento) en el pilar central
+    // estandartes neutros (acento) en las caras norte y sur de la torre del
+    // homenaje, mirando a cada equipo
     for (const ry of [0, Math.PI]) {
       const b = new THREE.Mesh(
         new THREE.PlaneGeometry(0.9, 1.9),
         new THREE.MeshLambertMaterial({ color: 0xff8a3d, map: this._tex('banner'), transparent: true })
       );
-      b.position.set(0, 1.85, (ry === 0 ? 1 : -1) * 0.93);
+      const side = ry === 0 ? 1 : -1;
+      b.position.set(side * 1.9, 1.85, side * 5.03);
       b.rotation.y = ry === 0 ? 0 : Math.PI;
       this.mapGroup.add(b);
+    }
+
+    // --- MURALLA EXTERIOR (v3): almenas corridas y un torreón por esquina,
+    // fuera del campo. La muralla en sí es una caja de la geometría compartida.
+    const outer = [];
+    const ox = this.fx + 0.4, oz = this.fz + 0.4;
+    for (let x = -ox + 0.6; x <= ox - 0.5; x += step) { outer.push([x, -oz, 0]); outer.push([x, oz, 0]); }
+    for (let z = -oz + 0.6; z <= oz - 0.5; z += step) { outer.push([-ox, z, Math.PI / 2]); outer.push([ox, z, Math.PI / 2]); }
+    const outerMerlon = new THREE.InstancedMesh(new THREE.BoxGeometry(0.8, 0.55, 0.95), stoneMat, outer.length);
+    outerMerlon.name = 'fortaleza-outer-merlons';
+    outer.forEach(([x, z, ry], i) => {
+      e.set(0, ry, 0); q.setFromEuler(e);
+      m4.compose(v.set(x, HIGH + 0.27, z), q, one);
+      outerMerlon.setMatrixAt(i, m4);
+    });
+    outerMerlon.castShadow = true;
+    this.mapGroup.add(outerMerlon);
+    for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+      const tx = sx * (ox + 1.5), tz = sz * (oz + 1.5);
+      const t = new THREE.Mesh(new THREE.CylinderGeometry(2.1, 2.4, 7.4, 12), towerMat);
+      t.position.set(tx, 3.2, tz);
+      t.castShadow = true;
+      this.mapGroup.add(t);
+      const roof = new THREE.Mesh(new THREE.ConeGeometry(2.5, 2.6, 12), new THREE.MeshLambertMaterial({ color: 0x704632 }));
+      roof.position.set(tx, 8.2, tz);
+      this.mapGroup.add(roof);
     }
 
     // --- braseros sobre los pilares de flanco (llama emisiva, sin luces extra)
@@ -4583,7 +4614,7 @@ export class World {
     this.mapGroup.add(land);
 
     // --- torreones lejanos (el "resto" del castillo), en piedra y con techo
-    const farTowers = [[-30, -16, 3.4, 11], [32, 9, 4, 13], [-28, 20, 3, 9], [29, -22, 3.6, 10]];
+    const farTowers = [[-52, -24, 3.4, 11], [54, 13, 4, 13], [-49, 33, 3, 9], [50, -36, 3.6, 10]];
     for (const [x, z, r, h] of farTowers) {
       const t = new THREE.Mesh(
         new THREE.CylinderGeometry(r * 0.88, r, h, 10),
@@ -4632,7 +4663,7 @@ export class World {
       [-20.95, 1.45, -5, Math.PI / 2, 1.2], [-20.95, 1.35, 13, Math.PI / 2, 0.9],
       [20.95, 1.4, 4, -Math.PI / 2, 1.1], [20.95, 1.3, -15, -Math.PI / 2, 0.85],
       [-12, 1.45, -26.55, 0, 1.15], [10, 1.3, -26.55, 0, 0.9],
-      [14, 1.45, 26.55, Math.PI, 1.1], [-7, 1.35, 26.55, Math.PI, 0.85],
+      [10.5, 1.45, 26.55, Math.PI, 1.1], [-7, 1.35, 26.55, Math.PI, 0.85],
     ];
     const crackMat = new THREE.MeshBasicMaterial({
       map: this._tex('crack'), transparent: true, alphaTest: 0.12,
@@ -4741,8 +4772,17 @@ export class World {
     beams.castShadow = true;
     this.mapGroup.add(beams);
 
-    // Faro central sobre el pilar: visible desde cualquier carril, sin luz real.
+    // Faro central: antes coronaba el pilar del patio; ahora cuelga del cruce
+    // de vigas de la torre del homenaje, visible desde cualquier carril.
     const metal = new THREE.MeshLambertMaterial({ color: 0x302c29 });
+    const keepBeams = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), siegeWood, 6);
+    keepBeams.name = 'fortaleza-keep-beams';
+    [[0, 0, 9.4, 0.3], [0, 0, 0.3, 9.4], [-3, 0, 0.22, 9.4], [3, 0, 0.22, 9.4], [0, -3, 9.4, 0.22], [0, 3, 9.4, 0.22]].forEach(([x, z, sx, sz], i) => {
+      m4.compose(p.set(x, BLOCK.HIGH - 0.13, z), q.identity(), s.set(sx, 0.26, sz));
+      keepBeams.setMatrixAt(i, m4);
+    });
+    keepBeams.castShadow = true;
+    this.mapGroup.add(keepBeams);
     const plinth = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.78, 0.24, 8), stoneMatFor(0x867d6f));
     plinth.position.set(0, BLOCK.HIGH + 0.12, 0);
     this.mapGroup.add(plinth);
@@ -4787,14 +4827,14 @@ export class World {
       [-20.95, 5, Math.PI / 2, 3.4, 2.8, 1.55],
       [-20.95, 20.3, Math.PI / 2, 2.3, 2.4, 1.45],
       [20.95, 8, -Math.PI / 2, 2.6, 2.6, 1.55],
-      [-14, -this.fz + 0.05, 0, 3.0, 2.7, 1.5],    // muralla norte/sur (cara interna)
-      [14, this.fz - 0.05, Math.PI, 3.0, 2.7, 1.5],
+      [-10, -26.55, 0, 3.0, 2.7, 1.5],    // muralla norte/sur (cara interna)
+      [10, 26.55, Math.PI, 3.0, 2.7, 1.5],
       [-8.5, -15.47, 0, 2.2, 1.7, 0.95],           // muro mediano de base
       [8.5, 15.47, Math.PI, 2.2, 1.7, 0.95],
       [9.5, -9.97, 0, 2.2, 2.4, 1.6],              // forma en L
       [-9.5, 9.97, Math.PI, 2.2, 2.4, 1.6],
-      [-0.93, 0, -Math.PI / 2, 1.6, 2.6, 1.5],     // pilar central, caras laterales
-      [0.93, 0, Math.PI / 2, 1.6, 2.6, 1.5],
+      [-5.03, -1.5, -Math.PI / 2, 2.4, 2.6, 1.5],  // torre del homenaje, caras este y oeste
+      [5.03, 1.5, Math.PI / 2, 2.4, 2.6, 1.5],
     ];
     for (const [x, z, ry, w, h, y] of ivies) {
       const p = new THREE.Mesh(new THREE.PlaneGeometry(w, h), ivyMat);
@@ -4861,8 +4901,8 @@ export class World {
       new THREE.MeshLambertMaterial({ color: 0x648a47 }),
     ];
     const trees = [
-      [-30.5, -6, 1.3], [30.5, 6, 1.3], [-29.5, 10, 1.0], [29.5, -10, 1.0],
-      [-11, -30.5, 1.15], [11, 30.5, 1.15], [19, -31, 0.9], [-19, 31, 0.9],
+      [-45.5, -6, 1.3], [45.5, 6, 1.3], [-44.5, 12, 1.0], [44.5, -12, 1.0],
+      [-11, -41.5, 1.15], [11, 41.5, 1.15], [22, -42, 0.9], [-22, 42, 0.9],
     ];
     for (const [x, z, s] of trees) {
       const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.22 * s, 0.3 * s, 2.4 * s, 6), trunkMat);
@@ -4876,7 +4916,7 @@ export class World {
       }
     }
     // cipreses junto a los torreones lejanos
-    for (const [x, z, s] of [[-33, -12, 1], [29, 13, 1.15], [-25, 23, 0.85], [26, -25.5, 1]]) {
+    for (const [x, z, s] of [[-55, -18, 1], [50, 19, 1.15], [-45, 38, 0.85], [46, -41, 1]]) {
       const cy = new THREE.Mesh(new THREE.ConeGeometry(0.85 * s, 4.6 * s, 7), leafMats[0]);
       cy.position.set(x, 2.3 * s - 0.4, z);
       this.mapGroup.add(cy);

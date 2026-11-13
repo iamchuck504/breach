@@ -9,12 +9,13 @@ export const MAPS = ['fortaleza', 'azoteas', 'calle2'];
 // online los valida en otro.
 export const MAP_RUNTIME = Object.freeze({
   fortaleza: Object.freeze({
-    spawnZ: 23.4,
-    // v2: las cajas salen de la línea central (quien tomaba el centro tenía
-    // el arma especial y las dos cajas a 14 m) y van al pie de cada galería
-    crates: Object.freeze([{ x: -16.5, z: -6.5 }, { x: 16.5, z: 6.5 }]),
-    // equidistante por el suelo: 28.3 m desde cada spawn (analyze-map.mjs)
-    special: Object.freeze({ x: 2.8, z: 0, y: 0 }),
+    // v3: los spawns salen del patio a un patio de armas propio, detrás de
+    // la muralla vieja (z ±27). Tres puertas al patio y dos salidas a las lizas.
+    spawnZ: 31.5,
+    // una caja en el centro de cada liza: disputada, lejos del patio
+    crates: Object.freeze([{ x: -33, z: 0 }, { x: 33, z: 0 }]),
+    // dentro de la torre del homenaje, en el centro exacto del mapa
+    special: Object.freeze({ x: 0, z: 0, y: 0 }),
   }),
   azoteas: Object.freeze({
     spawnZ: 35.1,
