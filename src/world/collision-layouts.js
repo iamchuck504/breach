@@ -129,7 +129,7 @@ const fortaleza = freeze([
   // AUDITORÍA de hitboxes: decoración MEDIDA sin física (el espejo crea el
   // par). Antorchas junto a los muros N/S y rocas/derrubio al pie de los
   // muros — las balas atravesaban el dibujo visible.
-  make(-10.3, 25.9, 0.7, 0.7, 1.62, 'low', { visual: false, cover: false }),
+  make(-13.4, 26.0, 0.7, 0.7, 1.62, 'low', { visual: false, cover: false }),
   make(-10.4, 25.75, 1.8, 1.5, 0.5, 'low', { visual: false, cover: false }),
   make(-19.75, -18.2, 1.5, 1.9, 0.84, 'low', { visual: false, cover: false }),
   make(-20.35, -6.7, 1.7, 1.7, 0.84, 'low', { visual: false, cover: false }),
@@ -157,9 +157,11 @@ const azoteasBoxes = [
   make(0, 40.4, 65, 0.8, HIGH, 'wall', { mirror: false }),
   make(-31.9, 0, 0.8, 82, HIGH, 'wall', { mirror: false }),
   make(31.9, 0, 0.8, 82, HIGH, 'wall', { mirror: false }),
-  // v2: el escudo crece hacia la izquierda (x -8..5.5) y una caseta media
-  // guarda la salida derecha; junto con las casetas laterales tapa el spawn
-  make(-1.25, -31.35, 13.5, 1.2, HIGH, 'hut'),
+  // v2: el escudo crece hacia la izquierda hasta tocar la caseta lateral
+  // (x -9.2..5.5) y una caseta media guarda la salida derecha; junto con las
+  // casetas laterales tapa el spawn. Antes paraba en x -8 y dejaba una
+  // rendija de 1,2 m: ni salida ni muro, y los bots se atascaban en ella.
+  make(-1.85, -31.35, 14.7, 1.2, HIGH, 'hut'),
   make(7.4, -27.9, 4.6, 1.1, MID, 'hut'),
   make(-8.2, -27.7, 4, 2.2, LOW, 'ac'),
   make(-8.2, -27.7, 3.9, 2.1, 1.18, 'ac', { visual: false, cover: false }),

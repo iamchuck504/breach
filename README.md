@@ -130,6 +130,7 @@ node scripts/analyze-map.mjs <mapa> [--ascii]   # tiempos de llegada, carriles, 
 node scripts/check-maps-v2.mjs                  # diseño + paridad cliente/servidor + rampas con el controlador real
 node scripts/shot-map-compare.mjs <mapa> <dir>  # aérea y vistas de jugador con cámaras fijas (antes/después)
 node scripts/audit-hitboxes.mjs <mapa>          # dibujo frente a colisión, también en Fortaleza (~100 s)
+node scripts/sim-bot-matches.mjs <mapa> [min]   # partidas 4v4 solo con bots: rondas, bajas por zona, puestos, atascos
 ```
 
 Los bots usan las plataformas como puesto: un bot por equipo a la vez sube por

@@ -10,6 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { clearClip } from './lib-clip.mjs';
 import { CHROME } from './lib-chrome.mjs';
+import { decksFor } from '../src/world/collision-layouts.js';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MAPS = process.argv.length > 2 ? process.argv.slice(2) : ['azoteas', 'calle2'];
@@ -34,7 +35,8 @@ try {
     await page.evaluate(() => document.getElementById('btn-lobby-start').click());
     await page.waitForFunction(() => window.BREACH.botMatch && !window.BREACH.botMatch.controlsLocked(), null, { timeout: 30000 });
     // el observador vive en la página: muestrea cada cuadro, no cada sondeo
-    await page.evaluate(() => {
+    const decks = decksFor(map).flatMap((d) => (d.mirror ? [1, -1] : [1]).map((s) => ({ x: d.x * s, z: d.z * s, w: d.w, d: d.d, h: d.h })));
+    await page.evaluate((decks) => {
       const seen = window.__perch = { approach: 0, up: 0, hold: 0, down: 0, done: 0, holdAtHeight: 0, strandedS: 0, maxStranded: 0, teams: {} };
       const last = new Map(), stranded = new Map();
       let prev = performance.now();
@@ -47,22 +49,24 @@ try {
           if (phase && phase !== was) { seen[phase]++; if (phase === 'hold') seen.teams[b.team] = (seen.teams[b.team] ?? 0) + 1; }
           if (phase === 'hold' && Math.abs(b.y - b.perch.deck.h) < 0.08) seen.holdAtHeight += dt;
           if (was === 'down' && !phase && b.y < 0.1) seen.done++;
-          // arriba (más de 0,6 m del suelo) sin puesto en curso
-          const s = !phase && b.grounded && b.y > 0.6 ? (stranded.get(b.id) ?? 0) + dt : 0;
+          // sobre una plataforma sin puesto en curso (el helipuerto de Azoteas
+          // también es suelo elevado, pero se sube y se baja andando)
+          const onDeck = decks.some((d) => Math.abs(b.pos.x - d.x) < d.w / 2 && Math.abs(b.pos.z - d.z) < d.d / 2 && Math.abs(b.y - d.h) < 0.2);
+          const s = !phase && b.grounded && onDeck ? (stranded.get(b.id) ?? 0) + dt : 0;
           stranded.set(b.id, s); seen.maxStranded = Math.max(seen.maxStranded, s);
           last.set(b.id, phase);
         }
         requestAnimationFrame(tick);
       };
       requestAnimationFrame(tick);
-    });
+    }, decks);
     let s = null;
     for (let i = 0; i < LIMIT_S; i++) {
       await page.waitForTimeout(1000);
       s = await page.evaluate(() => ({ ...window.__perch }));
       if (s.done >= 1 && s.holdAtHeight > 3) break;
     }
-    const ok = s.hold >= 1 && s.done >= 1 && s.holdAtHeight > 3 && s.maxStranded < 6 && errors.length === 0;
+    const ok = s.hold >= 1 && s.done >= 1 && s.holdAtHeight > 3 && s.maxStranded < 4 && errors.length === 0;
     console.log(`${ok ? 'OK ' : 'FAIL'} ${map}: bots usan el puesto elevado — ${JSON.stringify(s)}${errors.length ? ' · ' + errors[0] : ''}`);
     if (!ok) fails.push(map);
     await page.close();

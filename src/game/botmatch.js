@@ -47,6 +47,45 @@ function perchesFor(layout) {
   PERCHES.set(layout, out);
   return out;
 }
+// SALIDAS DEL SPAWN para mapas sin grafo de navegación. El escudo que tapa el
+// spawn es un muro de 15 m justo delante de donde nace el bot: rodearlo a
+// tientas costaba varios segundos por vida. Rutas en el lado rojo (el azul es
+// el espejo): la salida frontal y el paso por detrás de cada caseta lateral.
+const SPAWN_ROUTES = {
+  azoteas: [
+    [[7.35, -33.4], [7.35, -30.0]],
+    [[-9.8, -38.5], [-12.4, -36.2]],
+    [[9.8, -38.5], [12.4, -36.2]],
+  ],
+};
+// Huella completa de cada plataforma (cuerpo + rampas). Para rodearla, un bot
+// la trata como UN obstáculo: esquivar por separado cada escalón del relleno
+// de la rampa o cada tramo de baranda encadenaba rodeos que no terminaban.
+const FOOTPRINTS = new Map();
+function deckFootprints(layout) {
+  if (FOOTPRINTS.has(layout)) return FOOTPRINTS.get(layout);
+  const out = [];
+  for (const d of decksFor(layout)) for (const side of d.mirror ? [1, -1] : [1]) {
+    const x = d.x * side, z = d.z * side;
+    const b = { minx: x - d.w / 2, maxx: x + d.w / 2, minz: z - d.d / 2, maxz: z + d.d / 2 };
+    for (const r of rampsFor(layout)) {
+      const touches = r.x + r.w / 2 > b.minx - 0.3 && r.x - r.w / 2 < b.maxx + 0.3 &&
+        r.z + r.d / 2 > z - d.d / 2 - 0.3 && r.z - r.d / 2 < z + d.d / 2 + 0.3;
+      if (!touches) continue;
+      b.minx = Math.min(b.minx, r.x - r.w / 2); b.maxx = Math.max(b.maxx, r.x + r.w / 2);
+      b.minz = Math.min(b.minz, r.z - r.d / 2); b.maxz = Math.max(b.maxz, r.z + r.d / 2);
+    }
+    out.push(b);
+  }
+  FOOTPRINTS.set(layout, out);
+  return out;
+}
+function footprintAt(world, x, z) {
+  for (const b of deckFootprints(world.customMap ? world.customMap.base : world.layout)) {
+    if (x > b.minx - 0.05 && x < b.maxx + 0.05 && z > b.minz - 0.05 && z < b.maxz + 0.05) return b;
+  }
+  return null;
+}
 const INTRO_TIME = 10;
 const COUNTDOWN_TIME = 3;
 const ROUND_RESULT_TIME = 5;
@@ -139,6 +178,7 @@ export class Bot {
     this.roleT = 0; this.decisionT = 0; this.decisionSerial = 0;
     this.tacticalGoal = null;
     this.perch = null; this.perchCd = 4 + Math.random() * 6; // puesto elevado en curso
+    this.exitRoute = null; this.exitPending = true; this.exitT = 0; // salida del spawn
     this.flip = null;  // vuelta acrobática en el aire (solo estilo)
     this.stuckT = 0; this.avoidSide = 0;
     this.recovery = null;    // waypoint temporal para rodear un obstáculo concreto
@@ -167,6 +207,8 @@ export class Bot {
   _obstacleKey(c) {
     if (!c) return 'unknown';
     if (c.minx !== undefined) {
+      const deck = footprintAt(this.world, (c.minx + c.maxx) / 2, (c.minz + c.maxz) / 2);
+      if (deck) return `d:${deck.minx.toFixed(2)}:${deck.minz.toFixed(2)}`;
       return `a:${c.minx.toFixed(2)}:${c.minz.toFixed(2)}:${c.maxx.toFixed(2)}:${c.maxz.toFixed(2)}`;
     }
     if (c.a && c.b) {
@@ -206,6 +248,8 @@ export class Bot {
   _colliderBounds(c) {
     if (!c) return null;
     if (c.minx !== undefined) {
+      const deck = footprintAt(this.world, (c.minx + c.maxx) / 2, (c.minz + c.maxz) / 2);
+      if (deck) return deck;
       return { minx: c.minx, minz: c.minz, maxx: c.maxx, maxz: c.maxz };
     }
     if (c.a && c.b) {
@@ -269,6 +313,9 @@ export class Bot {
     if (!best) return false;
     this.recovery = {
       ...best, key, collider, age: 0,
+      // plazo del rodeo según su longitud: 3 s bastan para una caja, no para
+      // dar la vuelta a una plataforma de 19 m con sus rampas
+      budget: Math.max(3, Math.hypot(best.x - this.pos.x, best.z - this.pos.z) / 3.2 + 1),
       forwardX: fx, forwardZ: fz, perpX: px, perpZ: pz,
       targetP: best.x * px + best.z * pz,
       goalX: goal?.x ?? null, goalZ: goal?.z ?? null,
@@ -886,7 +933,26 @@ export class Bot {
     } else {
       // advance: waypoint elegido por rol, ocupación y valor táctico
       this.repathT -= dt;
-      if (!this.wp || this.repathT <= 0 ||
+      if (this.exitPending) {
+        this.exitPending = false;
+        const routes = SPAWN_ROUTES[this.world.customMap ? null : this.world.layout];
+        if (routes) {
+          // la ruta del lado de su carril; por el centro, la frontal
+          const side = this.team === 'red' ? 1 : -1;
+          const lane = (this.laneBias ?? 0) * side;
+          const pick = lane < -0.35 ? routes[1] : lane > 0.35 && hash01(this.id + ':exit:' + this.decisionSerial) < 0.5 ? routes[2] : routes[0];
+          this.exitRoute = pick.map(([x, z]) => ({ x: x * side, z: z * side }));
+          this.exitT = 0;
+        }
+      }
+      if (this.exitRoute) {
+        this.exitT += dt;
+        if (Math.hypot(this.exitRoute[0].x - this.pos.x, this.exitRoute[0].z - this.pos.z) < 0.9) this.exitRoute.shift();
+        if (!this.exitRoute.length || this.exitT > 7) this.exitRoute = null;
+      }
+      if (this.exitRoute) {
+        this.wp = this.exitRoute[0];
+      } else if (!this.wp || this.repathT <= 0 ||
           Math.hypot(this.wp.x - this.pos.x, this.wp.z - this.pos.z) < 1) {
         match.refreshTacticalPlan(this, enemy);
         this.wp = this.tacticalGoal;
@@ -943,7 +1009,7 @@ export class Bot {
           }
         }
         if (!chained) this._resetProgress();
-      } else if (this.recovery.age > 3) {
+      } else if (this.recovery.age > (this.recovery.budget ?? 3)) {
         this._recoverFromStuck(match, null, { x: rx / rd, z: rz / rd }, activeGoal, 'bypass-timeout');
       } else {
         mx = rx / rd; mz = rz / rd;
@@ -1553,6 +1619,9 @@ export class BotMatch {
       const x = (f.a.x + f.b.x) / 2 + f.n.x * 0.78;
       const z = (f.a.z + f.b.z) / 2 + f.n.z * 0.78;
       if (Math.abs(x) > this.world.fx - 1 || Math.abs(z) > this.world.fz - 1) continue;
+      // sobre una plataforma o su rampa no hay destino a pie llano: arriba se
+      // sube solo como puesto (ver _perch)
+      if (footprintAt(this.world, x, z)) continue;
       if (bot._goalRecentlyFailed(x, z)) continue;
       const d = Math.hypot(x - bot.pos.x, z - bot.pos.z);
       if (d < 2 || d > (role === 'flank' ? 22 : 18)) continue;

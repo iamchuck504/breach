@@ -4889,7 +4889,7 @@ export class World {
     const bandMat = new THREE.MeshLambertMaterial({ color: 0x4a4038 });
     const barrels = [
       [-19.9, -18.5, 0], [19.9, 18.5, 0], [-19.5, -17.6, 0], [19.5, 17.6, 0],
-      [10.3, -25.9, 0], [-10.3, 25.9, 0], [10.3, -25.9, 0.78], [-10.3, 25.9, 0.78],
+      [13.4, -26.0, 0], [-13.4, 26.0, 0], [13.4, -26.0, 0.78], [-13.4, 26.0, 0.78], // v2: fuera de la salida lateral del spawn
       [-20.6, -6.2, 0], [20.6, 6.2, 0],
     ];
     for (const [x, z, y] of barrels) {
