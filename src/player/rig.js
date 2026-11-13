@@ -1214,10 +1214,11 @@ export class Rig {
   // Reacción no letal independiente de la locomoción. Se suma a la pose
   // actual (run/aim/cover), de modo que recibir melee no teletransporta al
   // personaje a una animación genérica ni le roba su estado de gameplay.
-  hitReact(direction = 0, strength = 1, kind = 'shot') {
+  hitReact(direction = 0, strength = 1, kind = 'shot', fromBehind = false) {
     this._hitReact = {
       t: 0,
-      dur: kind === 'melee' ? 0.29 : 0.18,
+      dur: kind === 'kick' ? 0.62 : kind === 'melee' ? 0.29 : 0.18,
+      back: !!fromBehind,
       side: Math.max(-1, Math.min(1, Number(direction) || 0)),
       strength: Math.max(0.25, Math.min(1.25, Number(strength) || 1)),
       kind,
@@ -1816,7 +1817,26 @@ export class Rig {
       const r = this._hitReact;
       r.t += dt;
       const q = Math.min(1, r.t / r.dur);
-      const wave = Math.sin(Math.PI * q) * r.strength;
+      if (r.kind === 'kick') {
+        // PATADA RECIBIDA. De frente: el cuerpo se dobla sobre el vientre, la
+        // cabeza cae, los brazos se abren y la pelvis se hunde; luego se
+        // recompone tambaleándose. Por la espalda: se arquea hacia atrás.
+        const env = (q < 0.16 ? Math.sin(q / 0.16 * Math.PI / 2) : Math.pow(Math.cos((q - 0.16) / 0.84 * Math.PI / 2), 1.4)) * r.strength;
+        const dirS = r.back ? 0.6 : -1;
+        const wob = Math.sin(q * 15) * (1 - q) * r.strength;
+        add(this.torso.rotation, 'x', dirS * 0.62 * env);
+        add(this.torso.rotation, 'y', -r.side * 0.3 * env);
+        add(this.torso.rotation, 'z', wob * 0.09);
+        add(this.head.rotation, 'x', dirS * 0.34 * env);
+        add(this.head.rotation, 'z', -wob * 0.1);
+        add(this.armL.shoulder.rotation, 'x', 0.5 * env); add(this.armL.shoulder.rotation, 'z', -0.42 * env);
+        add(this.armR.shoulder.rotation, 'x', 0.42 * env); add(this.armR.shoulder.rotation, 'z', 0.36 * env);
+        add(this.armL.elbow.rotation, 'x', 0.3 * env);
+        hipsY -= 0.085 * env;
+        rootRotX += (r.back ? -0.1 : 0.12) * env;         // todo el cuerpo cede hacia donde lo empujan
+        if (q >= 1) this._hitReact = null;
+      }
+      const wave = r.kind === 'kick' ? 0 : Math.sin(Math.PI * q) * r.strength;
       const melee = r.kind === 'melee';
       const side = Math.abs(r.side) > 0.12 ? r.side : 0.35;
       add(this.torso.rotation, 'x', (melee ? 0.24 : 0.1) * wave);

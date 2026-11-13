@@ -1823,7 +1823,7 @@ function damagePlayerLocal(dmg, fromName, shooter, hitCtx = null) {
     const len = Math.max(0.001, Math.hypot(dx, dz));
     const rightX = Math.cos(G.player.yaw), rightZ = -Math.sin(G.player.yaw);
     const side = (dx * rightX + dz * rightZ) / len;
-    G.rig.hitReact(side, Math.min(1.2, dmg / 50), 'melee');
+    G.rig.hitReact(side, Math.min(1.2, dmg / 50), 'kick');
     // Empuje corto y físico: resolveCircle impide atravesar pared/cover.
     G.player.pos.x += (dx / len) * 0.13;
     G.player.pos.z += (dz / len) * 0.13;
@@ -2536,7 +2536,7 @@ function bindNet(net) {
       const dx = victimPos.x - ap.x, dz = victimPos.z - ap.z;
       const len = Math.max(0.001, Math.hypot(dx, dz));
       const side = (dx * Math.cos(victimYaw || 0) + dz * -Math.sin(victimYaw || 0)) / len;
-      victimRig.hitReact(side, Math.min(1.2, (+m.dmg || 60) / 50), 'melee');
+      victimRig.hitReact(side, Math.min(1.2, (+m.dmg || 60) / 50), 'kick', (+m.dmg || 0) >= TUNING.melee.backstabDmg);
     }
     if (m.from !== net.id) {
       const team = victimSelf ? G.team : (victimRemote?.team || victimBot?.team || 'blue');
@@ -3346,6 +3346,7 @@ function throwSmoke() {
 // Golpe melee: arco frontal corto. Pega al enemigo MÁS CERCANO dentro del
 // arco (un objetivo por golpe), con línea al pecho para no golpear a través
 // de paredes.
+G.kickPushes = [];
 function resolveMelee() {
   const ml = TUNING.melee;
   const p = G.player;
@@ -3393,7 +3394,7 @@ function resolveMelee() {
   let victimTeam = 'blue';
   if (G.mode === 'practice' && G.dummies) {
     connected = true;
-    tg.rig?.hitReact?.(best.dot < 0.75 ? Math.sign(best.dx) : 0, 1, 'melee');
+    tg.rig?.hitReact?.(best.dot < 0.75 ? Math.sign(best.dx) : 0, tackle ? 1.2 : 1, 'kick', backstab);
     G.dummies.recoil?.(tg.id, best.dx, best.dz, tackle ? ml.tackleShove : 0.45);
     killed = G.dummies.damage(tg.id, dmg, (d) => {
       d.rig.setDeathContext({
@@ -3412,13 +3413,15 @@ function resolveMelee() {
   } else if (G.mode === 'bots' && G.botMatch) {
     const result = G.botMatch.damageBot(tg.id, dmg, 'player', false, false, ctx);
     if (result !== null) { connected = true; killed = result; if (!killed) audio.hit(); }
-    if (connected && !killed && tackle) {
-      // el placaje desplaza al rival y lo saca de su cobertura
+    if (connected && !killed) {
+      // la patada desplaza al rival (repartido en unas décimas) y encaja el
+      // golpe; la de sprint además lo saca de su cobertura
       const b = G.botMatch.bots.find((x) => x.id === tg.id);
       if (b) {
-        b.pos.x += best.dx / dist * ml.tackleShove; b.pos.z += best.dz / dist * ml.tackleShove;
-        world.resolveCircle(b.pos, 0.42, b.y ?? 0);
-        if (b.cover) { b.cover = null; b.state = 'advance'; }
+        const reach = tackle ? ml.tackleShove : 0.45;
+        G.kickPushes.push({ b, x: best.dx / dist * reach, z: best.dz / dist * reach });
+        b.rig?.hitReact?.(best.dot < 0.75 ? Math.sign(best.dx) : 0, tackle ? 1.2 : 1, 'kick', backstab);
+        if (tackle && b.cover) { b.cover = null; b.state = 'advance'; }
       }
     }
     victimTeam = tg.team || 'blue';
@@ -3428,7 +3431,7 @@ function resolveMelee() {
     if ((r || b) && !r?.inv && !(b?.protT > 0)) {
       connected = true;
       victimTeam = r?.team || b.team;
-      (r?.rig || b?.rig)?.hitReact?.(best.dot < 0.75 ? Math.sign(best.dx) : 0, 1, 'melee');
+      (r?.rig || b?.rig)?.hitReact?.(best.dot < 0.75 ? Math.sign(best.dx) : 0, tackle ? 1.2 : 1, 'kick', backstab);
       // el golpe viaja como disparo validable de corto alcance + su claim
       G.net.fire(_v1, point, 'melee', [], G.player);
       G.net.hit(tg.id, dmg, 'body', false, point);
@@ -4052,6 +4055,13 @@ function simStep(dt) {
     }
   }
 
+  // empujones de patada pendientes sobre bots
+  for (let i = G.kickPushes.length - 1; i >= 0; i--) {
+    const k = G.kickPushes[i], f = 1 - Math.exp(-11 * dt), mx = k.x * f, mz = k.z * f;
+    if (!k.b.alive || Math.hypot(k.x, k.z) < 0.01) { G.kickPushes.splice(i, 1); continue; }
+    k.b.pos.x += mx; k.b.pos.z += mz; k.x -= mx; k.z -= mz;
+    world.resolveCircle(k.b.pos, 0.42, k.b.y ?? 0);
+  }
   // melee: whoosh al armar el golpe y UNA sola ventana de impacto por gesto
   if (p.state === 'melee') {
     if (!G.meleeSwung) {
