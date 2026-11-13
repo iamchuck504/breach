@@ -94,6 +94,13 @@ const fortaleza = freeze([
   // y detrás de cada muro queda una salida lateral. Cuatro salidas en total.
   make(-8.7, -22.9, 1, 4.2, HIGH, 'high'),
   make(8.7, -22.9, 1, 4.2, HIGH, 'high'),
+  // v2 — PUESTOS DEL PATIO: los dos flancos de media cancha eran 10 y 14 m
+  // de losa vacía, justo donde ahora están las cajas de munición.
+  make(-14.2, -1.0, 1.0, 3.2, MID, 'mid'),
+  make(12.8, -3.4, 2.6, 0.9, LOW, 'low'),
+  // v2 — esquinas del spawn: algo tras lo que cubrirse al salir por el lado
+  make(14.4, -23.4, 2.6, 0.9, LOW, 'low'),
+  make(-13.6, -22.6, 0.9, 2.6, LOW, 'low'),
   make(-8.5, -16, 5, 1, MID, 'mid'),
   make(5.5, -17, 3, 3, LOW, 'low'),
   make(-14.5, -12, 1, 6.5, HIGH, 'high'),
