@@ -100,6 +100,39 @@ experimentales fuera de rotación, pero no se anuncian como contenido jugable.
 Hay 5 variantes de soldado por equipo en PERSONAJE y opciones de Audio, Video,
 Idioma y Controles en el menú.
 
+### Mapas v2
+
+Los tres mapas se rediseñaron midiendo con las velocidades reales del juego
+(trote 4.8 m/s, sprint 7.6 m/s), no desde la vista aérea.
+
+- **Fortaleza:** cuerpo de guardia en cada spawn (escudo más ancho y dos muros
+  laterales, cuatro salidas), puestos en los flancos del patio y las cajas de
+  munición al pie de cada galería en vez de sobre la línea central.
+- **Azoteas:** salida de escalera que tapa el spawn, dos entreplantas técnicas
+  a media altura en los flancos de media cancha (rampa hacia cada equipo,
+  baranda baja), diez piezas nuevas de cover y las cajas en el flanco propio.
+- **Calle Cerrada:** un remolque de plataforma con rampas por equipo (la única
+  altura de la avenida, sin baranda), paneles publicitarios que cortan las
+  aceras, y la munición en el centro de cada callejón lateral, con pilas a
+  media altura para acercarse.
+
+Las plataformas son cajas normales más **rampas**, que son la única pieza
+nueva del motor: `rampHeight()` en `src/world/collision-layouts.js`, leída
+por `World.groundHeight` y por el servidor (`server/map-geometry.js`).
+`addDeck()` genera de una sola definición la caja, las barandas, las rampas
+y su relleno macizo; `src/world/maps-v2-art.js` dibuja desde esas mismas
+listas.
+
+Herramientas:
+
+```bash
+node scripts/analyze-map.mjs <mapa> [--ascii]   # tiempos de llegada, carriles, exposición, spawns, líneas de tiro
+node scripts/check-maps-v2.mjs                  # diseño + paridad cliente/servidor + rampas con el controlador real
+node scripts/shot-map-compare.mjs <mapa> <dir>  # aérea y vistas de jugador con cámaras fijas (antes/después)
+```
+
+Los bots rodean las plataformas: todavía no las usan como posición.
+
 ## Editor de mapas (sandbox)
 
 Botón **EDITOR DE MAPAS** en el menú. Está construido sobre el pipeline real:

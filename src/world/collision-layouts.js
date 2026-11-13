@@ -55,13 +55,15 @@ function addDeck(out, layout, { x, z, w, d, h, style, ramps = [], rails = [], ra
     RAMP_SPECS[layout].push(ramp);
     if (mirror) RAMP_SPECS[layout].push({ ...ramp, x: -cx, z: -cz, dir: sign });
     // relleno macizo bajo la rampa: detiene balas y vista, no el paso
-    const steps = 6;
+    // cada escalón llega a la altura de la rampa en su extremo alto: el
+    // relleno nunca queda por debajo de la cuña que se dibuja
+    const steps = 8;
     for (let i = 0; i < steps; i++) {
       const t = (i + 0.5) / steps; // 0 = pie, 1 = arriba
       const along = sign * (r.length / 2 - t * r.length);
       out.push(make(alongZ ? cx : cx + along, alongZ ? cz + along : cz,
         alongZ ? r.width : r.length / steps, alongZ ? r.length / steps : r.width,
-        h * (i + 0.5) / steps, 'solid', { mirror, visual: false, cover: false, walkSurface: true, rampFill: true }));
+        Math.min(h, h * ((i + 1) * r.length / steps) / (r.length - RAMP_LANDING)), 'solid', { mirror, visual: false, cover: false, walkSurface: true, rampFill: true }));
     }
   }
 }
@@ -89,11 +91,17 @@ const fortaleza = freeze([
   ...galleryBoxes(),
   make(0, -20.9, 10.4, 1, HIGH, 'high'),
   // v2 — CUERPO DE GUARDIA: dos muros altos cierran los costados del spawn
-  // (antes se veía desde el 9 % de la mitad rival). Los dos bloques bajos
-  // pegados al escudo se retiran: sus huecos son ahora las salidas frontales,
-  // y detrás de cada muro queda una salida lateral. Cuatro salidas en total.
-  make(-8.7, -22.9, 1, 4.2, HIGH, 'high'),
-  make(8.7, -22.9, 1, 4.2, HIGH, 'high'),
+  // (antes se veía desde el 9 % de la mitad rival). Entre el escudo y cada
+  // muro queda una salida frontal, y detrás de cada muro una lateral: cuatro.
+  // x ±10.4: a más de 0.82 m (holgura corporal de un muro alto) de los nodos
+  // de navegación de los bots en x ±9 y ±12
+  make(-10.4, -22.9, 1, 4.2, HIGH, 'high'),
+  make(10.4, -22.9, 1, 4.2, HIGH, 'high'),
+  // Los bloques bajos del modelo de la puerta se conservan (están dibujados
+  // en el GLB): ahora son el cover de cada salida frontal, con 2.6 m de paso
+  // entre su extremo y el muro lateral.
+  make(-6, -20.2, 2.6, 0.9, LOW, 'low'),
+  make(6, -20.2, 2.6, 0.9, LOW, 'low'),
   // v2 — PUESTOS DEL PATIO: los dos flancos de media cancha eran 10 y 14 m
   // de losa vacía, justo donde ahora están las cajas de munición.
   make(-14.2, -1.0, 1.0, 3.2, MID, 'mid'),

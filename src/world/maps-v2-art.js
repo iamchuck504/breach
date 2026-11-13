@@ -27,6 +27,24 @@ function wedgeGeometry(w, len, h) {
   return g;
 }
 
+// SALIDAS DEL SPAWN: el jugador aparece mirando al escudo que lo protege.
+// Flechas pintadas en el suelo le dicen por dónde se sale sin tener que
+// girar la cámara para averiguarlo. [x, z, rumbo] en el lado rojo; rumbo 0 =
+// hacia el campo (+z), ±90° = hacia un costado. El espejo crea las azules.
+const SPAWN_EXITS = {
+  fortaleza: [[-8.4, -22.4, 0], [8.4, -22.4, 0], [-11.9, -25.1, -90], [11.9, -25.1, 90]],
+  azoteas: [[7.4, -33.2, 0], [-11.6, -37.6, -90], [11.6, -37.6, 90]],
+  calle2: [[-7.6, -36.6, 0], [7.6, -36.6, 0]],
+};
+function arrowTexture() {
+  const cv = document.createElement('canvas'); cv.width = 128; cv.height = 192;
+  const g = cv.getContext('2d');
+  g.strokeStyle = '#f2d98a'; g.lineWidth = 16; g.lineCap = 'square'; g.lineJoin = 'miter';
+  for (const y of [70, 122, 174]) { g.beginPath(); g.moveTo(22, y); g.lineTo(64, y - 46); g.lineTo(106, y); g.stroke(); }
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+  return t;
+}
+
 const LOOKS = {
   // Azoteas: entreplanta técnica de rejilla con canto de seguridad
   mezzanine: { ramp: 0x66727e, edge: 0xd9a441, metalness: 0.45, roughness: 0.6 },
@@ -45,6 +63,23 @@ export function decorateMapV2(world, layout) {
     m.position.set(x, y, z);
     return m;
   };
+
+  // ---------- flechas de salida del spawn ----------
+  const exits = SPAWN_EXITS[layout] ?? [];
+  if (exits.length) {
+    const paint = new THREE.MeshBasicMaterial({ map: arrowTexture(), transparent: true, opacity: 0.5, depthWrite: false,
+      polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+    for (const [x, z, heading] of exits) for (const side of [1, -1]) {
+      const arrow = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 1.65), paint);
+      arrow.name = 'v2-spawn-exit';
+      arrow.rotation.x = -Math.PI / 2;
+      // la punta del dibujo mira a -z con rotación 0: se gira hacia el campo
+      arrow.rotation.z = (side > 0 ? Math.PI : 0) - heading * Math.PI / 180;
+      arrow.position.set(x * side, 0.022, z * side);
+      arrow.renderOrder = 2;
+      root.add(arrow);
+    }
+  }
 
   // ---------- rampas ----------
   const mats = new Map();

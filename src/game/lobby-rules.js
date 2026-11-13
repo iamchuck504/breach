@@ -13,9 +13,8 @@ export const MAP_RUNTIME = Object.freeze({
     // v2: las cajas salen de la línea central (quien tomaba el centro tenía
     // el arma especial y las dos cajas a 14 m) y van al pie de cada galería
     crates: Object.freeze([{ x: -16.5, z: -6.5 }, { x: 16.5, z: 6.5 }]),
-    // v2: corrido a z -0.75 para que ambos equipos lleguen en el mismo tiempo
-    // (26.6 m por el suelo desde cada spawn) tras rehacer el cuerpo de guardia
-    special: Object.freeze({ x: 3, z: -0.75, y: 0 }),
+    // equidistante por el suelo: 28.3 m desde cada spawn (analyze-map.mjs)
+    special: Object.freeze({ x: 2.8, z: 0, y: 0 }),
   }),
   azoteas: Object.freeze({
     spawnZ: 35.1,
