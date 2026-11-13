@@ -105,6 +105,10 @@ Idioma y Controles en el menú.
 El personaje se anima por código (no hay clips). La locomoción se rehízo para
 que controlar se sienta inmediato y los pies no patinen:
 
+- **Carrera clásica**: correr de frente sin apuntar (trote y sprint) conserva la
+  zancada original, amplia y por tiempo; se prefirió a la resuelta por distancia.
+  La marcha por distancia queda para apuntar, ir de lado y retroceder, y es lo
+  único que vigila `check:gait`.
 - **Marcha por distancia** (`src/player/rig.js`): la fase del paso avanza con
   los metros recorridos y cada pie se coloca por cinemática inversa. En el
   apoyo retrocede a la velocidad del cuerpo; de lado y hacia atrás da pasos en

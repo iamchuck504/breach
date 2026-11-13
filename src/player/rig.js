@@ -1333,8 +1333,17 @@ export class Rig {
     // atrás los pasos son más cortos
     const gaitCycle = (0.95 + 0.36 * gv) * (1 - 0.38 * sideness) * (1 - 0.22 * backness);
     const coverStep = String(p.state).startsWith('cover_') ? Math.abs(p.latMove ?? 0) * 3.5 / 0.9 : 0;
-    this.phase += Math.PI * 2 * dt * (gv / gaitCycle + coverStep);
+    // CARRERA CLÁSICA. Correr de frente sin apuntar conserva la zancada
+    // original (amplia, por tiempo, rodilla alta): se prefirió a la resuelta
+    // por distancia, aunque el pie patine algo. La marcha por distancia queda
+    // para apuntar, ir de lado y retroceder, donde la original cruzaba piernas.
+    const classicT = (p.aim ? 0 : 1) * Math.max(0, Math.min(1, (gFwd / gLen - 0.5) / 0.3));
+    this._classic = (this._classic ?? classicT) + (classicT - (this._classic ?? classicT)) * (1 - Math.exp(-10 * dt));
+    const classic = this._classic;
+    this.phase += (1 - classic) * Math.PI * 2 * dt * (gv / gaitCycle + coverStep)
+      + classic * dt * ((4.5 + sp * 8.5) * this._strideWeight + Math.PI * 2 * coverStep);
     const ph = this.phase;
+    const cSwing = Math.sin(ph);                         // vaivén de la carrera clásica
     const swing = Math.cos(ph), swing2 = -swing;       // +1: pie izquierdo delante
     const bob = .5 + .5*Math.cos(ph*2); // smooth footfall, no abs() cusp at each contact
     const pitch = p.aimPitch ?? 0;
@@ -1363,14 +1372,14 @@ export class Rig {
         damp = 10;
         rootRotX = (p.groundPitch ?? 0) * 0.58;
         // el torso se echa adelante, contrarrota con las piernas y se ladea al girar
-        R(this.torso, -0.55 + leanAcc, swing * 0.07, swing * 0.035 + leanSide * 1.2);
+        R(this.torso, -0.55 + leanAcc, swing * 0.07 * (1 - classic), (swing * 0.035 + leanSide * 1.2) * (1 - classic) + Math.sin(ph * 0.5) * 0.04 * classic);
         R(this.head, 0.42 - leanAcc * 0.5, -swing * 0.05, -leanSide * 0.6);
         // (las piernas las coloca el resolvedor de marcha, tras el suavizado)
-        R(this.armL.shoulder, swing2 * 0.85 + 0.2, 0, -0.2); R(this.armL.elbow, 1.15 + Math.max(0, swing) * 0.25, 0, 0);
+        R(this.armL.shoulder, (swing2 * 0.85) * (1 - classic) - cSwing * 0.9 * classic + 0.2, 0, -0.2); R(this.armL.elbow, (1.15 + Math.max(0, swing) * 0.25) * (1 - classic) + 1.25 * classic, 0, 0);
         // arma baja al costado, una mano
         M(0.19, -0.34, -0.22, -0.5, 0.05, 0);
         R(this.aimRig, 0, 0, 0);
-        hipsY = 0.585 - bob * 0.035 * this._strideWeight;
+        hipsY = (0.585 - bob * 0.035 * this._strideWeight) * (1 - classic) + (0.58 + bob * 0.06 * this._strideWeight) * classic;
         break;
       }
       case 'run': case 'idle': default: { // default: estados desconocidos (red) caen a idle
@@ -1387,8 +1396,9 @@ export class Rig {
         const lean = -(0.05 + 0.09 * sp) * m * (forward >= 0 ? 1 : -0.45);
         // (la respiración casi no mueve el torso: el arma en reposo y al
         // disparar comparten boca de cañón; respiran la cabeza y la pelvis)
-        R(this.torso, lean + leanAcc + breath * 0.004 * (1 - m),
-          tw * 0.55 + swing * 0.03 * m * calm, swing * 0.035 * m * calm + leanSide - side * 0.05 * m * calm);
+        R(this.torso, (lean + leanAcc) * (1 - classic) + (-0.1 * m + Math.sin(ph * 0.4) * 0.015 + leanAcc * 0.5) * classic + breath * 0.004 * (1 - m),
+          tw * 0.55 + swing * 0.03 * m * calm * (1 - classic),
+          (swing * 0.035 * m * calm + leanSide - side * 0.05 * m * calm) * (1 - classic) + (cSwing * 0.04 * m + leanSide * 0.5) * classic);
         // la cabeza se queda nivelada y acompaña la mirada vertical
         R(this.head, 0.05 * m - leanAcc * 0.6 + pitch * 0.3 * calm + breath * 0.02 * (1 - m), tw * 0.35, -leanSide * 0.7);
         // (las piernas las coloca el resolvedor de marcha, tras el suavizado)
@@ -1400,7 +1410,7 @@ export class Rig {
         damp = p.firing ? 18 : 14;
         M(0.245, -0.15, -0.40, 0, 0.18, 0);
         // la pelvis baja en el apoyo y sube en el vuelo; en reposo respira
-        hipsY = 0.66 - bob * (0.018 + 0.022 * sp) * m + breath * 0.004 * (1 - m);
+        hipsY = 0.66 - bob * (0.018 + 0.022 * sp) * m * (1 - classic) + bob * 0.045 * m * classic + breath * 0.004 * (1 - m);
         break;
       }
       case 'jump': {
@@ -1923,10 +1933,16 @@ export class Rig {
       const stance = Math.min(reach, gv * 0.2);
       const duty = Math.min(0.62, stance / gaitCycle + 1e-4);
       const liftH = (0.07 + 0.2 * sp) * (sprint ? 1.2 : 1);
-      const hipDrop = (sprint ? 0.02 : 0.05) * m * Math.min(1, sp * 1.6);
+      const hipDrop = (sprint ? 0.02 : 0.05) * m * Math.min(1, sp * 1.6) * (1 - classic);
+      // carrera clásica: ángulos directos con el suavizado general de la pose
+      const cw = this._strideWeight, cAmp = sprint ? 1.05 : 0.75, cKnee = sprint ? 1.5 : 1.1, cBase = sprint ? 0.2 : 0.1;
+      this._cls ??= [0, 0, 0, 0];
       const kl = 1 - Math.exp(-(18 + 72 * this._legBlend) * dt);
       const g0 = ph / (Math.PI * 2);
       for (const [leg, side, off] of [[this.legL, -1, 0], [this.legR, 1, 0.5]]) {
+        const ci = side < 0 ? 0 : 2, cs = side < 0 ? cSwing : -cSwing;
+        this._cls[ci] += (cs * cAmp * cw - this._cls[ci]) * k;
+        this._cls[ci + 1] += (-(Math.max(0, -cs) * cKnee + cBase) * cw - this._cls[ci + 1]) * k;
         const u = (((g0 + off) % 1) + 1) % 1;
         let s, lift = 0;
         if (u < duty) s = stance * (0.5 - u / duty);              // apoyo
@@ -1949,13 +1965,14 @@ export class Rig {
         d = Math.max(0.2, d);
         const knee = -(Math.PI - Math.acos(Math.max(-1, Math.min(1, (LEG_UP * LEG_UP + LEG_LOW * LEG_LOW - d * d) / (2 * LEG_UP * LEG_LOW)))));
         const a = -(LEG_UP + LEG_LOW * Math.cos(knee)), b = -LEG_LOW * Math.sin(knee);
-        const rz = Math.asin(Math.max(-1, Math.min(1, vx / -a)));
+        const rz = Math.asin(Math.max(-1, Math.min(1, vx / -a))) * (1 - classic);
         let rx = Math.atan2(vz, vy) - Math.atan2(b, a * Math.cos(rz));
-        rx = Math.atan2(Math.sin(rx), Math.cos(rx));
+        rx = Math.atan2(Math.sin(rx), Math.cos(rx)) * (1 - classic) + this._cls[ci] * classic;
+        const kneeX = knee * (1 - classic) + this._cls[ci + 1] * classic;
         leg.hip.rotation.x += (rx - leg.hip.rotation.x) * kl;
         leg.hip.rotation.y += (0 - leg.hip.rotation.y) * kl;
         leg.hip.rotation.z += (rz - leg.hip.rotation.z) * kl;
-        leg.knee.rotation.x += (knee - leg.knee.rotation.x) * kl;
+        leg.knee.rotation.x += (kneeX - leg.knee.rotation.x) * kl;
         leg.knee.rotation.y += (0 - leg.knee.rotation.y) * kl;
         leg.knee.rotation.z += (0 - leg.knee.rotation.z) * kl;
       }
