@@ -32,7 +32,7 @@ const check = (name, ok, extra = '') => {
   if (!ok) fails.push(name);
 };
 
-const MAPS = ['fortaleza', 'azoteas', 'calle', 'metro', 'prision', 'pueblo'];
+const MAPS = ['fortaleza', 'azoteas', 'calle', 'calle2', 'metro', 'prision', 'pueblo'];
 await page.goto('http://localhost:8792/?nolock=1', { waitUntil: 'networkidle' });
 await page.evaluate(() => document.getElementById('btn-enter')?.click());
 await page.waitForSelector('#splash.off', { state: 'attached' });
@@ -146,7 +146,7 @@ for (const map of MAPS) {
       r.streetReuse.inventedNames.length === 0,
       JSON.stringify(r.streetReuse));
   }
-  check(`${map}: ambiente de audio activo`, r.ambience === map, `amb=${r.ambience}`);
+  check(`${map}: ambiente de audio activo`, r.ambience === (map === 'calle2' ? 'calle' : map), `amb=${r.ambience}`);
 }
 
 check('sin errores de página', pageErrors === 0, `errores=${pageErrors}`);

@@ -5,6 +5,8 @@
 // y las caras de cobertura que consume el sistema de cover.
 import * as THREE from 'three';
 import { MAP_RUNTIME } from '../game/lobby-rules.js';
+import { rampHeight } from './collision-layouts.js';
+import { decorateMapV2 } from './maps-v2-art.js';
 import { BLOCK } from './block-heights.js';
 import { getMap, isCustomLayout, cratesOf, specialOf, spawnsOf, footprint, paletteById }
   from './map-data.js';
@@ -188,6 +190,7 @@ export class World {
       : layout;
     if (decorBase) polishArchitecture(this, decorBase);
     if (decorBase) addMapIdentity(this, decorBase);
+    if (decorBase) decorateMapV2(this, decorBase);
     this._addMapPeriphery(theme);
     this._flushBoxBatch();
     if (this._fortLook) this._weatherFortaleza();
@@ -4886,7 +4889,7 @@ export class World {
     const bandMat = new THREE.MeshLambertMaterial({ color: 0x4a4038 });
     const barrels = [
       [-19.9, -18.5, 0], [19.9, 18.5, 0], [-19.5, -17.6, 0], [19.5, 17.6, 0],
-      [10.3, -25.9, 0], [-10.3, 25.9, 0], [10.3, -25.9, 0.78], [-10.3, 25.9, 0.78],
+      [13.4, -26.0, 0], [-13.4, 26.0, 0], [13.4, -26.0, 0.78], [-13.4, 26.0, 0.78], // v2: fuera de la salida lateral del spawn
       [-20.6, -6.2, 0], [20.6, 6.2, 0],
     ];
     for (const [x, z, y] of barrels) {
@@ -4938,6 +4941,7 @@ export class World {
 
     buildSharedCollision(this, 'azoteas', {
       ac: acOpts, vent: ventOpts, hut: hutOpts, glass: glassOpts, wall: wallOpts,
+      deck: { color: 0x5f6b77, top: 0x4c5762, surface: 'metal' }, // entreplantas v2
     });
 
     // Landmarks y skins se conservan aparte: solo sus huellas físicas forman
@@ -5999,6 +6003,9 @@ export class World {
       }
       if (h > g) g = h;
     }
+    // rampas de las plataformas elevadas (un mapa de datos hereda las de su base)
+    const ramp = rampHeight(this.customMap ? this.customMap.base : this.layout, p, r);
+    if (ramp > g) g = ramp;
     const m = r * 0.5;
     for (const c of this.colliders) {
       if(c.walkSurface)continue;

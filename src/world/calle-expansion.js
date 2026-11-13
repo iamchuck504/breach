@@ -10,7 +10,21 @@ export const SIDE_PROPS = Object.freeze([
   { kind: 'dumpster', x: -27, z: 10.5, w: 2.8, d: 1.6, h: 1.1 },
   { kind: 'bench', x: 27, z: -10.5, w: 2.8, d: 1.6, h: 1.1 },
   { kind: 'bench', x: 27, z: 10.5, w: 2.8, d: 1.6, h: 1.1 },
+  // v2: los callejones guardan ahora las cajas de munición. Pilas a media
+  // altura junto al muro interior permiten acercarse al centro del callejón
+  // sin recorrer 15 m al descubierto.
+  { kind: 'pallets', x: -23.0, z: -6.4, w: 1.6, d: 1.4, h: 1.9 },
+  { kind: 'pallets', x: -23.0, z: 6.4, w: 1.6, d: 1.4, h: 1.9 },
+  { kind: 'toolchest', x: 23.0, z: -6.4, w: 1.6, d: 1.4, h: 1.9 },
+  { kind: 'toolchest', x: 23.0, z: 6.4, w: 1.6, d: 1.4, h: 1.9 },
 ]);
+
+// Piezas v2 de la avenida: una sola fuente para colisión (collision-layouts)
+// y dibujo (maps-v2-art). El espejo (-x,-z) crea la pareja del otro equipo.
+export const CALLE_2_V2 = Object.freeze({
+  trailer: Object.freeze({ x: 10.4, z: -15.5, w: 2.6, d: 5 }),
+  adPanels: Object.freeze([Object.freeze({ x: 13.9, z: 0, w: 2.0, d: 0.36, h: 3 })]),
+});
 
 // One placement source for visual vehicles AND all their collision tiers.
 // Keep the spawn shields; stage cover before the portals rather than in them.

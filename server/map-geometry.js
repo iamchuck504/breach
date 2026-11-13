@@ -1,7 +1,7 @@
 // Raycast estático sin Three.js para la autoridad online. Consume la misma
 // fuente de colliders que World, de modo que servidor y cliente no puedan
 // discrepar sobre paredes, vehículos, cover o barandas del helipuerto.
-import { HELIPAD, expandedCollisionBoxes, helipadSegments }
+import { HELIPAD, expandedCollisionBoxes, helipadSegments, rampHeight }
   from '../src/world/collision-layouts.js';
 import {galleryHeight} from '../src/world/fortaleza-galleries.js';
 
@@ -38,6 +38,7 @@ export function serverMapPhysics(layout) {
             zone.height * (1 - (az - zone.edge) / zone.rampLength));
         }
       }
+      height = Math.max(height, rampHeight(layout, p, r));
       const margin = r * 0.5;
       for (const box of g.boxes) {
         if(box.walkSurface)continue;

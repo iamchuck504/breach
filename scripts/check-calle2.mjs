@@ -16,13 +16,18 @@ for(const {from,to} of CALLE_2_VEHICLE_MOVES)for(const side of [-1,1]){
 }
 for(const p of SIDE_PROPS){
   assert(Math.abs(p.z)+p.d/2<15.8,'Side cover stays outside portal mouths');
-  assert(Math.abs(p.x)-p.w/2>25+.48,'Center route retains body clearance');
+  // v2: props may also hug the inner wall; either way they leave the bot
+  // route along |x| = 25 (body radius .48) untouched.
+  assert(Math.abs(p.x)-p.w/2>25+.48||Math.abs(p.x)+p.w/2<25-.48,'Center route retains body clearance');
 }
 
 assert(!MAPS.includes('calle')&&MAPS.includes('calle2'));
 assert.equal(normalizeLobbySettings({map:'calle'}).map,'calle2');
 assert.equal(normalizeLobbySettings({map:'calle2'}).map,'calle2');
-assert.deepEqual(MAP_RUNTIME.calle,MAP_RUNTIME.calle2);
+// v2 moved the ammo crates into the side alleys, which only calle2 has.
+assert.equal(MAP_RUNTIME.calle.spawnZ,MAP_RUNTIME.calle2.spawnZ);
+assert.deepEqual(MAP_RUNTIME.calle.special,MAP_RUNTIME.calle2.special);
+assert(MAP_RUNTIME.calle2.crates.every(c=>Math.abs(c.x)>21.55&&Math.abs(c.x)<29&&c.z===0));
 for(const side of [-1,1]){
   for(const z of [-18,18])assert.equal(mapLineBlocked('calle2',[side*14,1.2,z],[side*25,1.2,z]),false);
   assert.equal(mapLineBlocked('calle2',[side*14,1.2,0],[side*25,1.2,0]),true);
@@ -172,7 +177,7 @@ try{
         [{x:side*25,z:0},{x:side*13.5,z:18}],
         [{x:side*13.5,z:18},{x:side*25,z:0}],
         [{x:side*25,z:0},{x:side*13.5,z:-18}],
-        [{x:side*25,z:0},{x:side*14,z:0}],
+        [{x:side*25,z:0},{x:side*14,z:2}], // v2: an ad panel now stands at (14,0)
         [{x:side*10,z:-38},{x:side*13.5,z:-18}],
         [{x:side*10,z:38},{x:side*13.5,z:18}],
         [{x:side*13.5,z:-18},{x:side*10,z:0}],
@@ -246,7 +251,7 @@ try{
   });
   for(const [name,url] of Object.entries(report.images))await fs.writeFile(`${out}/${name}.png`,Buffer.from(url.split(',')[1],'base64'));
   delete report.images;
-  assert.deepEqual(report.boxes,expandedCollisionBoxes('calle2'),'server/client geometry');delete report.boxes;
+  assert.deepEqual(report.boxes,expandedCollisionBoxes('calle2').map(({minx,maxx,minz,maxz,h})=>({minx,maxx,minz,maxz,h})),'server/client geometry');delete report.boxes;
   console.log(JSON.stringify({...report,errors},null,2));
   assert.deepEqual(errors,[]);for(const [name,ok] of Object.entries(report.checks))assert(ok,name);
   // Real menu -> local lobby -> match smoke test. The existing map remains
