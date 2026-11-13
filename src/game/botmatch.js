@@ -25,6 +25,28 @@ import { t } from '../core/i18n.js';
 const ROUND_TIME = 300;      // 5 minutos
 const DEFAULT_LIVES = 15;
 import { nextRespawnWave } from './respawn-wave.js';
+import { decksFor, rampsFor } from '../world/collision-layouts.js';
+
+// PUESTOS ELEVADOS (mapas v2): cada plataforma con sus rampas, como ruta que
+// un bot puede seguir: pie de rampa -> rellano -> puesto. Sale de las mismas
+// listas que la colisión, así que un mapa nuevo con addDeck() ya los ofrece.
+const PERCHES = new Map();
+function perchesFor(layout) {
+  if (PERCHES.has(layout)) return PERCHES.get(layout);
+  const out = [];
+  for (const d of decksFor(layout)) for (const side of d.mirror ? [1, -1] : [1]) {
+    const deck = { x: d.x * side, z: d.z * side, w: d.w, d: d.d, h: d.h, railed: d.rails.length > 0, ramps: [] };
+    for (const r of rampsFor(layout)) {
+      if (r.axis !== 'z') continue; // dir = sentido en que se sube
+      const joinZ = r.z + r.dir * r.d / 2;
+      if (Math.abs(r.x - deck.x) > deck.w / 2 || Math.abs(joinZ - (deck.z - r.dir * deck.d / 2)) > 0.3) continue;
+      deck.ramps.push({ dir: r.dir, foot: { x: r.x, z: r.z - r.dir * (r.d / 2 + 0.8) }, top: { x: r.x, z: joinZ + r.dir * 0.55 } });
+    }
+    if (deck.ramps.length) out.push(deck);
+  }
+  PERCHES.set(layout, out);
+  return out;
+}
 const INTRO_TIME = 10;
 const COUNTDOWN_TIME = 3;
 const ROUND_RESULT_TIME = 5;
@@ -116,6 +138,7 @@ export class Bot {
     this.role = this.role ?? 'advance';
     this.roleT = 0; this.decisionT = 0; this.decisionSerial = 0;
     this.tacticalGoal = null;
+    this.perch = null; this.perchCd = 4 + Math.random() * 6; // puesto elevado en curso
     this.flip = null;  // vuelta acrobática en el aire (solo estilo)
     this.stuckT = 0; this.avoidSide = 0;
     this.recovery = null;    // waypoint temporal para rodear un obstáculo concreto
@@ -446,6 +469,56 @@ export class Bot {
     return true;
   }
 
+  // PUESTO ELEVADO: subir a una plataforma por su rampa, vigilar desde arriba
+  // y bajar. Mientras está en la rampa o arriba manda sobre el resto de
+  // decisiones: la baranda y el borde no se negocian con el steering normal,
+  // se entra y se sale por la rampa.
+  _perchEnd(match, cooldown) {
+    match.releasePerch(this);
+    this.perch = null; this.perchCd = cooldown;
+    this.wp = null; this.state = 'advance'; this.roleT = 0; this.decisionT = 0;
+    return false;
+  }
+
+  _perch(dt, match, enemy, dist, wantsSafety) {
+    this.perchCd = Math.max(0, this.perchCd - dt);
+    let p = this.perch;
+    if (!p) {
+      if (this.perchCd > 0 || this.state === 'cover' || wantsSafety || this.hp < 70 || !this.grounded ||
+          (enemy && dist < 12) || (this.role !== 'hold' && this.role !== 'angle' && this.role !== 'support')) return false;
+      p = match.claimPerch(this);
+      if (!p) { this.perchCd = 3; return false; }
+      this.perch = p; this.cover = null;
+    }
+    p.t += dt;
+    const near = (q, r) => Math.hypot(q.x - this.pos.x, q.z - this.pos.z) < r;
+    const descend = (exit) => { p.phase = 'down'; p.exit = exit; p.step = 0; p.t = 0; };
+    if (p.phase === 'approach') {
+      if (wantsSafety || (enemy && dist < 7) || p.t > 10) return this._perchEnd(match, 8);
+      if (near(p.entry.foot, 0.7)) { p.phase = 'up'; p.step = 0; p.t = 0; }
+    } else if (p.phase === 'up') {
+      if (near(p.step === 0 ? p.entry.top : p.spot, 0.45)) {
+        if (p.step === 0) { p.step = 1; p.t = 0; } else { p.phase = 'hold'; p.t = 0; p.quiet = 0; }
+      } else if (p.t > 5) {
+        // no llegó: si sigue en el suelo se abandona; si quedó arriba, baja
+        if (this.y < 0.3) return this._perchEnd(match, 10);
+        descend(p.entry);
+      }
+    } else if (p.phase === 'hold') {
+      if (this.y < p.deck.h - 0.4) return this._perchEnd(match, 12); // lo tiraron de la plataforma
+      p.quiet = enemy ? 0 : p.quiet + dt;
+      if (wantsSafety) descend(p.entry);
+      else if (p.t > p.holdFor || p.quiet > 6) descend(p.advance);
+    } else {
+      if (this.y < 0.05 && p.step === 1 && near(p.exit.foot, 1.6)) return this._perchEnd(match, 18 + Math.random() * 14);
+      if (near(p.step === 0 ? p.exit.top : p.exit.foot, 0.5)) {
+        if (p.step === 0) { p.step = 1; p.t = 0; } else return this._perchEnd(match, 18 + Math.random() * 14);
+      } else if (p.t > 6) return this._perchEnd(match, 20);
+    }
+    this.state = 'perch';
+    return true;
+  }
+
   // Colisión de CUERPOS: nadie atraviesa a nadie (aliados y enemigos, bots y
   // humanos). Corrección posicional SUAVE: la mitad del solape por paso con
   // tope de 3 m/s — sin empujones violentos ni atrapamientos permanentes.
@@ -558,10 +631,13 @@ export class Bot {
       if (td > 4 && td < 26) match.botThrowSmoke(this, threatRef);
     }
 
-    const spot = this.state !== 'cover' && this.coverCd <= 0 && wantsSafety && threatRef
+    const perching = this._perch(dt, match, enemy, dist, wantsSafety);
+    const spot = !perching && this.state !== 'cover' && this.coverCd <= 0 && wantsSafety && threatRef
       ? match.findCoverSpot(this, threatRef, { retreat: true, threats: match.threatsFor(this, threatRef) })
       : null;
-    if (spot) {
+    if (perching) {
+      // el puesto elevado manda: ver _perch
+    } else if (spot) {
       this.cover = spot; this.state = 'cover';
       this.coverPhase = 'go'; this.coverT = 0; this.coverPhaseT = 0;
       this.coverThreat = { x: threatRef.x, z: threatRef.z };
@@ -607,7 +683,7 @@ export class Bot {
     }
 
     // salto de esquiva bajo fuego reciente (a veces con vuelta en el aire)
-    if (this.recentHit < 0.6 && this.state !== 'cover' && Math.random() < 1.2 * dt) this._jump(true);
+    if (this.recentHit < 0.6 && this.state !== 'cover' && this.state !== 'perch' && Math.random() < 1.2 * dt) this._jump(true);
 
     // ---- comportamiento por estado ----
     let mx = 0, mz = 0, aiming = false, animOverride = null;
@@ -691,6 +767,23 @@ export class Bot {
       mz = ez + ex * this.strafeDir * 0.35;
       if (Math.random() < 0.5 * dt) this._jump(true);
       if (dist < 9) this._fireAt(dt, match, enemy, dist);
+    } else if (this.state === 'perch' && this.perch) {
+      const p = this.perch;
+      const target = p.phase === 'approach' ? p.entry.foot
+        : p.phase === 'up' ? (p.step === 0 ? p.entry.top : p.spot)
+        : p.phase === 'down' ? (p.step === 0 ? p.exit.top : p.exit.foot) : p.spot;
+      this.wp = target;
+      const dx = target.x - this.pos.x, dz = target.z - this.pos.z;
+      const d = Math.hypot(dx, dz);
+      if (d > (p.phase === 'hold' ? 0.5 : 0.12)) { mx = dx / d; mz = dz / d; }
+      if (enemy && (p.phase === 'hold' || dist < 16)) {
+        aiming = true;
+        this._face(enemy.x - this.pos.x, enemy.z - this.pos.z, dt, 8);
+        this._fireAt(dt, match, enemy, dist);
+      } else if (p.phase === 'hold') {
+        // vigila hacia el centro del mapa y el campo rival
+        this._face(-Math.sign(p.deck.x) * 0.6, this.team === 'red' ? 1 : -1, dt, 3);
+      } else if (mx || mz) this._face(mx, mz, dt, 7);
     } else if (this.state === 'hold') {
       // Una defensa es temporal: vigila el frente y pelea desde el ángulo que
       // eligió, pero el temporizador de rol terminará forzando otra decisión.
@@ -811,6 +904,10 @@ export class Bot {
     // Al completarlo, la intención táctica original vuelve a tomar el control.
     const activeGoal = this.state === 'cover' && this.coverPhase === 'go'
       ? this.cover : (this.wp || this.tacticalGoal || enemy);
+    // En la rampa y sobre la plataforma el bot va en línea recta entre puntos
+    // de la ruta: ni rodeos, ni saltos, ni empujones de compañeros.
+    const direct = this.state === 'perch' && !!this.perch && this.perch.phase !== 'approach';
+    if (direct) this.recovery = null;
     if (this.recovery) {
       const rx = this.recovery.x - this.pos.x, rz = this.recovery.z - this.pos.z;
       const rd = Math.hypot(rx, rz);
@@ -868,13 +965,14 @@ export class Bot {
         sepX += (ddx / dd) * w; sepZ += (ddz / dd) * w;
       }
     }
-    mx += sepX * 0.9; mz += sepZ * 0.9;
+    if (!direct) { mx += sepX * 0.9; mz += sepZ * 0.9; }
     const mlen = Math.hypot(mx, mz);
     const beforeX = this.pos.x, beforeZ = this.pos.z;
     let wasGrounded = this.grounded;
     let steering = null;
     if (mlen > 0.05) {
-      steering = this._steer(mx / mlen, mz / mlen, match, activeGoal);
+      steering = direct ? { x: mx / mlen, z: mz / mlen, blocked: false, hit: null, stairsRoute: true }
+        : this._steer(mx / mlen, mz / mlen, match, activeGoal);
       if(!steering.stairsRoute)this._jumpIfBlocked(steering.x, steering.z);
       // Un salto deliberado deja de ser un movimiento pegado al suelo.
       wasGrounded = this.grounded;
@@ -1109,6 +1207,7 @@ export class BotMatch {
     this.enemyHeat = { red: [0, 0, 0], blue: [0, 0, 0] };
     this.specialSeeker = { red: null, blue: null }; // un solo bot por equipo va al pedestal
     this.tacticalClaims = new Map(); // destinos/ángulos reservados por bot
+    this.perchClaims = new Map();    // plataforma -> bot que la ocupa
     this._rocketSeq = 0;
     this._nadeSeq = 0;
 
@@ -1288,6 +1387,46 @@ export class BotMatch {
 
   releaseTacticalClaim(id) {
     this.tacticalClaims.delete(id);
+  }
+
+  // Reserva una plataforma para el bot: una por bot, un bot por equipo arriba
+  // a la vez, y solo las que no quedan detrás de las líneas rivales.
+  claimPerch(bot) {
+    const decks = perchesFor(this.world.customMap ? this.world.customMap.base : this.world.layout);
+    if (!decks.length) return null;
+    if (this.bots.some((b) => b !== bot && b.alive && b.team === bot.team && b.perch)) return null;
+    const toward = bot.team === 'red' ? 1 : -1;
+    let best = null, bestD = 18;
+    for (const deck of decks) {
+      const holder = this.perchClaims.get(deck);
+      if (holder && holder !== bot.id) { const h = this.botById(holder); if (h?.alive && h.perch?.deck === deck) continue; }
+      if (deck.z * toward > 6) continue;
+      for (const entry of deck.ramps) {
+        const d = Math.hypot(entry.foot.x - bot.pos.x, entry.foot.z - bot.pos.z);
+        if (d < bestD) { bestD = d; best = { deck, entry }; }
+      }
+    }
+    if (!best) return null;
+    const { deck, entry } = best;
+    this.perchClaims.set(deck, bot.id);
+    this.releaseTacticalClaim(bot.id);
+    const inward = -Math.sign(deck.x);
+    return {
+      deck, entry, phase: 'approach', step: 0, t: 0, quiet: 0,
+      // bajar hacia el campo rival si hay rampa de ese lado
+      advance: deck.ramps.find((r) => r.dir * toward < 0) ?? entry,
+      // con baranda: en la esquina que mira al centro y al rival, con la
+      // baranda delante; sin ella (remolque), en medio de la tarima
+      spot: deck.railed
+        ? { x: deck.x + inward * (deck.w / 2 - 1.0), z: deck.z + toward * (deck.d / 2 - 1.0) }
+        : { x: deck.x, z: deck.z + toward * 0.6 },
+      holdFor: 7 + bot.profile.patience * 6,
+    };
+  }
+
+  releasePerch(bot) {
+    const deck = bot.perch?.deck;
+    if (deck && this.perchClaims.get(deck) === bot.id) this.perchClaims.delete(deck);
   }
 
   _leastControlledLane(bot) {
