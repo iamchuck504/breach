@@ -3,7 +3,7 @@ import { TUNING } from '../config/tuning.js';
 // Tiempo que debe sobrevivir un click semiautomático mientras el personaje
 // recupera control/alineación. Centralizado para poder probar el contrato sin
 // depender del loop/render del navegador.
-export function requiredFireBuffer(player, weaponState, reloadRemain = 0) {
+export function requiredFireBuffer(player, weaponState, reloadRemain = 0, swapRemain = 0) {
   const err = Math.abs(player.cameraYawError());
   const maxErr = TUNING.combat.fireAlignMaxDeg * Math.PI / 180;
   const turnDeg = player.state === 'cover' && !player.aim
@@ -15,9 +15,15 @@ export function requiredFireBuffer(player, weaponState, reloadRemain = 0) {
     transitionWait = Math.max(0, TUNING.evade.diveTime - player.stateT);
   } else if (player.state === 'mantle' && player.mantle) {
     transitionWait = Math.max(0, player.mantle.dur - player.mantle.t);
+  } else if (player.state === 'slide') {
+    // el deslizamiento a cover dura lo que tarde en llegar: un clic durante
+    // él caducaba a los 0,3 s y se perdía
+    transitionWait = 0.5;
+  } else if (player.state === 'melee') {
+    transitionWait = Math.max(0, (player.meleeEndT ?? 0) - (player.meleeT ?? 0));
   }
 
   // Dos frames de margen incluso a 30 fps.
   return Math.max(0.3, weaponState.cd + 0.06, reloadRemain + 0.06,
-    alignWait + 0.07, transitionWait + 0.07);
+    alignWait + 0.07, transitionWait + 0.07, swapRemain + 0.06);
 }

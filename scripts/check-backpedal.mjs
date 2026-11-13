@@ -57,7 +57,8 @@ for (const fps of [30, 60, 144]) {
         const previous = player.yaw;
         player.update(1 / fps, input, false);
         const step = Math.abs(Math.atan2(Math.sin(player.yaw - previous), Math.cos(player.yaw - previous)));
-        assert.ok(step <= 240 * Math.PI / 180 / fps + 1e-9, 'no abrupt locomotion turn');
+        // el tope de giro del trote es TUNING.move.turnMaxDeg (600°/s; antes 240 fijos)
+assert.ok(step <= 600 * Math.PI / 180 / fps + 1e-9, 'no abrupt locomotion turn');
       }
     }
   }

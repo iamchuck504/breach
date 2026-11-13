@@ -1227,7 +1227,7 @@ export class Rig {
   // IK analítico de dos huesos en espacio del aimRig. Prueba las dos
   // soluciones de codo y elige la que alcanza el target con el codo
   // hacia abajo/afuera (vector polo).
-  _ikArm(arm, side, target, shouldered = false) {
+  _ikArm(arm, side, target, shouldered = false, w = 1) {
     IK_S.copy(arm.shoulder.position);
     IK_V.copy(target).sub(IK_S);
     let d = IK_V.length();
@@ -1235,8 +1235,9 @@ export class Rig {
     IK_V.normalize();
     // A shouldered rifle hangs the upper arms down from the chest, rather
     // than folding both elbows forward alongside the receiver.
-    IK_POLE.set(side * (shouldered ? 1.25 : .7), shouldered ? -.65 : -.75,
-      shouldered ? .18 : -.4).normalize();
+    // el polo del codo se mezcla: al apuntar ya no cambia de golpe
+    const sh = typeof shouldered === 'number' ? shouldered : (shouldered ? 1 : 0);
+    IK_POLE.set(side * (.7 + .55 * sh), -.75 + .1 * sh, -.4 + .58 * sh).normalize();
     IK_N.crossVectors(IK_V, IK_POLE);
     if (IK_N.lengthSq() < 1e-5) IK_N.set(0, 0, -side);
     IK_N.normalize();
@@ -1264,12 +1265,21 @@ export class Rig {
         }
       }
     }
-    arm.shoulder.quaternion.copy(IK_BQ);
-    arm.elbow.rotation.set(bestBend, 0, 0);
+    // Entrada suave: cuando la mano vuelve al arma (tras superar un obstáculo,
+    // lanzar, deslizarse, esprintar) el brazo viaja hasta ella en vez de
+    // aparecer ya colocado. Con w = 1 es la solución exacta de siempre.
+    if (w >= 1) {
+      arm.shoulder.quaternion.copy(IK_BQ);
+      arm.elbow.rotation.set(bestBend, 0, 0);
+    } else {
+      arm.shoulder.quaternion.slerp(IK_BQ, w);
+      arm.elbow.rotation.set(arm.elbow.rotation.x + (bestBend - arm.elbow.rotation.x) * w, 0, 0);
+    }
   }
 
   // p: {state, speed, aim, aimPitch, twist}
   update(dt, p) {
+    const LEG_UP = 0.32, LEG_LOW = 0.375; // muslo y pierna hasta la suela
     if(this.stunned&&p.state!=='dead')p={...p,aim:false,speed:0,state:String(p.state).includes('cover')?p.state:'idle'};
     if (p.state !== 'dead' && !this.rag) this._pendingBlenderSoldier?.();
     // Convenciones (el personaje mira a -Z local):
@@ -1305,26 +1315,56 @@ export class Rig {
     this._gaitSpeed = (this._gaitSpeed??0) + (gaitTarget-(this._gaitSpeed??0))*(1-Math.exp(-14*dt));
     this._strideWeight = (this._strideWeight??0) + ((gaitTarget>.02?1:0)-(this._strideWeight??0))*(1-Math.exp(-18*dt));
     const sp = this._gaitSpeed;
-    this.phase += dt * (4.5 + sp * 8.5) * this._strideWeight;
+    // MARCHA POR DISTANCIA. La fase del paso avanza con los metros que recorre
+    // el cuerpo, no con el reloj: a cualquier velocidad, acelerando o frenando,
+    // el pie apoyado retrocede exactamente lo que el cuerpo avanza. Antes la
+    // cadencia iba por tiempo y la zancada era fija: los pies patinaban.
+    const gv = gaitTarget * 7.6;                       // m/s reales
+    const gFwd = p.moveForward ?? 1, gSide = p.moveSide ?? 0;
+    const gLen = Math.hypot(gFwd, gSide) || 1;
+    const sideness = Math.min(1, Math.abs(gSide) / gLen), backness = Math.max(0, -gFwd / gLen);
+    // metros por ciclo (dos pasos): crece con la velocidad; de lado y hacia
+    // atrás los pasos son más cortos
+    const gaitCycle = (0.95 + 0.36 * gv) * (1 - 0.38 * sideness) * (1 - 0.22 * backness);
+    const coverStep = String(p.state).startsWith('cover_') ? Math.abs(p.latMove ?? 0) * 3.5 / 0.9 : 0;
+    this.phase += Math.PI * 2 * dt * (gv / gaitCycle + coverStep);
     const ph = this.phase;
-    const swing = Math.sin(ph), swing2 = Math.sin(ph + Math.PI);
+    const swing = Math.cos(ph), swing2 = -swing;       // +1: pie izquierdo delante
     const bob = .5 + .5*Math.cos(ph*2); // smooth footfall, no abs() cusp at each contact
     const pitch = p.aimPitch ?? 0;
+    this._idleT = (this._idleT ?? 0) + dt;             // respiración: reloj propio
+    const breath = Math.sin(this._idleT * 1.7);
+    // INERCIA DEL CUERPO: aceleración y giro medidos sobre lo que el rig recibe
+    const vF = gv * gFwd / gLen, vS = gv * gSide / gLen;
+    const safeDt = Math.max(dt, 1e-4);
+    const kA = 1 - Math.exp(-9 * dt);
+    this._accF = (this._accF ?? 0) + (((vF - (this._vF ?? vF)) / safeDt) - (this._accF ?? 0)) * kA;
+    this._accS = (this._accS ?? 0) + (((vS - (this._vS ?? vS)) / safeDt) - (this._accS ?? 0)) * kA;
+    this._vF = vF; this._vS = vS;
+    let dYaw = this.root.rotation.y - (this._yawPrev ?? this.root.rotation.y);
+    dYaw = Math.atan2(Math.sin(dYaw), Math.cos(dYaw));
+    this._yawPrev = this.root.rotation.y;
+    this._yawRate = (this._yawRate ?? 0) + ((dYaw / safeDt) - (this._yawRate ?? 0)) * kA;
+    // con el arma en uso el torso no se ladea: la inercia nunca mueve la mira
+    this._calm = (this._calm ?? 1) + (((p.aim || p.firing) ? 0 : 1) - (this._calm ?? 1)) * (1 - Math.exp(-16 * dt));
+    const calm = this._calm;
+    const leanAcc = Math.max(-0.13, Math.min(0.13, -this._accF * 0.0075)) * calm;   // − = hacia delante
+    const leanSide = Math.max(-0.12, Math.min(0.12, -this._accS * 0.006 - this._yawRate * gaitTarget * 0.045)) * calm;
 
     const locomotionState = p.state === 'roadie' && (p.moveForward ?? 1) < 0.5 ? 'run' : p.state;
     switch (locomotionState) {
       case 'roadie': {
         damp = 10;
         rootRotX = (p.groundPitch ?? 0) * 0.58;
-        R(this.torso, -0.55, 0, Math.sin(ph * 0.5) * 0.04);
-        R(this.head, 0.42, 0, 0);
-        R(this.legL.hip, swing * 1.05*this._strideWeight, 0, 0); R(this.legL.knee, -(Math.max(0, -swing) * 1.5 + 0.2)*this._strideWeight, 0, 0);
-        R(this.legR.hip, swing2 * 1.05*this._strideWeight, 0, 0); R(this.legR.knee, -(Math.max(0, -swing2) * 1.5 + 0.2)*this._strideWeight, 0, 0);
-        R(this.armL.shoulder, swing2 * 0.9 + 0.2, 0, -0.2); R(this.armL.elbow, 1.25, 0, 0);
+        // el torso se echa adelante, contrarrota con las piernas y se ladea al girar
+        R(this.torso, -0.55 + leanAcc, swing * 0.07, swing * 0.035 + leanSide * 1.2);
+        R(this.head, 0.42 - leanAcc * 0.5, -swing * 0.05, -leanSide * 0.6);
+        // (las piernas las coloca el resolvedor de marcha, tras el suavizado)
+        R(this.armL.shoulder, swing2 * 0.85 + 0.2, 0, -0.2); R(this.armL.elbow, 1.15 + Math.max(0, swing) * 0.25, 0, 0);
         // arma baja al costado, una mano
         M(0.19, -0.34, -0.22, -0.5, 0.05, 0);
         R(this.aimRig, 0, 0, 0);
-        hipsY = 0.58 + bob * 0.06*this._strideWeight;
+        hipsY = 0.585 - bob * 0.035 * this._strideWeight;
         break;
       }
       case 'run': case 'idle': default: { // default: estados desconocidos (red) caen a idle
@@ -1335,12 +1375,17 @@ export class Rig {
         rootRotX = (p.groundPitch ?? 0) * 0.72;
         // La postura relajada nace de brazos/arma al frente; el torso conserva
         // su movilidad natural y no adopta todavía la rigidez de ADS.
-        R(this.torso, -0.1 * m + Math.sin(ph * 0.4) * 0.015,
-          tw * 0.55, swing * 0.04 * m);
-        R(this.head, 0.05 * m, tw * 0.35, 0);
-        // Reverse the stride, not the knee joint: knees still flex naturally.
-        R(this.legL.hip, swing * 0.75 * m * forward, 0, swing * 0.35 * m * side); R(this.legL.knee, -(Math.max(0, -swing) * 1.1 + 0.1) * m, 0, 0);
-        R(this.legR.hip, swing2 * 0.75 * m * forward, 0, swing2 * 0.35 * m * side); R(this.legR.knee, -(Math.max(0, -swing2) * 1.1 + 0.1) * m, 0, 0);
+        // Inclinación según la velocidad y el sentido de la marcha, respiración
+        // en reposo, y la inercia de arrancar, frenar y girar. El torso
+        // contrarrota apenas con las piernas; con el arma en uso, nada de esto.
+        const lean = -(0.05 + 0.09 * sp) * m * (forward >= 0 ? 1 : -0.45);
+        // (la respiración casi no mueve el torso: el arma en reposo y al
+        // disparar comparten boca de cañón; respiran la cabeza y la pelvis)
+        R(this.torso, lean + leanAcc + breath * 0.004 * (1 - m),
+          tw * 0.55 + swing * 0.03 * m * calm, swing * 0.035 * m * calm + leanSide - side * 0.05 * m * calm);
+        // la cabeza se queda nivelada y acompaña la mirada vertical
+        R(this.head, 0.05 * m - leanAcc * 0.6 + pitch * 0.3 * calm + breath * 0.02 * (1 - m), tw * 0.35, -leanSide * 0.7);
+        // (las piernas las coloca el resolvedor de marcha, tras el suavizado)
         leftOnGun = true;
         // El arma permanece al frente, sostenida por ambas manos y apenas por
         // debajo de ADS. Así la silueta comunica la dirección del hip fire sin
@@ -1348,35 +1393,49 @@ export class Rig {
         // elevación súbita del muzzle ni salto de retícula al primer click.
         damp = p.firing ? 18 : 14;
         M(0.245, -0.15, -0.40, 0, 0.18, 0);
-        hipsY = 0.66 + bob * 0.045 * m;
+        // la pelvis baja en el apoyo y sube en el vuelo; en reposo respira
+        hipsY = 0.66 - bob * (0.018 + 0.022 * sp) * m + breath * 0.004 * (1 - m);
         break;
       }
       case 'jump': {
-        // salto normal: piernas recogidas asimétricas, arma al pecho
-        damp = 14;
-        R(this.torso, -0.18, 0, 0.03);
-        R(this.head, 0.1, 0, 0);
-        R(this.legL.hip, 0.55, 0, 0); R(this.legL.knee, -1.0, 0, 0);
-        R(this.legR.hip, 0.2, 0, 0); R(this.legR.knee, -0.5, 0, 0);
+        // SALTO con fases: impulso (piernas estiradas hacia atrás), recogida en
+        // lo alto y piernas buscando el suelo al caer. Lo marca la velocidad
+        // vertical real; sin ella queda la pose recogida de siempre.
+        damp = 16;
+        const vy = p.vy ?? 0;
+        const rise = Math.max(0, Math.min(1, vy / 5)), fall = Math.max(0, Math.min(1, -vy / 6));
+        const tuck = 1 - Math.max(rise, fall);            // 1 en lo alto del salto
+        R(this.torso, -0.12 - 0.1 * tuck + 0.08 * fall, 0, 0.03 * tuck);
+        R(this.head, 0.1 + 0.12 * fall, 0, 0);
+        R(this.legL.hip, 0.2 + 0.5 * tuck - 0.25 * rise + 0.25 * fall, 0, 0.04);
+        R(this.legL.knee, -0.35 - 0.8 * tuck - 0.1 * fall, 0, 0);
+        R(this.legR.hip, -0.25 * rise + 0.25 * tuck + 0.1 * fall, 0, -0.04);
+        R(this.legR.knee, -0.25 - 0.45 * tuck - 0.35 * rise - 0.15 * fall, 0, 0);
         leftOnGun = true;
-        M(0.16, -0.14, -0.34, 0, 0, 0);
-        hipsY = 0.66;
+        M(0.16, -0.14 - 0.03 * fall, -0.34, 0, 0, 0);
+        hipsY = 0.66 + 0.02 * rise;
+        this._airVy = vy;
         break;
       }
       case 'mantle': {
         // vault corto sobre cover bajo: torso volcado, ambas manos al borde,
         // pierna de apoyo arriba — el arma va pegada al pecho
-        damp = 18;
-        R(this.torso, -0.85, 0, 0.06);
-        R(this.head, 0.5, 0, 0);
-        R(this.armL.shoulder, 1.35, 0, -0.25); R(this.armL.elbow, 0.25, 0, 0);
-        R(this.armR.shoulder, 1.2, 0, 0.2); R(this.armR.elbow, 0.3, 0, 0);
-        R(this.legL.hip, 1.5, 0, 0.1); R(this.legL.knee, -1.9, 0, 0);
-        R(this.legR.hip, 0.35, 0, -0.05); R(this.legR.knee, -0.5, 0, 0);
+        damp = 20;
+        // Tres tiempos sobre el progreso real del salto: manos al borde y
+        // cuerpo volcado, pierna que pasa por encima, y salida ya erguido.
+        const mk = Math.max(0, Math.min(1, p.mantlePhase ?? 0.5));
+        const over = Math.sin(Math.PI * Math.min(1, mk / 0.8));       // volcado
+        const out = Math.max(0, (mk - 0.7) / 0.3);                    // salida
+        R(this.torso, -0.25 - 0.6 * over + 0.2 * out, 0, 0.06 * over);
+        R(this.head, 0.2 + 0.3 * over, 0, 0);
+        R(this.armL.shoulder, 0.6 + 0.75 * over, 0, -0.25); R(this.armL.elbow, 0.25 + 0.5 * out, 0, 0);
+        R(this.armR.shoulder, 0.5 + 0.7 * over, 0, 0.2); R(this.armR.elbow, 0.3 + 0.5 * out, 0, 0);
+        R(this.legL.hip, 0.4 + 1.1 * over, 0, 0.1); R(this.legL.knee, -0.6 - 1.3 * over, 0, 0);
+        R(this.legR.hip, 0.35 * over + 0.5 * out, 0, -0.05); R(this.legR.knee, -0.5 - 0.5 * out, 0, 0);
         ikArms = false; // manos al borde, no al arma
-        M(0.14, -0.05, -0.2, 0.9, 0, 0.15);
+        M(0.14, -0.05, -0.2, 0.9 * over, 0, 0.15 * over);
         R(this.aimRig, 0, 0, 0);
-        hipsY = 0.5;
+        hipsY = 0.62 - 0.12 * over;
         break;
       }
 
@@ -1725,6 +1784,11 @@ export class Rig {
       set(this.aimRig.rotation, 'x', 0);
       set(this.aimRig.rotation, 'y', 0);
       leftOnGun = false;
+      // el brazo libre equilibra el gesto (antes se quedaba congelado donde estuviera)
+      blend(this.armL.shoulder.rotation, 'x', 0.55 - 0.5 * whip);
+      blend(this.armL.shoulder.rotation, 'y', 0);
+      blend(this.armL.shoulder.rotation, 'z', -0.35);
+      blend(this.armL.elbow.rotation, 'x', 0.9);
       // el bote ya voló: la mano queda vacía el resto del gesto
       if (this.activeGun.userData.thrown) this.activeGun.visible = !p.throwReleased;
     } else if (this.activeGun.userData.thrown && !this.rag) {
@@ -1808,6 +1872,22 @@ export class Rig {
       damp = Math.max(damp, TUNING.cover.firePoseRate);
     }
     if (transferringCover) damp = 14;
+    // ATERRIZAJE: al tocar suelo la pelvis cede y se recupera, más cuanto más
+    // rápida era la caída. Las piernas se doblan solas: las coloca la marcha.
+    const airNow = p.state === 'jump' || p.state === 'flip';
+    if (this._wasAir && !airNow && p.state !== 'dead' && p.state !== 'mantle') {
+      this._land = { t: 0, amp: Math.min(1, Math.max(0.25, -(this._airVy ?? -4) / 7)) };
+    }
+    this._wasAir = airNow;
+    let landDrop = 0;
+    if (this._land) {
+      this._land.t += dt;
+      const q = this._land.t / 0.26;
+      if (q >= 1) this._land = null;
+      else landDrop = Math.sin(Math.PI * Math.sqrt(q)) * 0.11 * this._land.amp; // baja rápido, sube despacio
+    }
+    hipsY -= landDrop;
+    if (landDrop) add(this.torso.rotation, 'x', -landDrop * 1.4);
     const k = 1 - Math.exp(-damp * dt);
     for (const [o, props] of T) {
       for (const prop in props) o[prop] += (props[prop] - o[prop]) * k;
@@ -1815,8 +1895,65 @@ export class Rig {
     // desplazamiento lateral de cadera al asomarse (lean)
     const hipsX = p.aim && p.coverLean ? -p.coverLean * 0.02 : 0;
     this.hips.position.x += (hipsX - this.hips.position.x) * k;
-    this.hips.position.y += (hipsY - this.hips.position.y) * k;
+    // el aterrizaje no espera al suavizado de la pose: es un golpe
+    this.hips.position.y += (hipsY - this.hips.position.y) * (landDrop ? Math.max(k, 1 - Math.exp(-34 * dt)) : k);
     this.root.rotation.x += (rootRotX - this.root.rotation.x) * (1 - Math.exp(-10 * dt));
+
+    // RESOLVEDOR DE MARCHA: coloca cada pie donde le toca y resuelve la pierna
+    // por cinemática inversa. En el apoyo el pie retrocede a la velocidad del
+    // cuerpo (no patina); en el vuelo vuelve adelante levantándose. Los pasos
+    // van en la dirección real del movimiento: de lado y hacia atrás también.
+    const walking = (locomotionState === 'run' || locomotionState === 'idle' || locomotionState === 'roadie') && !standingCoverFire;
+    this._legBlend = walking ? Math.min(1, (this._legBlend ?? 0) + dt / 0.12) : 0;
+    if (walking) {
+      // peso del paso: entra y sale más despacio que la cadencia, para que al
+      // parar el pie en vuelo baje a su sitio en vez de saltar a él
+      this._gaitW = (this._gaitW ?? 0) + ((gaitTarget > .02 ? 1 : 0) - (this._gaitW ?? 0)) * (1 - Math.exp(-8 * dt));
+      const m = this._gaitW;
+      const sprint = locomotionState === 'roadie';
+      const dirX = gSide / gLen, dirZ = -gFwd / gLen;             // el cuerpo mira a -z
+      // largo del apoyo: lo que el pie puede barrer sin despegarse del suelo
+      const reach = (sprint ? 0.70 : 0.60) * (1 - 0.34 * sideness) * (1 - 0.12 * backness);
+      const stance = Math.min(reach, gv * 0.2);
+      const duty = Math.min(0.62, stance / gaitCycle + 1e-4);
+      const liftH = (0.07 + 0.2 * sp) * (sprint ? 1.2 : 1);
+      const hipDrop = (sprint ? 0.02 : 0.05) * m * Math.min(1, sp * 1.6);
+      const kl = 1 - Math.exp(-(18 + 72 * this._legBlend) * dt);
+      const g0 = ph / (Math.PI * 2);
+      for (const [leg, side, off] of [[this.legL, -1, 0], [this.legR, 1, 0.5]]) {
+        const u = (((g0 + off) % 1) + 1) % 1;
+        let s, lift = 0;
+        if (u < duty) s = stance * (0.5 - u / duty);              // apoyo
+        else {
+          const w = (u - duty) / (1 - duty), e = w * w * (3 - 2 * w);
+          s = stance * (e - 0.5);
+          lift = Math.sin(Math.PI * w) * liftH;                    // vuelo
+        }
+        // posición de reposo (pies algo abiertos y escalonados) → paso
+        const restX = side * 0.17, restZ = side * 0.05;
+        const fx = restX * (1 - 0.25 * m * (1 - sideness)) + dirX * s * m;
+        const fz = restZ * (1 - m) + dirZ * s * m;
+        const fy = lift * m;
+        leg.hip.position.y += ((0.02 - hipDrop) - leg.hip.position.y) * kl;
+        // vector cadera → suela, en el marco de la pelvis
+        let vx = fx - (side * 0.15 + this.hips.position.x), vy = fy - (this.hips.position.y + leg.hip.position.y), vz = fz;
+        let d = Math.hypot(vx, vy, vz);
+        const maxD = LEG_UP + LEG_LOW - 0.012;
+        if (d > maxD) { const c = maxD / d; vx *= c; vy *= c; vz *= c; d = maxD; }
+        d = Math.max(0.2, d);
+        const knee = -(Math.PI - Math.acos(Math.max(-1, Math.min(1, (LEG_UP * LEG_UP + LEG_LOW * LEG_LOW - d * d) / (2 * LEG_UP * LEG_LOW)))));
+        const a = -(LEG_UP + LEG_LOW * Math.cos(knee)), b = -LEG_LOW * Math.sin(knee);
+        const rz = Math.asin(Math.max(-1, Math.min(1, vx / -a)));
+        let rx = Math.atan2(vz, vy) - Math.atan2(b, a * Math.cos(rz));
+        rx = Math.atan2(Math.sin(rx), Math.cos(rx));
+        leg.hip.rotation.x += (rx - leg.hip.rotation.x) * kl;
+        leg.hip.rotation.y += (0 - leg.hip.rotation.y) * kl;
+        leg.hip.rotation.z += (rz - leg.hip.rotation.z) * kl;
+        leg.knee.rotation.x += (knee - leg.knee.rotation.x) * kl;
+        leg.knee.rotation.y += (0 - leg.knee.rotation.y) * kl;
+        leg.knee.rotation.z += (0 - leg.knee.rotation.z) * kl;
+      }
+    }
 
     // vuelta en el aire alrededor de la cadera: eje según la dirección
     // ('z' = giro lateral Matrix, 'x' = backflip/frontflip)
@@ -1830,8 +1967,14 @@ export class Rig {
         this.hips.rotation.x = 0;
       }
     } else if (p.state !== 'dead') {
-      this.hips.rotation.z = 0; // 2π ≡ 0: aterriza limpio
-      this.hips.rotation.x = 0;
+      // 2π ≡ 0: una vuelta completa aterriza limpia. Una vuelta CORTADA (se
+      // aterriza antes de terminarla) ya no salta a cero: se recoge por el
+      // camino corto.
+      const settle = Math.exp(-11 * dt);
+      for (const axis of ['x', 'z']) {
+        const a = Math.atan2(Math.sin(this.hips.rotation[axis]), Math.cos(this.hips.rotation[axis]));
+        this.hips.rotation[axis] = Math.abs(a) < 1e-3 ? 0 : a * settle;
+      }
     }
 
     // física del ragdoll: peso muerto anclado al lugar de la muerte.
@@ -1997,8 +2140,12 @@ export class Rig {
         }
         this.root.updateWorldMatrix(true,true);
       }
+      // peso de entrada del IK por brazo: 0 al reengancharse, exacto a los 0,14 s
+      this._shoulderW = (this._shoulderW ?? 0) + ((p.aim ? 1 : 0) - (this._shoulderW ?? 0)) * (1 - Math.exp(-16 * dt));
+      this._ikR = Math.min(1, (this._ikR ?? 1) + dt / 0.14);
+      const blendIn = (t) => t >= 1 ? 1 : 1 - Math.exp(-26 * dt);
       gun.userData.grip.getWorldPosition(TMP_A);
-      this._ikArm(this.armR, 1, this.aimRig.worldToLocal(TMP_A),p.aim);
+      this._ikArm(this.armR, 1, this.aimRig.worldToLocal(TMP_A), coverPoseActive ? (p.aim ? 1 : 0) : this._shoulderW, blendIn(this._ikR));
       // el gesto de recarga solo aplica en posturas con el arma al frente
       // (misma whitelist que reloadPose, calculada arriba). Las armas de una
       // mano (granada) no lleva la izquierda al arma; la pistola sí usa apoyo
@@ -2013,9 +2160,12 @@ export class Rig {
         a.getWorldPosition(TMP_B);
         const tgt = this.aimRig.worldToLocal(TMP_B);
         if (reloadIk) tgt.y -= 0.16 * Math.sin(Math.PI * (p.reloadT ?? 0));
-        this._ikArm(this.armL, -1, tgt,p.aim&&!reloadIk);
-      }
-    }
+        // cambiar de asidero (guardamanos ↔ cargador ↔ apoyo de pistola) también entra suave
+        if (a !== this._ikLAnchor) { this._ikLAnchor = a; this._ikL = 0; }
+        this._ikL = Math.min(1, (this._ikL ?? 1) + dt / 0.14);
+        this._ikArm(this.armL, -1, tgt, reloadIk ? 0 : (coverPoseActive ? (p.aim ? 1 : 0) : this._shoulderW), blendIn(this._ikL));
+      } else this._ikL = 0;
+    } else { this._ikR = 0; this._ikL = 0; }
   }
 
   setTransform(x, z, yaw, y = 0) {

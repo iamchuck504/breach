@@ -3817,9 +3817,11 @@ function simStep(dt) {
   // lo que falta de cooldown/recarga, para que el tiro encolado nunca se pierda
   const wst = G.weapons.st;
   const relRemain = G.weapons.reloading ? wst.reload : 0;
+  // también durante el cambio de arma: el clic de un arma semiautomática
+  // pulsado antes de terminar el gesto se perdía sin más
   if (input.firePressed && !p.dead &&
-      (!canFire || wst.cd > 0 || relRemain > 0)) {
-    G.fireBuffer = requiredFireBuffer(p, wst, relRemain);
+      (!canFire || wst.cd > 0 || relRemain > 0 || G.weapons.swapping)) {
+    G.fireBuffer = requiredFireBuffer(p, wst, relRemain, G.weapons.swapping ? G.weapons.swapT : 0);
   }
   G.fireBuffer = Math.max(0, G.fireBuffer - dt);
   const wasReloading = G.weapons.reloading;
@@ -4126,7 +4128,9 @@ let padWasConnected = false;
 
 function frame(now) {
   requestAnimationFrame(frame);
-  const dt = Math.min(0.1, (now - last) / 1000);
+  // nunca negativo: si el reloj retrocede (pestaña restaurada, reloj de pruebas)
+  // un dt < 0 hace divergir todos los suavizados exponenciales
+  const dt = Math.max(0, Math.min(0.1, (now - last) / 1000));
   last = now;
 
   // MODO EDITOR: cámara y overlays propios; el gameplay no corre
