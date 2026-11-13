@@ -3394,7 +3394,7 @@ function resolveMelee() {
   if (G.mode === 'practice' && G.dummies) {
     connected = true;
     tg.rig?.hitReact?.(best.dot < 0.75 ? Math.sign(best.dx) : 0, 1, 'melee');
-    G.dummies.recoil?.(tg.id, best.dx, best.dz, tackle ? ml.tackleShove : 0.16);
+    G.dummies.recoil?.(tg.id, best.dx, best.dz, tackle ? ml.tackleShove : 0.45);
     killed = G.dummies.damage(tg.id, dmg, (d) => {
       d.rig.setDeathContext({
         impact: { x: d.x - p.pos.x, z: d.z - p.pos.z },

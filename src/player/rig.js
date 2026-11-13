@@ -1588,42 +1588,32 @@ export class Rig {
         const contact = ph < 0.27 ? ph / 0.27
           : ph < 0.5 ? 1
           : Math.max(0, 1 - (ph - 0.5) / 0.5);
-        hipsY = 0.57 - contact * 0.055;
-        rootRotX = (p.groundPitch ?? 0) * 0.35 - contact * 0.035;
-
-        if (ph < 0.27) {
-          // preparación breve: hombro y cadera cargan juntos.
-          const k = ph / 0.27;
-          // con embestida o placaje el cuerpo carga más atrás y se agacha
-          const big = p.meleeTackle ? 1 : p.meleeLunge ? 0.6 : 0;
-          R(this.torso, -0.08 - k * (0.08 + 0.3 * big), (0.38 + 0.3 * big) * k, 0.12 * k);
-          R(this.head, 0.08 + 0.2 * big * k, -0.18 * k, -0.04 * k);
-          M(compact ? 0.2 : 0.28, compact ? 0.08 : 0.14,
-            compact ? -0.18 : -0.08, compact ? 0.15 : 0.48,
-            -0.3 * k, compact ? 0.55 : 0.32);
-        } else if (ph < 0.5) {
-          // Contacto: pistola/artefacto da un golpe corto de antebrazo; armas
-          // largas cruzan la culata; las pesadas se convierten en un shove.
-          R(this.torso, (heavy ? -0.34 : -0.28) - (p.meleeTackle ? 0.3 : p.meleeLunge ? 0.12 : 0), (heavy ? -0.32 : -0.52) - (p.meleeLunge ? 0.14 : 0), -0.12);
-          R(this.head, 0.18, 0.16, 0.04);
-          if (compact) M(-0.12, -0.03, -0.48, -0.2, 0.28, -0.62);
-          else if (heavy) M(-0.03, -0.01, -0.52, -0.22, 0.05, -0.12);
-          else M(-0.12, 0.02, -0.56, -0.42, 0.18, -0.34);
-        } else {
-          // Follow-through visible y regreso breve a guardia.
-          const k = (ph - 0.5) / 0.5;
-          R(this.torso, -0.2 * (1 - k), -0.25 * (1 - k), -0.08 * (1 - k));
-          R(this.head, 0.08 * (1 - k), 0.08 * (1 - k), 0);
-          M(0.08, -0.01, -0.34 - (1 - k) * 0.08,
-            0.08 * (1 - k), 0.04 * (1 - k), -0.08 * (1 - k));
-        }
-        // Zancada asimétrica y brazos participan incluso con arma compacta.
-        R(this.legL.hip, -0.42 * contact, 0, 0.08); R(this.legL.knee, -0.62 * contact, 0, 0);
-        R(this.legR.hip, 0.3 * contact, 0, -0.08); R(this.legR.knee, -0.28, 0, 0);
-        R(this.armL.shoulder, 0.5 + contact * 0.45, 0, -0.18);
-        R(this.armL.elbow, 0.5 + contact * 0.3, 0, 0);
-        R(this.armR.shoulder, 0.45 + contact * 0.35, 0, 0.16);
-        R(this.armR.elbow, 0.35 + contact * 0.4, 0, 0);
+        // PATADA FRONTAL. Recoge la rodilla (preparación), estira la pierna
+        // a la altura del pecho (contacto) y la vuelve a bajar. En sprint es
+        // una patada en salto: el cuerpo se eleva y la pierna de apoyo se recoge.
+        const fly = p.meleeTackle ? 1 : 0;
+        // k: 0→1 recoger · e: 0→1 estirar · r: 0→1 volver
+        const kUp = Math.min(1, ph / 0.27);
+        const ext = ph < 0.2 ? 0 : ph < 0.3 ? (ph - 0.2) / 0.1 : ph < 0.5 ? 1 : Math.max(0, 1 - (ph - 0.5) / 0.3);
+        const back = ph < 0.5 ? 0 : Math.min(1, (ph - 0.5) / 0.5);
+        const up = kUp * (1 - back);                       // cuánto está arriba la pierna
+        hipsY = 0.64 - up * 0.03 + fly * up * 0.2;
+        rootRotX = (p.groundPitch ?? 0) * 0.35 + up * 0.05;
+        // el tronco se echa atrás para contrapesar y gira un poco con la cadera
+        R(this.torso, 0.1 * kUp * (1 - back) + 0.2 * ext + fly * 0.12 * up, -0.22 * up, 0.05 * up);
+        R(this.head, -0.12 * up - 0.1 * ext, 0.12 * up, 0);
+        // pierna que golpea (derecha): muslo arriba, rodilla recogida → estirada
+        R(this.legR.hip, up * (1.3 + 0.38 * ext), 0, -0.05 * up);
+        R(this.legR.knee, -up * 1.55 * (1 - ext) - 0.06, 0, 0);
+        // pierna de apoyo (izquierda): algo flexionada y atrás; en salto, recogida
+        R(this.legL.hip, up * (-0.2 + fly * 0.75), 0, 0.08 * up);
+        R(this.legL.knee, -(0.22 + fly * 1.1) * up - 0.08, 0, 0);
+        // el arma se queda pegada al pecho, cruzada, mientras patea
+        M(0.2, -0.1, -0.3, 0.05 + 0.2 * up, 0.28 * up, 0.12 * up);
+        R(this.armL.shoulder, 0.55 + up * 0.2, 0, -0.2);
+        R(this.armL.elbow, 0.75, 0, 0);
+        R(this.armR.shoulder, 0.5 + up * 0.15, 0, 0.18);
+        R(this.armR.elbow, 0.6, 0, 0);
         set(this.aimRig.rotation, 'x', 0);
         set(this.aimRig.rotation, 'y', 0);
         break;
