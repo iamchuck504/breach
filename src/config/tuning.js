@@ -221,6 +221,9 @@ export const TUNING = {
     tackleAcquire: 4.6, tackleMax: 3.1, tackleTopSpeed: 17, tackleDmg: 80, tackleShove: 0.9,
     // POR LA ESPALDA: letal
     backstabDmg: 100, backstabArcDeg: 100,
+    // ATURDIMIENTO de la patada: sin disparar, apuntar ni golpear, y más
+    // lento. Tras pasarse, un margen en el que no se puede volver a aturdir.
+    dazeTime: 0.45, tackleDaze: 0.7, dazeImmunity: 1.0, dazeSpeed: 0.55,
     hitStop: 0.035,   // pausa solo del gesto local; el mundo no se congela
     inputGuard: 0.045,// separa pulsaciones sin cooldown artificial largo
     lungeSpeed: 2.05,

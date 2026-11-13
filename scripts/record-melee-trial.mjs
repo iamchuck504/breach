@@ -63,7 +63,7 @@ try {
           rival.yaw = sc.rival[1] === 'frente' ? Math.PI / 2 : -Math.PI / 2;
           rival.rig.setTransform(rival.x, rival.z, rival.yaw);
         } else rival.respawnT = 1e9;
-        tag.textContent = rival.alive ? `Vida del rival: ${Math.max(0, Math.round(rival.hp))}` : 'Rival eliminado';
+        tag.textContent = rival.alive ? `Vida del rival: ${Math.max(0, Math.round(rival.hp))}${performance.now() < (rival.dazeUntil ?? 0) ? '  ·  ATURDIDO' : ''}` : 'Rival eliminado';
       };
       window.__place = () => {
         const q = G.player;

@@ -271,7 +271,7 @@ export class Controller {
 
   _beginMelee(fromCover = false) {
     const ml = TUNING.melee;
-    if (!this.grounded || this.meleeCd > 0 || this.state === 'melee') return false;
+    if (!this.grounded || this.meleeCd > 0 || this.state === 'melee' || this.dazed) return false;
     const previousState = this.state;
     this.meleeT = 0;
     this.meleeEndT = ml.hitAt + ml.missRecovery;
@@ -382,7 +382,7 @@ export class Controller {
     const hasInput = mw.mag > 0.1;
     const aimAllowed = this.state !== 'dive' && this.state !== 'slide' &&
       this.state !== 'roadie' && this.state !== 'flip' && this.state !== 'mantle' &&
-      this.state !== 'melee';
+      this.state !== 'melee' && !this.dazed;
     this.aim = input.aimHeld && aimAllowed;
     const lowCoverAim = this.state === 'cover' && this.aim && this.cover &&
       this.cover.h <= C.lowHeight;
@@ -428,9 +428,9 @@ export class Controller {
         }
         // apuntar se evaluó con el estado ANTERIOR: al soltar el sprint para
         // apuntar se perdía un cuadro
-        if (input.aimHeld && !this.aim && this.state !== 'roadie') this.aim = true;
+        if (input.aimHeld && !this.aim && this.state !== 'roadie' && !this.dazed) this.aim = true;
 
-        const targetSpeed = (this.state === 'roadie' ? M.roadieSpeed : M.runSpeed) * (this.aim ? 0.45 : 1);
+        const targetSpeed = (this.state === 'roadie' ? M.roadieSpeed : M.runSpeed) * (this.aim ? 0.45 : 1) * (this.dazed ? TUNING.melee.dazeSpeed : 1);
         let dx = mw.x, dz = mw.z;
         const cameraForward = this.cam.flatForward(), cameraRight = this.cam.flatRight();
         const forwardInput = dx * cameraForward.x + dz * cameraForward.z;

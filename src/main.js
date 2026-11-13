@@ -1824,6 +1824,10 @@ function damagePlayerLocal(dmg, fromName, shooter, hitCtx = null) {
     const rightX = Math.cos(G.player.yaw), rightZ = -Math.sin(G.player.yaw);
     const side = (dx * rightX + dz * rightZ) / len;
     G.rig.hitReact(side, Math.min(1.2, dmg / 50), 'kick');
+    if (!(G.kickDazeImmune > 0)) {
+      G.kickDaze = TUNING.melee.dazeTime;
+      G.kickDazeImmune = G.kickDaze + TUNING.melee.dazeImmunity;
+    }
     // Empuje corto y físico: resolveCircle impide atravesar pared/cover.
     G.player.pos.x += (dx / len) * 0.13;
     G.player.pos.z += (dz / len) * 0.13;
@@ -3396,6 +3400,10 @@ function resolveMelee() {
     connected = true;
     tg.rig?.hitReact?.(best.dot < 0.75 ? Math.sign(best.dx) : 0, tackle ? 1.2 : 1, 'kick', backstab);
     G.dummies.recoil?.(tg.id, best.dx, best.dz, tackle ? ml.tackleShove : 0.45);
+    if (!(performance.now() < (tg.dazeImmuneUntil ?? 0))) {   // los muñecos no atacan: solo se marca
+      const t = (tackle ? ml.tackleDaze : ml.dazeTime) * 1000;
+      tg.dazeUntil = performance.now() + t; tg.dazeImmuneUntil = tg.dazeUntil + ml.dazeImmunity * 1000;
+    }
     killed = G.dummies.damage(tg.id, dmg, (d) => {
       d.rig.setDeathContext({
         impact: { x: d.x - p.pos.x, z: d.z - p.pos.z },
@@ -3421,6 +3429,7 @@ function resolveMelee() {
         const reach = tackle ? ml.tackleShove : 0.45;
         G.kickPushes.push({ b, x: best.dx / dist * reach, z: best.dz / dist * reach });
         b.rig?.hitReact?.(best.dot < 0.75 ? Math.sign(best.dx) : 0, tackle ? 1.2 : 1, 'kick', backstab);
+        if (!(b.dazeImmuneT > 0)) { b.dazeT = tackle ? ml.tackleDaze : ml.dazeTime; b.dazeImmuneT = b.dazeT + ml.dazeImmunity; }
         if (tackle && b.cover) { b.cover = null; b.state = 'advance'; }
       }
     }
@@ -3791,6 +3800,12 @@ function simStep(dt) {
   const p = G.player;
   if (!p) return;
   updatePrototypes(dt);
+  // aturdimiento por patada: sin disparo, puntería ni golpe, y más lento
+  G.kickDaze = Math.max(0, (G.kickDaze ?? 0) - dt);
+  G.kickDazeImmune = Math.max(0, (G.kickDazeImmune ?? 0) - dt);
+  const dazed = G.kickDaze > 0 && !p.dead;
+  p.dazed = dazed;
+  if (dazed) { input.firePressed = false; input.meleePressed = false; G.fireBuffer = 0; hud.hint('ATURDIDO', 100); }
   if(G.protoStun>0&&!p.dead){
     G.weapons.cancelActions();G.fireBuffer=0;G.pendingShots=0;G.pendingRays.length=0;G.pendingThrows=0;G.throwT=0;G.throwPending=false;
     p.aim=false;p.vel.x=0;p.vel.z=0;p.firingBlind=0;
@@ -3952,7 +3967,7 @@ function simStep(dt) {
   // la intención de disparo SIEMPRE llega al controller: cancela el roadie
   // (en tierra o en el aire) y gira el cuerpo para disparar
   // A buffered shot must not keep a released cover peek exposed.
-  p.update(dt, input, (input.fireHeld || (p.state !== 'cover' && G.fireBuffer > 0)) && !p.dead && hasAmmo);
+  p.update(dt, input, (input.fireHeld || (p.state !== 'cover' && G.fireBuffer > 0)) && !p.dead && hasAmmo && !dazed);
 
   // colisión de cuerpos del jugador: suave y sin atrapamiento (mitad del
   // solape por paso, con tope). Cover y mantle gestionan su propia posición:
@@ -3979,7 +3994,7 @@ function simStep(dt) {
   updateAimOver(dt);
   canFire = stateOkAfter && p.fireAligned() && coverPoseReady(p.aim, wantsFire);
   const fired = p.dead ? false
-    : G.weapons.update(dt, input.fireHeld, input.firePressed || G.fireBuffer > 0, canFire);
+    : G.weapons.update(dt, input.fireHeld && !dazed, input.firePressed || G.fireBuffer > 0, canFire && !dazed);
   // Tras la primera inserción desde 0, conservar margen para que cover/arma
   // alcancen una pose válida antes de consumir el click que estaba esperando.
   if (G.weapons.reloadInserted > 0 && G.fireBuffer > 0) G.fireBuffer = Math.max(G.fireBuffer, 0.3);
