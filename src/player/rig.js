@@ -1280,6 +1280,12 @@ export class Rig {
   // p: {state, speed, aim, aimPitch, twist}
   update(dt, p) {
     const LEG_UP = 0.32, LEG_LOW = 0.375; // muslo y pierna hasta la suela
+    // seguimiento de altura (ver setTransform): solo con los pies en el suelo
+    this._ySnap = p.state === 'jump' || p.state === 'flip' || p.state === 'dead' || p.state === 'mantle' || !!this.rag;
+    if (!this._ySnap && this._footY !== undefined && this._visY !== undefined) {
+      this._visY += (this._footY - this._visY) * (1 - Math.exp(-24 * dt));
+      this.root.position.y = this._visY;
+    }
     if(this.stunned&&p.state!=='dead')p={...p,aim:false,speed:0,state:String(p.state).includes('cover')?p.state:'idle'};
     if (p.state !== 'dead' && !this.rag) this._pendingBlenderSoldier?.();
     // Convenciones (el personaje mira a -Z local):
@@ -2169,7 +2175,13 @@ export class Rig {
   }
 
   setTransform(x, z, yaw, y = 0) {
-    this.root.position.set(x, y, z);
+    // La altura se sigue con un suavizado corto mientras se pisa suelo: un
+    // escalón de 16 cm ya no es un salto de un cuadro en la figura. Saltos,
+    // caídas, muerte y recolocaciones grandes van sin suavizar.
+    this._footY = y;
+    const snap = this._ySnap || this._visY === undefined || Math.abs(y - this._visY) > 0.3;
+    if (snap) this._visY = y;
+    this.root.position.set(x, this._visY, z);
     this.root.rotation.y = yaw;
   }
 

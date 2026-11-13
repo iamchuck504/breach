@@ -124,4 +124,21 @@ console.log('DESLIZAMIENTO DE PIES (m de suela arrastrada por m recorrido)');
 for (const r of [...result.deslizamiento, ...result.paridad]) console.log(' ', pad(r.name, 24), pad(r.hz + ' Hz', 7), pad(r.deslizamientoPorMetro, 7), 'apoyo', pad(r.apoyo + ' %', 6), 'suelo mín', pad(r.sueloMin, 7), 'alzada', pad(r.alzadaMax, 6), 'cruzadas', r.cuadrosCruzadas + ' %');
 console.log('SALTOS DE POSE (m por cuadro a 60 Hz)');
 for (const r of result.saltos) console.log(' ', pad(r.name, 34), 'mano D', pad(r.manoD, 6), 'mano I', pad(r.manoI, 6), 'cabeza', pad(r.cabeza, 6), 'pies', pad(Math.max(r.pieD, r.pieI), 6), 'peor:', r.peor, r.donde);
-if (process.argv[2]) fs.writeFileSync(process.argv[2], JSON.stringify(result, null, 1));
+const out = process.argv.slice(2).find((a) => !a.startsWith('--'));
+if (out) fs.writeFileSync(out, JSON.stringify(result, null, 1));
+// --check: contrato de la locomoción. Antes del rediseño el pie de apoyo
+// patinaba entre 0,42 y 1,0 m por metro recorrido.
+if (process.argv.includes('--check')) {
+  const bad = [];
+  for (const r of [...result.deslizamiento, ...result.paridad]) {
+    if (r.deslizamientoPorMetro > 0.3) bad.push(`${r.name} (${r.hz} Hz): el pie de apoyo patina ${r.deslizamientoPorMetro} m por metro`);
+    if (r.cuadrosCruzadas > 0) bad.push(`${r.name}: las piernas se cruzan`);
+    if (r.sueloMin < -0.03) bad.push(`${r.name}: la suela se hunde ${r.sueloMin} m`);
+  }
+  for (const r of result.saltos) {
+    const feet = Math.max(r.pieD, r.pieI);
+    if (feet > 0.42) bad.push(`${r.name}: un pie salta ${feet} m en un cuadro`);
+  }
+  if (bad.length) { console.error('\n✗ MARCHA:\n - ' + bad.join('\n - ')); process.exit(1); }
+  console.log('\n✓ MARCHA OK: pies de apoyo sin patinar, sin cruces y sin saltos de pie');
+}
