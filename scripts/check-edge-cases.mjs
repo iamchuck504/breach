@@ -238,16 +238,17 @@ const swat = await page.evaluate(async () => {
   // buscar dos caras enfrentadas a menos de 5.5m (pasillo)
   let pair = null;
   for (const f of W.faces) {
-    if (f.h > 2.6) continue;
+    if (f.h > 2.6 || (f.baseY ?? 0) > 0) continue; // a ras de suelo: no barandas en altura
     const mx = (f.a.x + f.b.x) / 2, mz = (f.a.z + f.b.z) / 2;
     for (const g of W.faces) {
-      if (g === f || g.h > 2.6) continue;
+      if (g === f || g.h > 2.6 || (g.baseY ?? 0) > 0) continue;
       const gx = (g.a.x + g.b.x) / 2, gz = (g.a.z + g.b.z) / 2;
       const d = Math.hypot(gx - mx, gz - mz);
       if (d < 2.5 || d > 5.2) continue;
       // enfrentadas: la normal de g apunta hacia f
       const nx = (mx - gx) / d, nz = (mz - gz) / d;
-      if (g.n.x * nx + g.n.z * nz > 0.75 && f.n.x * -nx + f.n.z * -nz > 0.75) {
+      // bien enfrentadas, no en diagonal: el cruce va de cara a cara
+      if (g.n.x * nx + g.n.z * nz > 0.96 && f.n.x * -nx + f.n.z * -nz > 0.96) {
         pair = { f, mx, mz, gx, gz, d };
         break;
       }
@@ -270,6 +271,7 @@ const swat = await page.evaluate(async () => {
   const dbg = {
     cd: +p.evadeCooldown.toFixed(2), rec: +(p.evadeRecovery ?? 0).toFixed(2),
     found: seen ? +seen.dist.toFixed(2) : null, gap: +pair.d.toFixed(2),
+    at: [+pair.mx.toFixed(1), +pair.mz.toFixed(1), +pair.gx.toFixed(1), +pair.gz.toFixed(1)],
   };
   I.keys.add('ShiftLeft');
   I.keys.add('KeyS');
@@ -519,14 +521,14 @@ const crowd = await page.evaluate(async () => {
   const G = window.BREACH, M = G.botMatch;
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const bots = M.bots.filter((b) => b.alive).slice(0, 4);
-  window.__tp(4, -1.6);
-  for (const b of bots) { b.pos.x = 4; b.pos.z = -1.6; }
+  window.__tp(15, -18); // v3: (4,-1.6) cae ahora en el muro de la torre del homenaje
+  for (const b of bots) { b.pos.x = 15; b.pos.z = -18; }
   await wait(1600);
   let minSep = Infinity, maxDist = 0, bad = 0;
   const all = [{ x: G.player.pos.x, z: G.player.pos.z }, ...bots.map((b) => ({ x: b.pos.x, z: b.pos.z }))];
   for (let i = 0; i < all.length; i++) {
     if (![all[i].x, all[i].z].every(Number.isFinite)) bad++;
-    maxDist = Math.max(maxDist, Math.hypot(all[i].x - 4, all[i].z + 1.6));
+    maxDist = Math.max(maxDist, Math.hypot(all[i].x - 15, all[i].z + 18));
     for (let j = i + 1; j < all.length; j++) {
       minSep = Math.min(minSep, Math.hypot(all[i].x - all[j].x, all[i].z - all[j].z));
     }

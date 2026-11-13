@@ -77,6 +77,10 @@ export function calle2VehiclePosition(x,z) {
   return [x,z];
 }
 export function calle2FurnitureZ(x,z) {
+  // v3: la jardinera y el carrito de café quedaban justo en las esquinas de
+  // la calle transversal (z ±8.2), tapando el paso y el asomarse. Se corren
+  // 3,6 m hacia el centro de su fachada.
+  if(Math.abs(x)>13.5&&Math.abs(x)<16.5&&Math.abs(z)>=6.7&&Math.abs(z)<=9.3)return z+Math.sign(z)*3.6;
   return [12.45,12.9,14.9].includes(Math.abs(x))&&Math.abs(z)>16&&Math.abs(z)<19.1
     ? z+Math.sign(z)*4 : z;
 }
@@ -172,6 +176,8 @@ export function expansionBoxes() {
     out.push({ x:s*C.canopy.x, z:s*C.canopy.z, w:C.canopy.w, d:C.canopy.d, h:C.canopy.h, minY:C.canopy.minY,
       style:'expansion', mirror:false, visual:false, cover:false, surface:'metal', expansionKind:'canopy' });
   }
-  for(const x of [21.75,24.3]) add(x,12.2,.30,.30,2.9,false,'lift');
+  // elevador de taller en cada callejón (antes solo al este: desviaba la ruta
+  // de un equipo 1,5 m más que la del otro)
+  for(const s of [1,-1])for(const x of [21.75,24.3]) add(s*x,s*12.2,.30,.30,2.9,false,'lift');
   return out;
 }

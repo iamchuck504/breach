@@ -120,7 +120,10 @@ if layout.exists():
     for sign in ([1,-1] if b.get('mirror',True) and (b['x'] or b['z']) else [1]):
       x,z=sign*b['x'],sign*b['z'];w,d,h=b['w'],b['d'],b['h']-base
       for a,width,fx,fz in ((0,w,x,z+d/2),(math.pi,w,x,z-d/2),(math.pi/2,d,x+w/2,z),(-math.pi/2,d,x-w/2,z)):
-        rows=max(1,round(h/.46));cols=max(1,round(width/.82))
+        # v3: the citadel doubled the masonry. Tall walls use larger blocks so
+        # the kit stays inside its triangle budget (check-fort-galleries).
+        big=h>=2.9 and width>2
+        rows=max(1,round(h/(.75 if big else .46)));cols=max(1,round(width/(1.5 if big else .82)))
         for row in range(rows):
           # Horizontal beds and alternate joints read as masonry, not panels.
           y=base+(row+.5)*h/rows

@@ -30,8 +30,10 @@ function assertGeometryEqual(actual, expected, label, at = '') {
   assert.equal(actual, expected, `${label}${at}`);
 }
 
-assert.equal(mapLineBlocked('fortaleza', [0, 1, -4], [0, 1, 4]), true);
-assert.equal(mapLineBlocked('fortaleza', [3, 1, -4], [3, 1, 4]), false);
+// v3: la torre del homenaje ocupa el centro. Su muro sur corta la línea que
+// cruza el patio; dentro de la sala, de pared a pared, no hay nada.
+assert.equal(mapLineBlocked('fortaleza', [0, 1, -7], [0, 1, 0]), true);
+assert.equal(mapLineBlocked('fortaleza', [3.8, 1, -3.8], [3.8, 1, 3.8]), false);
 assert.equal(mapLineBlocked('calle', [0, 1, -38], [0, 1, -31]), true);
 assert.equal(mapLineBlocked('calle', [0, 5, -10], [0, 5, 10]), false);
 assert.equal(mapLineBlocked('azoteas', [8, 1.5, 0], [0, 1.5, 0]), true);
@@ -97,8 +99,8 @@ try {
       const world = window.BREACH_WORLD;
       world.setLayout(layout, true);
       return {
-        boxes: world.colliders.map(({ minx, maxx, minz, maxz, h, minY, walkSurface }) =>
-          ({ minx, maxx, minz, maxz, h, ...(minY !== undefined ? {minY} : {}), ...(walkSurface ? {walkSurface} : {}) })),
+        boxes: world.colliders.map(({ minx, maxx, minz, maxz, h, minY, walkSurface, moveOnly }) =>
+          ({ minx, maxx, minz, maxz, h, ...(minY !== undefined ? {minY} : {}), ...(walkSurface ? {walkSurface} : {}), ...(moveOnly ? {moveOnly} : {}) })),
         segments: world.segmentColliders.map(({ a, b, n, half, h }) => ({ a, b, n, half, h })),
       };
     }, map);
@@ -119,26 +121,27 @@ try {
 
   // Expire protection before isolating geometry/LOS authority.
   await wait(5100);
-  state(b, 0, 4); state(a, 0, -4); await wait(100);
-  b.send({ t: 'fire', w: 'smg', o: [0, 1.1, 4], p: [0, 1.1, 8], d: [] });
+  // v3: el obstáculo central es el muro sur de la torre del homenaje (z -5..-4.2)
+  state(b, 0, -1.5); state(a, 0, -8); await wait(100);
+  b.send({ t: 'fire', w: 'smg', o: [0, 1.1, -1.5], p: [0, 1.1, 2], d: [] });
   await wait(90);
 
   const fireP = b.next((m) => m.t === 'fire' && m.id === aw.id, 'fire bloqueado');
-  a.send({ t: 'fire', w: 'smg', o: [0, 1.1, -4], p: [0, 1, 4],
-    d: [[0, 1.1, -0.9], [7, 1, 7]] });
+  a.send({ t: 'fire', w: 'smg', o: [0, 1.1, -8], p: [0, 1, -1.5],
+    d: [[0, 1.1, -5.0], [7, 1, 7]] });
   const clipped = await fireP;
-  assert.ok(Math.abs(clipped.p[2] + 0.9) < 0.03, `endpoint no fue recortado: ${clipped.p}`);
+  assert.ok(Math.abs(clipped.p[2] + 5.0) < 0.03, `endpoint no fue recortado: ${clipped.p}`);
   assert.equal(clipped.d?.length, 1, 'se retransmitió un decal sin superficie física');
-  a.send({ t: 'hit', target: bw.id, dmg: 999, part: 'body', p: [0, 1, 4] });
+  a.send({ t: 'hit', target: bw.id, dmg: 999, part: 'body', p: [0, 1, -1.5] });
   await wait(120);
   a.history.length = 0;
   let snap = await a.next((m) => m.t === 'snap', 'snap hit bloqueado');
   assert.equal(hpOf(snap, bw.id), 100, 'el pilar permitió daño a través de él');
 
   // Carril limpio: el mismo disparo sí debe causar los 10 puntos reales.
-  state(a, 3, -4); state(b, 3, 4); await wait(120);
-  a.send({ t: 'fire', w: 'smg', o: [3, 1.1, -4], p: [3, 1, 4], d: [] });
-  a.send({ t: 'hit', target: bw.id, dmg: 999, part: 'body', p: [3, 1, 4] });
+  state(a, 3.8, -3.8); state(b, 3.8, 3.8); await wait(120);
+  a.send({ t: 'fire', w: 'smg', o: [3.8, 1.1, -3.8], p: [3.8, 1, 3.8], d: [] });
+  a.send({ t: 'hit', target: bw.id, dmg: 999, part: 'body', p: [3.8, 1, 3.8] });
   a.history.length = 0;
   snap = await a.next((m) => m.t === 'snap' && hpOf(m, bw.id) < 100, 'snap hit limpio');
   assert.equal(hpOf(snap, bw.id), 90, 'un carril limpio fue rechazado');
@@ -146,34 +149,34 @@ try {
   // El objetivo se mueve justo después del fire: el punto histórico reciente
   // sigue siendo válido, pero no un punto inventado lejos de cualquier pose.
   await wait(110);
-  a.send({ t: 'fire', w: 'smg', o: [3, 1.1, -4], p: [3, 1, 4], d: [] });
-  state(b, 3, 5);
-  a.send({ t: 'hit', target: bw.id, dmg: 999, part: 'body', p: [3, 1, 4] });
+  a.send({ t: 'fire', w: 'smg', o: [3.8, 1.1, -3.8], p: [3.8, 1, 3.8], d: [] });
+  state(b, 3.8, 2.9);
+  a.send({ t: 'hit', target: bw.id, dmg: 999, part: 'body', p: [3.8, 1, 3.8] });
   a.history.length = 0;
   snap = await a.next((m) => m.t === 'snap' && hpOf(m, bw.id) < 90, 'rewind válido');
   assert.equal(hpOf(snap, bw.id), 80, 'lag compensation reciente fue rechazada');
 
   await wait(110);
-  a.send({ t: 'fire', w: 'smg', o: [3, 1.1, -4], p: [6, 1, 4], d: [] });
-  a.send({ t: 'hit', target: bw.id, dmg: 999, part: 'body', p: [6, 1, 4] });
+  a.send({ t: 'fire', w: 'smg', o: [3.8, 1.1, -3.8], p: [0.8, 1, 2.9], d: [] });
+  a.send({ t: 'hit', target: bw.id, dmg: 999, part: 'body', p: [0.8, 1, 2.9] });
   await wait(120); a.history.length = 0;
   snap = await a.next((m) => m.t === 'snap', 'snap punto falso');
   assert.equal(hpOf(snap, bw.id), 80, 'se aceptó un impacto lejos del objetivo');
 
   // Same authority at the new elevation: clear window vs solid stone pier.
-  state(a,23.2,0,3,Math.PI/2);state(b,5,0);await wait(130);
+  state(a,23.2,0,3,Math.PI/2);state(b,5.6,0);await wait(130);
   a.history.length=0;
   const elevated=await a.next(m=>m.t==='snap'&&m.ps.some(p=>p.id===aw.id&&p.y===3),'upper pose sync');
   const beforeUpper=hpOf(elevated,bw.id);
-  a.send({t:'fire',w:'smg',o:[23.2,4.6,0],p:[5,1.1,0],d:[]});
-  a.send({t:'hit',target:bw.id,dmg:999,part:'body',p:[5,1.1,0]});
+  a.send({t:'fire',w:'smg',o:[23.2,4.6,0],p:[5.6,1.1,0],d:[]});
+  a.send({t:'hit',target:bw.id,dmg:999,part:'body',p:[5.6,1.1,0]});
   a.history.length=0;
   const through=await a.next(m=>m.t==='snap'&&hpOf(m,bw.id)<beforeUpper,'gallery window hit');
   const afterUpper=hpOf(through,bw.id);
-  state(a,23.2,1.5,3,Math.PI/2);state(b,5,1.5);await wait(130);
+  state(a,23.2,1.5,3,Math.PI/2);state(b,5.6,1.5);await wait(130);
   b.history.length=0;
-  a.send({t:'fire',w:'smg',o:[23.2,4.6,1.5],p:[5,1.1,1.5],d:[]});
-  a.send({t:'hit',target:bw.id,dmg:999,part:'body',p:[5,1.1,1.5]});
+  a.send({t:'fire',w:'smg',o:[23.2,4.6,1.5],p:[5.6,1.1,1.5],d:[]});
+  a.send({t:'hit',target:bw.id,dmg:999,part:'body',p:[5.6,1.1,1.5]});
   const pier=await b.next(m=>m.t==='fire'&&m.id===aw.id,'gallery pier clipping');
   assert(Math.abs(pier.p[0]-21.8)<.05,'pier must clip remote tracer');
   await wait(120);a.history.length=0;

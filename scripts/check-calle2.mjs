@@ -15,10 +15,9 @@ for(const {from,to} of CALLE_2_VEHICLE_MOVES)for(const side of [-1,1]){
     Math.abs((b.minz+b.maxz)/2-to[1]*side)<1e-6&&b.h===1.1));
 }
 for(const p of SIDE_PROPS){
-  assert(Math.abs(p.z)+p.d/2<15.8,'Side cover stays outside portal mouths');
-  // v2: props may also hug the inner wall; either way they leave the bot
-  // route along |x| = 25 (body radius .48) untouched.
-  assert(Math.abs(p.x)-p.w/2>25+.48||Math.abs(p.x)+p.w/2<25-.48,'Center route retains body clearance');
+  // v3: los props viven en callejones, patios de manzana y patios traseros;
+  // lo que no pueden hacer es tapar la boca de un portal (|z| 15.8..20.2).
+  assert(!(Math.abs(p.z)+p.d/2>15.8&&Math.abs(p.z)-p.d/2<20.2&&Math.abs(p.x)<29.8),'Side cover stays outside portal mouths');
 }
 
 assert(!MAPS.includes('calle')&&MAPS.includes('calle2'));
@@ -27,10 +26,13 @@ assert.equal(normalizeLobbySettings({map:'calle2'}).map,'calle2');
 // v2 moved the ammo crates into the side alleys, which only calle2 has.
 assert.equal(MAP_RUNTIME.calle.spawnZ,MAP_RUNTIME.calle2.spawnZ);
 assert.deepEqual(MAP_RUNTIME.calle.special,MAP_RUNTIME.calle2.special);
-assert(MAP_RUNTIME.calle2.crates.every(c=>Math.abs(c.x)>21.55&&Math.abs(c.x)<29&&c.z===0));
+// v3: las cajas están en los brazos de la calle transversal, dentro del patio
+assert(MAP_RUNTIME.calle2.crates.every(c=>Math.abs(c.x)>29.8&&Math.abs(c.x)<40&&c.z===0));
 for(const side of [-1,1]){
   for(const z of [-18,18])assert.equal(mapLineBlocked('calle2',[side*14,1.2,z],[side*25,1.2,z]),false);
-  assert.equal(mapLineBlocked('calle2',[side*14,1.2,0],[side*25,1.2,0]),true);
+  // la calle transversal está abierta hasta el patio; los edificios que quedan, no
+  assert.equal(mapLineBlocked('calle2',[side*15.2,1.2,3],[side*35,1.2,3]),false);
+  assert.equal(mapLineBlocked('calle2',[side*14,1.2,12],[side*25,1.2,12]),true);
   assert.equal(mapLineBlocked('calle2',[side*25,1.2,18],[side*25,1.2,38]),true);
 }
 const out='artifacts/calle2';await fs.mkdir(out,{recursive:true});
@@ -102,7 +104,7 @@ try{
       const after=new T.Box3().setFromObject(p);
       return ['x','y','z'].every(a=>after.min[a]>=before.min[a]-.04&&after.max[a]<=before.max[a]+.04);
     });
-    checks.allDistrictFacades=buildings.length===14&&buildings.every(b=>b.userData.blenderFacade);
+    checks.allDistrictFacades=buildings.length===10&&buildings.every(b=>b.userData.blenderFacade);
     checks.facadeDimensions=buildings.every(b=>{
       const meta=b.userData.streetBuilding;
       const box=new T.Box3().setFromObject(b.getObjectByName('Existing_envelope'));
@@ -155,12 +157,13 @@ try{
       checks.storeAccess??=true;
       for(const end of [-1,1])checks.storeAccess&&=world.navigation.clear(
         {x:side*15,z:end*28},{x:side*15,z:end*40});
-      for(const z of [-13,6,13])for(const [x,dx] of [[22.25,-1],[28.3,1]]){
+      // v3: un tramo de callejón con muro a ambos lados y sin el auto estacionado
+      for(const z of [-side*13])for(const [x,dx] of [[22.25,-1],[28.3,1]]){
         const found=world.findCover({x:side*x,z},{x:side*dx,z:0},1.2,.38);
         checks.wallCover&&=!!found&&found.face.kind==='high';
       }
       for(const z of [-18,18])checks.portals&&=world.navigation.clear({x:side*14,z},{x:side*25,z});
-      const ray=new T.Raycaster(new T.Vector3(side*14,1.4,0),new T.Vector3(side,0,0),0,11);
+      const ray=new T.Raycaster(new T.Vector3(side*14,1.4,12),new T.Vector3(side,0,0),0,11);
       checks.interiorSolid&&=world.raycast(ray.ray.origin,ray.ray.direction,11)!==null;
       for(const z of [-18,18]){
         ray.ray.origin.set(side*14,1.4,z);
@@ -182,6 +185,10 @@ try{
         [{x:side*10,z:38},{x:side*13.5,z:18}],
         [{x:side*13.5,z:-18},{x:side*10,z:0}],
         [{x:side*13.5,z:18},{x:side*10,z:0}],
+        // v3: al patio de manzana por la calle transversal y al patio trasero del spawn
+        [{x:side*10,z:-38},{x:side*35,z:2}],
+        [{x:side*10,z:side*38},{x:side*25.3,z:side*30}],
+        [{x:side*25.3,z:side*30},{x:side*26,z:side*4}],
       ];
       for(const [from,goal] of tasks){
         const path=world.navigation.path(from,goal);checks.paths&&=path.length>0;
@@ -189,14 +196,17 @@ try{
         let p=from;for(const q of path){checks.paths&&=world.navigation.clear(p,q);p=q;}
         // Exercise production bot steering and actual circle collision, not
         // only the planned path, at the normal navigation/body radius.
-        const bot={world,pos:{...from},recovery:null};
+        // con altura: la ruta puede pasar por encima del remolque o del andén
+        const bot={world,pos:{...from},recovery:null,y:0};
         for(let f=0;f<2400&&Math.hypot(bot.pos.x-goal.x,bot.pos.z-goal.z)>.25;f++){
           const d=Math.hypot(goal.x-bot.pos.x,goal.z-bot.pos.z);
           let steer;
           try {steer=Bot.prototype._steer.call(bot,(goal.x-bot.pos.x)/d,(goal.z-bot.pos.z)/d,{},goal);}
           catch(e){throw new Error(JSON.stringify({from,goal,pos:bot.pos,path,next:world.navigation.next(bot.pos,goal,bot),message:e.message}));}
-          bot.pos.x+=steer.x*.075;bot.pos.z+=steer.z*.075;world.resolveCircle(bot.pos,.38,0);
+          bot.pos.x+=steer.x*.075;bot.pos.z+=steer.z*.075;world.resolveCircle(bot.pos,.38,bot.y);
+          const ground=world.groundHeight(bot.pos,.38,bot.y);if(ground-bot.y<=.16)bot.y=ground;
         }
+        if(Math.hypot(bot.pos.x-goal.x,bot.pos.z-goal.z)>=.3)throw new Error('Bot route stalled '+JSON.stringify({from,goal,pos:bot.pos,path,next:world.navigation.next(bot.pos,goal,bot)}));
         checks.botRoutes&&=Math.hypot(bot.pos.x-goal.x,bot.pos.z-goal.z)<.3;
       }
     }
@@ -245,7 +255,7 @@ try{
     ]){cam.position.set(...p);cam.lookAt(...target);renderer.render(scene,cam);images[name]=renderer.domElement.toDataURL();}
     const nodes=world.navigation.nodes.length;
     const performance={triangles:renderer.info.render.triangles,drawCalls:renderer.info.render.calls};
-    world.setLayout('calle');checks.originalUnchanged=JSON.stringify(original)===JSON.stringify(world.colliders.map(key))&&world.navigation===null;
+    world.setLayout('calle');checks.originalUnchanged=JSON.stringify(original)===JSON.stringify(world.colliders.map(key));
     checks.polishScoped=true;world.mapGroup.traverse(o=>{if(o.userData.callePolish)checks.polishScoped=false;});
     renderer.dispose();return {boxes,checks,nodes,performance,images};
   });

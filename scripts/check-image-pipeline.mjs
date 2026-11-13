@@ -131,7 +131,7 @@ try {
       beams.on === 1 && beams.offNoShadow === 0 && beams.bad === 0 && beams.max > 0.01, JSON.stringify(beams));
     const wet = await high.evaluate(() => {
       let found = null;
-      window.BREACH_WORLD.mapGroup.traverse((o) => { if (!found && o.geometry?.type === 'PlaneGeometry' && o.material?.userData?.breachMacro) found = o.material.customProgramCacheKey(); });
+      window.BREACH_WORLD.mapGroup.traverse((o) => { if (!found && (o.name === 'map-floor' || o.geometry?.type === 'PlaneGeometry') && o.material?.userData?.breachMacro) found = o.material.customProgramCacheKey(); });
       return found;
     });
     check('suelo de Azoteas con desgaste y charcos', /breach-macro-nn0\.55/.test(wet ?? ''), String(wet));

@@ -3691,7 +3691,8 @@ export class World {
     const wasteDarkMat = new THREE.MeshStandardMaterial({ color: 0x1d2627, metalness: 0.48, roughness: 0.58 });
     const wasteRimMat = new THREE.MeshStandardMaterial({ color: 0x68706d, metalness: 0.48, roughness: 0.54 });
     const reflectorMat = new THREE.MeshBasicMaterial({ color: 0xcf7b3f });
-    for (const [x, z, ry] of [[-15.15, -8, Math.PI / 2], [15.15, 8, -Math.PI / 2]]) {
+    for (const [x, z0, ry] of [[-15.15, -8, Math.PI / 2], [15.15, 8, -Math.PI / 2]]) {
+      const z = expanded ? calle2FurnitureZ(x, z0) : z0;
       const bin = new THREE.Group(); bin.position.set(x, 0, z); bin.rotation.y = ry;
       const skid = new THREE.Mesh(new THREE.BoxGeometry(2.34, 0.12, 2.02), wasteDarkMat);
       skid.position.y = 0.06; bin.add(skid);
@@ -3874,7 +3875,8 @@ export class World {
     const coffeeAwningMat = new THREE.MeshStandardMaterial({ color: 0xa8653d, roughness: 0.72 });
     const coffeeMetalMat = new THREE.MeshStandardMaterial({ color: 0x8d9695, metalness: 0.72, roughness: 0.28 });
     const coffeeWheelMat = new THREE.MeshStandardMaterial({ color: 0x111416, roughness: 0.92 });
-    for (const [x, z, rot] of [[14.35, -8.5, 0], [-14.35, 8.5, Math.PI]]) {
+    for (const [x, z0, rot] of [[14.35, -8.5, 0], [-14.35, 8.5, Math.PI]]) {
+      const z = expanded ? calle2FurnitureZ(x, z0) : z0;
       const cart = new THREE.Group(); cart.position.set(x, 0, z); cart.rotation.y = rot;
       const addCartPart = (geometry, material, px, py, pz) => {
         const part = new THREE.Mesh(geometry, material);

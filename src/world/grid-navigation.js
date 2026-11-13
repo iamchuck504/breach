@@ -258,12 +258,18 @@ export class GridNavigation {
   }
   next(from, goal, owner) {
     let saved = this.cache.get(owner);
-    const stale = !saved || this.distance(saved.goal, goal) > 1.5 || !saved.path.length ||
-      (saved.path.length && !this.clear(from, saved.path[0]) && ++saved.misses > 2);
+    let stale = !saved || this.distance(saved.goal, goal) > 1.5 || !saved.path.length;
+    // Empujado fuera de la ruta (otro cuerpo, un borde): se recalcula desde
+    // donde está. Si ni así hay tramo recto, se espera unos cuadros antes de
+    // volver a buscar, para no lanzar una búsqueda por cuadro.
+    if (!stale && !this.clear(from, saved.path[0])) {
+      if (saved.wait > 0) saved.wait--; else stale = true;
+    }
     if (stale) {
-      saved = { goal: { x: goal.x, z: goal.z }, path: this.path(from, goal), misses: 0 };
+      const path = this.path(from, goal);
+      saved = { goal: { x: goal.x, z: goal.z }, path, wait: path.length && this.clear(from, path[0]) ? 0 : 12 };
       this.cache.set(owner, saved);
-    } else if (saved.path.length && this.clear(from, saved.path[0])) saved.misses = 0;
+    }
     while (saved.path.length > 1 && this.distance(from, saved.path[0]) < 0.8 && this.clear(from, saved.path[1])) saved.path.shift();
     return saved.path[0] ?? null;
   }

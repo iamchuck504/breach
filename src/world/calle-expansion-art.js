@@ -165,11 +165,13 @@ export function decorateCalleExpansion(world, buildings) {
   }
   // Repair bay: lift uprights sit flush against the inner wall, not in the lane.
   const liftZ=12.2;
-  for(const x of [21.75,24.3]) {
-    cube('vehicle-lift-upright',x,1.45,liftZ,.30,2.9,.30,yellow);
-    cube('lift-guide',x,1.55,liftZ-.17,.10,2.5,.035,metal);
+  for(const s of [1,-1]){
+    for(const x of [21.75,24.3]) {
+      cube('vehicle-lift-upright',s*x,1.45,s*liftZ,.30,2.9,.30,yellow);
+      cube('lift-guide',s*x,1.55,s*(liftZ-.17),.10,2.5,.035,metal);
+    }
+    cube('lift-overhead-rail',s*23.025,2.85,s*liftZ,2.85,.10,.3,yellow);
   }
-  cube('lift-overhead-rail',23.025,2.85,liftZ,2.85,.10,.3,yellow);
   // autos: el del callejón y los de cada patio, con su pareja girada 180°
   const carColors=[0x58646c,0x655647,0x4d5a48,0x6b5d55];
   [[-22.9,-12.2],...CALLE_3.cars].forEach(([x,z],i)=>{

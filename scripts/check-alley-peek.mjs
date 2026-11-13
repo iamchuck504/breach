@@ -36,5 +36,5 @@ try{
     results.push({edge,aim,weapon});
    }
   }return {samples:results.length};
- });assert.equal(report.samples,80);console.log('ALLEY PEEK OK',report);
+ });assert.equal(report.samples,140);console.log('ALLEY PEEK OK',report);
 }finally{await browser.close();}

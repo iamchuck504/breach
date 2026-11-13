@@ -17,8 +17,11 @@ export class Dummies {
   constructor(scene, world = null) {
     this.scene = scene;
     this.world = world;
-    const sx = world ? world.fx / 21 : 1;
-    const sz = world ? world.fz / 26.6 : 1;
+    // v3: los mapas crecieron hacia fuera (anillo, patios, azoteas vecinas).
+    // Los blancos siguen en el recinto central, donde estaban.
+    const core = { fortaleza: [26, 26.6], azoteas: [31.5, 40], calle2: [29, 42] }[world?.layout];
+    const sx = world ? (core?.[0] ?? world.fx) / 21 : 1;
+    const sz = world ? (core?.[1] ?? world.fz) / 26.6 : 1;
     const fit = (p) => {
       const q = { x: p.x * sx, z: p.z * sz };
       if (world) world.resolveCircle(q, 0.45, 0);

@@ -94,10 +94,14 @@ for (const side of [-1, 1]) {
     'la vidriera detiene el tiro donde se ve el vidrio, no .30 m detrás');
   assert.equal(hit2([side * 14, 1.5, 10.9], [side, 0, 0], 1.75), null,
     'la piel no flota delante del escaparate');
-  assert.equal(hit2([side * 14, 1.5, 7.95], [side, 0, 0], 1.95), null,
-    'la puerta de servicio al ras no tiene piel delante');
-  assert.notEqual(hit2([side * 14, 1.5, 7.95], [side, 0, 0], 2.25), null,
-    'detrás de la puerta sigue el muro estructural');
+  // v3: la puerta de z 7.95 cayó con la calle transversal; la medianera al
+  // ras que queda está en el extremo opuesto al patio trasero de cada lado
+  assert.equal(hit2([side * 14, 1.5, -side * 29], [side, 0, 0], 1.95), null,
+    'la medianera al ras no tiene piel delante');
+  assert.notEqual(hit2([side * 14, 1.5, -side * 29], [side, 0, 0], 2.25), null,
+    'detrás de la medianera sigue el muro estructural');
+  assert.equal(hit2([side * 14, 1.5, 3], [side, 0, 0], 20), null,
+    'la calle transversal está abierta hasta el patio');
   assert.equal(hit2([side * 14, 1.5, 18], [side, 0, 0], 6), null,
     'el pasaje lateral sigue abierto');
 }
