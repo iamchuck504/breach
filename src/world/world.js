@@ -2830,6 +2830,25 @@ export class World {
           bumpMap: this._detailTex('stone', 3, 2), bumpScale: 0.035,
           roughness: 0.92, metalness: 0.01,
         }));
+      // Tejado a cuatro aguas sobre cada casa: sin él eran cajas de piedra
+      // sueltas en el campo, que desde la muralla parecían piezas olvidadas.
+      {
+        const roofGeo = new THREE.ConeGeometry(Math.SQRT1_2, 1, 4, 1);
+        roofGeo.rotateY(Math.PI / 4);                      // base = cuadrado unidad
+        const roofs = new THREE.InstancedMesh(roofGeo,
+          new THREE.MeshStandardMaterial({ color: 0x7a3f26, roughness: 0.9, metalness: 0.01, flatShading: true }),
+          settlement.length);
+        const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
+        settlement.forEach(([x, z, w, h, d, ry = 0], i) => {
+          const rise = Math.min(w, d) * 0.42;
+          q.setFromEuler(e.set(0, ry, 0));
+          m4.compose(new THREE.Vector3(x, h + rise / 2, z), q, new THREE.Vector3(w * 1.14, rise, d * 1.14));
+          roofs.setMatrixAt(i, m4);
+        });
+        roofs.instanceMatrix.needsUpdate = true;
+        roofs.name = 'periphery-fortaleza-settlement-roofs';
+        this.mapGroup.add(roofs);
+      }
     } else if (theme === 'calle') {
       const gantries = [];
       for (const z of [-91, 91]) {

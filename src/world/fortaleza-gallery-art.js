@@ -16,11 +16,13 @@ export function addFortalezaGalleries(world){
   }
   const metal=new T.MeshStandardMaterial({color:0x262723,metalness:.5,roughness:.6});
   const lampMat=new T.MeshBasicMaterial({color:0xffc57e});
-  for(const side of [-1,1])for(const z of [-G.top+2,0,G.top-2]){
+  // Los faroles de los extremos van junto a la llegada de cada escalera y
+  // alcanzan más: con el muro cerrado sobre la puerta ya no entra sol al tramo.
+  for(const side of [-1,1])for(const z of [-G.top+.9,0,G.top-.9]){
     const bracket=new T.Mesh(new T.BoxGeometry(.08,.30,.17),metal);
     bracket.position.set(side*25.52,4.75,z);root.add(bracket);
     const lamp=new T.Mesh(new T.BoxGeometry(.08,.21,.11),lampMat);
     lamp.position.set(side*25.46,4.76,z);root.add(lamp);
-    const light=new T.PointLight(0xffc486,7,5,2);light.position.set(side*25.25,4.65,z);root.add(light);
+    const light=z?new T.PointLight(0xffc486,13,11,1.6):new T.PointLight(0xffc486,7,5,2);light.position.set(side*25.25,4.65,z);root.add(light);
   }
 }

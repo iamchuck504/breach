@@ -40,14 +40,19 @@ export function galleryBoxes(){
     const lastEdge=g.windowRadius*3+1.5;
     for(const end of [-1,1])add(side*21.4,end*(g.top+lastEdge)/2,.8,g.top-lastEdge,5.6,{minY:4.1});
     add(side*21.4,0,.8,g.top*2,6,{minY:5.6});
-    // Opaque stairwell sides (no unfair spawn sightlines).
-    for(const end of [-1,1])add(side*21.4,end*(g.start+g.top)/2,.8,g.start-g.top,6,{minY:3});
+    // Opaque stairwell sides (no unfair spawn sightlines). They run to the end
+    // wall: over the 3 m entrance the wall used to stop, leaving a 2.2 x 3 m
+    // hole up to the roof above each stair door.
+    for(const end of [-1,1])add(side*21.4,end*(g.end+g.top)/2,.8,g.end-g.top,6,{minY:3});
     // Weatherproof roof uses horizontal bands matching a pitched silhouette.
     const bands=12;
     for(let i=0;i<bands;i++){
       const w=(g.width+.8)/bands,local=-((g.width+.8)/2)+(i+.5)*w;
       const bottom=6.03+1.02*(1-Math.abs(local)/((g.width+.8)/2));
       add(x+local,0,w,g.end*2+.4,bottom+.22,{minY:bottom,roof:true});
+      // Gable infill: the end walls stop at 6 m and the pitched roof rises to
+      // 7.2, which left an open stepped triangle of sky at each end.
+      for(const end of [-1,1])add(x+local,end*(g.end+.2),w,.4,bottom,{minY:6});
     }
   }
   return out;
