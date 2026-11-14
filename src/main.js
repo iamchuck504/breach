@@ -2533,6 +2533,11 @@ function bindNet(net) {
       : victimRemote ? victimRemote.yaw
       : victimBot?.yaw;
     const victimRig = victimSelf ? G.rig : (victimRemote?.rig || victimBot?.rig);
+    // aturdimiento decidido por el servidor
+    if (+m.dz > 0) {
+      if (victimSelf) { G.kickDaze = +m.dz; G.kickDazeImmune = +m.dz + TUNING.melee.dazeImmunity; }
+      else if (victimBot) victimBot.dazeT = +m.dz;
+    }
     // El atacante ya predijo la reacción local para que el golpe no espere al
     // ping. Los demás clientes la reproducen desde la confirmación autoritativa.
     if (m.from !== net.id && victimRig && attacker && victimPos) {

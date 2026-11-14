@@ -365,8 +365,9 @@ function eventShooter(me, msg) {
   return bots.get(String(msg.bot)) || null;
 }
 
+const dazed = (entity) => nowSec() < (entity?.dazeUntil || 0); // pateado: ni dispara, ni golpea, ni lanza
 function relayNade(sourceWs, shooter, msg) {
-  if(prototypes.stunned(shooter?.id)||shooter?.weaponSlots?.[3]==='frag')return false;
+  if(dazed(shooter)||prototypes.stunned(shooter?.id)||shooter?.weaponSlots?.[3]==='frag')return false;
   if (!shooter?.alive || phase !== 'playing' || shooter.nades <= 0) return false;
   const o = vec3(msg.o), v = vec3(msg.v); if (!o || !v) return false;
   const now = nowSec();
@@ -392,7 +393,7 @@ function relayNade(sourceWs, shooter, msg) {
 }
 
 function relayRocket(sourceWs, shooter, msg) {
-  if(prototypes.stunned(shooter?.id))return false;
+  if(prototypes.stunned(shooter?.id)||dazed(shooter))return false;
   if (!shooter?.alive || phase !== 'playing' ||
       shooter.specialWep !== 'bazooka') return false;
   const o = vec3(msg.o), d = vec3(msg.d); if (!o || !d) return false;
@@ -518,7 +519,7 @@ function validatedFirePose(shooter, raw) {
 }
 
 function registerFire(shooter, msg, isBotFire = false) {
-  if(prototypes.stunned(shooter?.id))return false;
+  if(prototypes.stunned(shooter?.id)||dazed(shooter))return false;
   if (!shooter?.alive || phase !== 'playing') return false;
   const o = vec3(msg.o), pt = vec3(msg.p); if (!o || !pt) return false;
   const weapon = FIREABLE.has(msg.w) ? msg.w : 'smg', rule = FIRE_RULES[weapon], now = nowSec();
@@ -694,8 +695,15 @@ function commitAuthoritativeDamage(shooter, target, shot, msg, dist, authoritati
   target.hp -= dmg; target.lastDamage = now;
   if (shot.wep === 'melee') {
     const p = vec3(msg.p) || [target.x, (target.y || 0) + 1, target.z];
+    // ATURDIMIENTO de la patada: lo decide y lo hace cumplir el servidor
+    let dz = 0;
+    if (!(now < (target.dazeImmuneUntil || 0))) {
+      dz = !shooter.bot && dmg >= TUNING.melee.tackleDmg ? TUNING.melee.tackleDaze : TUNING.melee.dazeTime;
+      target.dazeUntil = now + dz;
+      target.dazeImmuneUntil = target.dazeUntil + TUNING.melee.dazeImmunity;
+    }
     broadcastRaw({ t: 'hitConfirm', target: target.id, from: shooter.id,
-      w: 'melee', dmg: Math.round(dmg), p });
+      w: 'melee', dmg: Math.round(dmg), p, dz });
   }
   if (target.hp > 0) {
     if (shot.wep === 'bazooka' || shot.wep === 'frag') {
