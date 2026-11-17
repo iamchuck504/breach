@@ -4,6 +4,7 @@ const KB_DEFAULT = {
   forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD',
   sprint: 'ShiftLeft', evade: 'Space', jump: 'KeyF', reload: 'KeyR', swap: 'KeyQ',
   melee: 'KeyV',
+  pickup: 'KeyE',   // recoger / reemplazar arma del suelo (antes compartía la tecla de evadir)
   slot1: 'Digit1', slot2: 'Digit2', slot3: 'Digit3', slot4: 'Digit4',
   score: 'Tab',
 };
@@ -23,7 +24,7 @@ export const BINDS = { kb: { ...KB_DEFAULT }, pad: { ...PAD_DEFAULT } };
 export const KB_LABELS = {
   forward: 'binding.forward', back: 'binding.back', left: 'binding.left', right: 'binding.right',
   sprint: 'binding.sprint', evade: 'binding.evade', jump: 'binding.jump',
-  melee: 'binding.melee', reload: 'binding.reload', swap: 'binding.swap',
+  melee: 'binding.melee', reload: 'binding.reload', swap: 'binding.swap', pickup: 'binding.pickup',
   slot1: 'binding.slot1', slot2: 'binding.slot2', slot3: 'binding.slot3', slot4: 'binding.slot4',
   score: 'binding.score',
 };
@@ -58,6 +59,11 @@ export function loadBinds() {
     const kb = JSON.parse(localStorage.getItem('breach.binds.kb.v3') || 'null');
     const pad = JSON.parse(localStorage.getItem('breach.binds.pad.v3') || 'null');
     if (kb) for (const k in KB_DEFAULT) { if (typeof kb[k] === 'string') BINDS.kb[k] = kb[k]; }
+    // Quien ya tenía la E asignada a otra acción (teclas guardadas antes de
+    // existir "recoger") conserva su esquema: recoger sigue en su tecla de evadir.
+    if (kb && typeof kb.pickup !== 'string' && Object.entries(BINDS.kb).some(([k, v]) => k !== 'pickup' && v === KB_DEFAULT.pickup)) {
+      BINDS.kb.pickup = BINDS.kb.evade;
+    }
     if (pad) for (const k in PAD_DEFAULT) { if (typeof pad[k] === 'number') BINDS.pad[k] = pad[k]; }
   } catch { /* defaults */ }
 }
