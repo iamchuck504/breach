@@ -210,6 +210,15 @@ buffer HDR con MSAA y un pase final aplica bloom, curva de tono (Khronos PBR
 Neutral: no toca los tonos medios), gradación por ambiente, viñeta y dither.
 La gradación de cada mapa vive en la tabla `GRADES` de ese archivo.
 
+**AUTO** es el valor por defecto mientras el jugador no elija un nivel
+(`src/render/auto-quality.js`): el arranque sale del equipo (nombre de la GPU,
+núcleos, memoria, pantalla táctil) y, jugando, si los cuadros se sostienen por
+debajo de 42 c/s durante seis segundos baja un escalón (alta → media → baja →
+baja al 75 % → clásico al 75 % → clásico al 50 %). Solo baja; lo aprendido se
+recuerda una semana y volver a elegir AUTO lo reinicia. `?gfx=auto` lo activa
+en pruebas y `BREACH_GFX()` en la consola muestra el estado.
+`check:auto-gfx` y `scripts/check-auto-gfx-live.mjs` lo cubren.
+
 Opciones → Video → Calidad gráfica elige el nivel (se guarda por jugador):
 
 | Nivel | MSAA | Bloom | Oclusión | Sombras | Tope de píxeles |

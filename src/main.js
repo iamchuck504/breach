@@ -28,6 +28,7 @@ import { Effects } from './fx/effects.js';
 import { Audio, selectAudioListener } from './fx/audio.js';
 import { HUD } from './ui/hud.js';
 import { ImagePipeline, QUALITY } from './render/pipeline.js';
+import { AutoQuality, initialQuality } from './render/auto-quality.js';
 import { SkyEnvironment } from './render/sky.js';
 import { NetClient } from './net/client.js';
 import { BotMatch } from './game/botmatch.js';
@@ -69,16 +70,33 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 // ?gfx=off|low|medium|high|ultra lo fuerza sin tocar lo guardado (pruebas).
 const pipeline = new ImagePipeline(renderer);
 const gfxParam = new URLSearchParams(location.search).get('gfx');
+const savedQuality = localStorage.getItem('breach.video.quality');
+// CALIDAD AUTOMÁTICA (por defecto mientras el jugador no elija un nivel): el
+// arranque sale del equipo y, jugando, baja sola si los cuadros no aguantan.
+// En navegadores automatizados (las suites, que corren en runners lentos y
+// prueban la cadena aparte con ?gfx) queda el render clásico, sin medidor.
+function gpuName() {
+  try {
+    const gl = renderer.getContext(), ext = gl.getExtension('WEBGL_debug_renderer_info');
+    return String(ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER));
+  } catch { return ''; }
+}
+const autoGfx = new AutoQuality({
+  start: initialQuality({ gpu: gpuName(), cores: navigator.hardwareConcurrency || 0,
+    memoryGb: navigator.deviceMemory || 0, coarse: coarseDisplay }),
+  storage: localStorage,
+});
+let gfxAuto = gfxParam === 'auto' || (!QUALITY[gfxParam] && !QUALITY[savedQuality] && !navigator.webdriver);
 let gfxQuality = QUALITY[gfxParam] ? gfxParam
-  : QUALITY[localStorage.getItem('breach.video.quality')] ? localStorage.getItem('breach.video.quality')
-    // Sin GPU real, y en navegadores automatizados (las suites, que corren en
-    // runners lentos y prueban la cadena aparte con ?gfx), el render clásico.
-    : ImagePipeline.softwareRenderer(renderer) || navigator.webdriver ? 'off' : coarseDisplay ? 'medium' : 'high';
+  : gfxAuto ? autoGfx.quality
+    : QUALITY[savedQuality] ? savedQuality
+      : 'off';
 pipeline.setQuality(gfxQuality);
+window.BREACH_GFX = () => ({ auto: gfxAuto, quality: gfxQuality, scale: gfxAuto ? autoGfx.scale : 1, gpu: gpuName(), fps: autoGfx.lastFps, controller: autoGfx });
 // varios render() por cuadro: las estadísticas se reinician a mano
 renderer.info.autoReset = false;
 function applyRenderSize() {
-  renderer.setPixelRatio(pipeline.pixelRatio(BASE_PIXEL_RATIO * renderScale, innerWidth, innerHeight));
+  renderer.setPixelRatio(pipeline.pixelRatio(BASE_PIXEL_RATIO * renderScale * (gfxAuto ? autoGfx.scale : 1), innerWidth, innerHeight));
   renderer.setSize(innerWidth, innerHeight);
 }
 let frameIndex = 0;
@@ -113,6 +131,8 @@ const camera = new THREE.PerspectiveCamera(TUNING.cam.fovNormal, 1, 0.1, 200);
 // Al jugar, setLayout reutiliza este mismo World con el mapa elegido.
 const sky = new SkyEnvironment(renderer, scene);
 const world = new World(scene, 'azoteas');
+// al cargar un mapa se compilan sombreadores: el medidor de cuadros espera
+{ const setLayout = world.setLayout.bind(world); world.setLayout = (...a) => { autoGfx.settle(); return setLayout(...a); }; }
 const effects = new Effects(scene, world);
 const audio = new Audio();
 const smoke = new SmokeSystem(scene, world, audio);
@@ -1283,10 +1303,18 @@ selScale.addEventListener('change', () => {
   applyRenderSize();
 });
 const selQuality = document.getElementById('sel-quality');
-selQuality.value = gfxQuality;
+selQuality.value = gfxAuto ? 'auto' : gfxQuality;
 selQuality.addEventListener('change', () => {
-  gfxQuality = QUALITY[selQuality.value] ? selQuality.value : 'high';
-  localStorage.setItem('breach.video.quality', gfxQuality);
+  gfxAuto = selQuality.value === 'auto';
+  if (gfxAuto) {
+    // volver a AUTO olvida lo aprendido y prueba de nuevo desde el arranque
+    autoGfx.reset();
+    gfxQuality = autoGfx.quality;
+    localStorage.removeItem('breach.video.quality');
+  } else {
+    gfxQuality = QUALITY[selQuality.value] ? selQuality.value : 'high';
+    localStorage.setItem('breach.video.quality', gfxQuality);
+  }
   pipeline.setQuality(gfxQuality);
   applyShadowFilter();
   applyRenderSize();
@@ -4129,6 +4157,14 @@ let padWasConnected = false;
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.1, (now - last) / 1000);
+  // calidad automática: si los cuadros reales no aguantan, baja un escalón
+  if (gfxAuto && autoGfx.sample((now - last) / 1000, document.visibilityState === 'visible')) {
+    gfxQuality = autoGfx.quality;
+    pipeline.setQuality(gfxQuality);
+    applyShadowFilter();
+    applyRenderSize();
+    console.info('[gfx] auto →', gfxQuality, 'x' + autoGfx.scale, '(' + autoGfx.lastFps.toFixed(0) + ' c/s)');
+  }
   last = now;
 
   // MODO EDITOR: cámara y overlays propios; el gameplay no corre
