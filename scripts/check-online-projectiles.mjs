@@ -118,16 +118,16 @@ try {
 
   // P1 recoge la bazooka de la primera ronda y anuncia el vuelo. El remitente
   // no recibe eco (ya la simuló); P2 sí recibe origen y dirección normalizada.
-  a.send({ t: 's', x: 2.8, y: 0, z: 0, yaw: 0, st: 'idle', w: 'smg' });
+  a.send({ t: 's', x: 0, y: 0, z: 0, yaw: 0, st: 'idle', w: 'smg' });
   await wait(80);
   const takenP = b.next('specialTaken', (m) => m.id === aw.id && m.wep === 'bazooka');
   a.send({ t: 'takeSpecial' });
   await takenP;
-  a.send({ t: 's', x: 2.8, y: 0, z: 0, yaw: 0, st: 'idle', w: 'bazooka' });
+  a.send({ t: 's', x: 0, y: 0, z: 0, yaw: 0, st: 'idle', w: 'bazooka' });
   await wait(80);
 
   const rocketP = b.next('rocket', (m) => m.id === aw.id);
-  a.send({ t: 'rocket', o: [2.8, 1.25, 0], d: [0, 0, -1],
+  a.send({ t: 'rocket', o: [0, 1.25, 0], d: [0, 0, -1],
     fp: { st: 'idle', a: 1, p: 0.28, ae: 0.1, cl: 0, ce: 1 } });
   const rocket = await rocketP;
   check('el otro cliente recibe el vuelo de la bazooka',

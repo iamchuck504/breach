@@ -33,7 +33,8 @@ function wedgeGeometry(w, len, h) {
 // girar la cámara para averiguarlo. [x, z, rumbo] en el lado rojo; rumbo 0 =
 // hacia el campo (+z), ±90° = hacia un costado. El espejo crea las azules.
 const SPAWN_EXITS = {
-  fortaleza: [[-8.4, -22.4, 0], [8.4, -22.4, 0], [-11.9, -25.1, -90], [11.9, -25.1, 90]],
+  // v3: sala de guardia tras la muralla vieja. Puerta central y pasos laterales.
+  fortaleza: [[0, -29.4, 0], [-9.6, -28.6, -90], [9.6, -28.6, 90]],
   azoteas: [[7.4, -33.2, 0], [-11.6, -37.6, -90], [11.6, -37.6, 90]],
   calle2: [[-7.6, -36.6, 0], [7.6, -36.6, 0]],
 };
@@ -51,6 +52,10 @@ const LOOKS = {
   mezzanine: { ramp: 0x66727e, edge: 0xd9a441, metalness: 0.45, roughness: 0.6 },
   // Calle: remolque de plataforma con rampas de carga
   trailer: { ramp: 0x3a4248, edge: 0xc5974e, metalness: 0.55, roughness: 0.55 },
+  // Calle: rampas de hormigón del andén de carga
+  dock: { ramp: 0x6a7072, edge: 0xc5974e, metalness: 0.05, roughness: 0.85 },
+  // Fortaleza: escalera exterior de piedra
+  stair: { ramp: 0x8a8173, edge: 0x6a6155, metalness: 0.02, roughness: 0.9 },
 };
 
 export function decorateMapV2(world, layout) {
@@ -148,6 +153,7 @@ export function decorateMapV2(world, layout) {
     const yellow = std(0xc5974e, { roughness: 0.6 });
     const reflector = new THREE.MeshBasicMaterial({ color: 0xff5a3c });
     for (const d of decksFor(layout)) for (const side of d.mirror ? [1, -1] : [1]) {
+      if (d.kind !== 'trailer') continue; // el andén de carga se dibuja con los patios
       const x = d.x * side, z = d.z * side;
       // REMOLQUE: bastidor, tarima de madera, ejes y ruedas bajo la caja
       cube('v2-trailer-frame', x, d.h - 0.2, z, d.w, 0.28, d.d, steel);

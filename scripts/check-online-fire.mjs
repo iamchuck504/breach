@@ -184,7 +184,7 @@ try {
   // El power weapon de la ronda se reclama en su pedestal. El servidor debe
   // validar la cabeza y publicar `hs=1` solo en la muerte letal; el cliente no
   // puede inventar esta reacción visual.
-  send(a, { t: 's', x: 2.8, z: 0, y: 0, yaw: 0, st: 'idle', w: 'smg', am: 40, ar: 150 });
+  send(a, { t: 's', x: 0, z: 0, y: 0, yaw: 0, st: 'idle', w: 'smg', am: 40, ar: 150 });
   send(a, { t: 'takeSpecial' });
   const special = await waitFor(a, (m) => m.t === 'specialTaken' && m.id === a.welcome.id);
   if (special.wep !== 'sniper') throw new Error('round 1 no entregó sniper');

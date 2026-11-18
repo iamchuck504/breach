@@ -174,7 +174,8 @@ const sniperDmg = await page.evaluate(async () => {
   // La pareja de posiciones se ELIGE con raycast: el mapa tiene bloques y
   // un duelo a ciegas hacía fallar el test por geometría, no por el arma.
   const W = window.BREACH_WORLD, T = window.THREE;
-  const spots = [[0, 6], [-14, 4], [6, -2], [0, -4], [14, -4], [-6, 10]];
+  // v3: primero un tramo despejado de la liza este
+  const spots = [[33, 10], [0, 6], [-14, 4], [6, -2], [0, -4], [14, -4], [-6, 10]];
   const _o = new T.Vector3(), _dir = new T.Vector3();
   let placed = null;
   for (const [tx, tz] of spots) {
@@ -326,6 +327,11 @@ check('bot dentro del humo pierde la visión (sin tracking imposible)',
 const rocketDeath = await page.evaluate(async () => {
   const G = window.BREACH, R = window.BREACH_ROCKETS;
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // la muerte solo agenda respawn con la ronda en juego y vidas en la reserva:
+  // esta comprobación llega tarde en la partida y no debe depender de eso
+  for (let i = 0; i < 60 && G.botMatch.phase !== 'playing'; i++) await wait(500);
+  G.botMatch.pool[G.team] = Math.max(G.botMatch.pool[G.team], 5);
+  if (!G.selfAlive) for (let i = 0; i < 40 && !G.selfAlive; i++) await wait(500);
   G.weapons.giveSpecial('bazooka');
   const p = G.player;
   p.pos.x = 0; p.pos.z = -8; p.y = 0; p.vel.x = 0; p.vel.z = 0;
@@ -342,8 +348,12 @@ const rocketDeath = await page.evaluate(async () => {
   G.botMatch.cb.damagePlayer(50, bot?.name ?? 'X', { x: p.pos.x, z: p.pos.z - 3 },
     { weapon: 'smg', distance: 3, damage: 50, part: 'body', gib: false });
   if (bot) G.botMatch._onDeath('player', bot.id, false);
-  await wait(1500);
-  return { inFlight, left: R.list.length, dead: !G.selfAlive, respawnT: +G.respawnT.toFixed(1) };
+  // se lee nada más morir: si la siguiente oleada cae dentro de la espera, el
+  // jugador ya ha reaparecido y la comprobación mentía
+  await wait(160);
+  const dead = !G.selfAlive, respawnT = +G.respawnT.toFixed(1);
+  await wait(1340);
+  return { inFlight, left: R.list.length, dead, respawnT };
 });
 check('cohete en vuelo al morir: se resuelve sin dejar residuo',
   rocketDeath.inFlight > 0 && rocketDeath.left === 0 && rocketDeath.dead,
