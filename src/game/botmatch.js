@@ -376,7 +376,7 @@ export class Bot {
         this.recovery=null;
         // Do not look past the waypoint into a wall when the route turns at
         // this corner. The full segment was already swept with body clearance.
-        return {x:dx,z:dz,blocked:false,hit:null,stairsRoute:!!this.world.galleryEnabled};
+        return {x:dx,z:dz,blocked:false,hit:null,stairsRoute:true};
       }
     }
     _v1.set(this.pos.x, this.y + 0.7, this.pos.z);
@@ -543,7 +543,7 @@ export class Bot {
     const near = (q, r) => Math.hypot(q.x - this.pos.x, q.z - this.pos.z) < r;
     const descend = (exit) => { p.phase = 'down'; p.exit = exit; p.step = 0; p.t = 0; };
     if (p.phase === 'approach') {
-      if (wantsSafety || (enemy && dist < 7) || p.t > 10) return this._perchEnd(match, 8);
+      if (wantsSafety || (enemy && dist < 7) || p.t > 16) return this._perchEnd(match, 8);
       if (near(p.entry.foot, 0.7)) { p.phase = 'up'; p.step = 0; p.t = 0; }
     } else if (p.phase === 'up') {
       if (near(p.step === 0 ? p.entry.top : p.spot, 0.45)) {
@@ -1480,7 +1480,9 @@ export class BotMatch {
     if (!decks.length) return null;
     if (this.bots.some((b) => b !== bot && b.alive && b.team === bot.team && b.perch)) return null;
     const toward = bot.team === 'red' ? 1 : -1;
-    let best = null, bestD = 18;
+    // v3: hay plataformas al otro lado de un puente; el bot llega por la ruta
+    // de navegación, así que el radio es amplio y el plazo de llegada también
+    let best = null, bestD = 30;
     for (const deck of decks) {
       const holder = this.perchClaims.get(deck);
       if (holder && holder !== bot.id) { const h = this.botById(holder); if (h?.alive && h.perch?.deck === deck) continue; }

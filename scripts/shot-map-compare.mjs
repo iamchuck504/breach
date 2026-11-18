@@ -82,8 +82,11 @@ const shoot = async (name, pos, at, { top = false } = {}) => {
   await page.locator('#game').screenshot({ path: path.join(OUT, `${LAYOUT}-${name}.png`) });
   console.log('shot', name);
 };
-await shoot('aerea', [0, HEIGHT[LAYOUT], 0], [0, 0, 0], { top: true });
-for (const [name, pos, at] of SHOTS[LAYOUT]) await shoot(name, pos, at);
+// SHOT_HEIGHT fija la altura de la cenital (misma escala entre versiones) y
+// un cuarto argumento da un JSON con otra lista de cámaras.
+const shots = process.argv[4] ? JSON.parse(fs.readFileSync(process.argv[4], 'utf8'))[LAYOUT] : SHOTS[LAYOUT];
+await shoot('aerea', [0, Number(process.env.SHOT_HEIGHT) || HEIGHT[LAYOUT], 0], [0, 0, 0], { top: true });
+for (const [name, pos, at] of shots) await shoot(name, pos, at);
 await browser.close();
 server.kill();
 await clearClip();

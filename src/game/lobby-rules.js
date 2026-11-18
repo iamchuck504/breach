@@ -9,18 +9,21 @@ export const MAPS = ['fortaleza', 'azoteas', 'calle2'];
 // online los valida en otro.
 export const MAP_RUNTIME = Object.freeze({
   fortaleza: Object.freeze({
-    spawnZ: 23.4,
-    // v2: las cajas salen de la línea central (quien tomaba el centro tenía
-    // el arma especial y las dos cajas a 14 m) y van al pie de cada galería
-    crates: Object.freeze([{ x: -16.5, z: -6.5 }, { x: 16.5, z: 6.5 }]),
-    // equidistante por el suelo: 28.3 m desde cada spawn (analyze-map.mjs)
-    special: Object.freeze({ x: 2.8, z: 0, y: 0 }),
+    // v3: los spawns salen del patio a un patio de armas propio, detrás de
+    // la muralla vieja (z ±27). Tres puertas al patio y dos salidas a las lizas.
+    spawnZ: 31.5,
+    // una caja en el centro de cada liza: disputada, lejos del patio
+    crates: Object.freeze([{ x: -33, z: 0 }, { x: 33, z: 0 }]),
+    // dentro de la torre del homenaje, en el centro exacto del mapa
+    special: Object.freeze({ x: 0, z: 0, y: 0 }),
   }),
   azoteas: Object.freeze({
     spawnZ: 35.1,
     // v2: fuera del eje central (ahí ya están el helipuerto y el arma
     // especial); cada caja queda en el flanco propio de un equipo
-    crates: Object.freeze([{ x: -24.4, z: -18.6 }, { x: 24.4, z: 18.6 }]),
+    // v3: una caja al desembarcar del puente central de cada azotea vecina,
+    // bajo la entreplanta
+    crates: Object.freeze([{ x: -40.4, z: 2.6 }, { x: 40.4, z: -2.6 }]),
     special: Object.freeze({ x: 0, z: 0, y: 1.1 }),
   }),
   calle: Object.freeze({
@@ -32,7 +35,9 @@ export const MAP_RUNTIME = Object.freeze({
     spawnZ: 38.4,
     // v2: la munición vive en el centro de cada callejón lateral. La avenida
     // ya tiene el arma especial; los callejones eran un rodeo sin premio.
-    crates: Object.freeze([{ x: -26.4, z: 0 }, { x: 26.4, z: 0 }]),
+    // v3: una caja en cada brazo de la calle transversal, a la vista del
+    // andén de carga y a mitad de camino entre los dos equipos.
+    crates: Object.freeze([{ x: -33.4, z: 0 }, { x: 33.4, z: 0 }]),
     special: Object.freeze({ x: 0, z: 0, y: 0 }),
   }),
   metro: Object.freeze({

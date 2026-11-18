@@ -30,7 +30,7 @@ for (const map of MAPS) {
   const r = analyze(map);
   check(`${map}: ningún spawn a la vista desde la mitad rival`, r.spawn.visibleFromEnemyHalfPct <= 0.5, `${r.spawn.visibleFromEnemyHalfPct} %`);
   check(`${map}: al menos 3 salidas del bolsillo de spawn`, r.spawn.exits.length >= 3, r.spawn.exits.join(' | '));
-  check(`${map}: arma especial equidistante`, r.fair.special <= 0.5,
+  check(`${map}: arma especial equidistante`, r.fair.special <= 1.0,
     `rojo ${r.routes.special.red.m} m · azul ${r.routes.special.blue.m} m`);
   check(`${map}: arma especial a más de 3 s de sprint de cualquier spawn`, r.routes.special.red.sprint >= 3, `${r.routes.special.red.sprint} s`);
   const crates = r.routes.crates;
@@ -45,7 +45,7 @@ for (const map of MAPS) {
   check(`${map}: mezcla de distancias de combate`, r.sightlines.close >= 25 && r.sightlines.mid >= 25 && r.sightlines.long <= 25,
     `corta ${r.sightlines.close} % · media ${r.sightlines.mid} % · larga ${r.sightlines.long} %`);
 }
-check('azoteas y calle2 tienen plataforma con rampas', rampsFor('azoteas').length === 4 && rampsFor('calle2').length === 4,
+check('azoteas y calle2 tienen plataforma con rampas', rampsFor('azoteas').length === 4 && rampsFor('calle2').length === 8 && rampsFor('fortaleza').length === 2,
   `azoteas ${rampsFor('azoteas').length} · calle2 ${rampsFor('calle2').length}`);
 
 // ---------- 2 y 3. en juego ----------

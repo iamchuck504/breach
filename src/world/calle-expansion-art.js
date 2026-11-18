@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { expansionBoxes, SIDE_PROPS } from './calle-expansion.js';
+import { expansionBoxes, SIDE_PROPS, CALLE_3 } from './calle-expansion.js';
 import { clipFacadeAbove } from './clip-facade.js';
 import { cloneUrbanAsset } from './urban-assets.js';
 
@@ -26,6 +26,9 @@ export function decorateCalleExpansion(world, buildings) {
   for(const side of [-1,1]) {
     floor(side<0?'service-alley-floor':'workshop-floor',side*25.25,0,7.5,40.4,concrete,.016);
     for(const z of [-18,18])floor('open-street-passage',side*18.80,z,5.4,4.4,concrete,.016);
+    // v3: patio de manzana y patio trasero del spawn
+    floor(side<0?'parking-yard-floor':'workshop-yard-floor',side*(29.8+CALLE_3.yardX)/2,0,CALLE_3.yardX-29.8,40.4,concrete,.016);
+    floor('back-lot-floor',side*25.275,side*31.5,7.45,21,concrete,.016);
   }
   // Visible walls and solid outer corners exactly match their collision boxes.
   for(const b of expansionBoxes()) {
@@ -45,7 +48,8 @@ export function decorateCalleExpansion(world, buildings) {
   for(const side of [-1,1])for(const z of [-30,-18,-6,6,18,30]) {
     const source=buildings.find(b=>b.userData.streetBuilding.side===side);
     // Put the complete first upper sill above the 4.4m service wall.
-    const clone=source.clone(true);clone.position.set(side*31.74,.95,z);
+    // v3: tras el patio de manzana quedan más lejos; en las esquinas, donde siempre.
+    const clone=source.clone(true);clone.position.set(side*(Math.abs(z)<21?CALLE_3.yardX+3.54:31.74),.95,z);
     clone.name='calle2-outer-city-building';clone.userData={streetContinuation:true};
     root.add(clone);
     clone.updateWorldMatrix(true,true);
@@ -160,26 +164,54 @@ export function decorateCalleExpansion(world, buildings) {
       {w:1.6,h:.30,parent:root,style:'transit',subtitle:'KEEP CLEAR'});
   }
   // Repair bay: lift uprights sit flush against the inner wall, not in the lane.
-  for(const x of [21.75,24.3]) {
-    cube('vehicle-lift-upright',x,1.45,0,.30,2.9,.30,yellow);
-    cube('lift-guide',x,1.55,-.17,.10,2.5,.035,metal);
+  const liftZ=12.2;
+  for(const s of [1,-1]){
+    for(const x of [21.75,24.3]) {
+      cube('vehicle-lift-upright',s*x,1.45,s*liftZ,.30,2.9,.30,yellow);
+      cube('lift-guide',s*x,1.55,s*(liftZ-.17),.10,2.5,.035,metal);
+    }
+    cube('lift-overhead-rail',s*23.025,2.85,s*liftZ,2.85,.10,.3,yellow);
   }
-  cube('lift-overhead-rail',23.025,2.85,0,2.85,.10,.3,yellow);
-  world._addStreetVehicle(22.9,0,0,0x58646c,1);
-  world._addStreetVehicle(-22.9,0,0,0x655647,1);
-  world._addMapSign('MOTOR WORKS',28.93,2.9,0,-Math.PI/2,
+  // autos: el del callejón y los de cada patio, con su pareja girada 180°
+  const carColors=[0x58646c,0x655647,0x4d5a48,0x6b5d55];
+  [[-22.9,-12.2],...CALLE_3.cars].forEach(([x,z],i)=>{
+    world._addStreetVehicle(x,z,0,carColors[i%4],1);
+    world._addStreetVehicle(-x,-z,0,carColors[(i+1)%4],1);
+  });
+  world._addMapSign('MOTOR WORKS',CALLE_3.yardX-.07,2.9,-12.5,-Math.PI/2,
+    {w:4,h:.8,parent:root,style:'industrial',subtitle:'ALIGNMENT / REPAIRS'});
+  world._addMapSign('MOTOR WORKS',-(CALLE_3.yardX-.07),2.9,12.5,Math.PI/2,
     {w:4,h:.8,parent:root,style:'industrial',subtitle:'ALIGNMENT / REPAIRS'});
   // A coherent workshop wall treatment, not another row of shopfronts.
   const paint=mat(0xa5a8a1),blue=mat(0x3d5964);
-  for(const x of [21.57,28.97]){
-    cube('workshop-painted-dado',x,.78,0,.015,1.55,29,paint);
-    cube('workshop-service-stripe',x,1.5,0,.025,.16,29,blue);
+  for(const x of [21.57,28.97])for(const z of [-13,13]){
+    cube('workshop-painted-dado',x,.78,z,.015,1.55,x<22?5.6:7.8,paint);
+    cube('workshop-service-stripe',x,1.5,z,.025,.16,x<22?5.6:7.8,blue);
+  }
+  // v3 — TALLER bajo marquesina y ANDÉN de carga
+  const canopy=CALLE_3.canopy,canopyMat=mat(0x39464d,{metalness:.55,roughness:.5});
+  for(const s of [1,-1]){
+    for(const [x,z] of canopy.posts)cube('workshop-canopy-post',s*x,canopy.minY/2,s*z,.5,canopy.minY,.5,yellow);
+    cube('workshop-canopy-roof',s*canopy.x,(canopy.minY+canopy.h)/2,s*canopy.z,canopy.w,canopy.h-canopy.minY,canopy.d,canopyMat);
+    cube('workshop-canopy-fascia',s*(canopy.x-canopy.w/2-.01),canopy.minY+.11,s*canopy.z,.02,.2,canopy.d,yellow).castShadow=false;
+    for(const dz of [-2.4,2.4])cube('workshop-canopy-lamp',s*canopy.x,canopy.minY-.04,s*(canopy.z+dz),3.2,.06,.22,lamp).castShadow=false;
+    const light=new THREE.PointLight(0xb8d8ee,6,12,2);light.position.set(s*canopy.x,3.7,s*canopy.z);root.add(light);
+    floor('workshop-bay-line',s*canopy.x,s*(canopy.z-4.4),canopy.w-.8,.1,yellow);
+    floor('workshop-bay-line',s*canopy.x,s*(canopy.z+4.4),canopy.w-.8,.1,yellow);
+  }
+  for(const s of [1,-1]){
+    const d=CALLE_3.dock,x=s*d.x,z=s*d.z;
+    cube('loading-dock-slab',x,1.1/2,z,d.w,1.1,d.d,concrete);
+    cube('loading-dock-edge',x-s*Math.sign(d.x)*(d.w/2-.05),1.105,z,.1,.012,d.d,yellow).castShadow=false;
+    for(const dz of [-d.d/2+.6,0,d.d/2-.6])cube('loading-dock-bumper',x-s*Math.sign(d.x)*(d.w/2+.04),.72,z+dz,.08,.5,.28,black);
+    floor('parking-bay-line',s*-34.3,s*-12.6,.1,5.4,yellow);
+    floor('parking-bay-line',s*-30.2,s*-16.4,.1,5.4,yellow);
   }
   for(const z of [-12,12]){
     cube('tool-wall-board',28.93,1.95,z,.045,.8,2.5,metal);
     for(let i=0;i<6;i++)cube('hanging-tool',28.90,1.96,z-.9+i*.36,.025,.35,.05,concrete);
   }
-  for(const z of [-12,-4,4,12]) {
+  for(const z of [-12,12]) {
     // Wall-mounted practical lamps: no detached halos and no shadow lights.
     for(const side of [-1,1]) {
       cube('wall-light-housing',side*28.94,3.3,z,.12,.22,.7,metal);
@@ -192,18 +224,19 @@ export function decorateCalleExpansion(world, buildings) {
   }
   // Narrow awnings leave this repair courtyard open to the sky and readable
   // from above; no inaccessible playable roof or invisible floor-to-roof box.
-  for(const z of [-9,9])cube('workshop-canopy',28.25,3.65,z,1.5,.12,7,metal);
+  for(const z of [-13,13])cube('workshop-canopy',28.25,3.65,z,1.5,.12,7,metal);
   for(const z of [-14,14]) {
     floor('workshop-bay-line',25.15,z,5.4,.1,yellow);
     floor('alley-loading-line',-25.15,z,5.4,.1,yellow);
   }
-  world._addMapSign('NO THROUGH TRAFFIC',-25,2.2,-20.16,0,
+  // v3: el extremo cerrado de cada callejón es ahora el opuesto al patio trasero
+  world._addMapSign('NO THROUGH TRAFFIC',-25,2.2,20.16,Math.PI,
     {w:2.7,h:.5,parent:root,style:'industrial',subtitle:'SERVICE ACCESS ONLY'});
-  world._addMapSign('NO EXIT',25,2.2,20.16,Math.PI,
+  world._addMapSign('NO EXIT',25,2.2,-20.16,0,
     {w:2.7,h:.5,parent:root,style:'industrial',subtitle:'USE SIDE PASSAGES'});
 
   // Wall details only: no new obstacles, blinking lights or particle spam.
-  for(const side of [-1,1])for(const z of [-6,6]){
+  for(const side of [-1,1])for(const z of [-11.6,11.6]){
     const x=side*21.62;
     cube('service-vent-frame',x,3.0,z,.10,.55,1.15,metal);
     for(let i=0;i<5;i++)cube('service-vent-louver',x+side*.06,2.80+i*.10,z,.035,.035,1.0,black);
@@ -259,7 +292,7 @@ export function decorateCalleExpansion(world, buildings) {
     cube('cabinet-warning',side*21.648,1.5,z,.008,.12,.12,yellow);
   }
   // Stored workshop tyres are hung on the wall, not loose trip hazards.
-  for(const z of [-7,7]){
+  for(const z of [-10.6,10.6]){
     const tyre=new THREE.Mesh(new THREE.TorusGeometry(.26,.095,6,12),black);
     tyre.name='stored-workshop-tyre';tyre.rotation.y=Math.PI/2;
     tyre.position.set(28.87,2.45,z);root.add(tyre);

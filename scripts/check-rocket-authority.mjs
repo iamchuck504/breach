@@ -71,26 +71,27 @@ try {
   // Expire protection before measuring rocket damage (shots preserve it).
   await wait(5100);
   // A recoge la bazooka autoritativa.
-  state(a, 2.8, 0); await wait(80);
+  state(a, 0, 0); await wait(80);
   a.send({ t: 'takeSpecial' });
   await a.next((m) => m.t === 'specialTaken' && m.id === aw.id && m.wep === 'bazooka',
     'bazooka tomada');
-  state(b, 0, 4); await wait(80);
-  b.send({ t: 'fire', w: 'smg', o: [0, 1.1, 4], p: [0, 1.1, 8], d: [] });
+  // v3: el obstáculo central es el muro sur de la torre del homenaje (z -5..-4.2)
+  state(b, 0, -1.5); await wait(80);
+  b.send({ t: 'fire', w: 'smg', o: [0, 1.1, -1.5], p: [0, 1.1, 2], d: [] });
   await wait(100);
 
   // El pilar central debe decidir el contacto, aunque el cliente no envíe
   // jamás un mensaje de explosión.
-  state(a, 0, -4, 'bazooka'); state(b, 0, 4); await wait(100);
+  state(a, 0, -9, 'bazooka'); state(b, 0, -1.5); await wait(100);
   a.clear(); b.clear();
-  a.send({ t: 'rocket', cid: 'blocked', o: [0, 1.1, -4], d: [0, 0, 1] });
+  a.send({ t: 'rocket', cid: 'blocked', o: [0, 1.1, -9], d: [0, 0, 1] });
   const ack = await a.next((m) => m.t === 'rocketAck' && m.cid === 'blocked', 'ack');
   const remote = await b.next((m) => m.t === 'rocket' && m.rid === ack.rid, 'relay');
   const blockedBoom = await a.next((m) => m.t === 'rocketBoom' && m.rid === ack.rid,
     'explosión contra pilar');
   assert.equal(remote.id, aw.id);
   assert.equal(blockedBoom.kind, 'world');
-  assert.ok(blockedBoom.p[2] < -0.9, `explosión cruzó el pilar: ${blockedBoom.p}`);
+  assert.ok(blockedBoom.p[2] < -4.9, `explosión cruzó el muro: ${blockedBoom.p}`);
   await wait(120); a.clear();
   let snap = await a.next((m) => m.t === 'snap', 'snap bloqueado');
   assert.equal(hpOf(snap, bw.id), 100, 'el splash atravesó el pilar central');
@@ -98,13 +99,13 @@ try {
   // Ni un segundo launch dentro de cadencia ni el protocolo legado fire+hit
   // pueden fabricar otra explosión o daño.
   a.clear();
-  a.send({ t: 'rocket', cid: 'spam', o: [0, 1.1, -4], d: [0, 0, 1] });
+  a.send({ t: 'rocket', cid: 'spam', o: [0, 1.1, -9], d: [0, 0, 1] });
   const rejected = await a.next((m) => m.t === 'rocketReject' && m.cid === 'spam',
     'rechazo por cadencia');
   assert.equal(rejected.cid, 'spam');
-  a.send({ t: 'fire', w: 'bazooka', o: [0, 1, 4], p: [0, 1, 4], d: [] });
-  a.send({ t: 'hit', target: bw.id, dmg: 999, part: 'body', p: [0, 1, 4] });
-  a.send({ t: 'rocketBoom', p: [0, 1, 4], target: bw.id });
+  a.send({ t: 'fire', w: 'bazooka', o: [0, 1, -1.5], p: [0, 1, -1.5], d: [] });
+  a.send({ t: 'hit', target: bw.id, dmg: 999, part: 'body', p: [0, 1, -1.5] });
+  a.send({ t: 'rocketBoom', p: [0, 1, -1.5], target: bw.id });
   await wait(130); a.clear();
   snap = await a.next((m) => m.t === 'snap', 'snap spoof');
   assert.equal(hpOf(snap, bw.id), 100, 'un cliente fabricó una explosión');
@@ -112,9 +113,9 @@ try {
   // Carril limpio: el servidor sigue el proyectil, detecta el cuerpo entre
   // ticks y aplica una sola muerte directa con el mismo punto para todos.
   await wait(1850);
-  state(a, 3, -4, 'bazooka'); state(b, 3, 4); await wait(100);
+  state(a, 3.8, -3.8, 'bazooka'); state(b, 3.8, 3.8); await wait(100);
   a.clear(); b.clear();
-  a.send({ t: 'rocket', cid: 'direct', o: [3, 1.1, -4], d: [0, 0, 1] });
+  a.send({ t: 'rocket', cid: 'direct', o: [3.8, 1.1, -3.8], d: [0, 0, 1] });
   const directAck = await a.next((m) => m.t === 'rocketAck' && m.cid === 'direct',
     'ack directo');
   const directBoom = await a.next((m) => m.t === 'rocketBoom' && m.rid === directAck.rid,

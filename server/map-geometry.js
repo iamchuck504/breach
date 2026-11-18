@@ -128,7 +128,7 @@ function pointInsideSegment(segment, point) {
 
 function pointInsideGeometry(layout, point) {
   const g = geometry(layout);
-  if (g.boxes.some((box) => pointInsideBox(box, point)) ||
+  if (g.boxes.some((box) => !box.moveOnly && pointInsideBox(box, point)) ||
       g.segments.some((segment) => pointInsideSegment(segment, point))) return true;
   if (!g.helipad || point.y < -0.1 || point.y > g.helipad.height) return false;
   const ax = Math.abs(point.x), az = Math.abs(point.z);
@@ -210,7 +210,7 @@ export function firstMapIntersection(layout, origin, dir, maxDist) {
   const g = geometry(layout);
   let best = null;
   const accept = (t) => { if (t !== null && (best === null || t < best)) best = t; };
-  for (const box of g.boxes) accept(boxHit(box, origin, dir, maxDist));
+  for (const box of g.boxes) if (!box.moveOnly) accept(boxHit(box, origin, dir, maxDist));
   for (const segment of g.segments) accept(segmentHit(segment, origin, dir, maxDist));
   if (g.helipad) accept(helipadHit(g.helipad, origin, dir, maxDist));
   return best;
