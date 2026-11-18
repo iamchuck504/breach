@@ -23,6 +23,7 @@ export class Input {
     this._mouseFire = false; this._mouseAim = false;
     this.firePressed = false;
     this.evadePressed = false;
+    this.pickupPressed = false;
     this.jumpPressed = false;
     this.reloadPressed = false;
     this.swapPressed = false;
@@ -195,6 +196,7 @@ export class Input {
       if (!this.locked && !this.lockDisabled) return;
       this.keys.add(c);
       if (c === BINDS.kb.evade) this.evadePressed = true;
+      if (c === BINDS.kb.pickup) this.pickupPressed = true;
       if (c === BINDS.kb.jump) this.jumpPressed = true;
       if (c === BINDS.kb.reload) this.reloadPressed = true;
       if (c === BINDS.kb.swap) this.swapPressed = true;
@@ -218,7 +220,8 @@ export class Input {
     // durante un rebind, el botón de pausa actual no debe cerrar el menú
     if (!this.rebinding && this.pad.justPressed.has(BINDS.pad.pause)) this.onEscape?.();
     if (!gameplay) return;
-    if (this.pad.justPressed.has(BINDS.pad.evade)) this.evadePressed = true;
+    // en el control, recoger sigue en el botón de evadir
+    if (this.pad.justPressed.has(BINDS.pad.evade)) { this.evadePressed = true; this.pickupPressed = true; }
     if (this.pad.justPressed.has(BINDS.pad.jump)) this.jumpPressed = true;
     if (this.pad.justPressed.has(BINDS.pad.reload)) this.reloadPressed = true;
     if (this.pad.justPressed.has(BINDS.pad.melee)) this.meleePressed = true;
@@ -266,6 +269,7 @@ export class Input {
   consumeEdges() {
     this.firePressed = false;
     this.evadePressed = false;
+    this.pickupPressed = false;
     this.jumpPressed = false;
     this.reloadPressed = false;
     this.swapPressed = false;

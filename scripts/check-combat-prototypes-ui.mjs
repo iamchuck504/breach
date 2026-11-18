@@ -18,7 +18,7 @@ try{
   p.pos.x=item.x;p.pos.z=item.z;p.y=item.y;
   await new Promise(r=>setTimeout(r,150));
   const before=[...g.weapons.slots],prompt=document.getElementById('pickup-prompt').textContent;
-  window.BREACH_INPUT.evadePressed=true;await new Promise(r=>setTimeout(r,150));
+  window.BREACH_INPUT.pickupPressed=true;await new Promise(r=>setTimeout(r,150));
   const count=g.weapons.state.frag?.mag,after=[...g.weapons.slots];
   g.weapons.cur='frag';window.BREACH_INPUT.firePressed=true;window.BREACH_INPUT.fireHeld=true;
   await new Promise(r=>setTimeout(r,400));window.BREACH_INPUT.fireHeld=false;
@@ -30,7 +30,7 @@ try{
   const x=dummy.x,z=dummy.z;await new Promise(r=>setTimeout(r,350));
   const frozen=Math.hypot(dummy.x-x,dummy.z-z)<.001;
   const stun=g.protoEngine.pickups.find(a=>a.kind==='stun');p.pos.x=stun.x;p.pos.z=stun.z;p.y=stun.y;
-  await new Promise(r=>setTimeout(r,120));window.BREACH_INPUT.evadePressed=true;
+  await new Promise(r=>setTimeout(r,120));window.BREACH_INPUT.pickupPressed=true;
   await new Promise(r=>setTimeout(r,150));
   const stunAmmo=g.weapons.state.stun?.mag;
   g.weapons.cur='stun';const oldMove=window.BREACH_INPUT.moveVec;

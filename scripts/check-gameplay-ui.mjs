@@ -39,6 +39,7 @@ try {
   });
   assert.ok(!result.slots.includes('sniper'));
   assert.ok(result.prompt.includes('SNPR') && result.prompt.includes('replace'));
+  assert.ok(result.prompt.includes('[E]'), 'recoger con E por defecto en teclado');
   await page.screenshot({ path: 'artifacts/gameplay-tuning/prompt.png' });
   await page.evaluate(async () => {
     const { BINDS } = await import('/src/core/bindings.js');
@@ -49,12 +50,12 @@ try {
   assert.ok((await page.locator('#pickup-prompt').textContent()).includes('[Y]'));
   await page.evaluate(async () => {
     const { BINDS } = await import('/src/core/bindings.js');
-    BINDS.kb.evade = 'KeyE';
+    BINDS.kb.pickup = 'KeyG'; // recoger tiene tecla propia (E por defecto) y se puede reasignar
     window.BREACH_INPUT.lastDevice = 'keyboard';
   });
   await page.waitForTimeout(60);
-  assert.ok((await page.locator('#pickup-prompt').textContent()).includes('[E]'));
-  await page.evaluate(() => { window.BREACH_INPUT.evadePressed = true; });
+  assert.ok((await page.locator('#pickup-prompt').textContent()).includes('[G]'));
+  await page.evaluate(() => { window.BREACH_INPUT.pickupPressed = true; });
   await page.waitForTimeout(150);
   assert.equal(await page.evaluate(() => window.BREACH.weapons.slots.includes('sniper')), true);
   const ammo = await page.evaluate(async () => {

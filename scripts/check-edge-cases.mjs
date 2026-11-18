@@ -501,8 +501,8 @@ const recoveredSpecial = await page.evaluate(async () => {
   if (!drop) return { why: 'drop expirado antes de recogerlo' };
   window.__tp(drop.x, drop.z);
   await wait(250);
-  // reemplazar un arma por un drop exige pulsar evadir (prompt "pickup.replace")
-  window.BREACH_INPUT.evadePressed = true;
+  // reemplazar un arma por un drop exige pulsar recoger (E; prompt "pickup.replace")
+  window.BREACH_INPUT.pickupPressed = true;
   await wait(450);
   return {
     slots: G.weapons.slots.join(','), cur: G.weapons.cur,

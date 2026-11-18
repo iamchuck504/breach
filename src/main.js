@@ -3307,10 +3307,11 @@ function prototypePickup(){
  if(item.kind==='frag'&&w.slots[3]==='frag'&&w.state.frag.mag>=2)return false;
  if(item.kind==='stun'&&w.slots[2]==='stun'&&w.state.stun.mag>0)return false;
  const manual=w.slots[slot]!==item.kind||item.kind==='stun';
- const button=input.lastDevice==='pad'?padBtnName(BINDS.pad.evade):keyLabel(BINDS.kb.evade);
+ const button=input.lastDevice==='pad'?padBtnName(BINDS.pad.evade):keyLabel(BINDS.kb.pickup);
  hud.pickupPrompt(manual?`[${button}] ${t('weapon.'+w.slots[slot])} → ${item.count} × ${t('weapon.'+item.kind)}`:`+ ${item.count} × ${t('weapon.'+item.kind)}`);
- if(!manual||input.evadePressed){
-  input.evadePressed=false;
+ if(!manual||input.pickupPressed){
+  if(input.pickupPressed&&(input.lastDevice==='pad'||BINDS.kb.pickup===BINDS.kb.evade))input.evadePressed=false;
+  input.pickupPressed=false;
   if(G.mode==='online'){
    if((G.protoClaimAt??0)<performance.now()){G.net.send({t:'protoClaim',id:item.id,manual});G.protoClaimAt=performance.now()+350;}
   }else G.protoEngine.claim('player',item.id,manual);
@@ -3870,10 +3871,11 @@ function simStep(dt) {
     const [id, d] = nearbyDrop;
     const slot = replacementSlot(G.weapons.slots, G.weapons.cur);
     const old = G.weapons.slots[slot];
-    const button = input.lastDevice === 'pad' ? padBtnName(BINDS.pad.evade) : keyLabel(BINDS.kb.evade);
+    const button = input.lastDevice === 'pad' ? padBtnName(BINDS.pad.evade) : keyLabel(BINDS.kb.pickup);
     hud.pickupPrompt(t('pickup.replace', { button, old: t('weapon.' + old + 'Short'), weapon: t('weapon.' + d.wep + 'Short') }));
-    if (input.evadePressed) {
-      input.evadePressed = false;
+    if (input.pickupPressed) {
+      // recoger consume la pulsación: en el control comparte botón con evadir
+      input.pickupPressed = false; if (input.lastDevice === 'pad' || BINDS.kb.pickup === BINDS.kb.evade) input.evadePressed = false;
       if (G.mode === 'online') {
         d.claimed = true; d.claimT = 1;
         G.net?.send({ t: 'takeDrop', id, replace: true, slot, expected: old });
