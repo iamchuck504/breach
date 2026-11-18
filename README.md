@@ -100,6 +100,34 @@ experimentales fuera de rotación, pero no se anuncian como contenido jugable.
 Hay 5 variantes de soldado por equipo en PERSONAJE y opciones de Audio, Video,
 Idioma y Controles en el menú.
 
+### Movimiento y animación
+
+El personaje se anima por código (no hay clips). La locomoción se rehízo para
+que controlar se sienta inmediato y los pies no patinen:
+
+- **Carrera clásica**: correr de frente sin apuntar (trote y sprint) conserva la
+  zancada original, amplia y por tiempo; se prefirió a la resuelta por distancia.
+  La marcha por distancia queda para apuntar, ir de lado y retroceder, y es lo
+  único que vigila `check:gait`.
+- **Marcha por distancia** (`src/player/rig.js`): la fase del paso avanza con
+  los metros recorridos y cada pie se coloca por cinemática inversa. En el
+  apoyo retrocede a la velocidad del cuerpo; de lado y hacia atrás da pasos en
+  la dirección real del movimiento.
+- **Cuerpo con inercia**: inclinación al acelerar, frenar y girar, respiración
+  en reposo, salto con impulso / recogida / caída y compresión al aterrizar.
+  Con el arma en uso nada de esto mueve la mira.
+- **Respuesta** (`src/player/controller.js`, `TUNING.move`, `.evade`,
+  `.jump`): tope de giro del trote 600°/s (antes 240), memoria de pulsación
+  para esquivar (0,12 s) y saltar (0,1 s, más 0,1 s tras salir de un borde),
+  frenada sin cola, salto independiente de los cuadros por segundo.
+- **Cámara** (`src/core/camera.js`): orbita rígida alrededor de un pivote
+  suavizado. Girar el ratón mueve la vista en el mismo cuadro.
+
+```bash
+node scripts/anim-metrics.mjs [salida.json]      # deslizamiento de pies y saltos de pose (npm run check:gait los vigila)
+node scripts/record-anim-clips.mjs <dir> [guion]  # clips deterministas de locomoción, apuntar, esquivar, cobertura, salto, armas y melee
+```
+
 ### Mapas v2
 
 Los tres mapas se rediseñaron midiendo con las velocidades reales del juego

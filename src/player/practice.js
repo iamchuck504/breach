@@ -65,8 +65,9 @@ export class Dummies {
     const d = this.list.find((x) => x.id === id);
     if (!d || !d.alive) return;
     const len = Math.max(0.001, Math.hypot(dx, dz));
-    d.hitOX += (dx / len) * distance;
-    d.hitOZ += (dz / len) * distance;
+    // el empujón se reparte en unas décimas: retrocede, no se teletransporta
+    d.pushX = (d.pushX ?? 0) + (dx / len) * distance;
+    d.pushZ = (d.pushZ ?? 0) + (dz / len) * distance;
   }
 
   update(dt) {
@@ -92,6 +93,10 @@ export class Dummies {
       const baseX = a.x + dx * d.u, baseZ = a.z + dz * d.u;
       const recoilDamp = Math.exp(-4.8 * dt);
       d.hitOX *= recoilDamp; d.hitOZ *= recoilDamp;
+      if (d.pushX || d.pushZ) {
+        const k = 1 - Math.exp(-11 * dt), mx = (d.pushX ?? 0) * k, mz = (d.pushZ ?? 0) * k;
+        d.hitOX += mx; d.hitOZ += mz; d.pushX -= mx; d.pushZ -= mz;
+      }
       d.x = baseX + d.hitOX;
       d.z = baseZ + d.hitOZ;
       if (this.world) {

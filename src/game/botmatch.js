@@ -632,6 +632,13 @@ export class Bot {
     this.jumpCd = Math.max(0, this.jumpCd - dt);
     this.coverCd = Math.max(0, this.coverCd - dt);
     this.roleT = Math.max(0, this.roleT - dt);
+    // aturdido por una patada: ni dispara, ni golpea, ni lanza
+    this.dazeImmuneT = Math.max(0, (this.dazeImmuneT ?? 0) - dt);
+    this.dazeT = Math.max(0, (this.dazeT ?? 0) - dt);
+    if (this.dazeT > 0) {
+      this.burstT = 0; this.pauseT = Math.max(this.pauseT, 0.08);
+      this.meleeCd = Math.max(this.meleeCd, 0.08); this.nadeCd = Math.max(this.nadeCd, 0.08);
+    }
     this.decisionT = Math.max(0, this.decisionT - dt);
     for (const f of this.failedRoutes) f.ttl -= dt;
     this.failedRoutes = this.failedRoutes.filter((f) => f.ttl > 0);
@@ -1162,6 +1169,15 @@ export class Bot {
     this.rig.update(dt, {
       state: anim,
       speed: Math.min(1, this.speed / TUNING.move.roadieSpeed),
+      // dirección real del paso respecto al cuerpo: un bot que se desplaza de
+      // lado mientras dispara ya no camina "hacia delante"
+      ...(() => {
+        const sp = Math.hypot(this.velX ?? 0, this.velZ ?? 0);
+        if (sp < 0.3) return {};
+        const fx = -Math.sin(this.yaw), fz = -Math.cos(this.yaw);
+        return { moveForward: (this.velX * fx + this.velZ * fz) / sp, moveSide: (this.velX * fz - this.velZ * fx) / -sp };
+      })(),
+      vy: this.vy,
       aim: this.aim,
       aimPitch: this.aimPitch,
       firing: this.burstT > 0 || this.muzzleT > 0,
