@@ -51,6 +51,16 @@ try {
       p.pos.x = d.x; p.pos.z = d.z - distance; p.y = d.y ?? 0;
       p.vel.x = 0; p.vel.z = 0; p.vy = 0; p.grounded = true;
       p.yaw = Math.PI; p.cam.yaw = Math.PI; p.cam.pitch = 0;
+      if (distance < 2) {
+        // El muñeco patrulla mirando hacia donde camina y por la espalda la
+        // patada es letal: el golpe medido se da de frente, a mitad de tramo
+        // para que no se dé la vuelta durante la medición.
+        const a = d.path[d.seg], b = d.path[1 - d.seg];
+        const dx = b.x - a.x, dz = b.z - a.z, len = Math.hypot(dx, dz);
+        d.u = 0.3; d.x = a.x + dx * d.u; d.z = a.z + dz * d.u;
+        p.pos.x = d.x + dx / len * distance; p.pos.z = d.z + dz / len * distance;
+        p.yaw = p.cam.yaw = Math.atan2(dx, dz);
+      }
       p.cover = null; p.coverEntry = null; p.slide = null; p.dive = null; p.mantle = null;
       p.state = 'idle'; p.stateT = 0; p.meleeCd = 0;
       return d.id;
@@ -79,14 +89,17 @@ try {
       connected: G.player.meleeConnected,
     };
   });
-  check('contacto temprano y confiable', hit.hitMs >= 75 && hit.hitMs <= 230, JSON.stringify(hit));
+  // La patada conecta en TUNING.melee.hitAt; el margen cubre el sondeo de 12 ms
+  // y los cuadros irregulares del navegador sin ventana.
+  check('contacto temprano y confiable', hit.hitMs >= 75 &&
+    hit.hitMs <= TUNING.melee.hitAt * 1000 + 110, JSON.stringify(hit));
   check('un gesto aplica exactamente un golpe', hit.hp === 40, JSON.stringify(hit));
   check('hit-stop local breve sin congelar el mundo', hit.freezeSeen, JSON.stringify(hit));
   // La posición final también incluye la resolución contra geometría/cuerpos,
   // que depende del punto exacto donde esté el dummy. El contrato del ataque
   // es meleeTravel: esa es la distancia aportada exclusivamente por el lunge.
   check('embestida limitada (no dash)',
-    hit.meleeTravel <= TUNING.melee.maxLunge + 0.002, JSON.stringify(hit));
+    hit.meleeTravel <= TUNING.melee.lungeMax + 0.002, JSON.stringify(hit));
 
   const miss = await page.evaluate(async () => {
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -131,7 +144,8 @@ try {
   check('recovery no se cancela con evade/swap', locks.state === 'melee' &&
     locks.cur === locks.before && !locks.swapping, JSON.stringify(locks));
 
-  await page.waitForTimeout(500);
+  // la patada fallada anterior tiene que haber terminado antes de la siguiente
+  await page.waitForTimeout(Math.round((TUNING.melee.hitAt + TUNING.melee.missRecovery) * 1000) + 500);
   const reload = await page.evaluate(async () => {
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     const G = window.BREACH;

@@ -99,12 +99,12 @@ export class Controller {
     this.yaw = approachAngle(this.yaw, this.cam.yaw, degPerSec * Math.PI / 180 * dt);
   }
 
-  _turnLocomotion(target, dt, response) {
+  _turnLocomotion(target, dt, response, maxDeg = 240) {
     // Exponential easing alone makes large heading changes jump on the first
     // frame. Bound angular speed as well, including return to backpedal.
     const delta = angleDelta(this.yaw, target);
     const easedStep = Math.abs(delta) * (1 - Math.exp(-response * dt));
-    this.yaw = approachAngle(this.yaw, target, Math.min(easedStep, 240 * Math.PI / 180 * dt));
+    this.yaw = approachAngle(this.yaw, target, Math.min(easedStep, maxDeg * Math.PI / 180 * dt));
   }
 
   camState() {
@@ -180,6 +180,8 @@ export class Controller {
       coverKind: this.cover?.kind,
       latMove: this._latMove(),
       groundPitch: this.groundPitch,
+      vy: this.vy,                                   // fases del salto
+      mantlePhase: this.mantle ? Math.min(1, this.mantle.t / this.mantle.dur) : 0,
       evadePhase: this.state === 'dive' ? Math.min(1, this.stateT / TUNING.evade.diveTime) : 0,
       meleePhase: this.state === 'melee'
         ? Math.min(1, this.meleeT / Math.max(0.001, this.meleeEndT || TUNING.melee.time))
@@ -187,6 +189,8 @@ export class Controller {
       meleeConnected: this.meleeConnected,
       meleeFromCover: this.meleeFromCover,
       meleeEntrySpeed: this.meleeEntrySpeed,
+      meleeTackle: this.state === 'melee' && !!this.meleeTackle,
+      meleeLunge: this.state === 'melee' && !!this.meleeLunge,
     };
   }
 
@@ -267,7 +271,7 @@ export class Controller {
 
   _beginMelee(fromCover = false) {
     const ml = TUNING.melee;
-    if (!this.grounded || this.meleeCd > 0 || this.state === 'melee') return false;
+    if (!this.grounded || this.meleeCd > 0 || this.state === 'melee' || this.dazed) return false;
     const previousState = this.state;
     this.meleeT = 0;
     this.meleeEndT = ml.hitAt + ml.missRecovery;
@@ -278,6 +282,10 @@ export class Controller {
     this.meleeEntryState = previousState;
     this.meleeFromCover = fromCover;
     this.meleeTravel = 0;
+    // placaje si entra en sprint; embestida si hay un rival enganchable
+    this.meleeTackle = this.speed > TUNING.move.runSpeed * 1.15; // por velocidad real: vale aunque se suelte el sprint en ese cuadro
+    const hooked = this.ev.meleeTarget?.(this.meleeTackle ? ml.tackleAcquire : ml.lungeAcquire, ml.lungeArcDeg);
+    this.meleeLunge = hooked ? { id: hooked.id, max: this.meleeTackle ? ml.tackleMax : ml.lungeMax } : null;
     this.aim = false;
     this.firingBlind = 0;
     if (fromCover) {
@@ -362,14 +370,19 @@ export class Controller {
     this.bounceWindow = Math.max(0, this.bounceWindow - dt);
     this.firingBlind = Math.max(0, this.firingBlind - dt);
     this.meleeCd = Math.max(0, this.meleeCd - dt);
+    this._roadieExitT = Math.max(0, (this._roadieExitT ?? 0) - dt);
+    // MEMORIA DE PULSACIÓN: esquivar o saltar justo antes de recuperar el
+    // control (final de una esquiva, aterrizaje) ya no se pierde.
+    this.evadeBuf = input.evadePressed ? E.inputBuffer : Math.max(0, (this.evadeBuf ?? 0) - dt);
+    this.jumpBuf = input.jumpPressed ? TUNING.jump.inputBuffer : Math.max(0, (this.jumpBuf ?? 0) - dt);
 
-    if (this.dead) { this.aim = false; return; }
+    if (this.dead) { this.aim = false; this.evadeBuf = 0; this.jumpBuf = 0; return; }
 
     const mw = this._moveWorld(input);
     const hasInput = mw.mag > 0.1;
     const aimAllowed = this.state !== 'dive' && this.state !== 'slide' &&
       this.state !== 'roadie' && this.state !== 'flip' && this.state !== 'mantle' &&
-      this.state !== 'melee';
+      this.state !== 'melee' && !this.dazed;
     this.aim = input.aimHeld && aimAllowed;
     const lowCoverAim = this.state === 'cover' && this.aim && this.cover &&
       this.cover.h <= C.lowHeight;
@@ -402,16 +415,22 @@ export class Controller {
         // permaneciendo lógicamente en idle.
         if (roadie && (!input.sprintHeld || !hasInput || input.aimHeld || firing)) {
           this._setState(hasInput || this.speed > 0.4 ? 'run' : 'idle');
+          this._roadieExitT = 0.05; // antirrebote: solo tras SALIR del sprint
         } else if (!roadie && input.sprintHeld && hasInput && !input.aimHeld && !firing &&
-                   this.stateT > 0.05) {
+                   this._roadieExitT <= 0) {
+          // antes exigía 50 ms en el estado actual: desde parado eran dos
+          // transiciones y el sprint arrancaba tarde
           this._setState('roadie');
         } else if (this.state === 'idle' && hasInput) {
           this._setState('run');
         } else if (this.state === 'run' && !hasInput && this.speed <= 0.4) {
           this._setState('idle');
         }
+        // apuntar se evaluó con el estado ANTERIOR: al soltar el sprint para
+        // apuntar se perdía un cuadro
+        if (input.aimHeld && !this.aim && this.state !== 'roadie' && !this.dazed) this.aim = true;
 
-        const targetSpeed = (this.state === 'roadie' ? M.roadieSpeed : M.runSpeed) * (this.aim ? 0.45 : 1);
+        const targetSpeed = (this.state === 'roadie' ? M.roadieSpeed : M.runSpeed) * (this.aim ? 0.45 : 1) * (this.dazed ? TUNING.melee.dazeSpeed : 1);
         let dx = mw.x, dz = mw.z;
         const cameraForward = this.cam.flatForward(), cameraRight = this.cam.flatRight();
         const forwardInput = dx * cameraForward.x + dz * cameraForward.z;
@@ -422,9 +441,9 @@ export class Controller {
           sideInput < -forwardInput * (this._straightBack ? 0.22 : 0.12);
 
         if (this.state === 'roadie') {
-          if (this._straightBack) this._turnLocomotion(this.cam.yaw, dt, M.roadieTurnLerp);
+          if (this._straightBack) this._turnLocomotion(this.cam.yaw, dt, M.roadieTurnLerp, M.roadieTurnMaxDeg);
           else {
-            this._turnLocomotion(yawFromDir(dx, dz), dt, M.roadieTurnLerp);
+            this._turnLocomotion(yawFromDir(dx, dz), dt, M.roadieTurnLerp, M.roadieTurnMaxDeg);
             const f = this.facing();
             dx = f.x * mw.mag; dz = f.z * mw.mag;
           }
@@ -434,7 +453,7 @@ export class Controller {
           // angular evita que un delta grande se convierta en un snap de 180°.
           this._turnToCamera(dt);
         } else if (hasInput) {
-          this._turnLocomotion(this._straightBack ? this.cam.yaw : yawFromDir(dx, dz), dt, M.turnLerp);
+          this._turnLocomotion(this._straightBack ? this.cam.yaw : yawFromDir(dx, dz), dt, M.turnLerp, M.turnMaxDeg);
         } else {
           // En reposo el cuerpo y la mira siguen a la cámara.
           this.yaw = approachAngle(this.yaw, this.cam.yaw,
@@ -450,17 +469,33 @@ export class Controller {
         const k = 1 - Math.exp(-(acc / Math.max(targetSpeed, 1)) * dt);
         this.vel.x += (tx - this.vel.x) * k;
         this.vel.z += (tz - this.vel.z) * k;
+        // FRENADA: el frenado exponencial deja una cola larga (el personaje
+        // "flota" hasta pararse). Una frenada lineal encima la corta.
+        if (!want && this.grounded) {
+          const sp = Math.hypot(this.vel.x, this.vel.z);
+          if (sp > 1e-4) {
+            const keep = Math.max(0, sp - M.stopBrake * dt) / sp;
+            this.vel.x *= keep; this.vel.z *= keep;
+          }
+        }
 
         // saltar: en el suelo salto normal; en el aire: wall kick si hay
-        // pared, si no doble salto = vuelta hacia la dirección presionada
-        if (input.jumpPressed) {
-          if (this.grounded) this._tryJump();
-          else if (!this._tryWallKick() && !this.usedDouble && hasInput) this._airRoll(mw, input.moveVec());
+        // pared, si no doble salto = vuelta hacia la dirección presionada.
+        // Con memoria: pulsar 0,1 s antes de aterrizar salta al tocar suelo, y
+        // pulsar 0,1 s después de salir de un borde aún cuenta como salto.
+        if (input.jumpPressed || this.jumpBuf > 0) {
+          if (this.grounded) { this.jumpBuf = 0; this._tryJump(); }
+          else if (input.jumpPressed) {
+            if ((this.coyoteT ?? 0) > 0 && this.vy <= 0) { this.jumpBuf = 0; this._tryJump(); }
+            else if (this._tryWallKick()) this.jumpBuf = 0;
+            else if (!this.usedDouble && hasInput) { this._airRoll(mw, input.moveVec()); this.jumpBuf = 0; }
+          }
         }
 
         // Nueva pulsación válida en el suelo: si el estado anterior ya terminó,
         // evade vuelve a estar disponible sin una espera artificial adicional.
-        if (input.evadePressed && this.grounded) {
+        if ((input.evadePressed || this.evadeBuf > 0) && this.grounded) {
+          this.evadeBuf = 0;
           this.chain = 0;
           const dir = hasInput ? { x: mw.x, z: mw.z } : this.facing();
           // impulso ganado: solo si venía corriendo un tramo REAL y la
@@ -512,15 +547,27 @@ export class Controller {
         let push = (ml.lungeSpeed + runFactor * ml.runLungeBonus) * wind;
         const remaining = Math.max(0, ml.maxLunge - this.meleeTravel);
         push = Math.min(push, remaining / Math.max(dt, 1e-4));
+        let f = this.facing();
+        const hook = this.meleeLunge && this.meleeT <= ml.hitAt ? this.ev.meleeTargetPos?.(this.meleeLunge.id) : null;
+        if (hook) {
+          // EMBESTIDA: cubre la distancia al rival justo para el contacto
+          const dx = hook.x - this.pos.x, dz = hook.z - this.pos.z, d = Math.hypot(dx, dz);
+          if (d > 0.01) {
+            this.yaw = approachAngle(this.yaw, Math.atan2(-dx, -dz), ml.lungeTurnDeg * Math.PI / 180 * dt);
+            f = { x: dx / d, z: dz / d };
+            const left = Math.max(dt, ml.hitAt - this.meleeT);
+            push = Math.min(this.meleeTackle ? ml.tackleTopSpeed : ml.lungeTopSpeed, Math.max(0, d - ml.lungeStop) / left,
+              Math.max(0, this.meleeLunge.max - this.meleeTravel) / Math.max(dt, 1e-4));
+          }
+        } else if (this.meleeLunge && this.meleeT <= ml.hitAt) this.meleeLunge = null;
         this.meleeTravel += push * dt;
-        const f = this.facing();
         this.vel.x = f.x * push;
         this.vel.z = f.z * push;
         // Asistencia pequeña: solo dentro de un cono frontal razonable y con
         // tope angular. Un giro de cámara de 90/180° nunca arrastra el golpe.
         const camDelta = angleDelta(this.yaw, this.cam.yaw);
         const assist = ml.assistDeg * Math.PI / 180;
-        if (this.meleeT <= ml.hitAt && Math.abs(camDelta) <= assist) {
+        if (!hook && this.meleeT <= ml.hitAt && Math.abs(camDelta) <= assist) {
           this.yaw = approachAngle(this.yaw, this.cam.yaw,
             ml.assistTurnDeg * Math.PI / 180 * dt);
         }
@@ -617,17 +664,20 @@ export class Controller {
         this.vel.x = this.dive.dir.x * spd;
         this.vel.z = this.dive.dir.z * spd;
         this.yaw = lerpAngle(this.yaw, yawFromDir(this.dive.dir.x, this.dive.dir.z), 1 - Math.exp(-14 * dt));
-        if (input.evadePressed && t > E.diveCancelPct && this.chain < E.chainMax) {
-          const ndir = mw.mag > 0.1 ? { x: mw.x, z: mw.z } : this.dive.dir;
-          this.chain++;
-          this.evadeMom *= 0.45;
-          if (this._tryEvade(ndir, E.bounceRange, false) === 'slide') this.ev.onBounce?.(this.chain);
-          else this.chain--;
-        } else if (t >= 1) {
+        // El final de la esquiva va PRIMERO: una pulsación en su último cuadro
+        // se comía y además alargaba la esquiva un cuadro. Ahora termina y la
+        // pulsación queda en memoria para el cuadro siguiente.
+        if (t >= 1) {
           this._setState(hasInput ? 'run' : 'idle');
           this.chain = 0;
           this.evadeMom = 0;
           this.evadeCooldown = 0;
+        } else if (input.evadePressed && t > E.diveCancelPct && this.chain < E.chainMax) {
+          const ndir = mw.mag > 0.1 ? { x: mw.x, z: mw.z } : this.dive.dir;
+          this.chain++;
+          this.evadeMom *= 0.45;
+          if (this._tryEvade(ndir, E.bounceRange, false) === 'slide') { this.ev.onBounce?.(this.chain); this.evadeBuf = 0; }
+          else this.chain--;
         }
         break;
       }
@@ -697,11 +747,22 @@ export class Controller {
         if(blindEdgeSide && (previousU-u)*blindEdgeSide>0){
           u=previousU+Math.max(-6*dt,Math.min(6*dt,u-previousU));
         }
+        // Soltar el apuntado en una orilla recogía el cuerpo 0,3 m en UN cuadro.
+        // Cualquier desplazamiento a lo largo del cover respeta un tope: lo que
+        // pide el stick, la inercia de entrada y 6 m/s de recogida.
+        {
+          const maxStep=(Math.abs(lat)*M.coverStrafe+Math.abs(entryCarry)+6)*dt;
+          u=previousU+Math.max(-maxStep,Math.min(maxStep,u-previousU));
+        }
         // At an exposed ADS edge, the bladed stance needs less wall-normal
         // clearance than the back-to-wall resting pose. Keep the larger
         // envelope for rest/blindfire and never remove collision checks.
         const edgeSupport = this.aim && firingEdge && f.peekMargin ? .12 : 0;
-        const standOff=Math.max(PLAYER_R,(f.standOff??0)-edgeSupport);
+        const standOffTarget=Math.max(PLAYER_R,(f.standOff??0)-edgeSupport);
+        // la separación del muro cambiaba 12 cm de golpe al apuntar en la orilla
+        if(this._standOffFace!==f){this._standOffFace=f;this._standOff=standOffTarget;}
+        this._standOff+=(standOffTarget-this._standOff)*(1-Math.exp(-22*dt));
+        const standOff=Math.max(PLAYER_R,this._standOff);
         if(f.standOff){
           const probe={x:f.a.x+ux*u+n.x*standOff,z:f.a.z+uz*u+n.z*standOff};
           const px=probe.x,pz=probe.z;
@@ -958,8 +1019,19 @@ export class Controller {
         this.state === 'cover' ? this.cover?.collider : null);
       // The accepted slide target uses cover's own stand-off. Keep the body
       // envelope for every OTHER facade; solid collision is still enforced.
-      if(this.state!=='cover')this.world.resolveFacadeBody?.(this.pos,PLAYER_R,this.y,
-        this.state==='slide'?this.slide?.face:null);
+      if(this.state!=='cover'){
+        // La holgura corporal de un muro alto no es sólida: es margen para el
+        // cuerpo. Al doblar su esquina muy pegado empujaba hasta 0,44 m en UN
+        // paso; ahora cede y aparta al personaje a 3,5 m/s como mucho.
+        const bx=this.pos.x,bz=this.pos.z;
+        this.world.resolveFacadeBody?.(this.pos,PLAYER_R,this.y,
+          this.state==='slide'?this.slide?.face:null);
+        const ox=this.pos.x-bx,oz=this.pos.z-bz,od=Math.hypot(ox,oz),cap=3.5*dt;
+        if(od>cap){
+          this.pos.x=bx+ox*cap/od;this.pos.z=bz+oz*cap/od;
+          this.world.resolveCircle(this.pos,PLAYER_R,this.y);
+        }
+      }
     }
 
     // Nunca subir un desnivel grande solo porque groundHeight cambió bajo el
@@ -1006,8 +1078,11 @@ export class Controller {
         this.y = ground; this.vy = 0; this.grounded = true;
         this.usedDouble = false;
       } else {
+        // integración trapezoidal: la altura del salto ya no depende de los
+        // cuadros por segundo (con Euler, a 30 fps se saltaba 10 cm menos)
+        const vy0 = this.vy;
         this.vy -= J.gravity * dt;
-        this.y += this.vy * dt;
+        this.y += (vy0 + this.vy) * 0.5 * dt;
       }
       if (!followsGround && this.y <= ground + 1e-3 && this.vy <= 0) {
         const wasAir = !this.grounded;
@@ -1022,6 +1097,8 @@ export class Controller {
       } else {
         this.grounded = this.y <= ground + 0.02;
       }
+      // margen para saltar justo después de salir de un borde
+      this.coyoteT = this.grounded ? J.coyote : Math.max(0, (this.coyoteT ?? 0) - dt);
     } else if (this.state !== 'mantle') {
       // estados pegados al suelo: la Y sigue al terreno real (un slide que
       // sale de una caja no debe conservar una altura fantasma).
@@ -1080,6 +1157,7 @@ export class Controller {
   _tryJump() {
     this.vy = TUNING.jump.vel;
     this.grounded = false;
+    this.coyoteT = 0;
     this.ev.onJump?.();
   }
 

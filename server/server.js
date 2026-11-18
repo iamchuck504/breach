@@ -54,7 +54,7 @@ const FIRE_RULES = {
   bazooka: { interval: 60 / WD.bazooka.rpm, range: WD.bazooka.range,
     maxDamage: WD.bazooka.dmg * 3, hitRange: WD.bazooka.splashRadius + 0.8 },
   // tolerancia de red pequeña sobre los 1.82 m físicos del cliente
-  melee: { interval: 0.4, range: 1.95, hitRange: 1.95, maxDamage: TUNING.melee.dmg },
+  melee: { interval: 0.4, range: 1.95, hitRange: 1.95, maxDamage: TUNING.melee.backstabDmg },
 };
 // ids replicables en 'w' (la granada solo aparece EN MANO, nunca dispara aquí)
 const VALID_WEAPONS = new Set(['smg', 'shotgun', 'pistol', 'grenade', 'sniper', 'bazooka','frag','stun']);
@@ -365,8 +365,9 @@ function eventShooter(me, msg) {
   return bots.get(String(msg.bot)) || null;
 }
 
+const dazed = (entity) => nowSec() < (entity?.dazeUntil || 0); // pateado: ni dispara, ni golpea, ni lanza
 function relayNade(sourceWs, shooter, msg) {
-  if(prototypes.stunned(shooter?.id)||shooter?.weaponSlots?.[3]==='frag')return false;
+  if(dazed(shooter)||prototypes.stunned(shooter?.id)||shooter?.weaponSlots?.[3]==='frag')return false;
   if (!shooter?.alive || phase !== 'playing' || shooter.nades <= 0) return false;
   const o = vec3(msg.o), v = vec3(msg.v); if (!o || !v) return false;
   const now = nowSec();
@@ -392,7 +393,7 @@ function relayNade(sourceWs, shooter, msg) {
 }
 
 function relayRocket(sourceWs, shooter, msg) {
-  if(prototypes.stunned(shooter?.id))return false;
+  if(prototypes.stunned(shooter?.id)||dazed(shooter))return false;
   if (!shooter?.alive || phase !== 'playing' ||
       shooter.specialWep !== 'bazooka') return false;
   const o = vec3(msg.o), d = vec3(msg.d); if (!o || !d) return false;
@@ -518,7 +519,7 @@ function validatedFirePose(shooter, raw) {
 }
 
 function registerFire(shooter, msg, isBotFire = false) {
-  if(prototypes.stunned(shooter?.id))return false;
+  if(prototypes.stunned(shooter?.id)||dazed(shooter))return false;
   if (!shooter?.alive || phase !== 'playing') return false;
   const o = vec3(msg.o), pt = vec3(msg.p); if (!o || !pt) return false;
   const weapon = FIREABLE.has(msg.w) ? msg.w : 'smg', rule = FIRE_RULES[weapon], now = nowSec();
@@ -528,7 +529,8 @@ function registerFire(shooter, msg, isBotFire = false) {
   // el melee no depende del arma en mano; el resto debe coincidir con ella
   if ((weapon !== 'melee' && weapon !== shooter.w) || now - shooter.lastFireAt < rule.interval * .82) return false;
   const melee = weapon === 'melee';
-  const originTolerance = melee ? 0.9 : (isBotFire ? 6 : 5);
+  // la embestida recorre hasta 3 m en 0,2 s: la posición conocida va por detrás
+  const originTolerance = melee ? 0.9 + TUNING.melee.tackleMax : (isBotFire ? 6 : 5);
   if (Math.hypot(o[0] - shooter.x, o[2] - shooter.z) > originTolerance ||
       Math.abs(o[1] - ((shooter.y || 0) + 1.1)) > (melee ? 1.1 : 4)) return false;
   if (Math.hypot(pt[0] - o[0], pt[1] - o[1], pt[2] - o[2]) > rule.range + (melee ? 0.22 : 2)) return false;
@@ -636,7 +638,13 @@ function authoritativeDamage(shooter, target, shot, msg, dist, pose) {
     : 1;
 
   if (wep === 'melee') {
-    return { dmg: TUNING.melee.dmg * botScale, part: 'body' };
+    // por la espalda lo decide el servidor; el placaje se acepta hasta su tope
+    const ml = TUNING.melee, dx = pose.x - shooter.x, dz = pose.z - shooter.z, len = Math.hypot(dx, dz);
+    const yaw = pose.yaw ?? target.yaw;
+    const backstab = !shooter.bot && Number.isFinite(yaw) && len > 0.05 &&
+      (dx * -Math.sin(yaw) + dz * -Math.cos(yaw)) / len > Math.cos(ml.backstabArcDeg * Math.PI / 360);
+    const base = backstab ? ml.backstabDmg : shooter.bot ? ml.dmg : Math.min(ml.tackleDmg, Math.max(ml.dmg, +msg.dmg || 0));
+    return { dmg: base * botScale, part: 'body' };
   }
   if (wep === 'bazooka') {
     return {
@@ -687,8 +695,15 @@ function commitAuthoritativeDamage(shooter, target, shot, msg, dist, authoritati
   target.hp -= dmg; target.lastDamage = now;
   if (shot.wep === 'melee') {
     const p = vec3(msg.p) || [target.x, (target.y || 0) + 1, target.z];
+    // ATURDIMIENTO de la patada: lo decide y lo hace cumplir el servidor
+    let dz = 0;
+    if (!(now < (target.dazeImmuneUntil || 0))) {
+      dz = !shooter.bot && dmg >= TUNING.melee.tackleDmg ? TUNING.melee.tackleDaze : TUNING.melee.dazeTime;
+      target.dazeUntil = now + dz;
+      target.dazeImmuneUntil = target.dazeUntil + TUNING.melee.dazeImmunity;
+    }
     broadcastRaw({ t: 'hitConfirm', target: target.id, from: shooter.id,
-      w: 'melee', dmg: Math.round(dmg), p });
+      w: 'melee', dmg: Math.round(dmg), p, dz });
   }
   if (target.hp > 0) {
     if (shot.wep === 'bazooka' || shot.wep === 'frag') {

@@ -9,6 +9,13 @@ export const TUNING = {
     decel: 34,            // frenado al soltar
     turnLerp: 15,         // giro del personaje hacia la dirección de movimiento
     roadieTurnLerp: 6.5,  // el sprint gira con más peso
+    // Tope de velocidad angular del cuerpo. Con 240°/s para todo, una media
+    // vuelta tardaba 0,75 s mientras la velocidad ya se había invertido en
+    // 0,3 s: el personaje corría de espaldas a su rumbo. El trote gira al
+    // ritmo al que cambia su velocidad; el sprint conserva su peso.
+    turnMaxDeg: 600,
+    roadieTurnMaxDeg: 300,
+    stopBrake: 7,         // m/s² de frenada lineal al soltar: corta la cola del frenado exponencial
     coverStrafe: 3.5,     // velocidad lateral pegado a cobertura
     maxStepUp: 0.16,      // desnivel máximo automático; más alto exige mantle/salto
     groundStickDown: 0.24,// sigue pendientes descendentes sin microcaídas
@@ -17,6 +24,7 @@ export const TUNING = {
   evade: {
     diveSpeed: 8.2,       // dash/roll sin cobertura
     diveTime: 0.36,
+    inputBuffer: 0.12,    // una pulsación de esquivar sobrevive este tiempo si aún no se puede ejecutar
     diveCancelPct: 0.5,   // % del dive tras el cual se puede cancelar en otro evade
     slideSpeed: 9.4,      // slide hacia cobertura
     slideMaxDist: 4.4,    // alcance de búsqueda de cobertura desde jog
@@ -37,6 +45,8 @@ export const TUNING = {
   jump: {
     vel: 6.2,          // impulso vertical (apex ~1.28m: pasa bloques LOW de 1.1)
     gravity: 15,
+    inputBuffer: 0.1,     // pulsar saltar hasta 0,1 s antes de tocar suelo
+    coyote: 0.1,          // y hasta 0,1 s después de salir de un borde
     wallVel: 5.4,      // impulso del salto de pared
     wallPush: 3.8,     // empuje horizontal alejándose de la pared
     airControl: 0.35,  // control de movimiento en el aire
@@ -73,7 +83,14 @@ export const TUNING = {
     pitchMin: -62, pitchMax: 55,
     fovNormal: 57, fovRoadie: 57, fovAim: 41, // sin FOV kick al correr
     fovLerp: 9,
-    posLerp: 11,          // seguimiento de posición
+    posLerp: 11,          // (histórico) suavizado de la posición completa
+    // La cámara ya no persigue su posición final: sigue al personaje con un
+    // pivote suavizado y ORBITA rígida alrededor de él. Girar el ratón mueve
+    // la vista en el mismo cuadro; lo único que se suaviza es el seguimiento.
+    pivotLerp: 26,        // pivote en el plano
+    pivotLerpY: 13,       // pivote en altura (escalones, saltos)
+    rigLerp: 12,          // hombro / altura / distancia al cambiar de modo (apuntar, cover)
+    clipOutLerp: 9,       // al despejarse un obstáculo la cámara se aleja suave; al chocar, entra ya
     rotLag: 0,            // reservado
     shoulder: 0.82,       // desplazamiento lateral sobre el hombro derecho
     height: 1.62, dist: 2.7,
@@ -187,11 +204,26 @@ export const TUNING = {
     acquireArcDeg: 124, // cono donde puede ayudar a orientar, no lock-on
     assistDeg: 16,    // corrección máxima del cuerpo hacia cámara/objetivo
     assistTurnDeg: 300,
-    time: 0.48,       // duración máxima: golpe fallado + recovery
-    hitAt: 0.13,      // contacto temprano y reactivo
-    hitRecovery: 0.21,
-    killRecovery: 0.25,
-    missRecovery: 0.35,
+    time: 0.72,       // duración máxima: golpe fallado + recovery
+    hitAt: 0.2,       // preparación visible antes del contacto
+    hitRecovery: 0.26,
+    killRecovery: 0.3,
+    missRecovery: 0.52, // fallar se paga: queda vendido medio segundo
+    // PRUEBA melee v2. EMBESTIDA: con un rival de frente y a la vista, el
+    // golpe recorre la distancia hasta él durante la preparación.
+    lungeAcquire: 3.6,  // m a los que engancha un rival
+    lungeMax: 1.9,      // m que puede recorrer
+    lungeArcDeg: 70,    // cono frontal de enganche
+    lungeStop: 1.15,    // se detiene a esta distancia del rival
+    lungeTopSpeed: 13,
+    lungeTurnDeg: 720,
+    // PLACAJE: golpear en sprint engancha más lejos, pega más y desplaza
+    tackleAcquire: 4.6, tackleMax: 3.1, tackleTopSpeed: 17, tackleDmg: 80, tackleShove: 0.9,
+    // POR LA ESPALDA: letal
+    backstabDmg: 100, backstabArcDeg: 100,
+    // ATURDIMIENTO de la patada: sin disparar, apuntar ni golpear, y más
+    // lento. Tras pasarse, un margen en el que no se puede volver a aturdir.
+    dazeTime: 0.45, tackleDaze: 0.7, dazeImmunity: 1.0, dazeSpeed: 0.55,
     hitStop: 0.035,   // pausa solo del gesto local; el mundo no se congela
     inputGuard: 0.045,// separa pulsaciones sin cooldown artificial largo
     lungeSpeed: 2.05,

@@ -19,6 +19,9 @@ export class ShoulderCamera {
     this.pivot = new THREE.Vector3();
     this._tmp = new THREE.Vector3();
     this._first = true;
+    this._follow = new THREE.Vector3(); // pivote suavizado: lo único que va con retraso
+    this._rig = null;                   // hombro / altura / distancia suavizados
+    this._reach = 1;                    // fracción de la distancia libre de obstáculos
     this._side = 1; // hombro actual: 1 = derecho, -1 = izquierdo (suavizado)
     this._scoped = false;
   }
@@ -122,10 +125,26 @@ export class ShoulderCamera {
     if (st.side !== 0) this._targetSide = st.side ?? 1;
     const targetSide = this._targetSide ?? 1;
     this._side += (targetSide - this._side) * (1 - Math.exp(-9 * dt));
-    shoulder *= this._side;
+    // Los parámetros del modo (apuntar, cover) se suavizan por separado: antes
+    // el cambio entraba por el mismo suavizado que la posición entera.
+    if (!this._rig || this._first) this._rig = { shoulder, height, dist };
+    const kr = 1 - Math.exp(-c.rigLerp * dt);
+    this._rig.shoulder += (shoulder - this._rig.shoulder) * kr;
+    this._rig.height += (height - this._rig.height) * kr;
+    this._rig.dist += (dist - this._rig.dist) * kr;
+    shoulder = this._rig.shoulder * this._side; height = this._rig.height; dist = this._rig.dist;
 
-    // pivot: pecho del jugador (sigue la altura del salto)
-    this.pivot.set(player.pos.x, (player.y ?? 0) + height * 0.92, player.pos.z);
+    // pivot: pecho del jugador. Se sigue con un suavizado corto en el plano y
+    // algo más largo en altura (escalones y saltos no sacuden la vista).
+    const tx = player.pos.x, ty = (player.y ?? 0) + height * 0.92, tz = player.pos.z;
+    if (this._first) this._follow.set(tx, ty, tz);
+    else {
+      const kp = 1 - Math.exp(-c.pivotLerp * dt), ky = 1 - Math.exp(-c.pivotLerpY * dt);
+      this._follow.x += (tx - this._follow.x) * kp;
+      this._follow.z += (tz - this._follow.z) * kp;
+      this._follow.y += (ty - this._follow.y) * ky;
+    }
+    this.pivot.copy(this._follow);
 
     const cy = Math.cos(this.yaw), sy = Math.sin(this.yaw);
     const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
@@ -144,10 +163,14 @@ export class ShoulderCamera {
     const len = dir.length();
     dir.normalize();
     const t = this.world.raycast(this.pivot, dir, len + 0.2, 0.25);
-    if (t !== null && t < len) desired.copy(this.pivot).addScaledVector(dir, Math.max(c.minDist, t - 0.15));
-
-    const k = this._first ? 1 : 1 - Math.exp(-c.posLerp * dt);
-    this.pos.lerp(desired, k);
+    // Obstáculo: la cámara entra EN EL ACTO (nunca atraviesa la pared mientras
+    // se suaviza) y vuelve a alejarse con suavidad cuando queda libre.
+    const free = t !== null && t < len ? Math.max(c.minDist, t - 0.15) / len : 1;
+    if (this._first || free < this._reach) this._reach = free;
+    else this._reach += (free - this._reach) * (1 - Math.exp(-c.clipOutLerp * dt));
+    // ORBITA RÍGIDA: la posición sale del pivote y de los ángulos de ESTE
+    // cuadro. Girar el ratón ya no arrastra la cámara detrás de la mira.
+    this.pos.copy(this.pivot).addScaledVector(dir, len * this._reach);
     this._first = false;
 
     // shake POSICIONAL únicamente: nunca rota la puntería (eso se siente incontrolable)

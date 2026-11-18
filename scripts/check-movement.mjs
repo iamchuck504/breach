@@ -63,7 +63,7 @@ await page.evaluate(() => {
     const moved = Math.hypot(P.pos.x - m.lastX, P.pos.z - m.lastZ);
     const ignoringTeleport = m.ignoreTeleport > 0;
     if (ignoringTeleport) m.ignoreTeleport--;
-    else if (moved > 15 * dt + 0.08) m.issues.push('teleport: ' + moved.toFixed(2) + 'm en un paso');
+    else if (moved > 15 * dt + 0.08) m.issues.push('teleport: ' + moved.toFixed(2) + 'm en un paso (' + wasState + '→' + P.state + ', dt ' + dt.toFixed(3) + ')');
     const rose = P.y - m.lastY;
     // el mantle sube GUIADO con grounded=true: su tramo empinado llega a
     // +0.27m por paso a dt=1/30 y es legítimo (el detector busca subir

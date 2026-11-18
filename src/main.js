@@ -569,6 +569,24 @@ const ctrlEvents = {
     audio.footstep('jump', 0.9);
     audio.whoosh();
   },
+  // Rival enganchable por la embestida: de frente, cerca, a la vista.
+  meleeTarget: (range, arcDeg) => {
+    const p = G.player, f = p.facing(), cosHalf = Math.cos(arcDeg * Math.PI / 360);
+    let best = null;
+    for (const tg of currentTargets()) {
+      if (tg.alive === false || tg.protected) continue;
+      const dx = tg.x - p.pos.x, dz = tg.z - p.pos.z, dist = Math.hypot(dx, dz);
+      if (dist > range || dist < 0.05 || Math.abs((tg.y ?? 0) - p.y) > TUNING.melee.heightTolerance) continue;
+      const dot = (dx * f.x + dz * f.z) / dist;
+      if (dot < cosHalf) continue;
+      _v1.set(p.pos.x, p.y + 1.08, p.pos.z); _v2.set(dx, 0, dz).normalize();
+      if (world.raycast(_v1, _v2, Math.max(0, dist - 0.3)) !== null) continue;
+      const score = dist + (1 - dot) * 1.2;
+      if (!best || score < best.score) best = { id: tg.id, score };
+    }
+    return best;
+  },
+  meleeTargetPos: (id) => currentTargets().find((tg) => tg.id === id && tg.alive !== false) || null,
   onMeleeStart: () => {
     // El golpe tiene prioridad sobre una recarga, pero no inventa munición:
     // conserva cargador/reserva exactamente donde estaban.
@@ -1833,7 +1851,11 @@ function damagePlayerLocal(dmg, fromName, shooter, hitCtx = null) {
     const len = Math.max(0.001, Math.hypot(dx, dz));
     const rightX = Math.cos(G.player.yaw), rightZ = -Math.sin(G.player.yaw);
     const side = (dx * rightX + dz * rightZ) / len;
-    G.rig.hitReact(side, Math.min(1.2, dmg / 50), 'melee');
+    G.rig.hitReact(side, Math.min(1.2, dmg / 50), 'kick');
+    if (!(G.kickDazeImmune > 0)) {
+      G.kickDaze = TUNING.melee.dazeTime;
+      G.kickDazeImmune = G.kickDaze + TUNING.melee.dazeImmunity;
+    }
     // Empuje corto y físico: resolveCircle impide atravesar pared/cover.
     G.player.pos.x += (dx / len) * 0.13;
     G.player.pos.z += (dz / len) * 0.13;
@@ -2539,6 +2561,11 @@ function bindNet(net) {
       : victimRemote ? victimRemote.yaw
       : victimBot?.yaw;
     const victimRig = victimSelf ? G.rig : (victimRemote?.rig || victimBot?.rig);
+    // aturdimiento decidido por el servidor
+    if (+m.dz > 0) {
+      if (victimSelf) { G.kickDaze = +m.dz; G.kickDazeImmune = +m.dz + TUNING.melee.dazeImmunity; }
+      else if (victimBot) victimBot.dazeT = +m.dz;
+    }
     // El atacante ya predijo la reacción local para que el golpe no espere al
     // ping. Los demás clientes la reproducen desde la confirmación autoritativa.
     if (m.from !== net.id && victimRig && attacker && victimPos) {
@@ -2546,7 +2573,7 @@ function bindNet(net) {
       const dx = victimPos.x - ap.x, dz = victimPos.z - ap.z;
       const len = Math.max(0.001, Math.hypot(dx, dz));
       const side = (dx * Math.cos(victimYaw || 0) + dz * -Math.sin(victimYaw || 0)) / len;
-      victimRig.hitReact(side, Math.min(1.2, (+m.dmg || 60) / 50), 'melee');
+      victimRig.hitReact(side, Math.min(1.2, (+m.dmg || 60) / 50), 'kick', (+m.dmg || 0) >= TUNING.melee.backstabDmg);
     }
     if (m.from !== net.id) {
       const team = victimSelf ? G.team : (victimRemote?.team || victimBot?.team || 'blue');
@@ -3357,6 +3384,7 @@ function throwSmoke() {
 // Golpe melee: arco frontal corto. Pega al enemigo MÁS CERCANO dentro del
 // arco (un objetivo por golpe), con línea al pecho para no golpear a través
 // de paredes.
+G.kickPushes = [];
 function resolveMelee() {
   const ml = TUNING.melee;
   const p = G.player;
@@ -3386,7 +3414,14 @@ function resolveMelee() {
       Math.max(0, strikeLen - ml.wallPadding)) !== null) {
     return { connected: false, killed: false };
   }
-  const dmg = ml.dmg;
+  // POR LA ESPALDA (letal) > PLACAJE en sprint > golpe normal
+  const tyaw = G.mode === 'practice' ? G.dummies?.list?.find((d) => d.id === tg.id)?.yaw
+    : G.mode === 'bots' ? G.botMatch?.bots.find((b) => b.id === tg.id)?.yaw
+    : (G.remotes.get(tg.id)?.yaw ?? G.onlineBots?.botById(tg.id)?.yaw);
+  const backstab = Number.isFinite(tyaw) && dist > 0.05 &&
+    (best.dx * -Math.sin(tyaw) + best.dz * -Math.cos(tyaw)) / dist > Math.cos(ml.backstabArcDeg * Math.PI / 360);
+  const tackle = !!p.meleeTackle;
+  const dmg = backstab ? ml.backstabDmg : tackle ? ml.tackleDmg : ml.dmg;
   const point = targetPoint.clone();
   const impactDir = new THREE.Vector3(best.dx, 0.12, best.dz).normalize();
   const attackerState = p.meleeEntryState || 'idle';
@@ -3397,8 +3432,12 @@ function resolveMelee() {
   let victimTeam = 'blue';
   if (G.mode === 'practice' && G.dummies) {
     connected = true;
-    tg.rig?.hitReact?.(best.dot < 0.75 ? Math.sign(best.dx) : 0, 1, 'melee');
-    G.dummies.recoil?.(tg.id, best.dx, best.dz, 0.16);
+    tg.rig?.hitReact?.(best.dot < 0.75 ? Math.sign(best.dx) : 0, tackle ? 1.2 : 1, 'kick', backstab);
+    G.dummies.recoil?.(tg.id, best.dx, best.dz, tackle ? ml.tackleShove : 0.45);
+    if (!(performance.now() < (tg.dazeImmuneUntil ?? 0))) {   // los muñecos no atacan: solo se marca
+      const t = (tackle ? ml.tackleDaze : ml.dazeTime) * 1000;
+      tg.dazeUntil = performance.now() + t; tg.dazeImmuneUntil = tg.dazeUntil + ml.dazeImmunity * 1000;
+    }
     killed = G.dummies.damage(tg.id, dmg, (d) => {
       d.rig.setDeathContext({
         impact: { x: d.x - p.pos.x, z: d.z - p.pos.z },
@@ -3416,6 +3455,18 @@ function resolveMelee() {
   } else if (G.mode === 'bots' && G.botMatch) {
     const result = G.botMatch.damageBot(tg.id, dmg, 'player', false, false, ctx);
     if (result !== null) { connected = true; killed = result; if (!killed) audio.hit(); }
+    if (connected && !killed) {
+      // la patada desplaza al rival (repartido en unas décimas) y encaja el
+      // golpe; la de sprint además lo saca de su cobertura
+      const b = G.botMatch.bots.find((x) => x.id === tg.id);
+      if (b) {
+        const reach = tackle ? ml.tackleShove : 0.45;
+        G.kickPushes.push({ b, x: best.dx / dist * reach, z: best.dz / dist * reach });
+        b.rig?.hitReact?.(best.dot < 0.75 ? Math.sign(best.dx) : 0, tackle ? 1.2 : 1, 'kick', backstab);
+        if (!(b.dazeImmuneT > 0)) { b.dazeT = tackle ? ml.tackleDaze : ml.dazeTime; b.dazeImmuneT = b.dazeT + ml.dazeImmunity; }
+        if (tackle && b.cover) { b.cover = null; b.state = 'advance'; }
+      }
+    }
     victimTeam = tg.team || 'blue';
   } else if (G.net) {
     const r = G.remotes.get(tg.id);
@@ -3423,7 +3474,7 @@ function resolveMelee() {
     if ((r || b) && !r?.inv && !(b?.protT > 0)) {
       connected = true;
       victimTeam = r?.team || b.team;
-      (r?.rig || b?.rig)?.hitReact?.(best.dot < 0.75 ? Math.sign(best.dx) : 0, 1, 'melee');
+      (r?.rig || b?.rig)?.hitReact?.(best.dot < 0.75 ? Math.sign(best.dx) : 0, tackle ? 1.2 : 1, 'kick', backstab);
       // el golpe viaja como disparo validable de corto alcance + su claim
       G.net.fire(_v1, point, 'melee', [], G.player);
       G.net.hit(tg.id, dmg, 'body', false, point);
@@ -3434,7 +3485,7 @@ function resolveMelee() {
     hud.hitmarker();
     audio.meleeImpact(null, killed);
     input.pad.rumble(killed ? 115 : 85, 0.58, killed ? 0.95 : 0.78);
-    shoulderCam.addShake(killed ? 0.48 : 0.34);
+    shoulderCam.addShake((killed ? 0.48 : 0.34) + (tackle || backstab ? 0.3 : 0));
   }
   return { connected, killed };
 }
@@ -3783,6 +3834,12 @@ function simStep(dt) {
   const p = G.player;
   if (!p) return;
   updatePrototypes(dt);
+  // aturdimiento por patada: sin disparo, puntería ni golpe, y más lento
+  G.kickDaze = Math.max(0, (G.kickDaze ?? 0) - dt);
+  G.kickDazeImmune = Math.max(0, (G.kickDazeImmune ?? 0) - dt);
+  const dazed = G.kickDaze > 0 && !p.dead;
+  p.dazed = dazed;
+  if (dazed) { input.firePressed = false; input.meleePressed = false; G.fireBuffer = 0; hud.hint('ATURDIDO', 100); }
   if(G.protoStun>0&&!p.dead){
     G.weapons.cancelActions();G.fireBuffer=0;G.pendingShots=0;G.pendingRays.length=0;G.pendingThrows=0;G.throwT=0;G.throwPending=false;
     p.aim=false;p.vel.x=0;p.vel.z=0;p.firingBlind=0;
@@ -3846,9 +3903,11 @@ function simStep(dt) {
   // lo que falta de cooldown/recarga, para que el tiro encolado nunca se pierda
   const wst = G.weapons.st;
   const relRemain = G.weapons.reloading ? wst.reload : 0;
+  // también durante el cambio de arma: el clic de un arma semiautomática
+  // pulsado antes de terminar el gesto se perdía sin más
   if (input.firePressed && !p.dead &&
-      (!canFire || wst.cd > 0 || relRemain > 0)) {
-    G.fireBuffer = requiredFireBuffer(p, wst, relRemain);
+      (!canFire || wst.cd > 0 || relRemain > 0 || G.weapons.swapping)) {
+    G.fireBuffer = requiredFireBuffer(p, wst, relRemain, G.weapons.swapping ? G.weapons.swapT : 0);
   }
   G.fireBuffer = Math.max(0, G.fireBuffer - dt);
   const wasReloading = G.weapons.reloading;
@@ -3943,7 +4002,7 @@ function simStep(dt) {
   // la intención de disparo SIEMPRE llega al controller: cancela el roadie
   // (en tierra o en el aire) y gira el cuerpo para disparar
   // A buffered shot must not keep a released cover peek exposed.
-  p.update(dt, input, (input.fireHeld || (p.state !== 'cover' && G.fireBuffer > 0)) && !p.dead && hasAmmo);
+  p.update(dt, input, (input.fireHeld || (p.state !== 'cover' && G.fireBuffer > 0)) && !p.dead && hasAmmo && !dazed);
 
   // colisión de cuerpos del jugador: suave y sin atrapamiento (mitad del
   // solape por paso, con tope). Cover y mantle gestionan su propia posición:
@@ -3970,7 +4029,7 @@ function simStep(dt) {
   updateAimOver(dt);
   canFire = stateOkAfter && p.fireAligned() && coverPoseReady(p.aim, wantsFire);
   const fired = p.dead ? false
-    : G.weapons.update(dt, input.fireHeld, input.firePressed || G.fireBuffer > 0, canFire);
+    : G.weapons.update(dt, input.fireHeld && !dazed, input.firePressed || G.fireBuffer > 0, canFire && !dazed);
   // Tras la primera inserción desde 0, conservar margen para que cover/arma
   // alcancen una pose válida antes de consumir el click que estaba esperando.
   if (G.weapons.reloadInserted > 0 && G.fireBuffer > 0) G.fireBuffer = Math.max(G.fireBuffer, 0.3);
@@ -4046,6 +4105,13 @@ function simStep(dt) {
     }
   }
 
+  // empujones de patada pendientes sobre bots
+  for (let i = G.kickPushes.length - 1; i >= 0; i--) {
+    const k = G.kickPushes[i], f = 1 - Math.exp(-11 * dt), mx = k.x * f, mz = k.z * f;
+    if (!k.b.alive || Math.hypot(k.x, k.z) < 0.01) { G.kickPushes.splice(i, 1); continue; }
+    k.b.pos.x += mx; k.b.pos.z += mz; k.x -= mx; k.z -= mz;
+    world.resolveCircle(k.b.pos, 0.42, k.b.y ?? 0);
+  }
   // melee: whoosh al armar el golpe y UNA sola ventana de impacto por gesto
   if (p.state === 'melee') {
     if (!G.meleeSwung) {
@@ -4156,7 +4222,9 @@ let padWasConnected = false;
 
 function frame(now) {
   requestAnimationFrame(frame);
-  const dt = Math.min(0.1, (now - last) / 1000);
+  // nunca negativo: si el reloj retrocede (pestaña restaurada, reloj de pruebas)
+  // un dt < 0 hace divergir todos los suavizados exponenciales
+  const dt = Math.max(0, Math.min(0.1, (now - last) / 1000));
   // calidad automática: si los cuadros reales no aguantan, baja un escalón
   if (gfxAuto && autoGfx.sample((now - last) / 1000, document.visibilityState === 'visible')) {
     gfxQuality = autoGfx.quality;
