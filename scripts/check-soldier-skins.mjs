@@ -17,7 +17,8 @@ try{
       const old=new Rig(scene,team,null,v);references.push(old);
       history.replaceState(null,'','/?soldier=blender');
       const rig=new Rig(scene,team,null,v);await rig.visualReady;
-      rig.update(0,{state:'idle',speed:0});rigs.push(rig);
+      // misma historia en ambos: el rig tiene inercia y una actualización de más los separa
+      old.update(0,{state:'idle',speed:0});rig.update(0,{state:'idle',speed:0});rigs.push(rig);
       rows.push({team,variant:v,name:rig.root.userData.skin});
     }
     const joints=r=>[r.hips,r.torso,r.head,r.aimRig,r.armL.shoulder,r.armL.elbow,r.armL.hand,
