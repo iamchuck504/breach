@@ -5,8 +5,12 @@
 // reales, qué fracción de la caja central (20%×20% alrededor de la
 // retícula) y de la lente del scope tapa el soldado local. Colliders
 // sintéticos en un claro de Fortaleza: geometría exacta y determinista.
-// Medida: dos renders crudos del mismo cuadro, solo luces + soldado sobre
-// blanco y sin soldado; píxel distinto = tapado (la trama cuenta tal cual).
+// Medida: renders crudos del mismo cuadro, solo luces + soldado sobre blanco:
+// con el fundido, sin soldado y con el fundido apagado (uLocal=0). Píxel
+// distinto = tapado; la trama cuenta tal cual (cobertura EFECTIVA = silueta
+// × fracción que se dibuja). Regla: en campo abierto el fundido no cambia un
+// solo píxel; de cerca el centro queda translúcido y de forma UNIFORME (sin
+// agujero en pantalla alrededor de la retícula).
 import { chromium } from 'playwright-core';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -61,7 +65,7 @@ try {
       const h = Math.round(w / cam.aspect);
       let scene = G.rig.root; while (scene.parent) scene = scene.parent;
       const rt = window.__rt ??= new THREE.WebGLRenderTarget(w, h, { type: THREE.FloatType });
-      const A = new Float32Array(w * h * 4), B = new Float32Array(w * h * 4);
+      const A = new Float32Array(w * h * 4), B = new Float32Array(w * h * 4), C = new Float32Array(w * h * 4);
       // solo luces + soldado local, fondo blanco: nada del mapa lo tapa
       const off = [];
       for (const o of scene.children) if (o.visible && !o.isLight && o !== G.rig.root) { off.push(o); o.visible = false; }
@@ -73,21 +77,28 @@ try {
       G.rig.root.visible = false;
       Rr.render(scene, cam); Rr.readRenderTargetPixels(rt, 0, 0, w, h, B);
       G.rig.root.visible = true;
+      const us = new Set();
+      G.rig.root.traverse((o) => { const u = o.material?.userData?.soldierUniforms; if (u?.uLocal) us.add(u); });
+      const prevL = [...us].map((u) => u.uLocal.value);
+      for (const u of us) u.uLocal.value = 0;
+      Rr.render(scene, cam); Rr.readRenderTargetPixels(rt, 0, 0, w, h, C);
+      [...us].forEach((u, i) => { u.uLocal.value = prevL[i]; });
       Rr.setRenderTarget(prev);
       for (const o of off) o.visible = true;
       scene.background = bg; scene.fog = fog;
-      let c20 = 0, n20 = 0, lens = 0, nl = 0, all = 0;
+      let c20 = 0, n20 = 0, lens = 0, nl = 0, all = 0, raw = 0, raw20 = 0, changed = 0;
       const lr = 0.43 * Math.min(w, h);
       for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
         const i = (y * w + x) * 4;
-        const on = Math.max(Math.abs(A[i] - B[i]), Math.abs(A[i + 1] - B[i + 1]), Math.abs(A[i + 2] - B[i + 2])) > 2e-3 ? 1 : 0;
-        all += on;
+        const diff = (P, Q) => (Math.max(Math.abs(P[i] - Q[i]), Math.abs(P[i + 1] - Q[i + 1]), Math.abs(P[i + 2] - Q[i + 2])) > 2e-3 ? 1 : 0);
+        const on = diff(A, B), onRaw = diff(C, B);
+        all += on; raw += onRaw; changed += diff(A, C);
         const dx = x + 0.5 - w / 2, dy = y + 0.5 - h / 2;
-        if (Math.abs(dx) <= w * 0.1 && Math.abs(dy) <= h * 0.1) { n20++; c20 += on; }
+        if (Math.abs(dx) <= w * 0.1 && Math.abs(dy) <= h * 0.1) { n20++; c20 += on; raw20 += onRaw; }
         if (Math.hypot(dx, dy) <= lr) { nl++; lens += on; }
       }
       const head = G.rig.head.getWorldPosition(new THREE.Vector3());
-      return { all: all / (w * h), c20: c20 / n20, lens: lens / nl, head: cam.position.distanceTo(head), scope: !!G.scopeActive };
+      return { all: all / (w * h), c20: c20 / n20, raw: raw / (w * h), raw20: raw20 / n20, changed: changed / (w * h), lens: lens / nl, head: cam.position.distanceTo(head), scope: !!G.scopeActive };
     };
   });
 
@@ -133,13 +144,22 @@ try {
       if (s.boxes.length === 0) {
         check(`${label}: cámara intacta (desvío ${r.drift.toFixed(4)} m)`, r.drift < 1e-3);
         // y el soldado se ve entero fuera del scope (≈9-18% de la pantalla)
-        if (mode !== 'scope') check(`${label}: soldado visible (${(r.all * 100).toFixed(0)}% ≥ 5%)`, r.all >= 0.05);
+        if (mode !== 'scope') {
+          check(`${label}: soldado visible (${(r.all * 100).toFixed(0)}% ≥ 5%)`, r.all >= 0.05);
+          check(`${label}: idéntico a sin fundido (${(r.changed * 100).toFixed(2)}% de píxeles cambiados)`, r.changed === 0);
+        }
       }
       if (mode === 'scope') {
         check(`${label}: scope activo y la lente sin soldado (${(r.lens * 100).toFixed(2)}%)`, r.scope && r.lens === 0);
       } else {
-        check(`${label}: centro tapado ${(r.c20 * 100).toFixed(1)}% ≤ 3% (pantalla ${(r.all * 100).toFixed(0)}%, casco a ${r.head.toFixed(2)} m)`,
-          r.c20 <= 0.03 && r.all <= 0.25);
+        check(`${label}: centro tapado (efectivo) ${(r.c20 * 100).toFixed(1)}% ≤ 25% (silueta ${(r.raw20 * 100).toFixed(0)}%, pantalla ${(r.all * 100).toFixed(0)}%, casco a ${r.head.toFixed(2)} m)`,
+          r.c20 <= 0.25 && r.all <= 0.25);
+        // sin agujero en pantalla: el centro se aclara en la misma proporción
+        // que el resto del soldado (±0.2), nunca se vacía solo él
+        if (r.raw20 > 0.5 && r.raw > 0.05) {
+          const kc = r.c20 / r.raw20, ka = r.all / r.raw;
+          check(`${label}: fundido uniforme, sin círculo (centro ${kc.toFixed(2)} · resto ${ka.toFixed(2)})`, Math.abs(kc - ka) <= 0.2);
+        }
       }
     }
   }

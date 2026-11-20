@@ -116,7 +116,7 @@ varying vec4 vSurf; varying vec2 vDetail; varying vec3 vBind; varying vec3 vBind
 vSurf = aSurf; vDetail = aDetail; vBind = position; vBindN = normal;`,
   fragmentPars: /* glsl */`
 uniform vec3 uTeam; uniform float uCorpse; uniform float uRim;
-uniform float uLocal; uniform float uHide; uniform float uProjY; uniform float uCrowd; uniform float uGhost;
+uniform float uLocal; uniform float uHide; uniform float uFade; uniform float uGun;
 varying vec4 vSurf; varying vec2 vDetail; varying vec3 vBind; varying vec3 vBindN;
 ${NOISE}`,
   // diffuseColor ya trae el color por vértice (lineal)
@@ -153,20 +153,18 @@ ${NOISE}`,
   float sL = dot(sAlb, vec3(0.2126, 0.7152, 0.0722));
   sAlb = mix(sAlb, vec3(sL) * 0.6, uCorpse * 0.82);
   diffuseColor.rgb = sAlb;
-  // SOLDADO PROPIO (solo su material, uLocal=1): lo que queda pegado a la
-  // lente o tapa la retícula de cerca se borra con trama ordenada (screen-
-  // door, sin mezcla ni orden de dibujo). La sombra sale de otro pase y se
-  // queda. Va al final del bloque: las derivadas de arriba ya se calcularon.
+  // SOLDADO PROPIO (solo su material, uLocal=1): trama ordenada (screen-
+  // door: sin mezcla ni orden de dibujo; la sombra sale de otro pase). Nada
+  // en espacio de pantalla: (a) lo que está cerca de la lente se vuelve
+  // translúcido en un degradado suave de profundidad (en hip y ADS normales
+  // el soldado está a >1.5 m y queda opaco) y (b) con la cámara de verdad
+  // apretada contra él por la colisión (uFade, suavizado en la CPU) todo el
+  // soldado se aclara por igual. uGun: el arma se aclara la mitad.
+  // Va al final del bloque: las derivadas de arriba ya se calcularon.
   if (uLocal > 0.5) {
-    float sZ = vViewPosition.z;
-    float sKeep = smoothstep(0.32, 0.62, sZ);
-    // radio en pantalla (unidades de media altura) desde la retícula
-    float sR = uProjY * length(vViewPosition.xy) / max(sZ, 1e-3);
-    // de cerca, o con el hombro aplastado (soldado detrás de la mira)
-    float sHole = (1.0 - smoothstep(0.42, 0.56, sR)) * max(1.0 - smoothstep(1.35, 1.75, sZ), uCrowd);
-    // cámara dentro del volumen del soldado: el resto queda en trama al 30%
-    sKeep = min(sKeep, 1.0 - sHole) * (1.0 - uHide) * (1.0 - 0.7 * uGhost);
-    // Bayer 4x4 aritmético sobre el píxel
+    float sKeep = smoothstep(0.25, 0.95, vViewPosition.z);
+    sKeep *= (1.0 - uHide) * (1.0 - uFade * mix(0.75, 0.45, uGun));
+    // Bayer 4x4 aritmético sobre el píxel (estable al moverse la cámara)
     vec2 sB = floor(gl_FragCoord.xy);
     vec2 sB2 = floor(sB * 0.5);
     float sT = fract(sB.x * 0.5 + sB.y * sB.y * 0.75) + 0.25 * fract(sB2.x * 0.5 + sB2.y * sB2.y * 0.75);
@@ -197,7 +195,7 @@ function makeMaterial(team, corpse) {
     uTeam: { value: new THREE.Color(SOLDIER_TEAM[team] ?? SOLDIER_TEAM.red) },
     uCorpse: { value: 0 },
     uRim: { value: 0.5 },
-    uLocal: { value: 0 }, uHide: { value: 0 }, uProjY: { value: 1 }, uCrowd: { value: 0 }, uGhost: { value: 0 },
+    uLocal: { value: 0 }, uHide: { value: 0 }, uFade: { value: 0 }, uGun: { value: 0 },
   };
   patch(material, { ...SHADER, uniforms, key: 'soldier-v1' });
   material.userData.soldierLook = team;
@@ -215,47 +213,53 @@ export function soldierCorpseMaterial(source) {
   return makeMaterial(source.userData.soldierLook, true);
 }
 
-// Material del soldado PROPIO: mismo programa que el de equipo (sin
-// compilar nada en partida), con sus propios uniforms. Solo lo lleva el rig
-// local; compañeros, rivales y cadáveres siguen con el compartido.
+// Materiales del soldado PROPIO (cuerpo y armas): mismo programa que el de
+// equipo (sin compilar nada en partida), con sus propios uniforms. Solo los
+// lleva el rig local; compañeros, rivales y cadáveres siguen con el compartido.
 const LOCAL_MATERIALS = new Map();
-function localSoldierMaterial(team) {
+function localSoldierMaterials(team) {
   if (!LOCAL_MATERIALS.has(team)) {
-    const material = makeMaterial(team, false);
-    material.userData.localSoldier = true;
-    LOCAL_MATERIALS.set(team, material);
+    const body = makeMaterial(team, false), gun = makeMaterial(team, false);
+    body.userData.localSoldier = gun.userData.localSoldier = true;
+    gun.userData.soldierUniforms.uGun.value = 1;
+    LOCAL_MATERIALS.set(team, { body, gun, fade: 0, t: 0 });
   }
   return LOCAL_MATERIALS.get(team);
 }
 /**
- * Cada cuadro, para el rig del jugador: cuerpo y armas horneadas pasan al
- * material propio (los re-horneados vuelven con el compartido) y se fijan
- * la proyección de la cámara y el modo: 'near' (cámara de hombro: se borra
- * lo pegado a la lente o encima de la retícula), 'hidden' (scope: nada del
- * soldado propio delante de la lente) u 'off'. De la cámara (0..1): crowd =
- * hombro aplastado (el soldado está detrás de la mira a cualquier distancia)
- * y ghost = cámara dentro de su volumen (todo él en trama).
+ * Cada cuadro, para el rig del jugador: cuerpo y armas horneadas pasan a los
+ * materiales propios (los re-horneados vuelven con el compartido). mode:
+ * 'near' (cámara de hombro), 'hidden' (scope: nada del soldado delante de la
+ * lente) u 'off' (presentación/espectador: entero). crowd/ghost (0..1, de la
+ * cámara): apretada por la colisión. Se suavizan aquí con histéresis (sube
+ * rápido, baja lento, zona muerta) para que nada parpadee.
  */
 export function syncLocalSoldierView(rig, camera, mode, crowd = 0, ghost = 0) {
   if (!rig) return;
   const hide = mode === 'hidden';
-  const shared = soldierMaterial(rig.team), local = localSoldierMaterial(rig.team);
+  const shared = soldierMaterial(rig.team), L = localSoldierMaterials(rig.team);
   const body = rig._bodyMesh;
-  if (body && body.material === shared) body.material = local;
+  if (body && body.material === shared) body.material = L.body;
   for (const k in rig.guns) {
     const baked = rig.guns[k]?.userData.bakedMesh;
-    if (baked && baked.material === shared) baked.material = local;
+    if (baked && baked.material === shared) baked.material = L.gun;
   }
-  const u = local.userData.soldierUniforms;
-  // 'off': otra cámara (presentación, espectador) mira al soldado: entero
-  u.uLocal.value = mode === 'off' ? 0 : 1;
-  u.uHide.value = hide ? 1 : 0;
-  u.uProjY.value = camera.projectionMatrix.elements[5];
-  u.uCrowd.value = crowd;
-  u.uGhost.value = ghost;
-  // contorno de spawn: ni dentro del scope ni con la cámara metida en él;
-  // visto desde otra cámara ('off') va entero (ghost es de la de hombro)
-  if (rig._outlineMat) rig._outlineMat.opacity = hide ? 0 : mode === 'off' ? 0.45 : 0.45 * (1 - ghost);
+  const now = performance.now() / 1000;
+  const dt = L.t ? Math.min(0.1, Math.max(0, now - L.t)) : 1;
+  L.t = now;
+  const raw = Math.max(crowd, ghost);
+  const target = raw < 0.15 ? 0 : raw;
+  L.fade += (target - L.fade) * (1 - Math.exp(-(target > L.fade ? 10 : 3) * dt));
+  if (L.fade < 0.002) L.fade = 0;
+  for (const m of [L.body, L.gun]) {
+    const u = m.userData.soldierUniforms;
+    u.uLocal.value = mode === 'off' ? 0 : 1;
+    u.uHide.value = hide ? 1 : 0;
+    u.uFade.value = mode === 'off' ? 0 : L.fade;
+  }
+  // contorno de spawn: ni dentro del scope ni con la cámara apretada;
+  // visto desde otra cámara ('off') va entero
+  if (rig._outlineMat) rig._outlineMat.opacity = hide ? 0 : mode === 'off' ? 0.45 : 0.45 * (1 - L.fade);
 }
 
 // Contorno de la protección de spawn: la misma geometría y el mismo
