@@ -31,6 +31,23 @@ export class NetClient {
 
   on(type, cb) { this.handlers[type] = cb; }
 
+  // Retener los mensajes (en orden) mientras el cliente prepara la entrada a
+  // una partida (modelos del mapa). Al soltar se aplican tal cual llegaron:
+  // nada del estado del servidor (cajas, armas, muertes, fases) se pierde y
+  // el servidor nunca espera a este cliente.
+  hold() { if (!this._held) this._held = []; }
+  release() {
+    const queue = this._held; this._held = null;
+    if (!queue) return;
+    for (let i = 0; i < queue.length; i++) {
+      if (this.dead) return;
+      this.handlers[queue[i].t]?.(queue[i]);
+      // un mensaje repetido pidió retener otra vez (otra entrada a partida):
+      // el resto espera, en orden, a la nueva suelta
+      if (this._held) { this._held.push(...queue.slice(i + 1)); return; }
+    }
+  }
+
   connect(url, name, variant = 0, action = 'join') {
     return new Promise((resolve, reject) => {
       let settled = false;
@@ -63,6 +80,7 @@ export class NetClient {
           reject(new Error(t(`lobby.error.${msg.code}`)));
           return;
         }
+        if (this._held) { this._held.push(msg); return; }
         this.handlers[msg.t]?.(msg);
       };
       this.ws.onerror = () => {

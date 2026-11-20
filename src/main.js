@@ -987,12 +987,10 @@ function startLobbyMatch() {
   if (G.lobbyKind === 'online') {
     const net = G.net, map = G.lobby.settings?.map;
     if (!net) return;
-    if (mapAssetsReady(map)) { net.lobbyStart(); return; }
-    document.body.classList.add('map-loading');
-    ensureMapAssets(map, { timeoutMs: MAP_ASSET_TIMEOUT }).then(() => {
-      document.body.classList.remove('map-loading');
-      if (G.net === net && G.lobbyKind === 'online' && !G.mode) net.lobbyStart();
-    });
+    // El servidor manda el tiempo de todos: START no espera descargas del
+    // anfitrión (bloqueaba a toda la sala). Lo que falte se repara al llegar.
+    if (!mapAssetsReady(map)) ensureMapAssets(map, { timeoutMs: MAP_ASSET_TIMEOUT });
+    net.lobbyStart();
   } else startBots(G.lobby);
 }
 
@@ -2455,16 +2453,11 @@ async function connectOnlineLobby(action) {
   if (!url) { netStatus.textContent = t('msg.serverUrl'); onlineEl.server.open = true; return; }
   localStorage.setItem('breach.server', url);
   const mySeq = ++startSeq;
-  // La rotación recorre todos los mapas y el servidor puede meternos en una
-  // partida empezada: se entra solo con sus modelos ya en memoria (tope:
-  // si la red no responde se entra igual y lo que falte se repara al llegar).
-  if (!playableMapAssetsReady()) {
-    netStatus.textContent = t('common.preparing');
-    document.body.classList.add('map-loading');
-    await ensurePlayableMapAssets({ timeoutMs: MAP_ASSET_TIMEOUT });
-    document.body.classList.remove('map-loading');
-    if (startSeq !== mySeq) return;
-  }
+  // Los modelos de la rotación bajan EN SEGUNDO PLANO: entrar a la sala no
+  // espera descargas (en una máquina lenta esa espera llegaba a 20 s y la sala
+  // parecía lista sin estar conectada). Si la partida empieza antes, el mapa se
+  // construye con sustitutos y se repara al llegar (repairMapIfDue).
+  if (!playableMapAssetsReady()) ensurePlayableMapAssets({ timeoutMs: MAP_ASSET_TIMEOUT });
   netStatus.textContent = t('msg.connecting');
   const net = new NetClient();
   bindNet(net);
@@ -2663,7 +2656,25 @@ function bindNet(net) {
       lobbyUI.render(G.lobby);
     }
   });
-  net.on('matchStart', (m) => { if (alive()) setupOnlineMatch(m); });
+  // Entrar a una partida (al empezar o ya empezada) solo con SU mapa cargado:
+  // nunca se ve un mapa a medio construir. La espera tiene tope
+  // (MAP_ASSET_TIMEOUT; luego se entra y se repara) y no frena a nadie: los
+  // mensajes del servidor quedan retenidos en orden y se aplican al entrar,
+  // así que el cliente sigue la fase real del servidor sin perder estado.
+  net.on('matchStart', (m) => {
+    if (!alive()) return;
+    const map = m.settings?.map || G.lobby?.settings?.map;
+    if (!map || mapAssetsReady(map)) { setupOnlineMatch(m); return; }
+    net.hold();
+    document.body.classList.add('map-loading');
+    netStatus.textContent = t('common.preparing');
+    ensureMapAssets(map, { timeoutMs: MAP_ASSET_TIMEOUT }).then(() => {
+      document.body.classList.remove('map-loading');
+      if (!alive()) return;
+      setupOnlineMatch(m);
+      net.release();
+    });
+  });
   net.on('host', (m) => {
     if (!alive()) return;
     if (G.lobby) G.lobby.hostId = m.id;
