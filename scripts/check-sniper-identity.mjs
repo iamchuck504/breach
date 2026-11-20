@@ -198,19 +198,28 @@ try {
     afterShot.scope && afterShot.dom && afterShot.fov < 23,
     JSON.stringify(afterShot));
 
-  // El comienzo, no el punto medio, de un swap debe sacar del scope.
-  const swapStarted = await page.evaluate(() => window.BREACH.weapons.startSwap('shotgun'));
-  await page.waitForTimeout(70);
-  const duringSwap = await page.evaluate(() => ({
-    swapping: window.BREACH.weapons.swapping,
-    scope: window.BREACH.scopeActive,
-    dom: document.getElementById('sniper-scope').classList.contains('on'),
-    fov: window.BREACH_CAM.fov,
-  }));
-  check('weapon switch inicia correctamente', swapStarted && duringSwap.swapping,
+  // El comienzo, no el punto medio, de un swap debe sacar del scope. Se mide
+  // en CUADROS y en tiempo de juego, no en milisegundos de reloj: un runner
+  // lento puede tardar más de 70 ms en dibujar un solo cuadro, y la espera
+  // fija fallaba sin que el juego hubiera hecho nada mal.
+  const duringSwap = await page.evaluate(async () => {
+    const G = window.BREACH, W = G.weapons;
+    const dom = () => document.getElementById('sniper-scope').classList.contains('on');
+    const frame = () => new Promise(requestAnimationFrame);
+    const fov0 = window.BREACH_CAM.fov;
+    const started = W.startSwap('shotgun');
+    const total = W.swapT, swapping = W.swapping;
+    let frames = 0, left = 1;
+    while (frames < 60 && W.swapping && (G.scopeActive || dom())) { await frame(); frames++; left = W.swapT / total; }
+    for (let i = 0; i < 2; i++) await frame(); // el FOV ya debe ir de vuelta
+    return { started, swapping, frames, left, scope: G.scopeActive, dom: dom(), fov0, fov: window.BREACH_CAM.fov };
+  });
+  check('weapon switch inicia correctamente', duringSwap.started && duringSwap.swapping,
     JSON.stringify(duringSwap));
+  // left = fracción del swap que quedaba cuando el scope se cerró: más de la
+  // mitad significa que salió en el primer tramo.
   check('weapon switch cancela el scope desde el primer tramo',
-    !duringSwap.scope && !duringSwap.dom && duringSwap.fov > 20.2,
+    !duringSwap.scope && !duringSwap.dom && duringSwap.left > 0.5 && duringSwap.fov > duringSwap.fov0,
     JSON.stringify(duringSwap));
 
   await page.waitForFunction(() => !window.BREACH.weapons.swapping,
