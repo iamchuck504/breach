@@ -11,7 +11,11 @@ import fs from 'node:fs';
 import * as T from 'three';
 import { Rig } from '../src/player/rig.js';
 
-const SOLE = new T.Vector3(0, -0.375, 0);
+// Suela REAL del avatar (rig.soleWorld: huella medida bajo el tobillo). Antes
+// era un punto fijo a 0,375 m bajo la rodilla, que no correspondía a la bota
+// del modelo Blender ni seguía al tobillo.
+const sole = (rig, leg, lowest = false) => rig.soleWorld(leg, new T.Vector3(), lowest);
+const ankleOf = (leg) => leg.ankle.getWorldPosition(new T.Vector3());
 const makeRig = () => { const r = new Rig(new T.Scene(), 'red'); r.groundFn = () => 0; return r; };
 const base = { state: 'idle', speed: 0, aim: false, aimPitch: 0, moveForward: 1, moveSide: 0 };
 
@@ -30,7 +34,9 @@ function footSlide({ name, hz = 60, seconds = 3, speedAt, forward = 1, side = 0,
     rig.setTransform(x, z, 0, 0);
     rig.update(dt, { ...base, state: v > 0.4 ? state : 'idle', speed: Math.min(1, v / 7.6), aim, moveForward: forward / len, moveSide: side / len, vx, vz });
     rig.root.updateMatrixWorld(true);
-    const feet = [rig.legL, rig.legR].map((leg) => leg.knee.localToWorld(SOLE.clone()));
+    // altura: punto más bajo de la bota; en planta, el tobillo (con el pie
+    // apoyado es solidario con la suela)
+    const feet = [rig.legL, rig.legR].map((leg) => { const c = ankleOf(leg); c.y = sole(rig, leg, true).y; return c; });
     if (i > hz * 0.5) { // tras el arranque
       frames++;
       feet.forEach((f) => { minY = Math.min(minY, f.y); maxLift = Math.max(maxLift, f.y); });
@@ -59,7 +65,9 @@ function poseJump({ name, hz = 60, steps }) {
   const probes = () => {
     rig.root.updateMatrixWorld(true);
     const pt = (o, v = new T.Vector3()) => rig.root.worldToLocal(o.localToWorld(v.clone()));
-    return { manoD: pt(rig.armR.hand), manoI: pt(rig.armL.hand), cabeza: pt(rig.head), pieD: pt(rig.legR.knee, SOLE), pieI: pt(rig.legL.knee, SOLE), arma: pt(rig.gunMount) };
+    // el tobillo: el punto más bajo salta entre punta y talón al inclinarse
+    const foot = (leg) => rig.root.worldToLocal(ankleOf(leg));
+    return { manoD: pt(rig.armR.hand), manoI: pt(rig.armL.hand), cabeza: pt(rig.head), pieD: foot(rig.legR), pieI: foot(rig.legL), arma: pt(rig.gunMount) };
   };
   for (let i = 0; i < hz; i++) rig.update(dt, { ...base, ...(typeof steps[0][0] === 'function' ? steps[0][0](0) : steps[0][0]) });
   let prev = probes();

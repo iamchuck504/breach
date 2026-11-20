@@ -197,7 +197,8 @@ try{
         // Exercise production bot steering and actual circle collision, not
         // only the planned path, at the normal navigation/body radius.
         // con altura: la ruta puede pasar por encima del remolque o del andén
-        const bot={world,pos:{...from},recovery:null,y:0};
+        // con el prototipo de Bot: _steer usa sus helpers (_stepOut, _localStep...)
+        const bot=Object.assign(Object.create(Bot.prototype),{world,pos:{...from},recovery:null,y:0});
         for(let f=0;f<2400&&Math.hypot(bot.pos.x-goal.x,bot.pos.z-goal.z)>.25;f++){
           const d=Math.hypot(goal.x-bot.pos.x,goal.z-bot.pos.z);
           let steer;

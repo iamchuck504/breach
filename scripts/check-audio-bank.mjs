@@ -507,6 +507,155 @@ function fft(re, im, inv) {
   }
 }
 
+/* ------------------- 6. timbre: objetos, no notas; sin agudo de fondo al correr */
+// Compuertas nacidas de dos quejas del dueño (overhaul run3): las recargas
+// "sonaban a marimba" (piezas con 20–35 % de su energía en un parcial que
+// sonaba 80–140 ms) y "siempre hay agudos molestos de fondo, sobre todo al
+// correr" (la cola del mapa, alimentada por cada paso, mantenía la banda
+// >3 kHz a solo ~13 dB del golpe del paso entre zancadas). Ver
+// analysis.js: tonality / longTerm / rt60Band.
+const { tonality, longTerm, rt60Band } = await import('../src/audio/analysis.js');
+const monoOf = (ch) => { if (ch.length === 1) return ch[0]; const m = new Float32Array(ch[0].length); for (const c of ch) for (let i = 0; i < m.length; i++) m[i] += c[i] / ch.length; return m; };
+// objetos físicos: mecánica, manejo, pasos, foley, recogidas, capas del arma
+const OBJECT_CATS = new Set(['handling', 'step', 'foley', 'pickup', 'weapon']);
+const OBJECT_NAMES = new Set(['pedestal_spawn', 'nade_bounce']);
+// señales eléctricas a propósito: el condensador del aturdidor y su pitido de listo
+const TONAL_OK = new Set(['stun_charge', 'ready_chirp']);
+// cada canal por separado: promediar a mono puede anular un tono en contrafase
+const tonalWorst = (chs) => chs.map((c) => tonality(c)).reduce((a, b) => ({
+  ...(b.note > a.note ? b : a), domFrac: Math.max(a.domFrac, b.domFrac) }));
+const soundsLikeNote = (t, plate = false) => !(t.domFrac <= (plate ? 0.25 : 0.2) && t.note <= (plate ? 3 : 0.6));
+// autoprueba de la compuerta: un tono que solo aparece en el último segundo
+// de un clip de 4 s y un tono en contrafase entre canales deben dispararla
+{
+  const n = SR * 4, late = new Float32Array(n), L = new Float32Array(SR), Rr = new Float32Array(SR);
+  let z = 1;
+  const rn = () => ((z = (z * 1103515245 + 12345) >>> 0) / 2147483648 - 1);
+  for (let i = 0; i < n; i++) late[i] = rn() * 0.05 + (i >= SR * 3 ? 0.3 * Math.sin((2 * Math.PI * 440 * i) / SR) : 0);
+  for (let i = 0; i < SR; i++) { const t = 0.3 * Math.sin((2 * Math.PI * 440 * i) / SR); L[i] = t + rn() * 0.05; Rr[i] = -t + rn() * 0.05; }
+  check(soundsLikeNote(tonalWorst([late])), 'la compuerta de tonalidad no ve un tono que solo suena al final de un clip largo');
+  check(soundsLikeNote(tonalWorst([L, Rr])), 'la compuerta de tonalidad no ve un tono en contrafase entre canales');
+  // tono aislado y bajo (0.025) en el último segundo de 5 s, tras ruido más fuerte
+  const quiet = new Float32Array(SR * 5);
+  for (let i = 0; i < SR * 4; i++) quiet[i] = rn() * 0.3;
+  for (let i = SR * 4; i < SR * 5; i++) quiet[i] = 0.025 * Math.sin((2 * Math.PI * 440 * i) / SR);
+  check(soundsLikeNote(tonalWorst([quiet])), 'la compuerta de tonalidad no ve un tono bajo y aislado tras ruido más fuerte');
+}
+let worstNote = { name: '-', note: 0, domFrac: 0, ringMs: 0 };
+for (const d of bank.defs.values()) {
+  if (d.external || TONAL_OK.has(d.name)) continue;
+  const plate = d.name === 'imp_metal'; // la chapa resuena de verdad: límite propio
+  if (!(OBJECT_CATS.has(d.cat) || OBJECT_NAMES.has(d.name) || plate)) continue;
+  for (let v = 0; v < d.variants; v++) {
+    const t = tonalWorst(bank.pcm(d.name, v));
+    check(!soundsLikeNote(t, plate),
+      `${d.name}[${v}]: suena a nota (${(t.domFrac * 100).toFixed(0)} % de la energía en ${t.domHz} Hz, ${t.ringMs.toFixed(0)} ms)`);
+    if (!plate && t.note >= worstNote.note) worstNote = { name: `${d.name}[${v}]`, ...t };
+  }
+}
+// colas de los mapas: los agudos mueren bastante antes que los medios
+const irRows = [];
+for (const name of new Set(Object.values(SPACE_PROFILES).map((s) => s.ir))) {
+  const x = monoOf(bank.pcm(name, 0));
+  const r1 = rt60Band(x, 1000), r4 = rt60Band(x, 4000), r8 = rt60Band(x, 8000);
+  irRows.push(`${name} ${r1?.toFixed(2)}/${r4?.toFixed(2)}/${r8?.toFixed(2)} s`);
+  check(r1 && r4 && r8 && r4 / r1 <= 0.55 && r8 / r1 <= 0.4, `${name}: los agudos de la cola duran demasiado (rt60 1k ${r1?.toFixed(2)} s, 4k ${r4?.toFixed(2)} s, 8k ${r8?.toFixed(2)} s)`);
+}
+// mezclas reales por el facade (mismo envío y nivel de sala que el juego)
+function renderClip(list, t0, dur, irName, level) {
+  const N = Math.ceil(dur * SR);
+  const dry = new Float32Array(N), send = new Float32Array(N);
+  const dryC = [new Float32Array(N), new Float32Array(N)];
+  for (const r of list) {
+    const src = r.buf?.ch;
+    if (!src?.[0]) continue;
+    const s0 = Math.round((r.at - t0) * SR), n = Math.floor(src[0].length / r.rate);
+    for (let i = 0; i < n; i++) {
+      const k = s0 + i;
+      if (k < 0 || k >= N) continue;
+      const j = Math.floor(i * r.rate), a = src[0][j], b = (src[1] ?? src[0])[j], v = (a + b) * 0.5;
+      dry[k] += v * r.gain; send[k] += v * r.send;
+      dryC[0][k] += a * r.gain; dryC[1][k] += b * r.gain;
+    }
+  }
+  const ir = bank.pcm(irName, 0);
+  const wet = convolve(send, ir[0], N), wetR = convolve(send, ir[1] ?? ir[0], N);
+  const mix = new Float32Array(N);
+  // también cada canal por separado (las compuertas de timbre no promedian a mono)
+  const chs = [new Float32Array(N), new Float32Array(N)];
+  for (let i = 0; i < N; i++) {
+    wet[i] *= level; mix[i] = dry[i] + wet[i];
+    chs[0][i] = dryC[0][i] + wet[i]; chs[1][i] = dryC[1][i] + wetR[i] * level;
+  }
+  return { mix, dry, wet, chs };
+}
+function hp3k(x) {
+  const g = Math.tan((Math.PI * 3000) / SR), k = Math.SQRT2;
+  const a1 = 1 / (1 + g * (g + k)), a2 = g * a1, a3 = g * a2;
+  let ic1 = 0, ic2 = 0;
+  const y = new Float32Array(x.length);
+  for (let i = 0; i < x.length; i++) { const v3 = x[i] - ic2, v1 = a1 * ic1 + a2 * v3, v2 = ic2 + a2 * ic1 + a3 * v3; ic1 = 2 * v1 - ic1; ic2 = 2 * v2 - ic2; y[i] = x[i] - k * v1 - v2; }
+  return y;
+}
+const energy = (x, a = 0, b = x.length) => { let e = 0; for (let i = Math.max(0, a); i < Math.min(x.length, b); i++) e += x[i] * x[i]; return e; };
+const fort = SPACE_PROFILES.fortaleza;
+// sprint propio 10 s sobre piedra (paso cada 2.1 m a 7.6 m/s, con equipo y sala)
+ctx.advance(5);
+audio.setSurfaceQuery(() => 'stone');
+audio.setAmbience('fortaleza');
+rec.length = 0;
+recording = true;
+let s0 = ctx.currentTime;
+const stepT = [];
+for (let t = 0, next = 0.05; t < 10; t += 1 / 240) {
+  if (t >= next) { stepT.push(ctx.currentTime - s0); audio.footstep('roadie'); next += 2.1 / 7.6; }
+  ctx.advance(1 / 240);
+}
+recording = false;
+const sprint = renderClip(rec.slice(), s0, 10.6, fort.ir, fort.level);
+const sh = hp3k(sprint.mix);
+const floors = [];
+for (let i = 1; i < stepT.length; i++) {
+  const a = Math.round(stepT[i] * SR), p = Math.round(stepT[i - 1] * SR), g = Math.round(0.07 * SR), h = Math.round(0.04 * SR);
+  floors.push(10 * Math.log10((energy(sh, a - g, a) / g) / Math.max(1e-30, energy(sh, p, p + h) / h)));
+}
+const floorDb = median(floors);
+const roomDb = 10 * Math.log10(energy(sprint.wet) / Math.max(1e-30, energy(sprint.dry)));
+const sprintLt = longTerm(sprint.mix);
+check(floorDb <= -18, `sprint: la banda >3 kHz entre zancadas queda a ${floorDb.toFixed(1)} dB del golpe del paso (fondo agudo continuo; máx −18)`);
+check(roomDb <= -4, `sprint: la sala lleva ${roomDb.toFixed(1)} dB respecto al paso seco (halo que no se vacía; máx −4)`);
+check(sprintLt.above(8000) <= 0.001, `sprint: ${(sprintLt.above(8000) * 100).toFixed(2)} % de la energía sobre 8 kHz (siseo; máx 0.1 %)`);
+// recargas completas con las duraciones reales del arma
+const { TUNING } = await import('../src/config/tuning.js');
+const reloadRows = [];
+for (const w of ['smg', 'pistol', 'shotgun', 'sniper', 'bazooka']) {
+  ctx.advance(4);
+  const rt = TUNING.weapons[w].reloadTime;
+  rec.length = 0;
+  recording = true;
+  s0 = ctx.currentTime;
+  let len;
+  if (w === 'shotgun') {
+    for (let i = 0; i < 8; i++) { ctx.advance(rt); audio.shellIn(); }
+    audio.reloadDone(w);
+    len = rt * 8 + 1;
+  } else {
+    audio.reload(w, rt);
+    ctx.advance(rt);
+    audio.reloadDone(w);
+    len = rt + 1;
+  }
+  ctx.advance(1);
+  recording = false;
+  const c = renderClip(rec.slice(), s0, len, fort.ir, fort.level);
+  const t = tonalWorst(c.chs);
+  const lt = c.chs.map((x) => longTerm(x)).reduce((a, b) => (b.peakDb > a.peakDb ? { ...b, above: (f) => Math.max(a.above(f), b.above(f)) } : { ...a, above: (f) => Math.max(a.above(f), b.above(f)) }));
+  reloadRows.push(`${w} ${(t.domFrac * 100).toFixed(0)}%@${t.domHz}Hz/${lt.peakDb.toFixed(0)}dB`);
+  check(t.domFrac <= 0.08 && lt.peakDb <= 16, `recarga ${w}: suena a nota (${(t.domFrac * 100).toFixed(0)} % en ${t.domHz} Hz; pico persistente ${lt.peakDb.toFixed(1)} dB en ${lt.peakHz} Hz)`);
+  check(lt.above(8000) <= 0.007, `recarga ${w}: ${(lt.above(8000) * 100).toFixed(2)} % de la energía sobre 8 kHz (máx 0.7 %)`);
+}
+console.log(`TIMBRE · peor objeto ${worstNote.name} (${(worstNote.domFrac * 100).toFixed(0)} % en un parcial, ${worstNote.ringMs.toFixed(0)} ms) · colas rt60 1k/4k/8k: ${irRows.join(', ')} · sprint: agudo entre zancadas ${floorDb.toFixed(1)} dB, sala ${roomDb.toFixed(1)} dB, >8 kHz ${(sprintLt.above(8000) * 100).toFixed(2)} % · recargas parcial/pico: ${reloadRows.join(', ')}`);
+
 /* ------------------- 5. robustez: frecuencias de contexto, rechazos, balas */
 
 const { bulletPass } = await import('../src/fx/audio.js');

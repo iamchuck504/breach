@@ -116,6 +116,7 @@ varying vec4 vSurf; varying vec2 vDetail; varying vec3 vBind; varying vec3 vBind
 vSurf = aSurf; vDetail = aDetail; vBind = position; vBindN = normal;`,
   fragmentPars: /* glsl */`
 uniform vec3 uTeam; uniform float uCorpse; uniform float uRim;
+uniform float uLocal; uniform float uHide; uniform float uProjY; uniform float uCrowd; uniform float uGhost;
 varying vec4 vSurf; varying vec2 vDetail; varying vec3 vBind; varying vec3 vBindN;
 ${NOISE}`,
   // diffuseColor ya trae el color por vértice (lineal)
@@ -152,6 +153,25 @@ ${NOISE}`,
   float sL = dot(sAlb, vec3(0.2126, 0.7152, 0.0722));
   sAlb = mix(sAlb, vec3(sL) * 0.6, uCorpse * 0.82);
   diffuseColor.rgb = sAlb;
+  // SOLDADO PROPIO (solo su material, uLocal=1): lo que queda pegado a la
+  // lente o tapa la retícula de cerca se borra con trama ordenada (screen-
+  // door, sin mezcla ni orden de dibujo). La sombra sale de otro pase y se
+  // queda. Va al final del bloque: las derivadas de arriba ya se calcularon.
+  if (uLocal > 0.5) {
+    float sZ = vViewPosition.z;
+    float sKeep = smoothstep(0.32, 0.62, sZ);
+    // radio en pantalla (unidades de media altura) desde la retícula
+    float sR = uProjY * length(vViewPosition.xy) / max(sZ, 1e-3);
+    // de cerca, o con el hombro aplastado (soldado detrás de la mira)
+    float sHole = (1.0 - smoothstep(0.42, 0.56, sR)) * max(1.0 - smoothstep(1.35, 1.75, sZ), uCrowd);
+    // cámara dentro del volumen del soldado: el resto queda en trama al 30%
+    sKeep = min(sKeep, 1.0 - sHole) * (1.0 - uHide) * (1.0 - 0.7 * uGhost);
+    // Bayer 4x4 aritmético sobre el píxel
+    vec2 sB = floor(gl_FragCoord.xy);
+    vec2 sB2 = floor(sB * 0.5);
+    float sT = fract(sB.x * 0.5 + sB.y * sB.y * 0.75) + 0.25 * fract(sB2.x * 0.5 + sB2.y * sB2.y * 0.75);
+    if (sKeep < 0.999 && sKeep <= sT + 0.03125) discard;
+  }
 }`,
   rough: /* glsl */`roughnessFactor = mix(vSurf.x, 0.92, uCorpse);`,
   // metalnessFactor ya existe aquí (metalnessmap_fragment va antes)
@@ -177,6 +197,7 @@ function makeMaterial(team, corpse) {
     uTeam: { value: new THREE.Color(SOLDIER_TEAM[team] ?? SOLDIER_TEAM.red) },
     uCorpse: { value: 0 },
     uRim: { value: 0.5 },
+    uLocal: { value: 0 }, uHide: { value: 0 }, uProjY: { value: 1 }, uCrowd: { value: 0 }, uGhost: { value: 0 },
   };
   patch(material, { ...SHADER, uniforms, key: 'soldier-v1' });
   material.userData.soldierLook = team;
@@ -192,6 +213,49 @@ export function soldierMaterial(team) {
 // Copia propia de un cadáver (su desaturación es por rig). Mismo programa.
 export function soldierCorpseMaterial(source) {
   return makeMaterial(source.userData.soldierLook, true);
+}
+
+// Material del soldado PROPIO: mismo programa que el de equipo (sin
+// compilar nada en partida), con sus propios uniforms. Solo lo lleva el rig
+// local; compañeros, rivales y cadáveres siguen con el compartido.
+const LOCAL_MATERIALS = new Map();
+function localSoldierMaterial(team) {
+  if (!LOCAL_MATERIALS.has(team)) {
+    const material = makeMaterial(team, false);
+    material.userData.localSoldier = true;
+    LOCAL_MATERIALS.set(team, material);
+  }
+  return LOCAL_MATERIALS.get(team);
+}
+/**
+ * Cada cuadro, para el rig del jugador: cuerpo y armas horneadas pasan al
+ * material propio (los re-horneados vuelven con el compartido) y se fijan
+ * la proyección de la cámara y el modo: 'near' (cámara de hombro: se borra
+ * lo pegado a la lente o encima de la retícula), 'hidden' (scope: nada del
+ * soldado propio delante de la lente) u 'off'. De la cámara (0..1): crowd =
+ * hombro aplastado (el soldado está detrás de la mira a cualquier distancia)
+ * y ghost = cámara dentro de su volumen (todo él en trama).
+ */
+export function syncLocalSoldierView(rig, camera, mode, crowd = 0, ghost = 0) {
+  if (!rig) return;
+  const hide = mode === 'hidden';
+  const shared = soldierMaterial(rig.team), local = localSoldierMaterial(rig.team);
+  const body = rig._bodyMesh;
+  if (body && body.material === shared) body.material = local;
+  for (const k in rig.guns) {
+    const baked = rig.guns[k]?.userData.bakedMesh;
+    if (baked && baked.material === shared) baked.material = local;
+  }
+  const u = local.userData.soldierUniforms;
+  // 'off': otra cámara (presentación, espectador) mira al soldado: entero
+  u.uLocal.value = mode === 'off' ? 0 : 1;
+  u.uHide.value = hide ? 1 : 0;
+  u.uProjY.value = camera.projectionMatrix.elements[5];
+  u.uCrowd.value = crowd;
+  u.uGhost.value = ghost;
+  // contorno de spawn: ni dentro del scope ni con la cámara metida en él;
+  // visto desde otra cámara ('off') va entero (ghost es de la de hombro)
+  if (rig._outlineMat) rig._outlineMat.opacity = hide ? 0 : mode === 'off' ? 0.45 : 0.45 * (1 - ghost);
 }
 
 // Contorno de la protección de spawn: la misma geometría y el mismo

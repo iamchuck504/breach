@@ -1,7 +1,9 @@
 // Contrato visual del arma: el mesh no cambia de eje entre low-ready y el
 // primer disparo; la guía central de gameplay se valida en check-reticle.
 import * as THREE from 'three';
-import { Rig } from '../src/player/rig.js';
+import fs from 'node:fs';
+import { Rig, ADS_WEAPON_POSES } from '../src/player/rig.js';
+import { measure } from './fire-reference.mjs';
 import { RemotePlayer } from '../src/player/remote.js';
 
 const failures = [];
@@ -106,7 +108,9 @@ for (const weapon of weapons) {
   // conserva una postura de precisión propia aunque comparta la línea óptica.
   settle(rig, params(true, 0), 90);
   poses.set(weapon, rig.gunMount.position.clone());
-  const adsCenterX = rig.aimRig.position.x + rig.gunMount.position.x;
+  // en mundo (raíz en el origen mirando a -z): con el pecho perfilado el
+  // aimRig ya no está en el marco del pecho visible
+  const adsCenterX = rig.gunMount.getWorldPosition(new THREE.Vector3()).x;
   const minAdsCenterShift = weapon === 'pistol' ? 0.19 : 0.23;
   check(adsCenterX >= minAdsCenterShift,
     `${weapon}: ADS no lleva brazos/arma hacia la línea de visión (${adsCenterX})`);
@@ -116,7 +120,9 @@ for (const weapon of weapons) {
   const gun = rig.activeGun;
   const rightHand = rig.armR.hand.getWorldPosition(new THREE.Vector3());
   const rightGrip = gun.userData.grip.getWorldPosition(new THREE.Vector3());
-  const support = gun.userData.aimSupport ?? gun.userData.forend;
+  // ADS con arma larga: la izquierda toma el punto alcanzable más adelantado
+  // entre grip y guardamanos (adsSupport en rig.js), no el guardamanos fijo
+  const support = gun.userData.aimSupport ?? gun.userData.adsSupport ?? gun.userData.forend;
   const leftHand = rig.armL.hand.getWorldPosition(new THREE.Vector3());
   const leftGrip = support.getWorldPosition(new THREE.Vector3());
   check(rightHand.distanceTo(rightGrip) < 0.09,
@@ -169,6 +175,40 @@ leftFireRemote.applyFirePose({ st: 'cover_high', a: 1, p: 0.1, ae: 0,
 check(leftFireRemote.aimSide === -1,
   'remoto: fire-pose de cover izquierdo conservó el hombro derecho');
 leftFireRemote.dispose(scene);
+
+// REFERENCIA ABSOLUTA. Hip fire y blindfire disparan por el eje físico del
+// cañón: muzzle y dirección se comparan con la tabla generada desde el rig
+// de HEAD 9fc6f12 (scripts/fixtures/fire-reference.json, ver
+// fire-reference.mjs), no con el cuadro anterior. Diferencias intencionadas:
+// - ADS abierto con arma larga: el arma avanza ADS_WEAPON_POSES[w].fwd a lo
+//   largo del propio cañón (misma dirección); con yaw/pitch extremos el
+//   ajuste de alcance del brazo derecho la traslada hasta 15 cm más. En ADS
+//   la bala va del muzzle al punto de la retícula: el origen cambia, la
+//   dirección del cañón no.
+// - blind_over: el cuerpo agachado acerca el arma al hombro; la dirección no
+//   cambia y el muzzle no se separa más de 6 cm apuntando hacia abajo (lo que
+//   decide librar el borde) ni de 22 cm apuntando nivelado o arriba.
+{
+  const ref = JSON.parse(fs.readFileSync(new URL('./fixtures/fire-reference.json', import.meta.url)));
+  const now = await measure(Rig);
+  let worstDir = 0, worstPos = 0;
+  for (const key of Object.keys(ref)) {
+    const [weapon, state, pitch] = key.split('|');
+    const a = ref[key], b = now[key];
+    if (!b) { check(false, `${key}: falta en la medición`); continue; }
+    const dir = 2 * Math.asin(Math.min(1, Math.hypot(...a.d.map((v, i) => v - b.d[i])) / 2)) * 180 / Math.PI;
+    let delta = new THREE.Vector3(...b.m).sub(new THREE.Vector3(...a.m));
+    const fwd = state === 'open-ads' ? (ADS_WEAPON_POSES[weapon]?.fwd ?? 0) : 0;
+    if (fwd) delta = delta.sub(new THREE.Vector3(...a.d).multiplyScalar(fwd));
+    const pos = delta.length();
+    const posMax = state === 'blind_over' ? (Number(pitch) < 0 ? 0.06 : 0.22) : fwd ? 0.15 : 0.02;
+    check(dir <= 0.5, `${key}: el cañón se desvió ${dir.toFixed(2)}° de la referencia`);
+    check(pos <= posMax, `${key}: el muzzle se movió ${pos.toFixed(3)} m de la referencia (máx ${posMax})`);
+    worstDir = Math.max(worstDir, dir);
+    if (state !== 'blind_over' && !fwd) worstPos = Math.max(worstPos, pos);
+  }
+  console.log(`REFERENCIA: ${Object.keys(ref).length} poses · desvío máx ${worstDir.toFixed(3)}° · muzzle máx ${worstPos.toFixed(3)} m (sin blind_over ni ADS largo)`);
+}
 
 if (failures.length) {
   console.error('FIRE DIRECTION ERRORS:');

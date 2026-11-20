@@ -3,8 +3,15 @@
 // del gesto). Slots 0/1 = primarias (un arma especial del mapa puede ocupar
 // uno), 2 = pistola, 3 = granada de humo.
 import { TUNING } from '../config/tuning.js';
+import { specialPickupSlot } from '../game/drop-policy.js';
 
-const SWAP_TIME = 0.55;
+// exportado: el servidor deriva de aquí el instante más temprano de un cambio honesto
+export const SWAP_TIME = 0.55;
+// intervalo mínimo entre dos tiros (fracción del nominal) al arrastrar
+// cadencia. La puerta del servidor rechaza todo intervalo < 0.82: con 0.9
+// queda ≥8 ms de margen al jitter de red. Precio: a 60 Hz la SMG sigue en
+// 6 cuadros (600 RPM); alternar con 5 (0.86) dejaba solo 4 ms de margen.
+const MIN_GAP = 0.9;
 export const DEFAULT_LOADOUT = ['smg', 'shotgun', 'pistol', 'grenade'];
 export const SPECIAL_WEAPONS = ['sniper', 'bazooka'];
 
@@ -50,6 +57,7 @@ export class Weapons {
     this.reloadInterrupted = false;
     this.reloadInserted = 0;
     this._reloadInterruptPending = false;
+    this._credit = 0;
   }
 
   // La muerte tiene prioridad absoluta sobre gestos del arma. Congelar el
@@ -61,6 +69,7 @@ export class Weapons {
     this._swapTarget = null;
     this._queuedTarget = null;
     this._reloadInterruptPending = false;
+    this._credit = 0;
     for (const k of this.slots) this.state[k].reload = 0;
   }
 
@@ -84,9 +93,8 @@ export class Weapons {
   // El arma especial del mapa reemplaza la primaria EN MANO (o el slot 0 si
   // llevas pistola/granada). Devuelve el id del arma que salió del loadout.
   giveSpecial(k) {
-    const curIdx = this.slots.indexOf(this.cur);
-    const existing = this.slots.indexOf(k);
-    const idx = existing >= 0 ? existing : (curIdx === 0 || curIdx === 1 ? curIdx : 0);
+    // misma regla que el servidor (drop-policy.js)
+    const idx = specialPickupSlot(this.slots, this.cur, k);
     const removed = this.slots[idx];
     delete this.state[removed];
     this.slots[idx] = k;
@@ -152,6 +160,10 @@ export class Weapons {
     return true;
   }
 
+  // El gatillo se soltó (aunque se volviera a pulsar antes del paso): el
+  // siguiente tiro no hereda el sobrante del anterior.
+  dropCadenceCredit() { this._credit = 0; }
+
   startReload() {
     const s = this.st, d = this.def;
     if (d.thrown || this.cur==='stun') return false;
@@ -178,17 +190,29 @@ export class Weapons {
     return Math.max(0, Math.min(1, 1 - s.reload / d.reloadTime));
   }
 
-  // Devuelve true si disparó (o lanzó) este frame.
-  update(dt, wantsFire, wantsFirePressed, canFire) {
+  // Devuelve true si disparó (o lanzó) este frame. `canHandle` = las manos
+  // están libres para el arma (false durante melee y su recovery).
+  update(dt, wantsFire, wantsFirePressed, canFire, canHandle = true) {
     const s = this.st, d = this.def;
     this.reloadInterrupted = this._reloadInterruptPending;
     this._reloadInterruptPending = false;
     this.reloadInserted = 0;
+    // cooldown del arma en mano al empezar el paso: si se agota DENTRO del
+    // paso, el tiempo que ya lleva lista se arrastra al siguiente tiro.
+    // El crédito vive APARTE del cd y se consume en cada paso: solo lo
+    // conserva la espera con el gatillo aún pendiente (abajo); soltar,
+    // recargar, cambiar, melee o estar bloqueado lo pierden.
+    const cdBefore = s.cd;
+    const credit = this._credit || 0;
+    this._credit = 0;
     // el cooldown corre para TODAS las armas (guardarlas no lo congela)
     for (const k of this.slots) this.state[k].cd = Math.max(0, this.state[k].cd - dt);
 
-    // auto-recarga al quedarse sin balas (sin esperar otro click)
-    if (s.mag === 0 && s.reload === 0 && this.swapT === 0 &&
+    // auto-recarga al quedarse sin balas (sin esperar otro click). No con
+    // las manos ocupadas: el melee cancela la recarga y, sin esta puerta, la
+    // misma actualización la reiniciaba y la escopeta metía un cartucho a
+    // mitad de la patada con la pose de recarga suprimida. Arranca al salir.
+    if (canHandle && s.mag === 0 && s.reload === 0 && this.swapT === 0 &&
         (this.infinite || s.reserve > 0) && !d.thrown) {
       this.startReload();
     }
@@ -244,12 +268,24 @@ export class Weapons {
     // bufereada; antes ignoraban el click encolado si se soltaba Fire antes
     // de recuperar control o terminar una recarga vacía.
     const trigger = d.auto ? (wantsFire || wantsFirePressed) : wantsFirePressed;
-    if (!trigger || !canFire || s.cd > 0) return false;
+    if (!trigger || !canFire || !canHandle) return false;
+    // listo = cooldown cubierto por el crédito, y nunca antes de MIN_GAP del
+    // nominal desde el tiro anterior (cd ≤ (1−MIN_GAP)·intervalo)
+    const gapLeft = (60 / d.rpm) * (1 - MIN_GAP);
+    if (s.cd > Math.min(credit, gapLeft)) { this._credit = credit; return false; }
     if (s.mag <= 0) return false; // seco total (la auto-recarga ya corrió arriba)
     s.mag--;
     // la granada no recarga: en práctica se repone sola al lanzarla
     if (this.infinite && d.thrown && this.cur!=='frag') s.mag = d.mag;
-    s.cd = 60 / d.rpm;
+    // Arrastre de cadencia: sin él cada tiro esperaba al primer paso entero
+    // tras agotarse el cooldown y la SMG de 620 RPM daba 600 a 60 Hz, 563 a
+    // 75 y 617 a 144. Crédito = cuánto antes de este fin de paso quedó lista
+    // según el horario nominal (incluido lo que MIN_GAP retrasó); solo si
+    // seguía en cadena al empezar el paso, y acotado a medio intervalo.
+    const interval = 60 / d.rpm;
+    const left = cdBefore - credit; // lo que faltaba al empezar el paso
+    this._credit = cdBefore > 0 ? Math.min(interval * 0.5, Math.max(0, dt - left)) : 0;
+    s.cd = interval;
     return true;
   }
 }

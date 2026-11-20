@@ -177,7 +177,9 @@ try {
 
   // El bot del host tiene una carga y la retransmisión identifica al bot, no
   // al host. El host queda excluido para no ver una segunda simulación.
-  a.send({ t: 'botState', bots: [{ id: hostedBot.id, x: 0, y: 0, z: 0, yaw: 0, st: 'idle', w: 'smg' }] });
+  // como el bot real (botmatch.js): saca el bote con su gesto y lo lanza con
+  // la granada EN MANO; el servidor exige que el arma replicada sea esa
+  a.send({ t: 'botState', bots: [{ id: hostedBot.id, x: 0, y: 0, z: 0, yaw: 0, st: 'idle', w: 'grenade' }] });
   await wait(80);
   const botNadeP = b.next('nade', (m) => m.id === hostedBot.id);
   a.send({ t: 'nade', bot: hostedBot.id, o: [0.4, 1.2, 0], v: [6, 3.36, 0] });

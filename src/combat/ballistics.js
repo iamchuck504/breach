@@ -1,26 +1,35 @@
 // Hitscan: ray contra mundo (AABBs) y contra jugadores (cápsula cuerpo + esfera cabeza).
 import * as THREE from 'three';
 
+// Toda primitiva comprueba primero la CONTENCIÓN: un origen dentro del
+// volumen (cañón a quemarropa dentro del rival) impacta en t = 0.
 export function raySphere(o, d, cx, cy, cz, r) {
   const ox = o.x - cx, oy = o.y - cy, oz = o.z - cz;
   const b = ox * d.x + oy * d.y + oz * d.z;
   const c = ox * ox + oy * oy + oz * oz - r * r;
+  if (c <= 0) return 0;
   const disc = b * b - c;
   if (disc < 0) return null;
   const t = -b - Math.sqrt(disc);
   return t > 0 ? t : null;
 }
 
+// alias histórico: raySphere ya trata la contención
+export const raySphereIn = raySphere;
+
 // Cápsula vertical (x, z, y0..y1, r). Aproximación por punto más cercano.
 export function rayCapsule(o, d, x, z, y0, y1, r) {
-  // resolver contra cilindro infinito en XZ
+  // contención primero: punto del segmento más cercano al origen
   const ox = o.x - x, oz = o.z - z;
+  const cy = Math.max(y0, Math.min(y1, o.y));
+  if (ox * ox + (o.y - cy) * (o.y - cy) + oz * oz <= r * r) return 0;
+  // resolver contra cilindro infinito en XZ
   const a = d.x * d.x + d.z * d.z;
   if (a < 1e-8) {
-    // ray vertical: dentro del radio?
+    // rayo vertical: dentro del radio entra por la tapa de su lado
     if (ox * ox + oz * oz > r * r) return null;
-    const t = (y0 - o.y) / d.y;
-    return t > 0 ? t : null;
+    const t0 = raySphere(o, d, x, y0, z, r), t1 = raySphere(o, d, x, y1, z, r);
+    return t0 !== null && t1 !== null ? Math.min(t0, t1) : (t0 ?? t1);
   }
   const b = ox * d.x + oz * d.z;
   const c = ox * ox + oz * oz - r * r;
@@ -39,7 +48,62 @@ export function rayCapsule(o, d, x, z, y0, y1, r) {
   return t0 ?? t1;
 }
 
-// targets: [{id, x, z, y, alive, crouch}] — hitbox de PIE: cuerpo y0.35..1.3
+// Cápsula de eje libre (segmento a→b, radio r), para poses inclinadas (dive,
+// mantle, flip, asomado). Como en la vertical, lo que queda más de 0.12 m
+// más allá de b (hombros) no es cuerpo: ahí manda la cabeza. El corte es un
+// semiespacio, así que un rayo que entra por esa zona sigue pudiendo dar en
+// el resto del tronco (con el cuerpo tumbado hacia el tirador, el antiguo
+// "descartar el impacto" dejaba el pecho sin volumen).
+export function raySegmentCapsule(o, d, ax, ay, az, bx, by, bz, r) {
+  const ux = bx - ax, uy = by - ay, uz = bz - az;
+  const len = Math.hypot(ux, uy, uz);
+  if (len < 1e-6) return raySphereIn(o, d, ax, ay, az, r);
+  const ex = ux / len, ey = uy / len, ez = uz / len;
+  const wx = o.x - ax, wy = o.y - ay, wz = o.z - az;
+  const dd = d.x * ex + d.y * ey + d.z * ez, wd = wx * ex + wy * ey + wz * ez;
+  // contención primero (sin pasar el corte de hombros)
+  {
+    const k = Math.max(0, Math.min(len, wd));
+    if (wd <= len + 0.12 && Math.hypot(wx - ex * k, wy - ey * k, wz - ez * k) <= r) return 0;
+  }
+  let tin = Infinity, tout = -Infinity;
+  // cara lateral del cilindro (solo dentro del segmento)
+  const px = d.x - ex * dd, py = d.y - ey * dd, pz = d.z - ez * dd;
+  const qx = wx - ex * wd, qy = wy - ey * wd, qz = wz - ez * wd;
+  const A = px * px + py * py + pz * pz, B = px * qx + py * qy + pz * qz;
+  const C = qx * qx + qy * qy + qz * qz - r * r;
+  if (A > 1e-10) {
+    const disc = B * B - A * C;
+    if (disc >= 0) {
+      const sq = Math.sqrt(disc);
+      for (const t of [(-B - sq) / A, (-B + sq) / A]) {
+        const along = wd + dd * t;
+        if (along >= 0 && along <= len) { if (t < tin) tin = t; if (t > tout) tout = t; }
+      }
+    }
+  }
+  // esferas de los extremos: la cápsula es convexa, entrada/salida = min/max
+  for (const [cx, cy, cz] of [[ax, ay, az], [bx, by, bz]]) {
+    const sx = o.x - cx, sy = o.y - cy, sz = o.z - cz;
+    const sb = sx * d.x + sy * d.y + sz * d.z, sc = sx * sx + sy * sy + sz * sz - r * r;
+    const disc = sb * sb - sc;
+    if (disc < 0) continue;
+    const sq = Math.sqrt(disc);
+    if (-sb - sq < tin) tin = -sb - sq;
+    if (-sb + sq > tout) tout = -sb + sq;
+  }
+  if (tin > tout) return null;
+  const lim = len + 0.12;
+  if (Math.abs(dd) < 1e-9) { if (wd > lim) return null; }
+  else if (dd > 0) tout = Math.min(tout, (lim - wd) / dd);
+  else tin = Math.max(tin, (lim - wd) / dd);
+  if (tin > tout) return null;
+  // origen dentro (entrada negativa, salida positiva): impacto inmediato
+  return tin >= 0 ? tin : tout >= 0 ? 0 : null;
+}
+
+// targets: [{id, x, z, y, alive, crouch, hit?}] — `hit` (hit-pose.js) es el
+// volumen de la pose en mundo y manda cuando existe. — hitbox de PIE: cuerpo y0.35..1.3
 // r0.4, cabeza y1.52 r0.22. AGACHADO (cover bajo): cuerpo 0.26..0.6, cabeza
 // 0.86 (tope 1.08 < bloque LOW 1.1) — sin esto, el personaje visualmente
 // agachado conservaba la cabeza-hitbox de pie flotando sobre el bloque.
@@ -58,9 +122,18 @@ export function resolveShot(world, targets, origin, dir, maxRange, excludeId = n
 
   for (const tg of targets) {
     if (!tg.alive || tg.id === excludeId) continue;
+    // volumen según la pose dibujada (hit-pose.js); sin él, la regla de siempre
+    if (tg.hit) {
+      const v = tg.hit;
+      const th = raySphereIn(origin, dir, v.hx, v.hy, v.hz, v.hr);
+      if (th !== null && th < bestT) { bestT = th; hit = { kind: 'player', t: th, id: tg.id, part: 'head' }; continue; }
+      const tb = raySegmentCapsule(origin, dir, v.ax, v.ay, v.az, v.bx, v.by, v.bz, v.br);
+      if (tb !== null && tb < bestT) { bestT = tb; hit = { kind: 'player', t: tb, id: tg.id, part: 'body' }; }
+      continue;
+    }
     const ty = tg.y || 0; // altura de los pies (saltos / encima de cajas)
     const cr = !!tg.crouch;
-    const th = raySphere(origin, dir, tg.x, (cr ? 0.86 : 1.52) + ty, tg.z, 0.22);
+    const th = raySphereIn(origin, dir, tg.x, (cr ? 0.86 : 1.52) + ty, tg.z, 0.22);
     if (th !== null && th < bestT) { bestT = th; hit = { kind: 'player', t: th, id: tg.id, part: 'head' }; continue; }
     const bodyR = cr ? 0.42 : 0.4;
     const bodyTop = (cr ? 0.6 : 1.3) + ty;

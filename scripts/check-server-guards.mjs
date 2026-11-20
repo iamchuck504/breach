@@ -22,11 +22,13 @@ assert.equal(soldier.ammoBudget.smg, total('smg'), 'la caja no repuso munición 
 
 const bot = { bot: true, ammoBudget: createAmmoBudget() };
 bot.ammoBudget.smg = 0;
-assert.equal(consumeShotAmmo(bot, 'smg'), true, 'la IA perdió su presupuesto normal interno');
+// los bots alojados se contabilizan como un jugador (cargador + reserva)
+assert.equal(consumeShotAmmo(bot, 'smg'), false, 'un bot disparó sin presupuesto normal');
 assert.equal(consumeShotAmmo(bot, 'sniper'), false, 'un bot inventó munición especial');
 assert.equal(grantWeaponAmmo(bot, 'sniper'), total('sniper'));
-for (let i = 0; i < total('sniper'); i++) assert.equal(consumeShotAmmo(bot, 'sniper'), true);
-assert.equal(consumeShotAmmo(bot, 'sniper'), false, 'el sniper de bot no agotó munición');
+// el sniper de bot tiene cargador de 1: cada tiro tras su recarga (1.7 s)
+for (let i = 0; i < total('sniper'); i++) assert.equal(consumeShotAmmo(bot, 'sniper', 100 + i * 2), true);
+assert.equal(consumeShotAmmo(bot, 'sniper', 100 + total('sniper') * 2), false, 'el sniper de bot no agotó munición');
 assert.equal(grantWeaponAmmo(bot, 'bazooka', 999, 999), total('bazooka'),
   'un pickup excedió la capacidad real');
 assert.equal(grantWeaponAmmo(bot, 'bazooka', Number.POSITIVE_INFINITY, 1), 0,

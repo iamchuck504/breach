@@ -21,8 +21,10 @@ try{
       old.update(0,{state:'idle',speed:0});rig.update(0,{state:'idle',speed:0});rigs.push(rig);
       rows.push({team,variant:v,name:rig.root.userData.skin});
     }
+    // sin piernas: se apoyan sobre la suela medida de cada avatar (difieren a
+    // propósito; ver check-soldier-feet)
     const joints=r=>[r.hips,r.torso,r.head,r.aimRig,r.armL.shoulder,r.armL.elbow,r.armL.hand,
-      r.armR.shoulder,r.armR.elbow,r.armR.hand,r.legL.hip,r.legL.knee,r.legR.hip,r.legR.knee];
+      r.armR.shoulder,r.armR.elbow,r.armR.hand];
     let maxPoseError=0,maxMuzzleError=0,opaque=true,shared=true,samePalette=true;
     const recruitMaterials={red:new Set(),blue:new Set()};
     for(const r of rigs.filter(r=>r.variant===0))r.root.traverse(o=>{

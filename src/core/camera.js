@@ -22,6 +22,9 @@ export class ShoulderCamera {
     this._follow = new THREE.Vector3(); // pivote suavizado: lo único que va con retraso
     this._rig = null;                   // hombro / altura / distancia suavizados
     this._reach = 1;                    // fracción de la distancia libre de obstáculos
+    this._sideDir = new THREE.Vector3();
+    this.crowd = 0;                     // 0..1: hombro aplastado contra algo
+    this.ghost = 0;                     // 0..1: cámara dentro del volumen del soldado
     this._side = 1; // hombro actual: 1 = derecho, -1 = izquierdo (suavizado)
     this._scoped = false;
   }
@@ -152,26 +155,43 @@ export class ShoulderCamera {
     const back = this._tmp.set(sy * cp, -sp, cy * cp); // apunta desde pivot hacia atrás de cámara
     const right = { x: cy, z: -sy };
 
-    const desired = new THREE.Vector3(
-      this.pivot.x + back.x * dist + right.x * shoulder,
-      this.pivot.y + back.y * dist + 0.12,
-      this.pivot.z + back.z * dist + right.z * shoulder,
-    );
-
-    // colisión: ray del pivot a la posición deseada
-    const dir = desired.clone().sub(this.pivot);
+    // Brazo de UN tramo, el de siempre (pivote → hombro + atrás·dist): la
+    // cámara es el origen del rayo óptico que decide los tiros en ADS, así
+    // que su posición respecto al soldado no puede ganar ángulo sobre una
+    // esquina (run 4 probó un brazo hombro-luego-atrás y abría líneas de
+    // tiro nuevas junto a una pared). Lo que cambia: la colisión SIEMPRE
+    // gana. Antes la distancia mínima de 0.5 m podía dejar la cámara al
+    // otro lado de una pared fina; ahora se queda a este lado aunque quede
+    // más cerca del casco, y es el material del soldado propio (trama) el
+    // que mantiene la vista libre.
+    const dir = this._sideDir.set(back.x * dist + right.x * shoulder, back.y * dist + 0.12, back.z * dist + right.z * shoulder);
     const len = dir.length();
-    dir.normalize();
-    const t = this.world.raycast(this.pivot, dir, len + 0.2, 0.25);
+    dir.multiplyScalar(1 / len);
+    let free = this._free(this.pivot, dir, len);
+    // Distancia mínima (TUNING.cam.minDist) como antes, pero solo hasta la
+    // superficie real menos 2 cm: nunca al otro lado de una pared fina.
+    if (free * len < c.minDist) {
+      const tSurf = this.world.raycast(this.pivot, dir, c.minDist, 0);
+      free = Math.max(free, Math.min(c.minDist, tSurf === null ? c.minDist : Math.max(0, tSurf - 0.02)) / len);
+    }
     // Obstáculo: la cámara entra EN EL ACTO (nunca atraviesa la pared mientras
     // se suaviza) y vuelve a alejarse con suavidad cuando queda libre.
-    const free = t !== null && t < len ? Math.max(c.minDist, t - 0.15) / len : 1;
     if (this._first || free < this._reach) this._reach = free;
     else this._reach += (free - this._reach) * (1 - Math.exp(-c.clipOutLerp * dt));
     // ORBITA RÍGIDA: la posición sale del pivote y de los ángulos de ESTE
     // cuadro. Girar el ratón ya no arrastra la cámara detrás de la mira.
     this.pos.copy(this.pivot).addScaledVector(dir, len * this._reach);
     this._first = false;
+    // Para el material del soldado propio (main → syncLocalSoldierView):
+    // crowd = hombro recogido (el soldado queda detrás de la retícula; normal
+    // 0.82 de pie y en cover, 1.08 apuntando → 0); ghost = cámara metida en
+    // su volumen (a menos de ~0.7 m de su eje → todo él en trama).
+    const lat = Math.abs(shoulder) * this._reach;
+    const k = Math.min(1, Math.max(0, (0.8 - lat) / 0.22));
+    this.crowd = k * k * (3 - 2 * k);
+    const ax = Math.hypot(this.pos.x - player.pos.x, this.pos.z - player.pos.z);
+    const g = Math.min(1, Math.max(0, (0.8 - ax) / 0.25));
+    this.ghost = g * g * (3 - 2 * g);
 
     // shake POSICIONAL únicamente: nunca rota la puntería (eso se siente incontrolable)
     this.shakeT += dt * 30;
@@ -192,6 +212,14 @@ export class ShoulderCamera {
       this.camera.fov = this.fov;
       this.camera.updateProjectionMatrix();
     }
+  }
+
+  // Fracción libre de un tramo (dir unitario, len): la cámara se queda 0.15
+  // antes de la caja inflada 0.25.
+  _free(from, dir, len) {
+    if (len < 1e-6) return 1;
+    const t = this.world.raycast(from, dir, len + 0.2, 0.25);
+    return t !== null && t < len ? Math.max(0, t - 0.15) / len : 1;
   }
 
   // Ray desde el centro de pantalla (para apuntar)

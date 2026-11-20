@@ -98,6 +98,16 @@ await p1.evaluate(() => {
 });
 await p1.waitForTimeout(600); // sync de posiciones (20 Hz)
 const hpBefore = await p2.evaluate(() => window.BREACH.selfHp);
+// P1 está DETRÁS de P2: el servidor puede resolverlo como golpe por la espalda
+// (letal) y P2 reaparecer antes de medir; se registra lo que P2 vivió
+await p2.evaluate(() => {
+  const w = window.__melee = { minHp: window.BREACH.selfHp, died: false };
+  w.timer = setInterval(() => {
+    const G = window.BREACH;
+    w.minHp = Math.min(w.minHp, G.selfHp);
+    if (!G.selfAlive || G.player?.dead) w.died = true;
+  }, 20);
+});
 for (let i = 0; i < 3; i++) {
   await p1.evaluate(() => {
     const p = window.BREACH.player;
@@ -112,8 +122,8 @@ for (let i = 0; i < 3; i++) {
 }
 const meleeOut = {
   hpBefore,
-  p2dead: await p2.evaluate(() => !window.BREACH.selfAlive || !!window.BREACH.player?.dead),
-  p2hp: await p2.evaluate(() => Math.round(window.BREACH.selfHp)),
+  p2dead: await p2.evaluate(() => { clearInterval(window.__melee.timer); return window.__melee.died; }),
+  p2hp: await p2.evaluate(() => Math.round(window.__melee.minHp)),
 };
 check('melee online mata con la validación del server',
   meleeOut.p2dead || meleeOut.p2hp < hpBefore, JSON.stringify(meleeOut));

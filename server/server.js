@@ -14,15 +14,30 @@ import { ROUND_FINISH_HOLD as DEFAULT_ROUND_FINISH_HOLD } from '../src/game/matc
 import { TUNING } from '../src/config/tuning.js';
 import { nextRespawnWave } from '../src/game/respawn-wave.js';
 import { PowerRespawn } from '../src/game/power-respawn.js';
-import { takeDropAmmo, canReplaceDrop, replacementSlot } from '../src/game/drop-policy.js';
+import { takeDropAmmo, canReplaceDrop, replacementSlot, specialPickupSlot } from '../src/game/drop-policy.js';
 import { damageFalloff, firearmDamage, rocketSplashDamage } from '../src/combat/damage.js';
 import {evaluateBlast} from '../src/combat/blast.js';
 import {CombatPrototypes} from '../src/combat/prototypes.js';
 import { isSniperHeadshotDeath, rocketDeathLevel } from '../src/combat/death-reactions.js';
 import { makeSmokeProjectile, stepSmokeProjectile } from '../src/game/smoke-physics.js';
+import { claimPose, currentVolume, placeHitPose, hitAimHeights } from '../src/combat/hit-pose.js';
+import { adsSetback, shooterPlaneDistance } from '../src/combat/shooter-plane.js';
+// pose ADS del tirador alineada con el disparo: la actual o las de los
+// últimos 300 ms (el estado viaja a 20 Hz y el disparo puede adelantarse)
+function aimedSetback(shooter, o) {
+  // el historial de poses va en reloj MONÓTONO (monoSec): compararlo con
+  // epoch descartaba todas las muestras
+  const mt = monoSec();
+  for (const pose of [shooter, ...(shooter.poseHistory || []).filter((p) => p.at >= mt - 0.3).reverse()]) {
+    const c = adsSetback(pose, o);
+    if (c) return c;
+  }
+  return null;
+}
 import {
   MAX_WS_PAYLOAD, MessageRateGuard, acceptMovement, consumeShotAmmo,
   createAmmoBudget, grantWeaponAmmo, refillNormalAmmo, resetMovementGuard,
+  fireCadenceAllows, commitFireCadence, noteMessageArrival,
 } from './guards.js';
 import {
   clipMapEndpoint, mapLineBlocked, mapSurfaceContact, projectileMapContact,
@@ -78,7 +93,6 @@ const VALID_STATES = new Set(['idle', 'run', 'roadie', 'dive', 'slide', 'cover_l
 const VALID_COVER_KINDS = new Set(['low', 'medium', 'high', 'railing', 'platform-edge',
   'vehicle', 'shelter', 'truck', 'bus']);
 const VISUAL_AIM_MAX = 52 * Math.PI / 180;
-const CROUCH_STATES = new Set(['cover_low', 'blind_over', 'blind_low_left', 'blind_low_right']);
 const POSE_HISTORY_TIME = 0.75;
 const CLAIM_POSITION_TOLERANCE = 0.82;
 
@@ -139,7 +153,7 @@ const roomDefaults = () => ({ ...DEFAULT_LOBBY_SETTINGS,
 let settings = roomDefaults(), phase = 'empty', phaseTimer = null, startAt = 0, round = 0;
 const prototypes=new CombatPrototypes({
  experimental:process.env.BREACH_EXPERIMENTAL_STUN==='1',
- actors:()=>allSlots().map(p=>({...p,protected:p.prot>nowSec()})),
+ actors:()=>allSlots().map(p=>({...p,protected:p.prot>nowSec(),blastH:blastHeightOf(p)})),
  physics:{resolveCircle:(...a)=>serverMapPhysics(settings.map).resolveCircle(...a),groundHeight:(...a)=>serverMapPhysics(settings.map).groundHeight(...a)},
  blocked:(a,b)=>mapLineBlocked(settings.map,[a.x,a.y,a.z],[b.x,b.y,b.z],.015),
  event:e=>{if(e.kind==='blastResolved'){checkRoundEnd();return;}broadcastRaw({t:'protoEvent',...e});},
@@ -161,32 +175,73 @@ let waveEpoch = 0;
 let wins = { red: 0, blue: 0 }, pools = { red: 0, blue: 0 };
 
 const nowSec = () => Date.now() / 1000;
-function resetPoseHistory(entity, now = nowSec()) {
-  entity.poseHistory = [{ at: now, x: entity.x || 0, y: entity.y || 0,
-    z: entity.z || 0, st: entity.st || 'idle' }];
+const LOG_FIRE_REJECTS = process.env.BREACH_LOG_FIRE_REJECTS === '1';
+// Texto de la red: solo si ES texto. String()/plantillas sobre un objeto
+// arbitrario pueden lanzar ({"toString":1,"valueOf":1}).
+const str = (v) => (typeof v === 'string' ? v : '');
+// Reloj monótono para el historial de poses, el instante de los disparos y
+// los pings: un salto del reloj del sistema no puede desordenarlos.
+const monoSec = () => performance.now() / 1000;
+// Pose tal como se DIFUNDE a los observadores (lo que hit-pose.js necesita:
+// estado, apuntado, exposición sobre cover bajo solo si el cliente la envió,
+// asomado, pitch, ae, velocidad y arma).
+function poseSnapshot(entity, now) {
+  return { at: now, x: entity.x || 0, y: entity.y || 0, z: entity.z || 0, st: entity.st || 'idle',
+    yaw: entity.yaw || 0, aim: entity.aim ? 1 : 0, p: entity.p || 0, ae: entity.ae || 0, cl: entity.cl || 0,
+    sp: entity.sp || 0, w: entity.w, ...(entity.ceKnown ? { ce: entity.ce } : {}) };
 }
-function recordPose(entity, now = nowSec()) {
+// historial: lo difundido en cada snapshot. Se guarda más que la ventana de
+// posición (0.75 s) para reconstruir la entrada de dive/mantle/flip.
+const POSE_RETAIN = 1.6;
+function resetPoseHistory(entity, now = monoSec()) {
+  entity.poseHistory = [poseSnapshot(entity, now)];
+}
+function recordPose(entity, now = monoSec()) {
   entity.poseHistory ||= [];
-  entity.poseHistory.push({ at: now, x: entity.x || 0, y: entity.y || 0,
-    z: entity.z || 0, st: entity.st || 'idle' });
-  while (entity.poseHistory.length > 2 && entity.poseHistory[0].at < now - POSE_HISTORY_TIME) {
+  entity.poseHistory.push(poseSnapshot(entity, now));
+  while (entity.poseHistory.length > 2 && entity.poseHistory[0].at < now - POSE_RETAIN) {
     entity.poseHistory.shift();
   }
 }
-function poseForClaim(target, point, now) {
+// Pose del objetivo que explica el claim: se reconstruye en el instante que
+// veía el tirador (rebobinado acotado desde el disparo, hit-pose.js) y un solo
+// volumen decide cuerpo y cabeza. `legacy`: el tirador no anunció el modelo de
+// pose (cliente anterior) y se valida con la regla anterior.
+function poseForClaim(target, point, shot = null, legacy = false, rtt = undefined) {
   if (!point) return null;
-  const candidates = (target.poseHistory || []).filter((pose) => pose.at >= now - POSE_HISTORY_TIME);
-  candidates.push({ at: now, x: target.x || 0, y: target.y || 0,
-    z: target.z || 0, st: target.st || 'idle' });
-  let best = null, bestDistance = Infinity;
-  for (const pose of candidates) {
-    const relY = point[1] - pose.y;
-    const crouched = CROUCH_STATES.has(pose.st);
-    if (relY < 0.12 || relY > (crouched ? 1.18 : 1.88)) continue;
-    const distance = Math.hypot(point[0] - pose.x, point[2] - pose.z);
-    if (distance < bestDistance) { bestDistance = distance; best = pose; }
-  }
-  return bestDistance <= CLAIM_POSITION_TOLERANCE ? best : null;
+  const mt = monoSec();
+  const history = [...(target.poseHistory || []), poseSnapshot(target, mt)];
+  const headOk = shot?.wep === 'sniper'
+    ? (head) => distance3(point, head) <= SNIPER_HEAD_AUTH_RADIUS && sniperRayHitsHead(shot, point, head)
+    : null;
+  // quemarropa: contacto de longitud cero (sin dirección); dentro de la cabeza es cabeza
+  const pointBlank = !!shot && !shot.direction && shot.wep !== 'melee';
+  const best = claimPose(history, shot?.mt ?? mt, point,
+    { rtt, legacy, headOk, pointBlank, tolerance: CLAIM_POSITION_TOLERANCE });
+  return best ? { ...best.pose, vol: best.vol, head: best.head, inside: best.inside } : null;
+}
+// volumen de la pose actual (difundida + estado de ahora)
+const currentVolumeOf = (entity) => currentVolume([...(entity.poseHistory || []), poseSnapshot(entity, monoSec())]);
+// Origen de un disparo de bot (lo simula el host): debe salir de su cuerpo
+// difundido en los últimos BOT_ORIGIN_LAG s (desfase host→servidor; los
+// botState y el botFire viajan por el mismo socket), a menos de
+// BOT_MUZZLE_REACH en planta, entre 0.3 y 2.1 m sobre los pies, y con el
+// tramo pecho→origen libre de geometría del mapa (no se dispara a través de
+// una cobertura).
+const BOT_ORIGIN_LAG = 0.3, BOT_MUZZLE_REACH = 1.2;
+function botOriginLegal(bot, o) {
+  const mt = monoSec();
+  // solo poses DIFUNDIDAS (lo que vieron los observadores), nunca la recién recibida
+  const samples = (bot.poseHistory || []).filter((p) => p.at >= mt - BOT_ORIGIN_LAG && p.at <= mt);
+  return samples.some((p) => {
+    const rel = o[1] - (p.y || 0);
+    return Math.hypot(o[0] - p.x, o[2] - p.z) <= BOT_MUZZLE_REACH && rel >= 0.3 && rel <= 2.1 &&
+      !mapLineBlocked(settings.map, [p.x, (p.y || 0) + 1.3, p.z], o, 0.02);
+  });
+}
+// altura de las muestras de exposición a explosiones según la pose
+function blastHeightOf(entity) {
+  return hitAimHeights(currentVolumeOf(entity)).blast;
 }
 const send = (ws, obj) => { if (ws?.readyState === 1) ws.send(JSON.stringify(obj)); };
 function sendRaw(ws, data) { if (ws?.readyState === 1) ws.send(data); }
@@ -350,7 +405,7 @@ function freshCombatState(p, spawn) {
     p: 0, ae: 0, cl: 0, ce: 1, ck: null, w: 'smg', sp: 0, hp: HP, alive: true,
     specialWep: null,
     weaponSlots: ['smg', 'shotgun', 'pistol', 'grenade'],
-    ammoBudget: createAmmoBudget(),
+    ammoBudget: createAmmoBudget(), fireWeapon: null, // vida nueva: sin arma previa
     nades: p.bot ? 1 : WD.grenade.mag,
     lastNadeAt: -Infinity, lastRocketAt: -Infinity,
     lastDamage: 0, respawnAt: 0, prot: startAt + SPAWN_PROT,
@@ -362,7 +417,13 @@ function freshCombatState(p, spawn) {
 function eventShooter(me, msg) {
   if (msg.bot === undefined || msg.bot === null) return me;
   if (!isHost(me)) return null;
-  return bots.get(String(msg.bot)) || null;
+  const b = bots.get(str(msg.bot)) || null;
+  if (b) syncBotTransport(b, me);
+  return b;
+}
+// un bot alojado viaja por el socket de su host: mismo silencio y mismo orden
+function syncBotTransport(b, host) {
+  b.stallCredit = host.stallCredit; b.stallAt = host.stallAt; b.msgSeq = host.msgSeq;
 }
 
 const dazed = (entity) => nowSec() < (entity?.dazeUntil || 0); // pateado: ni dispara, ni golpea, ni lanza
@@ -372,6 +433,7 @@ function relayNade(sourceWs, shooter, msg) {
   const o = vec3(msg.o), v = vec3(msg.v); if (!o || !v) return false;
   const now = nowSec();
   if (now - shooter.lastNadeAt < NADE_RELAY_INTERVAL) return false;
+  if (!projectileCadenceAllows(shooter, 'grenade', now)) return false;
   const horizontalOrigin = Math.hypot(o[0] - shooter.x, o[2] - shooter.z);
   const verticalOrigin = Math.abs(o[1] - ((shooter.y || 0) + 1.1));
   const speed = Math.hypot(v[0], v[1], v[2]);
@@ -379,7 +441,7 @@ function relayNade(sourceWs, shooter, msg) {
   const nid = `n${nextNadeId++}`;
   const cid = typeof msg.cid === 'string' && /^[a-zA-Z0-9:_-]{1,40}$/.test(msg.cid)
     ? msg.cid : null;
-  shooter.lastNadeAt = now;
+  shooter.lastNadeAt = now; commitProjectileCadence(shooter, 'grenade', now);
   shooter.nades--;
   activeNades.set(nid, makeSmokeProjectile(
     { x: o[0], y: o[1], z: o[2] },
@@ -392,6 +454,21 @@ function relayNade(sourceWs, shooter, msg) {
   return true;
 }
 
+// Proyectiles (cohete, humo, frag/stun) pasan por el MISMO horario por arma y
+// la misma evidencia de cambio que las armas de fuego, y quedan registrados
+// como última arma disparada: sin esto, arma → cohete → arma esquivaba el
+// gesto de cambio.
+const projectileInterval = (weapon) => 60 / (WD[weapon]?.rpm || 60);
+const projectileMeta = (shooter) => ({ wAt: shooter.wAt, wSeq: shooter.wSeq, wWeapon: shooter.wSeen, wInstant: !!shooter.wInstant, requireSwapEvidence: true });
+function projectileCadenceAllows(shooter, weapon, now) {
+  // el arma del lanzamiento tiene que ser la EQUIPADA replicada, siempre
+  if (shooter.w !== weapon) return false;
+  return fireCadenceAllows(shooter, weapon, projectileInterval(weapon), now, projectileMeta(shooter));
+}
+function commitProjectileCadence(shooter, weapon, now) {
+  commitFireCadence(shooter, weapon, projectileInterval(weapon), now, projectileMeta(shooter));
+}
+
 function relayRocket(sourceWs, shooter, msg) {
   if(prototypes.stunned(shooter?.id)||dazed(shooter))return false;
   if (!shooter?.alive || phase !== 'playing' ||
@@ -399,10 +476,12 @@ function relayRocket(sourceWs, shooter, msg) {
   const o = vec3(msg.o), d = vec3(msg.d); if (!o || !d) return false;
   const now = nowSec();
   if (now - shooter.lastRocketAt < ROCKET_RELAY_INTERVAL) return false;
+  if (!projectileCadenceAllows(shooter, 'bazooka', now)) return false;
   const horizontalOrigin = Math.hypot(o[0] - shooter.x, o[2] - shooter.z);
   const verticalOrigin = Math.abs(o[1] - ((shooter.y || 0) + 1.1));
   const len = Math.hypot(d[0], d[1], d[2]);
   if (horizontalOrigin > 2.2 || verticalOrigin > 2.2 || len < 0.5 || len > 1.5) return false;
+  if (shooter.bot && !botOriginLegal(shooter, o)) return false;
   if (!consumeShotAmmo(shooter, 'bazooka')) return false;
   const dir = d.map((n) => +(n / len).toFixed(6));
   const rid = `r${nextRocketId++}`;
@@ -414,10 +493,9 @@ function relayRocket(sourceWs, shooter, msg) {
     origin: o, direction: dir, launchedAt: now, traveled: 0,
     staticContact,
   });
-  // La posesión autoritativa basta: un cambio de arma puede llegar un snapshot
-  // después que el click con latencia. El launch aprobado corrige ese desfase.
-  shooter.w = 'bazooka';
-  shooter.lastRocketAt = now; shooter.lastFireAt = now;
+  // El arma equipada la decide el estado replicado (validada arriba); un
+  // lanzamiento nunca la reescribe.
+  shooter.lastRocketAt = now; commitProjectileCadence(shooter, 'bazooka', now);
   shooter.pendingShot = null;
   const fp = validatedFirePose(shooter, msg.fp);
   const packet = { t: 'rocket', rid, id: shooter.id, o, d: dir,
@@ -505,15 +583,16 @@ function dropWeapon(target) {
 
 function validatedFirePose(shooter, raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  const st = VALID_STATES.has(String(raw.st)) && raw.st !== 'dead'
-    ? String(raw.st) : (shooter.st || 'idle');
-  const ck = VALID_COVER_KINDS.has(String(raw.ck)) ? String(raw.ck) : null;
+  const st = VALID_STATES.has(str(raw.st)) && raw.st !== 'dead'
+    ? raw.st : (shooter.st || 'idle');
+  const ck = VALID_COVER_KINDS.has(str(raw.ck)) ? raw.ck : null;
   return {
     st, a: raw.a ? 1 : 0,
     p: clamp(raw.p, -1.6, 1.6),
     ae: clamp(raw.ae, -VISUAL_AIM_MAX, VISUAL_AIM_MAX),
     cl: clamp(raw.cl, -1, 1),
-    ce: Number.isFinite(raw.ce) ? clamp(raw.ce, 0, 1) : 1,
+    // sin `ce` en el origen no se inventa: los observadores aplican la regla antigua
+    ...(Number.isFinite(raw.ce) ? { ce: clamp(raw.ce, 0, 1) } : {}),
     ...(ck ? { ck } : {}),
   };
 }
@@ -526,14 +605,28 @@ function registerFire(shooter, msg, isBotFire = false) {
   // La bazooka nace exclusivamente mediante `rocket`; aceptar un `fire` en
   // el punto de explosión devolvería al cliente autoridad sobre la trayectoria.
   if (weapon === 'bazooka') return false;
-  // el melee no depende del arma en mano; el resto debe coincidir con ella
-  if ((weapon !== 'melee' && weapon !== shooter.w) || now - shooter.lastFireAt < rule.interval * .82) return false;
+  // el melee no depende del arma en mano; el resto debe coincidir con ella.
+  // Cadencia (guards.js): horario virtual por arma, apertura ≥82 %, crédito
+  // solo por jitter/atasco de transporte, gesto de cambio entre armas y `sq`
+  // creciente (clientes nuevos) contra duplicados.
+  const cadenceMeta = { sq: Number.isFinite(msg.sq) ? msg.sq : undefined,
+    wAt: shooter.wAt, wSeq: shooter.wSeq, wWeapon: shooter.wSeen, wInstant: !!shooter.wInstant, requireSwapEvidence: true };
+  if ((weapon !== 'melee' && weapon !== shooter.w) ||
+      !fireCadenceAllows(shooter, weapon, rule.interval, now, cadenceMeta)) return false;
   const melee = weapon === 'melee';
   // la embestida recorre hasta 3 m en 0,2 s: la posición conocida va por detrás
   const originTolerance = melee ? 0.9 + TUNING.melee.tackleMax : (isBotFire ? 6 : 5);
   if (Math.hypot(o[0] - shooter.x, o[2] - shooter.z) > originTolerance ||
       Math.abs(o[1] - ((shooter.y || 0) + 1.1)) > (melee ? 1.1 : 4)) return false;
-  if (Math.hypot(pt[0] - o[0], pt[1] - o[1], pt[2] - o[2]) > rule.range + (melee ? 0.22 : 2)) return false;
+  if (isBotFire && !melee && !botOriginLegal(shooter, o)) return false;
+  // Rango y falloff se miden desde el PLANO del tirador (pecho a 1.3 m),
+  // igual que el cliente: en ADS el origen óptico es la cámara, ~2.2 m por
+  // detrás, y medir desde ella descartaba disparos válidos y restaba daño.
+  // El descuento solo existe si el PROPIO estado del tirador (aim y pitch de
+  // sus snapshots recientes, no el bit del disparo) estaba en ADS y el origen
+  // cae en el sobre de su cámara; hip/blindfire (cañón): base 0.
+  const planeVec = melee ? null : aimedSetback(shooter, o);
+  if (shooterPlaneDistance(o, pt, planeVec) > rule.range + (melee ? 0.22 : 2)) return false;
   if (melee) {
     const dx = pt[0] - o[0], dz = pt[2] - o[2], len = Math.hypot(dx, dz);
     const fx = -Math.sin(shooter.yaw || 0), fz = -Math.cos(shooter.yaw || 0);
@@ -554,9 +647,10 @@ function registerFire(shooter, msg, isBotFire = false) {
   const shotDir = shotLen > 0.001
     ? shotVec.map((v) => v / shotLen)
     : null;
-  shooter.lastFireAt = now; shooter.pendingShot = {
-    at: now, wep: weapon, origin: o, endpoint, direction: shotDir,
-    length: shotLen, remainingDamage: rule.maxDamage, hitIds: new Set(),
+  commitFireCadence(shooter, weapon, rule.interval, now, cadenceMeta); shooter.pendingShot = {
+    sq: cadenceMeta.sq,
+    at: now, mt: monoSec(), wep: weapon, origin: o, endpoint, direction: shotDir,
+    length: shotLen, remainingDamage: rule.maxDamage, hitIds: new Set(), planeVec,
   };
   const fp = validatedFirePose(shooter, msg.fp);
   broadcastRaw({ t: 'fire', id: shooter.id, o, p: endpoint, w: weapon,
@@ -567,9 +661,11 @@ const HEAD_RADIUS = 0.22;
 const SNIPER_HEAD_AUTH_RADIUS = 0.58; // hitbox + margen breve de snapshot/red
 const SNIPER_ENDPOINT_EPSILON = 0.28;
 
-function targetHeadCenter(target, pose = target) {
-  const crouched = CROUCH_STATES.has(pose.st);
-  return [pose.x, (pose.y || 0) + (crouched ? 0.86 : 1.52), pose.z];
+// Centro de cabeza de la pose actual (hit-pose.js); con dos volúmenes
+// posibles (mantle) el más cercano al punto.
+function targetHeadCenter(target) {
+  const w = placeHitPose(currentVolumeOf(target), target.x || 0, target.y || 0, target.z || 0, target.yaw || 0);
+  return [w.hx, w.hy, w.hz];
 }
 
 function distance3(a, b) {
@@ -599,18 +695,10 @@ function sniperRayHitsHead(shot, point, head) {
 // impactos claramente situados en el torso.
 function validatedPart(target, claimedPart, point, shot = null, pose = target) {
   if (claimedPart !== 'head' || !point) return 'body';
-  const crouched = CROUCH_STATES.has(pose.st);
-  const relY = point[1] - (pose.y || 0);
-  const minY = crouched ? 0.66 : 1.30;
-  const maxY = crouched ? 1.16 : 1.82;
-  const horizontal = Math.hypot(point[0] - pose.x, point[2] - pose.z);
-  if (relY < minY || relY > maxY || horizontal > 1.25) return 'body';
-  if (shot?.wep === 'sniper') {
-    const head = targetHeadCenter(target, pose);
-    if (distance3(point, head) > SNIPER_HEAD_AUTH_RADIUS ||
-        !sniperRayHitsHead(shot, point, head)) return 'body';
-  }
-  return 'head';
+  // la banda de cabeza (de pie 1.30..1.82, agachado 0.66..1.16, alzado sobre
+  // cover bajo...) y el rayo del sniper ya se comprobaron en poseForClaim,
+  // con el MISMO volumen que validó el cuerpo
+  return pose?.head ? 'head' : 'body';
 }
 
 // Nunca retransmitir el punto bruto del cliente fuera del cráneo: mantiene
@@ -643,7 +731,7 @@ function authoritativeDamage(shooter, target, shot, msg, dist, pose) {
     const yaw = pose.yaw ?? target.yaw;
     const backstab = !shooter.bot && Number.isFinite(yaw) && len > 0.05 &&
       (dx * -Math.sin(yaw) + dz * -Math.cos(yaw)) / len > Math.cos(ml.backstabArcDeg * Math.PI / 360);
-    const base = backstab ? ml.backstabDmg : shooter.bot ? ml.dmg : Math.min(ml.tackleDmg, Math.max(ml.dmg, +msg.dmg || 0));
+    const base = backstab ? ml.backstabDmg : shooter.bot ? ml.dmg : Math.min(ml.tackleDmg, Math.max(ml.dmg, num(msg.dmg)));
     return { dmg: base * botScale, part: 'body' };
   }
   if (wep === 'bazooka') {
@@ -745,11 +833,19 @@ function registerHit(shooter, msg) {
   const selfRocket = target.id === shooter.id && shot?.wep === 'bazooka';
   if (target.team === shooter.team && !selfRocket) return;
   if (!shot || !rule || now - shot.at > HIT_WINDOW || shot.hitIds.has(target.id)) return;
+  // claim de otro disparo (cliente nuevo con `sq`): nunca se adjunta al vigente
+  if (Number.isFinite(msg.sq) && Number.isFinite(shot.sq) && msg.sq !== shot.sq) return;
   const point = vec3(msg.p); if (!point) return;
-  const pose = poseForClaim(target, point, now); if (!pose) return;
-  if (!claimMatchesShot(shot, point) ||
+  // modelo de impacto y latencia del tirador (bots: los del host que los simula)
+  const viewer = shooter.bot ? players.get(hostId) : shooter;
+  const pose = poseForClaim(target, point, shot, viewer?.hitModel !== 2, viewer?.rtt); if (!pose) return;
+  // quemarropa: el cliente impactó con el origen DENTRO del rival (contacto de
+  // longitud cero, sin dirección): vale solo si el punto está dentro del volumen
+  const pointBlank = !shot.direction && shot.wep !== 'melee' && shot.wep !== 'bazooka';
+  if ((pointBlank ? !pose.inside || distance3(point, shot.origin) > 0.05 : !claimMatchesShot(shot, point)) ||
       mapLineBlocked(settings.map, shot.origin, point, shot.wep === 'melee' ? 0.24 : 0.18)) return;
-  const dist = distance3(shot.origin, point);
+  // misma definición que el rango del fire: distancia desde el plano del tirador
+  const dist = shooterPlaneDistance(shot.origin, point, shot.planeVec);
   const hitTolerance = shot.wep === 'melee' ? 0.28 : 2;
   if (dist > (rule.hitRange ?? rule.range) + hitTolerance) return;
   if (shot.wep === 'melee') {
@@ -784,6 +880,9 @@ function firstRocketTarget(rocket, fromDistance, toDistance, now) {
     const point = rocketPoint(rocket, distance);
     const separation = Math.hypot(target.x - point[0], centerY - point[1], target.z - point[2]);
     if (separation > ROCKET_FUSE_RADIUS || (best && distance >= best.distance)) continue;
+    // misma regla que offline (special.js): la espoleta tiene que VER el torso;
+    // un muro fino lateral no deja detonar sobre quien está detrás
+    if (separation > 0.001 && mapLineBlocked(settings.map, point, [target.x, centerY, target.z], 0.02)) continue;
     best = { target, distance };
   }
   return best;
@@ -822,7 +921,7 @@ function detonateRocket(rocket, distance, kind, directTarget = null) {
     if (target.team === rocket.team && !self) continue;
     const point = [target.x, (target.y || 0) + 0.9, target.z];
     const dist = distance3(blast, point);
-    const resultBlast=evaluateBlast(WD.bazooka,{x:blast[0],y:blast[1],z:blast[2]},target,
+    const resultBlast=evaluateBlast(WD.bazooka,{x:blast[0],y:blast[1],z:blast[2]},{...target,blastH:blastHeightOf(target)},
       (a,b)=>mapLineBlocked(settings.map,[a.x,a.y,a.z],[b.x,b.y,b.z],.015),
       {self,direct:target.id===directTarget?.id});
     if(resultBlast.damage<=0)continue;
@@ -893,6 +992,18 @@ function tickSmoke(now) {
 
 wss.on('connection', (ws) => {
   let me = null;
+  // latencia del tirador para el rebobinado de impactos: ping/pong de control
+  // de WebSocket (el navegador responde solo; no es un mensaje del protocolo)
+  // Cada pong se empareja con su ping por id; rtt = mínimo de las 8 últimas
+  // muestras (inflarlo exige retrasar todas) y hit-pose.js lo topa (RTT_CAP).
+  ws.on('pong', (data) => {
+    const id = String(data), sent = me?.pings?.get(id);
+    if (sent === undefined) return;
+    me.pings.delete(id);
+    (me.rttSamples ||= []).push(monoSec() - sent);
+    if (me.rttSamples.length > 8) me.rttSamples.shift();
+    me.rtt = Math.min(...me.rttSamples);
+  });
   const rateGuard = new MessageRateGuard(nowSec());
   // Errores de protocolo/payload pertenecen a este peer. Sin listener, `ws`
   // los eleva como excepción no manejada y un solo cliente puede tumbar la sala.
@@ -903,6 +1014,8 @@ wss.on('connection', (ws) => {
       ws.close(1008, 'rate limit'); return;
     }
     let msg; try { msg = JSON.parse(data); } catch { return; }
+    // solo objetos con tipo de texto (null, números o listas no son mensajes)
+    if (!msg || typeof msg !== 'object' || Array.isArray(msg) || typeof msg.t !== 'string') return;
     if (msg.t === 'join' && !me) {
       const action = msg.action === 'create' ? 'create' : 'join';
       if (action === 'create' && players.size) { lobbyError(ws, 'lobby-exists'); return; }
@@ -917,15 +1030,17 @@ wss.on('connection', (ws) => {
       if (!relieved && !canJoinTeam({ id: '' }, team)) { lobbyError(ws, 'lobby-full'); return; }
       const id = 'p' + nextId++;
       me = { ws, id, bot: false, team, joinedAt: Date.now(),
-        name: uniqueName(String(msg.name || '').trim().slice(0, 14).toUpperCase() || 'ANON'),
+        name: uniqueName(str(msg.name).trim().slice(0, 14).toUpperCase() || 'ANON'),
         v: Math.min(4, Math.max(0, Math.round(num(msg.v)))), hp: HP, alive: true,
         kills: 0, deaths: 0, w: 'smg', specialWep: null,
+        // modelo de impacto anunciado en el join (2 = pose); ausente = anterior
+        hitModel: msg.hp === 2 ? 2 : 1,
         lastFireAt: -Infinity, pendingShot: null };
       if (relieved) bots.delete(relieved.id);
       players.set(id, me); if (!hostId) { hostId = id; phase = 'lobby'; }
       if (!late) {
         syncLobbyBots();
-        send(ws, { t: 'welcome', id, team: me.team, lobby: lobbyPayload() }); broadcastLobby();
+        send(ws, { t: 'welcome', id, team: me.team, lobby: lobbyPayload(), hp: 2 }); broadcastLobby();
         console.log(`+ ${me.name} (${me.team}) — ${players.size} humanos, ${bots.size} bots`); return;
       }
       const joinedAt = nowSec();
@@ -936,7 +1051,7 @@ wss.on('connection', (ws) => {
         Object.assign(me, { alive: false, hp: 0, respawnAt: relieved.respawnAt || 0,
           x: relieved.x ?? me.x, z: relieved.z ?? me.z, y: relieved.y || 0 });
       }
-      send(ws, { t: 'welcome', id, team: me.team, lobby: lobbyPayload() });
+      send(ws, { t: 'welcome', id, team: me.team, lobby: lobbyPayload(), hp: 2 });
       send(ws, lateJoinPayload());
       CRATES.forEach((c, i) => { if (!c.up) send(ws, { t: 'crate', i, up: 0 }); });
       for (const [dropId, d] of drops) send(ws, { t: 'dropA', id: dropId, wep: d.wep, x: d.x, z: d.z,
@@ -947,11 +1062,14 @@ wss.on('connection', (ws) => {
       return;
     }
     if (!me) return;
-    if(msg.t==='protoClaim'){prototypes.claim(me.id,String(msg.id),msg.manual===true);return;}
+    noteMessageArrival(me, nowSec()); // evidencia de atasco para la cadencia
+    if(msg.t==='protoClaim'){prototypes.claim(me.id,str(msg.id),msg.manual===true);return;}
     if(msg.t==='protoFire'){
       if(!me.weaponSlots?.includes(msg.kind)||me.w!==msg.kind||['melee','dive','slide','mantle'].includes(me.st))return;
-      const o=vec3(msg.o),d=vec3(msg.d);
-      if(o&&d)prototypes.fire(me.id,msg.kind,{x:o[0],y:o[1],z:o[2]},{x:d[0],y:d[1],z:d[2]});
+      const o=vec3(msg.o),d=vec3(msg.d),pnow=nowSec();
+      if(!o||!d||!projectileCadenceAllows(me,msg.kind,pnow))return;
+      // solo un lanzamiento ACEPTADO por el motor consume horario
+      if(prototypes.fire(me.id,msg.kind,{x:o[0],y:o[1],z:o[2]},{x:d[0],y:d[1],z:d[2]}))commitProjectileCadence(me,msg.kind,pnow);
       const s=prototypes.state(me.id);
       if(['frag','stun'].includes(msg.kind))send(ws,{t:'protoInventory',id:me.id,kind:msg.kind,count:msg.kind==='frag'?s.frag:s.stunAmmo});
       return;
@@ -1019,7 +1137,7 @@ wss.on('connection', (ws) => {
       }
       if (phase !== 'playing' || !me.alive) {
         me.st = 'idle'; me.aim = 0; me.ae = 0; me.cl = 0; me.ce = 1; me.ck = null;
-        me.sp = 0; return;
+        me.sp = 0; me.rl = null; return;
       }
       if (![msg.x, msg.y, msg.z, msg.yaw].every((v) => typeof v === 'number' && Number.isFinite(v))) return;
       const next = { x: clamp(msg.x, -60, 60), z: clamp(msg.z, -60, 60), y: clamp(msg.y, 0, 20) };
@@ -1029,43 +1147,74 @@ wss.on('connection', (ws) => {
         return;
       }
       me.x = next.x; me.z = next.z; me.y = next.y; me.yaw = clamp(msg.yaw, -10, 10);
-      me.st = VALID_STATES.has(String(msg.st)) && msg.st !== 'dead' ? msg.st : 'idle';
+      me.st = VALID_STATES.has(str(msg.st)) && msg.st !== 'dead' ? msg.st : 'idle';
       me.aim = msg.aim ? 1 : 0; me.p = clamp(msg.p, -1.6, 1.6);
       me.ae = clamp(msg.ae, -VISUAL_AIM_MAX, VISUAL_AIM_MAX);
       me.cl = clamp(msg.cl, -1, 1);
       me.ce = Number.isFinite(msg.ce) ? clamp(msg.ce, 0, 1) : 1;
-      me.ck = VALID_COVER_KINDS.has(String(msg.ck)) ? String(msg.ck) : null;
+      me.ceKnown = Number.isFinite(msg.ce);
+      me.ck = VALID_COVER_KINDS.has(str(msg.ck)) ? msg.ck : null;
       const requestedWep = clampWep(msg.w);
-      me.w = (['frag','stun'].includes(requestedWep)&&!me.weaponSlots.includes(requestedWep)) || SPECIAL_WEAPONS.has(requestedWep) && me.specialWep !== requestedWep ? 'smg' : requestedWep;
+      const stateWep = (['frag','stun'].includes(requestedWep)&&!me.weaponSlots.includes(requestedWep)) || SPECIAL_WEAPONS.has(requestedWep) && me.specialWep !== requestedWep ? 'smg' : requestedWep;
+      // Estado VIEJO tras una recogida: el cliente lo envió antes de recibir
+      // specialTaken (aún con el arma anterior). No deshace la recogida ni
+      // consume su tiro inmediato; un cambio real llega después de ese plazo.
+      const staleAfterGrant = me.wGrant && nowSec() < me.wGrant.until && stateWep === me.wGrant.from;
+      if (!staleAfterGrant) me.w = stateWep;
+      // instante en que el arma replicada cambió: evidencia del gesto de cambio
+      if (me.w !== me.wSeen) { me.wSeen = me.w; me.wAt = nowSec(); me.wSeq = me.msgSeq; me.wInstant = false; }
       const def = WD[me.w] || WD.smg;
       me.am = clamp(msg.am, 0, def.mag || 0); me.ar = clamp(msg.ar, 0, def.reserve || 0);
-      me.sp = clamp(msg.sp, 0, 1); recordPose(me, stateNow); return;
+      me.sp = clamp(msg.sp, 0, 1);
+      // progreso de recarga (opcional, solo presentación: la munición y el fin
+      // de la recarga se deciden donde siempre). Ausente = no recarga.
+      me.rl = Number.isFinite(msg.rl) ? clamp(msg.rl, 0, 1) : null;
+      return; // la pose se registra al difundirla (snap)
     }
     if (msg.t === 'botState') {
       if (!isHost(me) || phase !== 'playing' || !Array.isArray(msg.bots)) return;
       const stateNow = nowSec();
       for (const s of msg.bots.slice(0, MAX_PLAYERS)) {
+        // entrada malformada: se descarta, nunca lanza
+        if (!s || typeof s !== 'object' || typeof s.id !== 'string') continue;
         const b = bots.get(s.id); if (!b || !b.alive) continue;
         if(prototypes.stunned(b.id))continue;
         if (![s.x, s.y, s.z, s.yaw].every((v) => typeof v === 'number' && Number.isFinite(v))) continue;
         const next = { x: clamp(s.x, -60, 60), z: clamp(s.z, -60, 60), y: clamp(s.y, 0, 20) };
         if (!acceptMovement(b, next, stateNow, ALLOW_TEST_TELEPORTS)) continue;
         b.x = next.x; b.z = next.z; b.y = next.y; b.yaw = clamp(s.yaw, -10, 10);
-        b.st = VALID_STATES.has(String(s.st)) && s.st !== 'dead' ? s.st : 'idle';
+        b.st = VALID_STATES.has(str(s.st)) && s.st !== 'dead' ? s.st : 'idle';
         b.aim = s.aim ? 1 : 0; b.p = clamp(s.p, -1.6, 1.6);
         b.ae = clamp(s.ae, -VISUAL_AIM_MAX, VISUAL_AIM_MAX); b.cl = clamp(s.cl, -1, 1);
         b.ce = Number.isFinite(s.ce) ? clamp(s.ce, 0, 1) : 1;
-        b.ck = VALID_COVER_KINDS.has(String(s.ck)) ? String(s.ck) : null;
+        b.ceKnown = Number.isFinite(s.ce);
+        b.ck = VALID_COVER_KINDS.has(str(s.ck)) ? s.ck : null;
         const requestedWep = clampWep(s.w);
         b.w = SPECIAL_WEAPONS.has(requestedWep) && b.specialWep !== requestedWep ? 'smg' : requestedWep;
-        b.sp = clamp(s.sp, 0, 1); recordPose(b, stateNow);
+        // arma replicada del bot: misma evidencia de cambio que un jugador
+        if (b.w !== b.wSeen) { b.wSeen = b.w; b.wAt = stateNow; b.wSeq = me.msgSeq; b.wInstant = false; }
+        b.sp = clamp(s.sp, 0, 1);
+        b.rl = Number.isFinite(s.rl) ? clamp(s.rl, 0, 1) : null;
       } return;
     }
-    if (msg.t === 'fire') { registerFire(me, msg); return; }
+    // Un disparo rechazado no deja sus claims colgados del anterior.
+    if (msg.t === 'fire') { if (!registerFire(me, msg)) me.pendingShot = null; return; }
     if (msg.t === 'botFire') { if (isHost(me)) { const b = bots.get(msg.id); if (b) {
       const requestedWep = FIREABLE.has(msg.w) ? msg.w : 'smg';
       if (SPECIAL_WEAPONS.has(requestedWep) && b.specialWep !== requestedWep) return;
-      b.w = requestedWep; registerFire(b, msg, true);
+      // el arma se valida contra la REPLICADA por botState (b.w); el mensaje de
+      // disparo no puede cambiarla por su cuenta
+      syncBotTransport(b, me);
+      if (!registerFire(b, msg, true)) {
+        b.pendingShot = null;
+        // diagnóstico de pruebas (BREACH_LOG_FIRE_REJECTS=1): por qué se rechazó
+        if (LOG_FIRE_REJECTS) console.log('[botFire rechazado]', JSON.stringify({ id: b.id, w: msg.w, held: b.w,
+          alive: b.alive, dazed: dazed(b), stunned: prototypes.stunned(b.id), phase,
+          last: b.lastActionWeapon, since: +(nowSec() - (b.lastActionAt ?? -1e9)).toFixed(3),
+          mag: b.botMag?.[msg.w]?.mag, budget: b.ammoBudget?.[msg.w], cadence: b.lastRejectReason,
+          fireWeapon: b.fireWeapon, wSeen: b.wSeen, wAge: +(nowSec() - (b.wAt ?? -1e9)).toFixed(3), lastHeld: b.lastActionHeld }));
+        b.lastRejectReason = null;
+      }
     } } return; }
     // Proyectiles visuales: quien dispara ya los simuló localmente. El server
     // valida lanzamiento, simula trayectoria/impacto y decide todo el splash.
@@ -1098,6 +1247,9 @@ wss.on('connection', (ws) => {
         me.ammoBudget[removed] = 0;
         me.specialWep = me.weaponSlots.find(w => SPECIAL_WEAPONS.has(w)) || null;
         grantWeaponAmmo(me, d.wep, d.mag, d.res);
+        // reemplazar el arma EN MANO por la del suelo es un cambio sin gesto
+        // (el cliente solo cambia `cur` si sustituyó la que llevaba)
+        if (removed === me.w) { me.w = d.wep; me.wSeen = d.wep; me.wAt = nowSec(); me.wSeq = me.msgSeq; me.wInstant = true; }
         drops.delete(msg.id); broadcastRaw({ t: 'dropR', id: msg.id });
         send(ws, { t: 'dropGive', replace: true, slot, wep: d.wep, mag: d.mag, res: d.res });
       } else {
@@ -1120,19 +1272,30 @@ wss.on('connection', (ws) => {
       if (!spot || Math.hypot(claimant.x - spot.x, claimant.z - spot.z) > 2.2 ||
           Math.abs((claimant.y || 0) - (spot.y || 0)) > 1.5) return;
       special.taken = true; special.by = claimant.id; claimant.specialWep = special.wep;
+      // recoger la especial la pone EN MANO al instante (sin gesto): cuenta como cambio
+      // el servidor queda como tras un cambio real a esa arma: `w` incluido
+      // El hueco se elige con el arma EN MANO antes de recoger (misma regla
+      // compartida que el cliente: specialPickupSlot en drop-policy.js).
       claimant.weaponSlots ||= ['smg', 'shotgun', 'pistol', 'grenade'];
-      const existingSlot = claimant.weaponSlots.indexOf(special.wep);
-      claimant.weaponSlots[existingSlot >= 0 ? existingSlot : replacementSlot(claimant.weaponSlots, claimant.w)] = special.wep;
+      const heldBefore = claimant.w;
+      claimant.weaponSlots[specialPickupSlot(claimant.weaponSlots, heldBefore, special.wep)] = special.wep;
+      claimant.w = special.wep; claimant.wSeen = special.wep; claimant.wAt = nowSec(); claimant.wInstant = true;
+      claimant.wSeq = me.msgSeq;
+      // plazo para estados viejos: lo que tarda specialTaken en llegar y el
+      // siguiente estado en volver (ida y vuelta + un envío a 20 Hz)
+      claimant.wGrant = { from: heldBefore, until: nowSec() + Math.min(0.5, (claimant.rtt ?? 0.15) + 0.1) };
       grantWeaponAmmo(claimant, special.wep);
       broadcastRaw({ t: 'specialTaken', id: claimant.id, wep: special.wep });
       return;
     }
     if (msg.t === 'crate') {
-      const c = CRATES[msg.i];
-      const spot = MAP_RUNTIME[settings.map]?.crates?.[msg.i];
+      // índice entero: una clave objeto se convertiría a texto (y puede lanzar)
+      const ci = Number.isInteger(msg.i) ? msg.i : -1;
+      const c = CRATES[ci];
+      const spot = MAP_RUNTIME[settings.map]?.crates?.[ci];
       if (!c || !spot || !c.up || !me.alive || phase !== 'playing' ||
           Math.hypot(me.x - spot.x, me.z - spot.z) > 3) return;
-      c.up = false; c.t = CRATE_RESPAWN; broadcastRaw({ t: 'crate', i: msg.i, up: 0, by: me.id });
+      c.up = false; c.t = CRATE_RESPAWN; broadcastRaw({ t: 'crate', i: ci, up: 0, by: me.id });
       refillNormalAmmo(me);
     }
   });
@@ -1183,13 +1346,13 @@ setInterval(() => {
     if (p.alive && p.hp < HP && now - p.lastDamage > REGEN_DELAY) p.hp = Math.min(HP, p.hp + REGEN_RATE / TICK_HZ);
     if (!p.alive && p.respawnAt > 0 && now >= p.respawnAt) {
       p.alive = true; p.hp = HP; p.respawnAt = 0; p.prot = now + SPAWN_PROT;
-      p.w = 'smg'; p.specialWep = null; p.ammoBudget = createAmmoBudget();
+      p.w = 'smg'; p.specialWep = null; p.ammoBudget = createAmmoBudget(); p.fireWeapon = null;
       p.weaponSlots = ['smg', 'shotgun', 'pistol', 'grenade'];
       p.nades = p.bot ? 1 : WD.grenade.mag;
       p.lastNadeAt = -Infinity; p.lastRocketAt = -Infinity;
       const spawn = pickSpawn(p.team); Object.assign(p, { x: spawn.x, z: spawn.z, y: 0, yaw: spawn.yaw });
       resetMovementGuard(p, now);
-      resetPoseHistory(p, now);
+      resetPoseHistory(p);
       broadcastRaw({ t: 'respawn', id: p.id, spawn });
     }
   }
@@ -1208,13 +1371,28 @@ setInterval(() => {
     lives: livesState(), wins: { ...wins },
     ps: allSlots().map((p) => ({ id: p.id, x: p.x ?? 0, z: p.z ?? 0, y: p.y || 0,
       yaw: p.yaw || 0, st: p.st || 'idle', aim: p.aim || 0, p: p.p || 0,
-      ae: p.ae || 0, cl: p.cl || 0, ce: Number.isFinite(p.ce) ? p.ce : 1,
+      ae: p.ae || 0, cl: p.cl || 0, ...(p.ceKnown ? { ce: p.ce } : {}),
       ...(p.ck ? { ck: p.ck } : {}), w: p.w || 'smg',
-      sp: p.sp || 0, hp: Math.round(p.hp), alive: p.alive,
+      sp: p.sp || 0, ...(p.alive && p.rl != null ? { rl: +p.rl.toFixed(2) } : {}), hp: Math.round(p.hp), alive: p.alive,
       resp: !p.alive && p.respawnAt > now ? +(p.respawnAt - now).toFixed(2) : 0,
       rq: !p.alive && p.respawnAt > 0 ? 1 : 0,
       inv: p.prot > now ? 1 : 0, bot: p.bot ? 1 : 0 })) });
+  // historial de impactos = lo que los observadores acaban de recibir
+  if (players.size && inMatch()) { const mt = monoSec(); for (const p of allSlots()) recordPose(p, mt); }
 }, 1000 / TICK_HZ);
+// un ping por segundo a cada humano, con id (ver ws.on('pong')); los que no
+// vuelven en 5 s caducan
+let pingSeq = 0;
+setInterval(() => {
+  const t = monoSec();
+  for (const p of players.values()) {
+    if (p.ws?.readyState !== 1) continue;
+    p.pings ||= new Map();
+    for (const [k, at] of p.pings) if (t - at > 5) p.pings.delete(k);
+    const id = String(++pingSeq); p.pings.set(id, t);
+    try { p.ws.ping(id); } catch { p.pings.delete(id); }
+  }
+}, 1000);
 
 function num(v) { return typeof v === 'number' && Number.isFinite(v) ? v : 0; }
 function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, num(v))); }

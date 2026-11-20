@@ -483,10 +483,11 @@ try {
         const contact = W.raycastHit(muzzle, dir, range);
         const t = contact?.t ?? W.raycast(muzzle, dir, range) ?? range;
         const projected = muzzle.clone().addScaledVector(dir, t).project(window.BREACH_CAM);
-        const expected = {
-          x: (projected.x * 0.5 + 0.5) * innerWidth,
-          y: (-projected.y * 0.5 + 0.5) * innerHeight,
-        };
+        // La granada no tiene cañón: su lanzamiento sigue al centro de cámara
+        // (check-throw-flow) y la marca hip debe prometer exactamente eso.
+        const expected = G.weapons.def.thrown
+          ? { x: innerWidth / 2, y: innerHeight / 2 }
+          : { x: (projected.x * 0.5 + 0.5) * innerWidth, y: (-projected.y * 0.5 + 0.5) * innerHeight };
         errors.push(Math.hypot(actual.x - expected.x, actual.y - expected.y));
         centerOffsets.push(Math.hypot(expected.x - innerWidth * 0.5,
           expected.y - innerHeight * 0.5));
@@ -509,7 +510,7 @@ try {
   // Con el pitch de este escenario, una pose hip realmente física no puede
   // coincidir con el centro óptico. Esto detecta el error sutil de orientar el
   // propio barrel a cámara y después declarar que la retícula "sigue barrel".
-  const centeredHip = hipPhysical.filter((item) => item.minCenterOffset < 4);
+  const centeredHip = hipPhysical.filter((item) => item.weapon !== 'grenade' && item.minCenterOffset < 4);
   if (centeredHip.length) {
     console.error('HIP RETICLE CENTERED DEBUG', JSON.stringify(hipPhysical));
     throw new Error(`hip fire volvió a comportarse como ADS: ${centeredHip.map((v) => v.weapon).join(', ')}`);

@@ -33,9 +33,11 @@ try {
     let maxOrigin = 0, maxDirection = 0, maxVisualMuzzle=0;
     const visualGrips=[];
     let maxPoseError=0;
+    // Las piernas se resuelven contra la suela MEDIDA de cada avatar (la bota
+    // del modelo Blender es más alta: rig.js _groundLegs) y difieren a
+    // propósito; check-soldier-feet comprueba que ambos pisan el suelo.
     const joints=r=>[r.root,r.hips,r.torso,r.head,r.aimRig,
-      r.armR.shoulder,r.armR.elbow,r.armR.hand,r.armL.shoulder,r.armL.elbow,r.armL.hand,
-      r.legR.hip,r.legR.knee,r.legL.hip,r.legL.knee];
+      r.armR.shoulder,r.armR.elbow,r.armR.hand,r.armL.shoulder,r.armL.elbow,r.armL.hand];
     const oldJoints=joints(reference),newJoints=joints(candidate);
     const a = new THREE.Vector3(), b = new THREE.Vector3();
     const states = ['idle','run','roadie','cover_low','cover_high','blind_over',

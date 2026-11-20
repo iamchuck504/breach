@@ -115,7 +115,7 @@ export function footstepRelation(listenerTeam, sourceTeam) {
 const LOCAL_GAIN = { smg: 0.39, shotgun: 0.46, pistol: 0.42, sniper: 0.55 };
 const REMOTE_GAIN = { smg: 0.34, shotgun: 0.39, pistol: 0.36, sniper: 0.48 };
 const HEAVY = new Set(['shotgun', 'sniper', 'bazooka']);
-const STEP_OF = { stone: 'step_stone', metal: 'step_metal', concrete: 'step_concrete', glass: 'step_concrete' };
+const STEP_OF = { stone: 'step_stone', metal: 'step_metal', concrete: 'step_concrete', glass: 'step_concrete', earth: 'step_earth' };
 const IMPACT_OF = { metal: 'imp_metal', stone: 'imp_stone', glass: 'imp_glass' };
 // pasos: propio discreto, aliado atenuado y oscuro, enemigo presente y nítido
 const STEP_REL = Object.freeze({
@@ -990,31 +990,50 @@ export class Audio {
   // Secuencia programada sobre la duración REAL de la recarga del arma; la
   // pieza final suena en reloadDone, en el instante exacto en que el
   // cargador queda lleno. Cancelar (melee, disparo, cambio) corta lo pendiente.
-  reload(wep = null, duration = 0) {
+  // `progress` (0..1) reanuda una recarga ya empezada (fin de una pausa):
+  // solo se programan las piezas que faltan, contadas desde ese punto.
+  reload(wep = null, duration = 0, progress = 0) {
     if (!wep || !(duration > 0) || !this.engine) {
-      if (!wep || !this.engine) this._tone('square', 700, 500, 0.07, 0.04);
+      if (!progress && (!wep || !this.engine)) this._tone('square', 700, 500, 0.07, 0.04);
       return;
     }
     this.reloadCancel();
     const t0 = this._now();
-    const T = (k) => ({ at: t0 + k * duration, tag: 'reload' });
+    const T = (k) => ({ at: t0 + (k - progress) * duration, tag: 'reload' });
+    const cue = (name, k) => k < progress || this._play(name, T(k));
     let ok = true;
-    if (wep === 'smg') ok = this._play('mag_out', T(0.15)) && this._play('mag_in', T(0.62));
-    else if (wep === 'pistol') ok = this._play('mag_out_light', T(0.12)) && this._play('mag_in_light', T(0.55));
-    else if (wep === 'sniper') ok = this._play('bolt_open', T(0.08)) && this._play('round_in', T(0.5));
-    else if (wep === 'bazooka') ok = this._play('tube_slide', T(0.25));
-    else if (wep === 'stun') ok = this._play('stun_charge', T(0.15));
+    if (wep === 'smg') ok = cue('mag_out', 0.15) && cue('mag_in', 0.62);
+    else if (wep === 'pistol') ok = cue('mag_out_light', 0.12) && cue('mag_in_light', 0.55);
+    else if (wep === 'sniper') ok = cue('bolt_open', 0.08) && cue('round_in', 0.5);
+    else if (wep === 'bazooka') ok = cue('tube_slide', 0.25);
+    else if (wep === 'stun') ok = cue('stun_charge', 0.15);
     // escopeta: cada cartucho suena al insertarse (shellIn), sin pieza inicial
-    if (!ok && wep !== 'shotgun') this._tone('square', 700, 500, 0.07, 0.04);
+    if (!ok && wep !== 'shotgun' && !progress) this._tone('square', 700, 500, 0.07, 0.04);
   }
   reloadDone(wep = null) {
     const piece = { smg: 'rack', pistol: 'slide_release', sniper: 'bolt_close', bazooka: 'tube_lock', stun: 'ready_chirp' }[wep];
-    if (wep === 'shotgun' && this._play('pump', { at: this._now() + 0.08, tag: 'pump' })) return;
+    if (wep === 'shotgun' && this._play('pump', { at: this._now() + 0.08, tag: 'pump' })) {
+      this._pumpAt = this._now() + 0.08; return;
+    }
     if (piece && this._play(piece)) return;
     this._tone('square', 900, 1200, 0.08, 0.05);
   }
   reloadCancel() {
     this.engine?.stopTag('reload', 0.04);
+  }
+  // Pausa offline: las piezas programadas en tiempo de audio se cortan; el
+  // bombeo que aún no sonó guarda lo que le faltaba para reanudarse igual.
+  reloadPause() {
+    this.reloadCancel();
+    const left = (this._pumpAt ?? 0) - this._now();
+    if (left > 0) { this._pumpLeft = left; this.engine?.stopTag('pump', 0.02); }
+    this._pumpAt = 0;
+  }
+  reloadResume() {
+    if (this._pumpLeft > 0 && this._play('pump', { at: this._now() + this._pumpLeft, tag: 'pump' })) {
+      this._pumpAt = this._now() + this._pumpLeft;
+    }
+    this._pumpLeft = 0;
   }
   shellIn() {
     if (!this._play('shell_in')) this._tone('square', 900, 1200, 0.08, 0.05);

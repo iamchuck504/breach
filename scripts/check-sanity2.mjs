@@ -312,6 +312,8 @@ const botSmoke = await page.evaluate(async () => {
       const c = S.clouds[0];
       if (!c) return { why: 'sin nube' };
       bot.pos.x = c.x; bot.pos.z = c.z; bot.y = Math.max(0, c.y - 1.3);
+      // percepción NUEVA en la nube (la lista cacheada es de antes de moverlo)
+      bot.senseT = 0;
       const visInside = M.visibleEnemies(bot).length;
       await wait(500);
       return { before, visInside, targetAfter: bot.targetId, react: +(bot.reactT ?? 0).toFixed(2) };
