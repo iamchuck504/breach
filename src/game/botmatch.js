@@ -698,7 +698,8 @@ export class Bot {
   }
 
   _trySwap(want) {
-    if (this.wep === want || this.swapCd > 0) return;
+    // como el jugador: durante la patada el arma está ocupada y no se cambia
+    if (this.wep === want || this.swapCd > 0 || this.meleeT > 0) return;
     // el arma ESPECIAL no se guarda por preferencia de distancia: se usa
     // hasta agotarla (specialAmmo llega a 0 → vuelve a la primaria sola)
     if (TUNING.weapons[this.wep]?.special && this.specialAmmo > 0) return;
@@ -1106,8 +1107,9 @@ export class Bot {
       this.speed = push;
       animOverride = 'melee';
       if (this.meleeT <= 0) { this.meleeT = 0; this._meleeHit = false; }
-    } else if (enemy && dist < TUNING.melee.range * 0.9 && this.meleeCd <= 0 &&
+    } else if (enemy && dist < TUNING.melee.range * 0.9 && this.meleeCd <= 0 && this.swapAnim <= 0 &&
                this.grounded && this.state !== 'cover' && !this.throwPlan && match.canBotMelee(this, enemy)) {
+      // como el jugador (main.js): no se patea a mitad de un cambio de arma
       this.meleeT = TUNING.melee.time;
       this.meleeCd = TUNING.melee.botCooldownMin +
         Math.random() * (TUNING.melee.botCooldownMax - TUNING.melee.botCooldownMin);
@@ -2658,7 +2660,8 @@ export class BotMatch {
   // el bote sale en botReleaseSmoke, desde la mano.
   botThrowSmoke(bot, threat) {
     const smoke = this.cb.smoke;
-    if (!smoke || bot.nades <= 0 || bot.throwPlan) return false;
+    // ni a mitad de una patada ni de otro cambio de arma (reglas del jugador)
+    if (!smoke || bot.nades <= 0 || bot.throwPlan || bot.meleeT > 0 || bot.swapAnim > 0) return false;
     bot.nades--;
     bot.nadeCd = 12 + Math.random() * 8;
     bot.reloadT = 0; // sacar el bote interrumpe la recarga, como al jugador

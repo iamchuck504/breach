@@ -1199,9 +1199,15 @@ wss.on('connection', (ws) => {
     }
     // Un disparo rechazado no deja sus claims colgados del anterior.
     if (msg.t === 'fire') { if (!registerFire(me, msg)) me.pendingShot = null; return; }
-    if (msg.t === 'botFire') { if (isHost(me)) { const b = bots.get(msg.id); if (b) {
+    if (msg.t === 'botFire') { if (isHost(me)) { const b = bots.get(msg.id);
+      if (!b && LOG_FIRE_REJECTS) console.log('[botFire rechazado]', JSON.stringify({ id: msg.id, w: msg.w, alive: false, phase, reason: 'unknown-bot' }));
+      if (b) {
       const requestedWep = FIREABLE.has(msg.w) ? msg.w : 'smg';
-      if (SPECIAL_WEAPONS.has(requestedWep) && b.specialWep !== requestedWep) return;
+      if (SPECIAL_WEAPONS.has(requestedWep) && b.specialWep !== requestedWep) {
+        if (LOG_FIRE_REJECTS) console.log('[botFire rechazado]', JSON.stringify({ id: b.id, w: msg.w, held: b.w,
+          alive: b.alive, phase, reason: 'special-not-owned', specialWep: b.specialWep }));
+        return;
+      }
       // el arma se valida contra la REPLICADA por botState (b.w); el mensaje de
       // disparo no puede cambiarla por su cuenta
       syncBotTransport(b, me);
