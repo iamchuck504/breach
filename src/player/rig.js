@@ -9,6 +9,7 @@
 // robóticas. El pitch de la cámara inclina el aimRig completo (brazos+arma).
 import * as THREE from 'three';
 import { attachBlenderSoldier, attachBlenderWeapon, blenderSoldierEnabled } from './blender-soldier.js';
+import { bakeSoldierBody, bakeSoldierGun, soldierCorpseMaterial, soldierOutlineMaterial, SOLDIER_TEAM } from './soldier-bake.js';
 import { TUNING } from '../config/tuning.js';
 import { coverAimPose, coverBlindPose } from '../combat/cover-fire.js';
 import { isSniperHeadshotDeath, rocketDeathLevel } from '../combat/death-reactions.js';
@@ -716,6 +717,8 @@ export class Rig {
     this.setWeapon('smg');
 
     if (name) this._addNameTag(name, tc);
+    // Avatar de respaldo (antes de que cargue el GLB) también en una llamada.
+    bakeSoldierBody(this);
 
     this.phase = 0;
     this._recoil = 0;
@@ -899,6 +902,12 @@ export class Rig {
       if (node.isMesh && node.material) {
         const originals = Array.isArray(node.material) ? node.material : [node.material];
         const clones = originals.map((original) => {
+          // Material del soldado: copia con su propio uniform de cadáver
+          // (mismo programa); la desaturación la hace el shader.
+          if (original.userData.soldierLook) {
+            const material = soldierCorpseMaterial(original);
+            return { material, corpse: material.userData.soldierUniforms.uCorpse, base: null };
+          }
           const material = original.clone();
           material.userData = { ...material.userData, shared: false, corpseClone: true };
           const base = material.color?.clone() ?? null;
@@ -939,6 +948,7 @@ export class Rig {
     this._corpseVisual.amount = amount;
     for (const entry of this._corpseVisual.entries) {
       for (const c of entry.clones) {
+        if (c.corpse) { c.corpse.value = amount; continue; }
         if (c.base) c.material.color.copy(c.base).lerp(c.muted, amount);
         if (typeof c.roughness === 'number') {
           c.material.roughness = c.roughness + (0.9 - c.roughness) * amount;
@@ -1160,6 +1170,7 @@ export class Rig {
       g.scale.set(s[0], s[1], s[2]);
       this.guns[wep] = g;
       attachBlenderWeapon(this,g,wep);
+      bakeSoldierGun(this, g, wep);
     }
     return g;
   }
@@ -1192,6 +1203,11 @@ export class Rig {
       this.holsterMount.add(pistol);
       pistol.position.set(0, 0, 0);
       pistol.rotation.set(0, 0, 0);
+    }
+    // solo el arma en mano proyecta sombra; las guardadas no la necesitan
+    for (const k in this.guns) {
+      const baked = this.guns[k].userData.bakedMesh;
+      if (baked) baked.castShadow = this.guns[k].parent === this.gunMount;
     }
   }
 
@@ -2226,6 +2242,19 @@ export class Rig {
   }
 
   _buildOutline() {
+    // Cuerpo fusionado: UN contorno que comparte geometría y esqueleto.
+    const body = this._bodyMesh;
+    if (body) {
+      this._outlineMat = soldierOutlineMaterial(SOLDIER_TEAM[this.team]);
+      const o = new THREE.SkinnedMesh(body.geometry, this._outlineMat);
+      o.name = 'soldier-outline';
+      o.bind(body.skeleton, body.bindMatrix);
+      o.boundingSphere = body.boundingSphere;
+      o.visible = false;
+      this.root.add(o);
+      this._outlines = [o];
+      return;
+    }
     this._outlineMat = new THREE.MeshBasicMaterial({
       color: TEAM_COLORS[this.team],
       side: THREE.BackSide,
@@ -2272,5 +2301,6 @@ export class Rig {
     for (const g of geos) g.dispose();
     for (const t of maps) t.dispose(); // CanvasTexture única del nametag
     for (const m of mats) m.dispose();
+    this._bodyMesh?.skeleton.dispose(); // textura de huesos propia del rig
   }
 }

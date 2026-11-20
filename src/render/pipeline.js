@@ -343,12 +343,13 @@ export class ImagePipeline {
     this.renderer.render(this.quadScene, this.cam);
   }
 
-  render(scene, camera, gradeName) {
+  // grade: gradación propia (la del look del mapa); sin ella, la de la tabla.
+  render(scene, camera, gradeName, grade = null) {
     const r = this.renderer;
     if (!this.active) { r.setRenderTarget(null); r.render(scene, camera); return; }
     try {
       this._ensure();
-      const g = GRADES[gradeName] || GRADES.default;
+      const g = grade || GRADES[gradeName] || GRADES.default;
       r.setRenderTarget(this.sceneRT);
       r.render(scene, camera);
 

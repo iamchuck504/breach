@@ -334,6 +334,91 @@ lentos); `check-image-pipeline` prueba la cadena aparte con `?gfx=high`.
 `?gfx=off|low|medium|high|ultra` fuerza un nivel sin tocar lo guardado;
 `GFX=high node scripts/bench-map.mjs <mapa> <carpeta>` mide y captura con él.
 
+## Presentación: look por mapa, soldados, efectos y audio
+
+Todo esto es una capa AL LADO del gameplay: no mueve colliders, caras de
+cobertura ni spawns, no toca el protocolo ni el servidor.
+`npm run check:collision-baseline` lo comprueba contra
+`scripts/collision-baseline.json` (cajas, rampas, plataformas, spawns y
+pickups de los tres mapas).
+
+### Look por mapa (`src/look/`)
+
+Cada mapa tiene un directorio con su **paleta** (`palette.js`), sus
+**superficies** (`surfaces.js`: recolorea los materiales que el mapa ya
+construyó y fija luz, cielo, niebla y gradación) y sus **capas de vida**
+(geometría decorativa nueva: telas, plantas, aire, luces). El contrato está al
+inicio de `src/look/index.js`.
+
+| Mapa | Identidad | Capas de vida |
+|---|---|---|
+| Fortaleza | fortaleza medieval a la hora dorada: piedra, heráldica de equipo, braseros, fragua | `flora`, `cloth`, `atmos` |
+| Azoteas | azoteas de ciudad de noche: cielo estrellado, rótulos de neón y luminosos en los edificios vecinos | `stars`, `signs`, `skyline`, `atmos` |
+| Calle Cerrada | calle acordonada en una ciudad post-apocalíptica: sirenas, faroles muertos, daños, vandalismo | `cordon`, `ruina`, `atmos` |
+
+Cada mapa conserva lo que lo distingue: ningún motivo decorativo se repite
+entre mapas, y todo color tiene una causa dentro del mundo (un neón, una
+sirena, un fuego, el cielo, un material real).
+
+- Los bloques de cobertura llevan por vértice `aBox` (u, v, ancho y alto de la
+  cara en metros) y `aBoxMeta` (id y altura del bloque): los sombreadores
+  dibujan sillares, paneles o remates que caen exactos en las esquinas de cada
+  bloque, sin texturas que se repitan.
+- Las capas de vida cuelgan de un grupo propio, FUERA de `world.mapGroup`: la
+  auditoría de hitboxes, las marcas de impacto y el editor no las ven. Por eso
+  solo dibujan cosas que evidentemente no paran una bala y nunca cruzan una
+  línea de tiro (telas por encima de 3.3 m, 5 m donde se dispara desde una
+  galería; plantas de menos de 0.30 m dentro del campo).
+- El rojo y el azul saturados son de los equipos (`0xe8402f` /
+  `0x2f7fe8`): el entorno los evita en zonas amplias de combate. La excepción
+  son las sirenas de Calle Cerrada, concentradas alrededor del cordón.
+- La decoración escala con la calidad gráfica y se rehace sola si la calidad
+  cambia a media partida. Un mapa de datos del editor hereda superficies y
+  ambiente de su tema, pero no la decoración.
+- `?look=classic` (o `localStorage breach.look = 'classic'`) muestra un mapa
+  como era antes; `?life=flora,atmos` limita las capas.
+
+```bash
+# capturas con cámaras fijas contra un servidor de desarrollo ya abierto
+BASE=http://127.0.0.1:5200 node scripts/shot-look.mjs <mapa> <carpeta> [--look=classic] [--stats] [--frames=2] [--player=x,z,yaw]
+# costo de render en una partida real 4v4 con bots (bench-map mide el mapa vacío)
+node scripts/bench-match.mjs <mapa> [carpeta]     # GFX=…  LOOK=classic  BASE=…
+```
+
+### Soldados (`src/player/soldier-bake.js`)
+
+El cuerpo de cada soldado es UNA malla con esqueleto rígido: cada vértice va
+atado con peso 1 a la pieza a la que pertenecía, y las piezas que ya movía la
+animación por código hacen de huesos. La animación, las poses, los anclajes
+del arma y las hitboxes no cambian. Cada arma visible es otra malla. Un
+material por equipo sirve a cuerpo y armas (color, brillo y zona de equipo
+viajan por vértice), con casco, pecho, hombros y muslos en el color exacto del
+equipo, visor y tiras emisivas y un contorno del color del equipo.
+
+### Efectos (`src/fx/`)
+
+`pools.js` anima partículas, trazadoras, anillos y fogonazos en la GPU sobre
+búferes circulares, con un atlas de sprites procedural (`atlas.js`): ningún
+efecto crea geometría ni materiales al dispararse. Trazadoras del color del
+equipo que dispara, impactos según la superficie, explosiones por capas. Todo
+lo translúcido se dibuja antes que el humo (orden 3) para que una granada de
+humo tape de verdad lo que hay detrás.
+
+### Audio (`src/audio/` detrás de `src/fx/audio.js`)
+
+Motor de 32 voces con prioridades y grupos, limitador maestro y un banco de
+sonidos sintetizados que se renderiza en un worker al cargar la página (el
+juego no lo espera: mientras llega, suena el sintetizador anterior). Las
+cuatro grabaciones de armas siguen siendo el cuerpo de cada disparo; alrededor
+van capas cercana, remota y distante, secuencias de recarga medidas con la
+recarga real, pasos distintos para uno mismo, aliados y enemigos, el silbido
+de una bala que pasa cerca (calculado con el segmento de disparo que ya viaja
+por red) y una cola acústica por mapa. La mezcla espacial, la oclusión y el
+ambiente son los de siempre. Sin música durante las rondas.
+`npm run check:audio-bank` mide el banco sin oírlo: sonoridad, recorte,
+cobertura de eventos, mezcla de ocho jugadores y fugas de nodos. Cómo suena
+solo lo puede juzgar una persona.
+
 ## Validación (headless, sin abrir ventana)
 
 Fortaleza incorpora dos galerías techadas con 10 ventanas y cuatro escaleras

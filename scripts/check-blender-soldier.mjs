@@ -132,6 +132,8 @@ try {
   if (!report.hasModel || !fallback || !report.protectionRestored || !report.hiddenHead || !report.restoredHead ||
       // matrices float32: ~1 ulp a 8 m es 1e-6; 1e-5 = 0.01 mm sigue exigiendo la misma pose
       report.maxOrigin>1e-6 || report.maxDirection>1e-8 || report.maxVisualMuzzle>1e-6 ||
-      report.maxPoseError>1e-5 || !report.bodyMeshes || !report.opaqueBody || report.skinnedBody || errors.length) process.exitCode=1;
+      // el cuerpo se dibuja como UN SkinnedMesh rígido sobre las piezas del rig
+      // (src/player/soldier-bake.js): se exige skinning y una sola pieza
+      report.maxPoseError>1e-5 || report.bodyMeshes!==1 || !report.opaqueBody || !report.skinnedBody || errors.length) process.exitCode=1;
   if(report.visualGrips.some(g=>g.error>1e-6))process.exitCode=1;
 } finally { await browser.close(); }

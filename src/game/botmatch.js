@@ -1151,13 +1151,13 @@ export class Bot {
       if (this._facc > (this.speed > 4.6 ? 1.9 : 1.6)) {
         this._facc = 0;
         match.cb.stepSound?.(this.pos.x, this.pos.z,
-          this.speed > 4.6 ? 'run' : 'walk', this.y);
+          this.speed > 4.6 ? 'run' : 'walk', this.y, this.team);
       }
     } else {
       this._facc = 0;
     }
     if (this._wasAir && this.grounded) {
-      match.cb.stepSound?.(this.pos.x, this.pos.z, 'land', this.y);
+      match.cb.stepSound?.(this.pos.x, this.pos.z, 'land', this.y, this.team);
     }
     this._wasAir = !this.grounded;
 
@@ -1917,7 +1917,7 @@ export class BotMatch {
     } else if (best.e.id === 'player') {
       killed = !!this.cb.damagePlayer(ml.dmg * BOT_DMG, bot.name,
         { x: bot.pos.x, z: bot.pos.z }, ctx);
-      if (killed) this._onDeath('player', bot.id, false);
+      if (killed) this._onDeath('player', bot.id, false, ctx);
     } else {
       killed = !!this.damageBot(best.e.id, ml.dmg * BOT_DMG,
         bot.id, false, false, ctx);
@@ -2057,7 +2057,12 @@ export class BotMatch {
         : baseDir;
       const hit = resolveShot(this.world, targets, _v1, dir, def.range, bot.id);
       if (!shotPoint) shotPoint = hit.point.clone();
-      if (i === 0) this.cb.effects.tracer(_v1, hit.point);
+      if (i === 0) {
+        // solo visual: tracer y fogonazo salen del arma del bot, con el color de su equipo
+        const from = bot.rig?.muzzleWorld ? bot.rig.muzzleWorld(_v2) : _v1;
+        this.cb.effects.tracer(from, hit.point, false, { team: bot.team, weapon: bot.wep });
+        this.cb.effects.muzzleFlash?.(from, bot.wep === 'shotgun', { weapon: bot.wep, to: hit.point, team: bot.team });
+      }
       if (hit.kind === 'player') {
         let dmg = def.dmg * BOT_DMG;
         dmg *= damageFalloff(def, hit.t);
@@ -2077,9 +2082,9 @@ export class BotMatch {
         impactPoints.push(hit.point.clone());
       }
     }
-    const shotAudio = { position: { x: bot.pos.x, y: bot.y + 1.35, z: bot.pos.z } };
-    if (bot.wep === 'shotgun') this.cb.audio.shotgun(shotAudio);
-    else this.cb.audio.smg(shotAudio);
+    const shotAudio = { position: { x: bot.pos.x, y: bot.y + 1.35, z: bot.pos.z }, end: shotPoint, team: bot.team };
+    // cada bot suena con SU arma (antes todo lo que no era escopeta era SMG)
+    this.cb.audio.gun(bot.wep, shotAudio);
     if (this.external && shotPoint) {
       this.cb.botFire?.(bot, shotOrigin, shotPoint, bot.wep, impactPoints);
     }
@@ -2101,7 +2106,7 @@ export class BotMatch {
         const died = this.cb.damagePlayer(dmg, bot.name, { x: bot.pos.x, z: bot.pos.z }, deathCtx);
         if (died) {
           if (gib) this.cb.effects.gib(_v3.set(this.cb.player().x, this.cb.player().y || 0, this.cb.player().z), TEAM_HEX[this.playerTeam]);
-          this._onDeath('player', bot.id, gib);
+          this._onDeath('player', bot.id, gib, deathCtx);
         }
       } else {
         this.damageBot(id, dmg, bot.id, gib, true, deathCtx);
@@ -2192,7 +2197,7 @@ export class BotMatch {
       } else if (gib) {
         this.cb.effects.gib(_v3.set(b.pos.x, b.y, b.pos.z), TEAM_HEX[b.team]);
       }
-      this._onDeath(id, from, gib);
+      this._onDeath(id, from, gib, hitCtx);
       return true;
     }
     return false;
@@ -2203,7 +2208,8 @@ export class BotMatch {
   // killerId null: sin killfeed y sin regalar un kill por suicidarse.
   playerSelfDeath() { this._onDeath('player', null, false); }
 
-  _onDeath(victimId, killerId, gib) {
+  // hitCtx (opcional): { weapon, part } del golpe final, para feed y confirmación
+  _onDeath(victimId, killerId, gib, hitCtx = null) {
     this.coverClaims.delete(victimId); // el muerto suelta su reserva de cover
     this.releaseTacticalClaim(victimId);
     // el que iba por el arma especial ya no va: liberar para otro
@@ -2218,8 +2224,14 @@ export class BotMatch {
       const b = this.bots.find((x) => x.id === victimId);
       if (b) this.cb.dropWeapon?.(b.wep, b.pos.x, b.pos.z, b.team, b.y, b.rig, b.specialAmmo);
     }
-    if (v && k) this.cb.hud.kill(k.name, k.team, v.name, v.team);
-    if (killerId === 'player') { this.cb.audio.kill(); this.cb.hud.hitmarker(); }
+    const head = hitCtx?.part === 'head';
+    if (v && k) this.cb.hud.kill(k.name, k.team, v.name, v.team, { weapon: hitCtx?.weapon, head,
+      local: killerId === 'player' ? 'killer' : victimId === 'player' ? 'victim' : null });
+    if (killerId === 'player') {
+      this.cb.audio.kill(head);
+      this.cb.hud.hitmarker('kill');
+      if (victimId !== 'player') this.cb.hud.killConfirm?.(v?.name, hitCtx?.weapon, head);
+    }
     const team = v?.team;
     if (!team || this.phase !== 'playing') return;
     if (this.pool[team] > 0) {

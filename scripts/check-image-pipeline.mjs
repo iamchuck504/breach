@@ -131,10 +131,16 @@ try {
       beams.on === 1 && beams.offNoShadow === 0 && beams.bad === 0 && beams.max > 0.01, JSON.stringify(beams));
     const wet = await high.evaluate(() => {
       let found = null;
-      window.BREACH_WORLD.mapGroup.traverse((o) => { if (!found && (o.name === 'map-floor' || o.geometry?.type === 'PlaneGeometry') && o.material?.userData?.breachMacro) found = o.material.customProgramCacheKey(); });
+      window.BREACH_WORLD.mapGroup.traverse((o) => {
+        if (found) return;
+        const data = o.material?.userData;
+        // con el look del mapa, el suelo lleva su propio sombreador (con sus charcos)
+        if (o.name === 'map-floor' && data?.lookPatched) found = o.material.customProgramCacheKey();
+        else if ((o.name === 'map-floor' || o.geometry?.type === 'PlaneGeometry') && data?.breachMacro) found = o.material.customProgramCacheKey();
+      });
       return found;
     });
-    check('suelo de Azoteas con desgaste y charcos', /breach-macro-nn0\.55/.test(wet ?? ''), String(wet));
+    check('suelo de Azoteas con desgaste y charcos', /breach-macro-nn0\.55|look:az2-floor/.test(wet ?? ''), String(wet));
     check('estadísticas de dibujo cuentan el cuadro entero', info.calls > 20, `calls ${info.calls}`);
   }
   // tope de píxeles: en una ventana grande, 'low' dibuja menos que 'ultra'

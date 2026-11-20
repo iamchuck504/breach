@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { expansionBoxes, SIDE_PROPS, CALLE_3 } from './calle-expansion.js';
 import { clipFacadeAbove } from './clip-facade.js';
 import { cloneUrbanAsset } from './urban-assets.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { polishCalleProp } from './calle-prop-polish.js';
 
 // Visual extension only; collision comes from the shared server/client specs.
 export function decorateCalleExpansion(world, buildings) {
@@ -95,8 +97,7 @@ export function decorateCalleExpansion(world, buildings) {
       const x=side*18.85;
       cube('passage-edge-marking',x,.03,z+end*1.92,5.4,.025,.10,yellow);
     }
-    const light=new THREE.PointLight(0xffc888,3,9,2);
-    light.position.set(side*19.0,2.95,z);root.add(light);
+    // sin luz propia: la lámpara brilla y deja su charco de luz (optimizeCalle2)
     cube('passage-lamp',side*19.0,3.30,z,.7,.08,.24,lamp);
   }
   for(const p of SIDE_PROPS) {
@@ -195,7 +196,6 @@ export function decorateCalleExpansion(world, buildings) {
     cube('workshop-canopy-roof',s*canopy.x,(canopy.minY+canopy.h)/2,s*canopy.z,canopy.w,canopy.h-canopy.minY,canopy.d,canopyMat);
     cube('workshop-canopy-fascia',s*(canopy.x-canopy.w/2-.01),canopy.minY+.11,s*canopy.z,.02,.2,canopy.d,yellow).castShadow=false;
     for(const dz of [-2.4,2.4])cube('workshop-canopy-lamp',s*canopy.x,canopy.minY-.04,s*(canopy.z+dz),3.2,.06,.22,lamp).castShadow=false;
-    const light=new THREE.PointLight(0xb8d8ee,6,12,2);light.position.set(s*canopy.x,3.7,s*canopy.z);root.add(light);
     floor('workshop-bay-line',s*canopy.x,s*(canopy.z-4.4),canopy.w-.8,.1,yellow);
     floor('workshop-bay-line',s*canopy.x,s*(canopy.z+4.4),canopy.w-.8,.1,yellow);
   }
@@ -218,9 +218,12 @@ export function decorateCalleExpansion(world, buildings) {
       cube('wall-light-lens',side*28.86,3.25,z,.03,.12,.5,lamp);
     }
   }
-  for(const side of [-1,1])for(const z of [-10,10]) {
-    const light=new THREE.PointLight(side<0?0xffc888:0xb8d8ee,5,13,2);
-    light.position.set(side*26.5,3.6,z);root.add(light);
+  // UNA luz real por distrito (antes diez): cada luz extra se evalúa en cada
+  // píxel iluminado de todo el mapa. Lámparas, marquesina y apliques dejan
+  // charcos de luz pintados (optimizeCalle2).
+  for(const side of [-1,1]) {
+    const light=new THREE.PointLight(side<0?0xffc888:0xb8d8ee,14,26,1.7);
+    light.name='calle2-district-light';light.position.set(side*26.5,4.4,0);root.add(light);
   }
   // Narrow awnings leave this repair courtyard open to the sky and readable
   // from above; no inaccessible playable roof or invisible floor-to-roof box.
@@ -311,4 +314,406 @@ export function decorateCalleExpansion(world, buildings) {
     floor('localized-damp-pavement',side*26.5,side*4,1.5,2.5,stain,.027);
     for(let i=0;i<3;i++)floor('service-paper-litter',side*(28.45-i*.17),side*(15+i*.30),.15,.21,mat(i%2?0x7b817a:0xa39779),.031+i*.001);
   }
+}
+
+// ---------------------------------------------------------------------------
+// RENDIMIENTO DE CALLE 2. El mapa se arma con cientos de piezas sueltas
+// (autos de 47 mallas, mobiliario, cables, arcenes): cada una era una llamada
+// de dibujo en el pase principal y otra en el de sombras. Aquí, ya construido
+// todo, se FUSIONA por material dentro de cada grupo editable: misma
+// geometría y mismos materiales (la silueta que audita el raycast no cambia),
+// pero una llamada por material en vez de una por pieza.
+
+// Mallas que los tests o el código buscan por nombre/posición: no se fusionan.
+const KEEP = new Set(['map-floor', 'contact-shadows', 'street-building-seam', 'calle2-instanced-upper-facades',
+  'service-alley-floor', 'workshop-floor', 'procedural-prop-fallback', 'streetlamp-lit-lens',
+  // fachadas de Blender: los tests miden puerta, rótulo, envolvente y cubierta
+  'Existing_envelope', 'Roof_cap', 'Door_leaf', 'Sign_enamel_inset', 'Sign_brass_frame', 'Shop_title', 'Shop_subtitle']);
+const ATTRS = ['position', 'normal', 'uv', 'color'];
+const own = (m, k) => Object.prototype.hasOwnProperty.call(m, k);
+const hex = (c) => (c ? c.getHexString() : '-');
+
+// Materiales gemelos (el mismo color/rugosidad creado veinte veces por los
+// helpers) pasan a ser uno: menos programas por cambiar y más fusión posible.
+function materialKey(m) {
+  if (m.userData.urbanAssetShared || own(m, 'onBeforeCompile') || m.isShaderMaterial) return null;
+  return [m.type, m.name, hex(m.color), hex(m.emissive), m.emissiveIntensity, m.roughness, m.metalness,
+    m.map?.uuid, m.emissiveMap?.uuid, m.bumpMap?.uuid, m.bumpScale, m.normalMap?.uuid, m.alphaMap?.uuid,
+    m.transparent, m.opacity, m.side, m.depthWrite, m.depthTest, m.toneMapped, m.vertexColors, m.flatShading,
+    m.polygonOffset, m.polygonOffsetFactor, m.polygonOffsetUnits, m.alphaTest, m.blending, m.fog, m.visible].join('|');
+}
+
+function dedupeMaterials(root) {
+  const canon = new Map(), dropped = new Set();
+  const swap = (m) => {
+    const k = materialKey(m);
+    if (k == null) return m;
+    const c = canon.get(k);
+    if (!c) { canon.set(k, m); return m; }
+    if (c !== m) dropped.add(m);
+    return c;
+  };
+  root.traverse((o) => {
+    if (!o.material) return;
+    o.material = Array.isArray(o.material) ? o.material.map(swap) : swap(o.material);
+  });
+  for (const m of dropped) m.dispose();
+}
+
+// Geometría propia, en coordenadas de `target`, con atributos float simples
+// (los GLB traen uv cuantizadas o intercaladas que no se pueden unir tal cual).
+function flatGeometry(src, matrix, keepColor) {
+  const g = new THREE.BufferGeometry();
+  const n = src.attributes.position.count;
+  for (const name of ATTRS) {
+    const a = src.attributes[name];
+    if (!a || (name === 'color' && !keepColor)) continue;
+    const out = new Float32Array(n * a.itemSize);
+    for (let i = 0; i < n; i++) for (let k = 0; k < a.itemSize; k++) out[i * a.itemSize + k] = a.getComponent(i, k);
+    g.setAttribute(name, new THREE.BufferAttribute(out, a.itemSize));
+  }
+  if (src.index) g.setIndex(Array.from(src.index.array));
+  else g.setIndex(Array.from({ length: n }, (_, i) => i));
+  g.applyMatrix4(matrix);
+  return g;
+}
+
+const TMP_BOX = new THREE.Box3(), TMP_SIZE = new THREE.Vector3();
+// HORNEADO DE COLOR. Un auto trae diez materiales lisos que solo difieren en
+// el color: con el color en el vértice comparten UNO por clase de acabado
+// (rugosidad/metal redondeados), así que la pieza entera cuesta dos o tres
+// llamadas. `tintOf(malla)` dice qué tramo de vértices venía de qué
+// material para que el look lo pueda repintar (retint).
+const bakedMaterials = new Map();
+// tramos de color de cada malla horneada: fuera de userData (el editor clona
+// grupos y three serializa userData, que convertiría materiales en números)
+const TINTS = new WeakMap();
+export const tintOf = (mesh) => TINTS.get(mesh) ?? null;
+function bakeClass(m) {
+  if (own(m, 'onBeforeCompile') || m.userData.lookPatched || m.vertexColors || m.transparent || !m.visible) return null;
+  if (m.map || m.alphaMap || m.emissiveMap || m.bumpMap || m.normalMap || m.roughnessMap || m.metalnessMap || m.aoMap || m.lightMap) return null;
+  if (m.emissive && (m.emissive.r + m.emissive.g + m.emissive.b) * m.emissiveIntensity > 0.02) return null;
+  if (m.isMeshStandardMaterial && !m.isMeshPhysicalMaterial) return `std:${Math.round(m.roughness * 4) / 4}:${Math.round(m.metalness * 2) / 2}:${m.side}:${m.flatShading}`;
+  if (m.isMeshLambertMaterial) return `lam:${m.side}:${m.flatShading}`;
+  if (m.isMeshBasicMaterial) return `bas:${m.side}:${m.toneMapped}`;
+  return null;
+}
+function bakedMaterial(cls) {
+  if (bakedMaterials.has(cls)) return bakedMaterials.get(cls);
+  const [kind, a, b, c, d] = cls.split(':');
+  const side = Number(kind === 'std' ? c : a);
+  const m = kind === 'std' ? new THREE.MeshStandardMaterial({ vertexColors: true, roughness: Number(a), metalness: Number(b), side, flatShading: d === 'true' })
+    : kind === 'lam' ? new THREE.MeshLambertMaterial({ vertexColors: true, side, flatShading: b === 'true' })
+      : new THREE.MeshBasicMaterial({ vertexColors: true, side, toneMapped: b !== 'false' });
+  m.name = `calle2-baked:${cls}`;
+  m.userData.calleBaked = true;
+  bakedMaterials.set(cls, m);
+  return m;
+}
+
+// Recorre `target` y fusiona sus mallas por material (o por clase de acabado,
+// si el material es liso). `stop(o)` corta una rama (carteles, detalles que
+// viven aparte, piezas con nombre propio).
+function mergeTree(target, stop, { name = 'calle2-batch', exact = false } = {}) {
+  target.updateWorldMatrix(true, true);
+  const inv = target.matrixWorld.clone().invert();
+  const buckets = new Map();
+  const walk = (o) => {
+    for (const c of o.children) {
+      if (c.visible === false || stop(c)) continue;
+      if (c.isMesh && !c.isInstancedMesh && !c.isSkinnedMesh && !Array.isArray(c.material) && !KEEP.has(c.name)
+        && !c.morphTargetInfluences && !c.children.length && c.matrixWorld.determinant() > 0) {
+        // la sombra de un tornillo o de una manija no se ve: solo proyectan
+        // las piezas con cuerpo
+        let cast = c.castShadow;
+        if (cast) {
+          if (!c.geometry.boundingBox) c.geometry.computeBoundingBox();
+          TMP_BOX.copy(c.geometry.boundingBox).applyMatrix4(c.matrixWorld).getSize(TMP_SIZE);
+          cast = Math.max(TMP_SIZE.x, TMP_SIZE.y, TMP_SIZE.z) >= 0.45;
+        }
+        const m = c.material, cls = bakeClass(m);
+        const attrs = cls ? 'baked' : ATTRS.filter((a) => c.geometry.attributes[a] && (a !== 'color' || m.vertexColors)).join(',');
+        // exact: las piezas se agrupan por su marco (padre + matriz local) y
+        // el lote conserva los vértices bit a bit (ver `frame` más abajo). Lo
+        // piden las fachadas: la auditoría de hitboxes tira rayos justo por el
+        // borde de sus alféizares y un redondeo distinto cambiaba el veredicto.
+        const frameKey = exact ? `${c.parent.uuid}:${c.matrix.elements.join(',')}` : '';
+        const key = [cls ?? m.uuid, cast, c.receiveShadow, c.renderOrder, !!c.userData.noBulletDecal, c.frustumCulled, attrs, frameKey].join('|');
+        if (!buckets.has(key)) buckets.set(key, { m: cls ? bakedMaterial(cls) : m, cls, cast, recv: c.receiveShadow, order: c.renderOrder, noDecal: !!c.userData.noBulletDecal, cull: c.frustumCulled, list: [] });
+        buckets.get(key).list.push(c);
+      }
+      if (!c.isMesh || c.children.length) walk(c);
+    }
+  };
+  walk(target);
+  const rel = new THREE.Matrix4(), origin = new THREE.Vector3();
+  for (const b of buckets.values()) {
+    if (b.list.length < 2 && !b.cls) { if (!b.cast) b.list[0].castShadow = false; continue; }
+    // Si todas las piezas se llaman igual (las marcas de carga, p. ej.), el
+    // lote conserva el nombre y la posición de la primera: hay código que
+    // las busca así.
+    const same = b.list.every((o) => o.name && o.name === b.list[0].name);
+    // Piezas hermanas con la MISMA transformación (las de un GLB): el lote
+    // queda en su sitio, con sus vértices intactos bit a bit. Así un rayo
+    // que roza un borde da exactamente lo mismo que antes de fusionar.
+    const first = b.list[0];
+    const frame = b.list.every((o) => o.parent === first.parent && o.matrix.equals(first.matrix));
+    origin.set(0, 0, 0);
+    if (same && !frame) origin.setFromMatrixPosition(first.matrixWorld).applyMatrix4(inv);
+    const ranges = [];
+    let start = 0;
+    const geos = b.list.map((o) => {
+      if (frame) rel.identity();
+      else rel.multiplyMatrices(inv, o.matrixWorld).premultiply(new THREE.Matrix4().makeTranslation(-origin.x, -origin.y, -origin.z));
+      const g = flatGeometry(o.geometry, rel, !b.cls && b.m.vertexColors);
+      if (b.cls) {
+        g.deleteAttribute('uv');
+        if (!g.attributes.normal) g.computeVertexNormals();
+        const n = g.attributes.position.count;
+        g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+        ranges.push({ material: o.material, start, count: n, shade: 1, glow: false });
+        start += n;
+      }
+      return g;
+    });
+    const geometry = geos.length > 1 ? mergeGeometries(geos) : geos[0];
+    if (geos.length > 1) for (const g of geos) g.dispose();
+    if (!geometry) continue; // atributos incompatibles: se quedan como estaban
+    geometry.computeBoundingSphere();
+    const mesh = new THREE.Mesh(geometry, b.m);
+    mesh.name = same ? first.name : name;
+    if (frame) { mesh.position.copy(first.position); mesh.quaternion.copy(first.quaternion); mesh.scale.copy(first.scale); }
+    else mesh.position.copy(origin);
+    mesh.castShadow = b.cast; mesh.receiveShadow = b.recv;
+    mesh.renderOrder = b.order; mesh.frustumCulled = b.cull;
+    if (b.noDecal) mesh.userData.noBulletDecal = true;
+    if (b.cls) { TINTS.set(mesh, ranges); retint(mesh); }
+    (frame ? first.parent : target).add(mesh);
+    for (const o of b.list) {
+      o.parent.remove(o);
+      if (!o.geometry.userData.urbanAssetShared) o.geometry.dispose();
+    }
+  }
+}
+
+const isSign = (o) => o.name.startsWith('map-sign') || o.name.startsWith('prop-label');
+
+// Llamar al final de _decorCalle(true), con todo el mapa ya construido.
+export function optimizeCalle2(world) {
+  const map = world.mapGroup;
+  bakedMaterials.clear(); // por mapa: setLayout los libera y el look los parchea
+  dedupeMaterials(map);
+  for (const top of [...map.children]) {
+    const ud = top.userData;
+    if (top.isMesh || top.isLight) continue;
+    if (ud.blenderFacade || ud.streetBuilding) { facadeShadows(top); mergeTree(top, isSign, { exact: true }); continue; }
+    if (ud.streetContinuation) continue;
+    if (top.name === 'calle2-service-districts') {
+      for (const c of top.children) {
+        if (c.name === 'calle2-instanced-upper-facades') c.castShadow = false; // en lo alto, tras el muro
+      }
+      mergeTree(top, (o) => isSign(o) || o.userData.streetContinuation || (!o.isMesh && o.parent === top && o.userData.callePolish));
+      continue;
+    }
+    // Un prop modelado en Blender: el test de carteles mira su primer hijo
+    // (el modelo), así que se fusiona DENTRO del modelo.
+    if (ud.blenderProp) {
+      for (const c of top.children) if (c.name !== 'procedural-prop-fallback' && !isSign(c)) mergeTree(c, isSign);
+      continue;
+    }
+    // Detalles del pulido: hijos sin transformación, se fusionan en su sitio.
+    for (const c of top.children) if (c.name.startsWith('calle2-prop-polish:')) mergeTree(c, isSign);
+    mergeTree(top, (o) => isSign(o) || o.name.startsWith('calle2-prop-polish:'));
+  }
+  // Piezas sueltas sin nombre (cables, bordillos, muros de cierre, aceras).
+  mergeTree(map, (o) => !o.isMesh || !!o.name);
+  // carteles: placas pegadas a muros o vehículos, su sombra no se distingue
+  map.traverse((o) => { if (o.isMesh && isSign(o.parent ?? o)) o.castShadow = false; });
+  addLightPools(world);
+  bakedMaterials.clear(); // nada del mapa queda colgado del módulo
+}
+
+// LUZ SIN LUCES. Las 16 farolas y las lámparas de los distritos ya no son
+// luces reales: dejan un charco de luz aditivo en el suelo (una sola llamada
+// para todos). Cuatro luces de relleno cálidas sobre la avenida y una por
+// distrito (calle2-district-light) siguen iluminando soldados y coberturas.
+export const AVENUE_FILL = Object.freeze([[-7.5, -27], [7.5, 27], [7.5, -9], [-7.5, 9]]);
+// Cabezas de farola de la avenida, desde los DATOS del mapa (postes en
+// ±11.72 cada 10 m; la lente queda 0.635 m hacia la calzada y a 6.045 m). Un
+// clon del editor recrea las farolas después de construir el mapa: leerlas
+// de la escena dejaba el clon sin charcos de luz.
+export const CALLE_LAMP_HEADS = Object.freeze([-35, -25, -15, -5, 5, 15, 25, 35]
+  .flatMap((z) => [-1, 1].map((side) => Object.freeze({ x: side * 11.085, y: 6.045, z }))));
+function addLightPools(world) {
+  const pools = []; // [x, z, radio, alargamiento en x]
+  for (const l of CALLE_LAMP_HEADS) pools.push([l.x, l.z, 4.4, 1.25]);
+  for (const side of [-1, 1]) {
+    for (const z of [-18, 18]) pools.push([side * 19.0, z, 2.6, 1]);          // pasos laterales
+    for (const z of [-12, 12]) pools.push([side * 28.1, z, 2.4, 1]);          // apliques del taller
+    for (const dz of [-2.4, 2.4]) pools.push([side * CALLE_3.canopy.x, side * (CALLE_3.canopy.z + dz), 2.8, 1.4]); // marquesina
+  }
+  const cv = document.createElement('canvas'); cv.width = cv.height = 128;
+  const g = cv.getContext('2d'), grad = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  grad.addColorStop(0, 'rgba(255,255,255,1)'); grad.addColorStop(0.35, 'rgba(255,255,255,.55)');
+  grad.addColorStop(0.7, 'rgba(255,255,255,.16)'); grad.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grad; g.fillRect(0, 0, 128, 128);
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
+  const mat = new THREE.MeshBasicMaterial({
+    map: tex, color: 0xffb867, transparent: true, opacity: 0.42, blending: THREE.AdditiveBlending,
+    depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, fog: true,
+  });
+  const geo = new THREE.PlaneGeometry(2, 2); geo.rotateX(-Math.PI / 2);
+  const mesh = new THREE.InstancedMesh(geo, mat, pools.length);
+  const m4 = new THREE.Matrix4();
+  pools.forEach(([x, z, r, sx], i) => mesh.setMatrixAt(i, m4.makeScale(r * sx, 1, r).setPosition(x, 0.036, z)));
+  mesh.instanceMatrix.needsUpdate = true;
+  mesh.name = 'calle2-light-pools'; mesh.userData.noBulletDecal = true; mesh.renderOrder = 1;
+  mesh.computeBoundingSphere();
+  world.mapGroup.add(mesh);
+  for (const [x, z] of AVENUE_FILL) {
+    const light = new THREE.PointLight(0xffcf9a, 15, 26, 1.6);
+    light.name = 'calle2-avenue-fill'; light.position.set(x, 5.4, z);
+    world.mapGroup.add(light);
+  }
+}
+
+// Fachadas de Blender: 20+ mallas cada una, todas proyectando sombra. La
+// sombra la da el volumen (envolvente + cubierta); el relieve, de noche, no.
+function facadeShadows(building) {
+  building.traverse((o) => {
+    if (o.isMesh) o.castShadow = o.name === 'Existing_envelope' || o.name === 'Roof_cap';
+  });
+}
+
+// CONTINUACIÓN de la avenida más allá de ±fz: los mismos edificios reales de
+// la fila (no una versión inventada), oscurecidos con la distancia. Antes eran
+// 16 clones completos con materiales clonados (~350 llamadas, ~270k
+// triángulos y ~290 materiales que nunca se liberaban). El muro de cierre
+// (4.4 m) tapa lo de abajo: solo se conserva lo que asoma por encima desde
+// cualquier cámara del juego (ver contCut), recortado por triángulo,
+// y se hornea en DOS mallas por extremo (sólido + ventanas encendidas) con el
+// color de cada material y su oscurecimiento en el color por vértice.
+// Altura de recorte por módulo, MEDIDA desde la cámara más alta que usa el
+// juego: la órbita de presentación (main.js, updateMatchCamera) sube hasta
+// 11 m y llega al extremo opuesto (84.4 m del muro). Por encima de la línea
+// que pasa por el remate del muro (4.4 m) todo se ve; cuanto más lejos el
+// módulo, más baja esa línea. 0.3 m de margen.
+const WALL_TOP = 4.4, CAM_TOP = 11, CAM_RUN = 84.4;
+const contCut = (behind) => Math.max(0, Math.min(4.3, WALL_TOP - (CAM_TOP - WALL_TOP) * behind / CAM_RUN - 0.3));
+export function buildCalle2Continuation(world, buildings, { modules, step, shades }) {
+  const root = new THREE.Group();
+  root.name = 'street-building-continuation';
+  root.userData.streetContinuation = true;
+  const buckets = new Map(); // `${dir}:${glow}` -> [{ geometry, material, shade }]
+  const clipCache = new Map();
+  const m4 = new THREE.Matrix4(), box = new THREE.Box3();
+  const add = (mesh, matrix, shade, dir, cut) => {
+    const m = mesh.material;
+    if (!mesh.isMesh || Array.isArray(m) || m.transparent || !m.visible) return;
+    const g = mesh.geometry;
+    if (!g.boundingBox) g.computeBoundingBox();
+    box.copy(g.boundingBox).applyMatrix4(matrix);
+    if (box.max.y <= cut) return;
+    let src = g;
+    if (box.min.y < cut) {
+      const e = matrix.elements, key = [g.uuid, e[1], e[5], e[9], e[13], cut].map((v) => (typeof v === 'number' ? v.toFixed(4) : v)).join(':');
+      if (!clipCache.has(key)) clipCache.set(key, clipFacadeAbove(g, matrix, cut));
+      src = clipCache.get(key);
+    }
+    if (!src.attributes.position.count) return;
+    const glow = !!(m.isMeshBasicMaterial || (m.emissive && m.emissiveIntensity * (m.emissive.r + m.emissive.g + m.emissive.b) > 0.3));
+    const k = `${dir}:${glow ? 1 : 0}`;
+    if (!buckets.has(k)) buckets.set(k, []);
+    // solo posición y normal: sin texturas, todas las piezas unen igual
+    const geometry = flatGeometry(src, matrix, false);
+    geometry.deleteAttribute('uv');
+    if (!geometry.attributes.normal) geometry.computeVertexNormals();
+    buckets.get(k).push({ geometry, material: m, shade, glow });
+  };
+  for (const dir of [-1, 1]) for (const side of [-1, 1]) {
+    const sources = buildings
+      .filter((b) => b.userData.streetBuilding.side === side)
+      .sort((a, b) => (dir > 0 ? b.position.z - a.position.z : a.position.z - b.position.z));
+    for (let depth = 0; depth < modules; depth++) {
+      const source = sources[depth % sources.length];
+      source.updateWorldMatrix(true, true);
+      const dz = dir * (world.fz + step * (depth + 0.5)) - source.position.z;
+      const shift = new THREE.Matrix4().makeTranslation(0, 0, dz);
+      const cut = contCut(step * depth - 0.4);
+      source.traverse((o) => { if (o.isMesh && o.visible) add(o, m4.multiplyMatrices(shift, o.matrixWorld), shades[depth], dir, cut); });
+      // zócalo macizo bajo el recorte: desde una cámara libre (editor) la
+      // fachada nunca queda flotando
+      const env = source.getObjectByName('Existing_envelope');
+      if (env && cut > 0.05) {
+        const { span } = source.userData.streetBuilding;
+        const plinth = new THREE.Mesh(new THREE.BoxGeometry(5.4, cut, span));
+        plinth.material = env.material;
+        plinth.position.set(source.position.x, cut / 2, source.position.z + dz);
+        plinth.updateMatrixWorld();
+        add(plinth, plinth.matrixWorld, shades[depth], dir, 0);
+        plinth.geometry.dispose();
+      }
+    }
+  }
+  // farolas de la continuación: el mismo GLB (con su lente) que las del campo
+  for (const dir of [-1, 1]) for (let depth = 0; depth < modules; depth++) for (const side of [-1, 1]) {
+    const lamp = cloneUrbanAsset('streetlight');
+    if (!lamp) continue;
+    const scale = 1.21, minY = Number(lamp.userData.urbanMinY) || 0;
+    lamp.position.set(side * 11.72, -minY * scale, dir * (world.fz + 3 + depth * 10));
+    lamp.rotation.y = side > 0 ? Math.PI : 0; lamp.scale.setScalar(scale);
+    polishCalleProp(world, lamp, 'streetlight', { illuminate: false });
+    lamp.updateWorldMatrix(true, true);
+    const cut = contCut(3 + depth * 10 - 0.4);
+    lamp.traverse((o) => { if (o.isMesh) add(o, o.matrixWorld, Math.min(0.9, shades[depth] + 0.18), dir, cut); });
+    // el pulido clona materiales y crea la lente: lo propio se libera ya
+    lamp.traverse((o) => {
+      if (!o.isMesh) return;
+      if (!o.geometry.userData.urbanAssetShared) o.geometry.dispose();
+      if (!o.material.userData.urbanAssetShared) o.material.dispose();
+    });
+  }
+  for (const g of clipCache.values()) g.dispose();
+  const solid = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, metalness: 0.08 });
+  solid.userData.calleBaked = true; // el look le añade el brillo de lo que pinta por encima de 1
+  const lit = new THREE.MeshBasicMaterial({ vertexColors: true });
+  for (const [k, parts] of buckets) {
+    const glow = k.endsWith(':1');
+    const ranges = [];
+    let start = 0;
+    for (const p of parts) {
+      const n = p.geometry.attributes.position.count;
+      p.geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+      ranges.push({ material: p.material, start, count: n, shade: p.shade, glow });
+      start += n;
+    }
+    const geometry = mergeGeometries(parts.map((p) => p.geometry));
+    for (const p of parts) p.geometry.dispose();
+    const mesh = new THREE.Mesh(geometry, glow ? lit : solid);
+    mesh.name = `street-building-continuation:${k}`;
+    TINTS.set(mesh, ranges);
+    retint(mesh);
+    root.add(mesh);
+  }
+  world.mapGroup.add(root);
+  return root;
+}
+
+// Color por vértice = color del material de origen × oscurecimiento. El look
+// lo vuelve a llamar con su propia función de color: colorOf(material, glow)
+// -> THREE.Color | null (null = el color original).
+export function retint(mesh, colorOf = null) {
+  const ranges = TINTS.get(mesh), col = mesh.geometry?.attributes.color, c = new THREE.Color();
+  if (!ranges || !col) return;
+  for (const r of ranges) {
+    const m = r.material;
+    if (!m?.color?.isColor) continue;
+    const custom = colorOf?.(m, r.glow);
+    if (custom) c.copy(custom);
+    else if (r.glow) c.copy(m.isMeshBasicMaterial ? m.color : m.emissive).multiplyScalar(m.isMeshBasicMaterial ? 1 : Math.min(2, m.emissiveIntensity));
+    else c.copy(m.color);
+    c.multiplyScalar(r.shade);
+    for (let i = r.start; i < r.start + r.count; i++) col.setXYZ(i, c.r, c.g, c.b);
+  }
+  col.needsUpdate = true;
 }

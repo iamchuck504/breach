@@ -1,5 +1,5 @@
 /* BREACH / field interface. Presentation only: no camera, reticle or input rules. */
-:root{--bg:#0b1016;--panel:#131c26;--line:#334453;--text:#f1f4f5;--dim:#b0bcc7;--accent:#f2a65e;--red:#f37978;--blue:#72b4fa;--surface:#182430;--muted:#8495a6;--radius:8px;--ui-shadow:0 22px 70px #0006; color-scheme:dark}
+:root{--bg:#120c24;--panel:#1b1434;--line:#3e3466;--text:#fbf7ff;--dim:#c3badf;--accent:#ffc23d;--accent-hot:#ff9a3d;--accent-ink:#2a1606;--teal:#3fe3c5;--magenta:#ff5cb8;--violet:#a88bff;--red:#f37978;--blue:#72b4fa;--surface:#221a42;--muted:#9187b8;--radius:10px;--ui-shadow:0 26px 80px #07031a99;--festival:linear-gradient(90deg,var(--teal),var(--accent) 50%,var(--magenta)); color-scheme:dark}
 button,input,select{font:inherit}
 button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
 button:disabled{cursor:not-allowed;opacity:.48}
@@ -132,3 +132,190 @@ input[type=checkbox]{width:19px;height:19px;accent-color:var(--accent);vertical-
 @media(max-width:480px){.lobby-grid{grid-template-columns:1fr}.lobby-settings{grid-row:auto}.lobby-settings-body{grid-template-columns:1fr}.lobby-actions{grid-template-columns:1fr}.control-actions{flex-wrap:wrap}.menu-top{flex-wrap:wrap}.menu-top .tag{max-width:none;text-align:left}#options-card .options-list{grid-template-columns:1fr}#score{left:auto;right:10px;transform:none}.menu-prompt{white-space:normal}#menu-prompts{gap:8px;font-size:10px}}
 @media(max-height:800px){#menu{align-items:flex-start}#menu .menu-card{margin:0 auto 56px}.menu-top{margin-bottom:16px}.menu-title{margin-bottom:16px}#main-card:not(.in-match) .menu-note{display:none}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}}
+
+/* ===================== FESTIVAL: identidad de menús y HUD =====================
+   Paleta de los mapas nuevos (dorado de la Fortaleza, neón turquesa/magenta de
+   Azoteas) sobre añil profundo. Rojo y azul SATURADOS quedan solo para equipos.
+   Solo presentación: ids, clases y layout de navegación se conservan. */
+#splash{background:radial-gradient(ellipse 60% 55% at 22% 30%,#3fe3c533,transparent 70%),radial-gradient(ellipse 55% 60% at 80% 72%,#ff5cb838,transparent 70%),radial-gradient(ellipse at 50% 45%,#2d2160,#120c24 72%)}
+#splash::after{display:block;content:"";position:absolute;inset:-20%;left:-20%;top:-20%;width:auto;height:auto;transform:none;box-shadow:none;opacity:.55;background:radial-gradient(circle at 30% 40%,#ffc23d22,transparent 34%),radial-gradient(circle at 70% 60%,#a88bff26,transparent 38%);animation:festival-drift 14s ease-in-out infinite alternate}
+.splash-content{border-top:0;padding:28px 24px;display:flex;flex-direction:column;align-items:center}
+.splash-logo,.logo{position:relative;display:inline-block;font-family:var(--sans);font-weight:900;font-style:normal;letter-spacing:.02em;transform:skewX(-8deg);background:linear-gradient(180deg,#fff 30%,#e3dcff);-webkit-background-clip:text;background-clip:text;color:transparent;filter:drop-shadow(0 3px 0 #0a061a) drop-shadow(0 14px 26px #0a061a99)}
+.splash-logo em,.logo em{font-style:normal;background:linear-gradient(160deg,var(--accent) 20%,var(--accent-hot) 55%,var(--magenta));-webkit-background-clip:text;background-clip:text;color:transparent}
+.splash-logo::after,.logo::after{content:"";position:absolute;left:4%;right:2%;bottom:-.1em;height:.11em;min-height:3px;border-radius:2px;background:var(--festival);transform:skewX(8deg) translateX(-2%);box-shadow:0 0 18px #ffc23d55}
+.splash-logo{font-size:clamp(68px,14vw,168px)}
+.logo{font-size:30px;line-height:1.05;padding-bottom:6px}
+#btn-enter{background:linear-gradient(135deg,var(--accent),var(--accent-hot));color:var(--accent-ink);border:0;border-radius:999px;font:800 15px/1 var(--sans);letter-spacing:.16em;min-width:230px;min-height:54px;box-shadow:0 10px 30px #ff9a3d44,inset 0 1px #fff8;transition:transform .15s,box-shadow .15s}
+#btn-enter::before,#btn-enter::after{color:var(--accent-ink);opacity:.55}
+#btn-enter:hover{transform:translateY(-2px) scale(1.02);box-shadow:0 14px 38px #ff9a3d66,inset 0 1px #fff8}
+
+/* Menú: el backdrop 3D en vivo (Azoteas) se ve y respira; el oscurecido se
+   concentra detrás de la tarjeta y en los bordes, no en todo el cuadro. */
+#menu{background:radial-gradient(ellipse 85% 75% at 62% 45%,transparent 30%,#0c0720b3 100%),linear-gradient(100deg,#0e0824cc 0,#0e082466 48%,#0e082422 72%,#0e082455)}
+#menu::before{display:block;opacity:1;background-image:none;mask-image:none;background:radial-gradient(ellipse 45% 35% at 82% 18%,#ff5cb81f,transparent 70%),radial-gradient(ellipse 40% 40% at 12% 88%,#3fe3c51a,transparent 70%);animation:festival-breathe 9s ease-in-out infinite alternate}
+#menu.in-match-bg{background:linear-gradient(90deg,#0e0824ee,#0e082499)}
+.menu-card,#lobby-card{background:linear-gradient(160deg,#1f1742d6,#130d2bc2 60%,#170f30cc);border:1px solid #ffffff1c;border-radius:16px;box-shadow:0 30px 90px #05021499,inset 0 1px #ffffff14}
+.menu-card::before{content:"";position:absolute;left:24px;right:24px;top:0;height:3px;border-radius:0 0 3px 3px;background:var(--festival);opacity:.9}
+.menu-top{border-bottom-color:#ffffff14}
+.tag{color:var(--dim)}
+.menu-kicker,.lobby-kicker{color:var(--teal);font-weight:700;letter-spacing:.14em}
+.menu-title,.lobby-title{font-weight:900;letter-spacing:-.04em;background:linear-gradient(180deg,#fff 40%,#d9d0ff);-webkit-background-clip:text;background-clip:text;color:transparent}
+.mode-detail{border-left-color:var(--teal);color:var(--dim)}
+
+/* Botones: vidrio añil con barra de acento que crece; primario dorado. */
+.btn{background:#ffffff0d;border-color:#ffffff1f;border-radius:10px;transition:background .14s,border-color .14s,box-shadow .14s,transform .14s}
+.btn:hover:not(:disabled){background:#ffffff1a;border-color:#ffffff40}
+.btn.primary,#btn-resume{background:linear-gradient(120deg,var(--accent) 0,#ffb13d 45%,var(--accent-hot));border-color:transparent;color:var(--accent-ink);font-weight:800;box-shadow:0 10px 30px #ff9a3d33,inset 0 1px #fff9}
+.btn.primary:hover:not(:disabled){background:linear-gradient(120deg,#ffd76b,#ffc04f 45%,#ffab55);color:var(--accent-ink);box-shadow:0 14px 36px #ff9a3d55,inset 0 1px #fff}
+.btn.primary .btn-num,.btn.primary .btn-copy small{color:#6b3a0e}
+.mode-list .btn{position:relative;overflow:hidden;min-height:60px;padding-left:24px;font-size:15px;animation:mode-in .42s cubic-bezier(.2,.8,.2,1) both}
+.mode-list .btn:nth-child(2){animation-delay:.04s}.mode-list .btn:nth-child(3){animation-delay:.09s}.mode-list .btn:nth-child(4){animation-delay:.14s}
+.mode-list>.btn::before{content:"";position:absolute;left:0;top:10px;bottom:10px;width:4px;border-radius:0 4px 4px 0;background:var(--mode,var(--accent));transition:width .18s,top .18s,bottom .18s,opacity .18s;opacity:.95}
+.mode-list>.btn:hover:not(:disabled)::before,.mode-list>.btn:focus-visible::before,.mode-list>.btn.menu-nav-focus::before{top:0;bottom:0;width:7px}
+.mode-list>.btn:hover:not(:disabled),.mode-list>.btn:focus-visible{transform:translateX(5px)}
+#btn-bots{--mode:#fff5d6;min-height:72px;font-size:17px}
+#btn-practice{--mode:var(--teal)}#btn-online{--mode:var(--magenta)}
+#btn-practice:hover:not(:disabled){background:linear-gradient(90deg,#3fe3c524,#ffffff0d 70%)}
+#btn-online:hover:not(:disabled){background:linear-gradient(90deg,#ff5cb824,#ffffff0d 70%)}
+.mode-list .btn-num{display:inline-grid;place-items:center;min-width:34px;height:24px;padding:0 6px;border-radius:999px;background:#ffffff14;color:var(--dim);font-weight:700}
+.mode-list .btn.primary .btn-num{background:#2a160622;color:#5a300a}
+#main-card.in-match #btn-bots{background:#ffffff0d;border-color:#ffffff1f}
+.pause-actions .btn{padding-left:18px}
+#btn-leave-match{color:#ffc9d6;border-color:#ff5cb84d}
+#btn-leave-match:hover:not(:disabled){color:#fff;border-color:var(--magenta);background:#ff5cb824}
+/* tarjeta lateral y mapas */
+.prep-panel{background:#0d081fb8;border:1px solid #ffffff17;border-radius:12px}
+.prep-head{border-bottom-color:#ffffff14}.field{border-bottom-color:#ffffff12}
+.field input,.lobby-field select,.select-row select,.online-server input{background:#0b061cd9;border-color:#ffffff26;border-radius:8px}
+.field input:focus,.select-row select:focus{border-color:var(--accent);box-shadow:0 0 0 3px #ffc23d33}
+.map-row{position:relative;border-radius:10px;overflow:hidden;border:1px solid #ffffff1f;background:#0b061c}
+.map-row::after{content:"";position:absolute;left:0;right:0;top:0;height:116px;pointer-events:none;background:linear-gradient(180deg,transparent 45%,#0b061c99),linear-gradient(90deg,#ffc23d14,transparent 40%)}
+#map-preview{border-radius:0;object-position:50% 64%;transition:transform .5s cubic-bezier(.2,.8,.2,1),filter .3s;filter:saturate(1.08)}
+.map-row:hover #map-preview{transform:scale(1.035);filter:saturate(1.2) brightness(1.05)}
+#btn-map{border:0;border-top:1px solid #ffffff17;border-radius:0;background:#ffffff0a}
+#btn-map .btn-num{color:var(--accent);font-weight:700}
+@media(max-height:800px){.map-row::after{height:92px}}
+.utility-row .btn{border-radius:9px}
+.prep-panel .utility-row .btn:hover:not(:disabled){border-color:var(--teal);box-shadow:inset 0 -2px var(--teal)}
+#net-status{color:var(--accent)}
+.lobby-team,.lobby-settings,.online-status,.col,.slider-row,.select-row,.char-slot{background:#0d081fb3;border-color:#ffffff17}
+.lobby-slot{border-bottom-color:#ffffff10}.lobby-mini{background:#ffffff0d;border-color:#ffffff24}
+.lobby-value{background:#0b061cd9;border-color:#ffffff26;border-radius:8px}
+.lobby-mini:hover:not(:disabled){color:var(--accent);border-color:var(--accent)}
+.lobby-validation{border-left-color:var(--accent);background:#ffc23d12;color:#ffd98c}
+.lobby-actions{background:linear-gradient(#130d2b00,#130d2b 24%)}
+.lobby-badge.host{color:var(--accent)}
+.char-slot.sel{border-color:var(--accent);background:#ffc23d14;box-shadow:0 0 0 3px #ffc23d22}
+.char-slot img{background:radial-gradient(circle at 50% 38%,#a88bff2e,transparent 58%)}
+.col-title{color:var(--teal)}.bind-btn{background:#0b061cd9;border-color:#ffffff26}
+.bind-btn:hover,.bind-btn.listening{border-color:var(--accent);color:var(--accent)}
+#options-card .options-list .btn{background:linear-gradient(150deg,#ffffff12,#ffffff06)}
+#options-card .options-list .btn:nth-child(1){box-shadow:inset 0 3px var(--accent)}#options-card .options-list .btn:nth-child(2){box-shadow:inset 0 3px var(--teal)}
+#options-card .options-list .btn:nth-child(3){box-shadow:inset 0 3px var(--violet)}#options-card .options-list .btn:nth-child(4){box-shadow:inset 0 3px var(--magenta)}
+.control-actions{border-top-color:#ffffff14}
+.using-controller .menu-nav-focus{outline:2px solid #fff!important;box-shadow:0 0 0 5px #ffc23d66!important}
+#menu-prompts{background:#120c24e6;border-color:#ffffff24}
+.using-controller .menu-prompt:first-child b{color:var(--accent-ink)}
+@keyframes mode-in{from{opacity:0;translate:-14px 0}to{opacity:1;translate:0 0}}
+@keyframes festival-drift{from{transform:translate3d(-3%,-2%,0) scale(1)}to{transform:translate3d(3%,2%,0) scale(1.08)}}
+@keyframes festival-breathe{from{opacity:.55}to{opacity:1}}
+
+/* HUD: mismos anclajes, vidrio añil y filo festivo. */
+#hud{--hud-bg:#140e2be6;--hud-bg-soft:#1a1236e0;--hud-line:#ffffff24;--hud-line-hot:#ffc23d99}
+.hud-panel{border-radius:10px;box-shadow:0 8px 24px #05021466,inset 0 1px #ffffff12}
+#score::before{background:var(--festival);width:64px;height:3px;border-radius:0 0 3px 3px;box-shadow:0 0 14px #ffc23d55}
+#score .score-core{background:#0b061c66}
+#score .mode{color:var(--accent);font-weight:700}
+#score .sep.urgent{color:var(--accent);animation:timer-urgent 1s ease-in-out infinite}
+@keyframes timer-urgent{50%{opacity:.55}}
+#weapon::before{background:var(--festival);width:3px;opacity:1;top:10px;bottom:10px;border-radius:2px}
+#weapon .weapon-kicker{color:var(--teal)}
+#weapon .slots .slot{border-radius:6px}
+#weapon .slots .slot.cur{border-color:var(--accent);background:#ffc23d1f}
+#weapon .slots .slot.cur .k{color:var(--accent)}
+#weapon.low-ammo .mag{color:var(--accent-hot)}
+#weapon.low-ammo #wep-bar .fill,#weapon.low-ammo #wep-bar .seg.on{background:var(--accent-hot)}
+#wep-bar .seg,#wep-bar .cont{background:#ffffff1f;border-radius:2px}
+#wep-bar .seg.on,#wep-bar .cont .fill{background:#fff6e0}
+#wep-bar.reloading .seg.on,#wep-bar.reloading .fill{background:var(--teal)}
+#weapon .reload{color:var(--teal)}
+#round-pips{border-radius:999px;background:#0b061c80}
+#round-pips .pip{border-radius:2px}
+#context-hint{border-left-color:var(--teal);background:#0b061ca8;border-radius:0 6px 6px 0}
+#center-msg.big{color:var(--accent)}
+.mf-card::before{background:var(--festival)}
+.mf-kicker,.mf-result-label{color:var(--teal)}
+.mf-progress span{background:var(--festival)}
+.mf-count{color:var(--accent);text-shadow:0 0 46px #ffc23d44}
+.mf-card,.mf-result-card,#scoreboard{background:linear-gradient(160deg,#1f1742f2,#130d2bf2)}
+.sb-brand b{color:var(--accent)}
+.mf-team,.mf-chip,.mf-mvp-stat,.mf-portrait,.sb-team{background:#0d081fcc;border-color:#ffffff1a}
+.mf-portrait{background:radial-gradient(circle at 50% 38%,#a88bff33,transparent 58%),#0d081fcc}
+.sb-row.me,.mf-player.me{color:#ffe1a0;background:#ffc23d14}
+.sb-row.me{border-left-color:var(--accent)}
+.spec-card{border-top-color:var(--teal)}.spec-kicker{color:var(--teal)}.spec-respawn.ready{color:var(--accent)}
+.wheel-sector{border-radius:10px;background:#140e2bed!important}
+.wheel-sector.selected{border-color:var(--accent)!important;background:#2e2350f5!important;box-shadow:inset 3px 0 var(--accent),0 0 22px #ffc23d33}
+#pickup-prompt{background:#140e2bf2;border-color:var(--accent);border-radius:10px}
+
+/* ---------- feedback de combate ---------- */
+/* Vida: tinte vino en los BORDES (centro siempre limpio, transparente hasta
+   ~60% del radio). En vida baja (<30%, el umbral del latido de audio) un
+   segundo halo late con el tempo del latido (--beat, lo fija hud.js). */
+#vignette{position:fixed;inset:0;pointer-events:none;opacity:0;transition:opacity .2s;
+  background:radial-gradient(ellipse closest-side at center,transparent 60%,#5c0a2a66 84%,#3a0420d9 108%,#2a0218f2 135%)}
+#vignette::after{content:"";position:absolute;inset:0;opacity:0;
+  background:radial-gradient(ellipse closest-side at center,transparent 66%,#ff3f8a3d 86%,#a0124acc 110%,#6a0a33f2 140%)}
+#vignette.low::after{opacity:.85;animation:lowhp-beat var(--beat,.8s) ease-out infinite}
+@keyframes lowhp-beat{0%{opacity:.55}10%{opacity:1}24%{opacity:.62}34%{opacity:.9}100%{opacity:.5}}
+#hud.low-hp #weapon,#hud.low-hp #score{box-shadow:0 8px 24px #05021466,inset 0 0 0 1px #ff5c9a40}
+/* Golpe recibido: destello de borde breve (sin dirección conocida, más fuerte). */
+#hurt-flash{position:fixed;inset:0;pointer-events:none;opacity:0;
+  background:radial-gradient(ellipse closest-side at center,transparent 62%,#ff7a3a55 88%,#ff5a2acc 115%)}
+/* Arcos de daño: anillo alrededor del centro apuntando al atacante. Naranja
+   ardiente con núcleo claro: lee como peligro sin usar el rojo de equipo. */
+#dmg-dir{position:fixed;left:50%;top:50%;width:0;height:0;pointer-events:none;z-index:3}
+.dmg-arc{position:absolute;width:clamp(210px,32vmin,380px);aspect-ratio:1;left:0;top:0;translate:-50% -50%;opacity:0;will-change:transform,opacity}
+.dmg-arc svg{display:block;width:100%;height:100%;overflow:visible}
+.dmg-arc .arc{fill:none;stroke:#ff8a2a;stroke-width:8;stroke-linecap:round;filter:drop-shadow(0 0 5px #ff5a1acc) drop-shadow(0 0 1px #000)}
+.dmg-arc .chev{fill:#ffe2b8;filter:drop-shadow(0 0 3px #ff5a1a)}
+/* Marcador de impacto: 4 trazos separados del centro (el punto de la mira
+   queda libre). Cuerpo blanco · cabeza dorada más larga · baja magenta,
+   gruesa y con rombo. Sombra oscura: se lee sobre la piedra clara y de noche. */
+#hitmarker{position:fixed;left:50%;top:50%;width:0;height:0;opacity:0;color:#fff;pointer-events:none;z-index:4;
+  --hm-len:9px;--hm-gap:7px;--hm-w:2.5px;filter:drop-shadow(0 0 1px #000) drop-shadow(0 0 1px #000) drop-shadow(0 1px 3px #000a)}
+#hitmarker i{position:absolute;left:calc(var(--hm-len) / -2);top:calc(var(--hm-w) / -2);width:var(--hm-len);height:var(--hm-w);border-radius:2px;background:currentColor}
+#hitmarker i:nth-child(1){transform:rotate(45deg) translateX(calc(var(--hm-gap) + var(--hm-len) / 2))}
+#hitmarker i:nth-child(2){transform:rotate(135deg) translateX(calc(var(--hm-gap) + var(--hm-len) / 2))}
+#hitmarker i:nth-child(3){transform:rotate(225deg) translateX(calc(var(--hm-gap) + var(--hm-len) / 2))}
+#hitmarker i:nth-child(4){transform:rotate(315deg) translateX(calc(var(--hm-gap) + var(--hm-len) / 2))}
+#hitmarker b{position:absolute;left:-13px;top:-13px;width:26px;height:26px;border:2px solid currentColor;transform:rotate(45deg);border-radius:3px;display:none}
+#hitmarker[data-k=head]{color:#ffd23f;--hm-len:12px;--hm-gap:8px;--hm-w:3px}
+#hitmarker[data-k=kill]{color:#ff5cb8;--hm-len:14px;--hm-gap:10px;--hm-w:3.5px}
+#hitmarker[data-k=kill] b{display:block;opacity:.9}
+/* Confirmación de baja: bajo la retícula, fuera del centro. */
+#kill-confirm{position:fixed;left:50%;top:calc(50% + clamp(112px,17vh,190px));transform:translate(-50%,0);display:flex;align-items:center;gap:9px;
+  padding:5px 12px 5px 10px;white-space:nowrap;opacity:0;pointer-events:none;z-index:4;transition:opacity .25s;
+  font:700 12px/1.2 var(--sans);letter-spacing:.08em;text-transform:uppercase;color:#fff;
+  background:linear-gradient(90deg,#140e2b00,#140e2bc7 18%,#140e2bc7 82%,#140e2b00);text-shadow:0 1px 2px #000}
+#kill-confirm.on{opacity:1}
+#kill-confirm .kc-tag{color:var(--magenta);font-weight:800}
+#kill-confirm .kc-name{font-size:15px;letter-spacing:.03em}
+#kill-confirm .kc-wep{display:inline-block;width:48px;height:16px;color:#e8e2ff}
+#kill-confirm .kc-wep svg{width:100%;height:100%;filter:brightness(1.7) saturate(.6)}
+#kill-confirm .kc-head{display:inline-flex;align-items:center;gap:4px;color:#ffd23f;font-size:11px}
+#kill-confirm .kc-streak{color:var(--accent);font:800 15px/1 var(--mono)}
+.head-glyph{width:13px;height:13px;flex:0 0 auto}
+/* Kill feed: icono real del arma, headshot dorado, filas propias marcadas. */
+#feed{position:fixed}
+#feed .row{gap:9px;border-radius:8px;background:#140e2bd9;border-color:#ffffff1c;align-items:center}
+#feed .row::after{background:var(--festival);opacity:.55;width:28px;height:2px}
+#feed .kf-name{max-width:13ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+#feed .kf-wep{display:inline-block;width:46px;height:15px;flex:0 0 46px;color:#e8e2ff;opacity:.95}
+#feed .kf-wep svg{width:100%;height:100%;opacity:1;filter:brightness(1.7) saturate(.6)}
+#feed .kf-head{display:inline-flex;color:#ffd23f}
+#feed .row.mine{border-color:#ffc23d73;background:linear-gradient(90deg,#ffc23d1f,#140e2bd9 55%)}
+#feed .row.mine::after{opacity:1;width:100%}
+#feed .row.died{border-color:#ffffff40;background:#24183fe6}
+#hud.spectating #dmg-dir,#hud.spectating #hitmarker,#hud.spectating #kill-confirm,#hud.scoped #kill-confirm{opacity:0!important}
+@media(max-width:760px){#feed .kf-wep{width:34px;flex-basis:34px;height:12px}#kill-confirm{font-size:10px}#kill-confirm .kc-name{font-size:13px}}

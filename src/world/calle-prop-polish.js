@@ -165,12 +165,8 @@ export function polishCalleProp(world, parent, kind, spec={}) {
     lensGeometry.setAttribute('position',new T.Float32BufferAttribute(points,3));
     const lens=new T.Mesh(lensGeometry,new T.MeshBasicMaterial({color:0xffe4ba,side:T.DoubleSide,toneMapped:false}));
     lens.name='streetlamp-lit-lens';root.add(lens);
-    if(spec.illuminate){
-      const light=new T.SpotLight(0xffdfb0,65,14,Math.PI*.34,.8,2);
-      light.name='streetlamp-light';light.position.set(.50,2.38,0);
-      const target=new T.Object3D();target.position.set(1.4,-2.5,0);
-      light.target=target;light.castShadow=false;root.add(light,target);
-    }
+    // Sin SpotLight por farola (16 luces evaluadas en cada píxel): el charco
+    // de luz en el suelo y cuatro luces de relleno los pone optimizeCalle2.
   }
   for(const [material,geometries] of batches){
     const geometry=mergeGeometries(geometries);geometries.forEach(g=>g.dispose());
