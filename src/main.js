@@ -108,7 +108,7 @@ function renderFrame() {
   renderer.shadowMap.autoUpdate = every <= 1;
   if (every > 1 && frameIndex++ % every === 0) renderer.shadowMap.needsUpdate = true;
   pipeline.sun = world.sun;
-  pipeline.render(scene, camera, world.theme ?? world.layout);
+  pipeline.render(scene, camera, world.theme ?? world.layout, world.look.grade);
 }
 // El filtro de sombras va compilado dentro de cada material: al cambiarlo
 // hay que recompilarlos.
@@ -131,13 +131,16 @@ const camera = new THREE.PerspectiveCamera(TUNING.cam.fovNormal, 1, 0.1, 200);
 // Al jugar, setLayout reutiliza este mismo World con el mapa elegido.
 const sky = new SkyEnvironment(renderer, scene);
 const world = new World(scene, 'azoteas');
+world.look.setQuality(gfxQuality);
 // al cargar un mapa se compilan sombreadores: el medidor de cuadros espera
 { const setLayout = world.setLayout.bind(world); world.setLayout = (...a) => { autoGfx.settle(); return setLayout(...a); }; }
 const effects = new Effects(scene, world);
+effects.setQuality(gfxQuality);
 const audio = new Audio();
 const smoke = new SmokeSystem(scene, world, audio);
 const specials = new SpecialPickup(scene);
 const rockets = new Rockets(scene, world, audio);
+effects.trackRockets(rockets);
 audio.setAmbience('azoteas');
 const hud = new HUD();
 initMenuPresentation();
@@ -412,6 +415,7 @@ function cycleSpectator(dir) {
 }
 
 function enterSpectator() {
+  audio.cancelHandling(); // recarga/bombeo programados no siguen en espectador
   G.spectator.active = true;
   G.spectator.targetId = null;
   G.spectator.deathHold = 1.15;
@@ -515,6 +519,7 @@ audio.setSpatialContext(
       return selectAudioListener(true, {
         x: camera.position.x, y: camera.position.y, z: camera.position.z,
         right: { x: audioListenerRight.x / rl, z: audioListenerRight.z / rl },
+        team: G.team,
       }, null);
     }
     return selectAudioListener(false, null, {
@@ -522,6 +527,7 @@ audio.setSpatialContext(
       y: (G.player.y ?? 0) + 1.15,
       z: G.player.pos.z,
       right: shoulderCam.flatRight(),
+      team: G.team,
     });
   },
   (source, listener) => {
@@ -534,22 +540,97 @@ audio.setSpatialContext(
     return hit !== null && hit < distance - 0.6;
   },
 );
+// Superficie bajo los pies para los pasos: la tapa del collider donde se
+// apoya (mismo criterio que groundHeight) o el suelo base del mapa.
+audio.setSurfaceQuery((x, y, z) => {
+  let best = null;
+  for (const c of world.colliders) {
+    if (c.moveOnly || c.h > y + 0.3 || c.h < y - 0.3) continue;
+    if (x < c.minx || x > c.maxx || z < c.minz || z > c.maxz) continue;
+    if (!best || c.h > best.h) best = c;
+  }
+  if (best?.surface) return best.surface;
+  const theme = world.theme ?? world.layout;
+  return theme === 'fortaleza' || theme === 'pueblo' ? 'stone' : 'concrete';
+});
+// ---------- origen del daño online (el snapshot solo trae la vida) ----------
+// confirmed: hitConfirm / bot alojado / explosión / melee. guess: bala enemiga
+// cuya trayectoria cruzó el cuerpo del jugador (test 3D). Una caída de vida
+// usa SIEMPRE el confirmado; si aún no llegó, destella ya y espera unos ms a
+// que llegue antes de recurrir al candidato inferido. Cada fuente se consume.
+const hurtSrc = { confirmed: null, guess: null, pending: null };
+function noteHurtSource(confirmed, x, z, id) {
+  const src = { x, z, id, t: performance.now() };
+  if (!confirmed) { hurtSrc.guess = src; return; }
+  const p = hurtSrc.pending;
+  if (p && src.t - p.t < 400) { hud.hurtArc(src, p.amount, id); hurtSrc.pending = null; hurtSrc.guess = null; return; }
+  hurtSrc.confirmed = src;
+}
+function onlineHpDrop(amount) {
+  const t = performance.now(), c = hurtSrc.confirmed;
+  hurtSrc.confirmed = null;
+  if (c && t - c.t < 700) { hud.hurt(c, amount, c.id); hurtSrc.guess = null; return; }
+  hud.hurtFlash(true, amount);
+  hurtSrc.pending = { amount, t };
+}
+// por cuadro: sin confirmado tras 150 ms, el candidato inferido (si es reciente)
+function resolveOnlineHurt() {
+  const p = hurtSrc.pending;
+  if (!p) return;
+  const t = performance.now();
+  if (t - p.t < 150) return;
+  const g = hurtSrc.guess;
+  if (g && t - g.t < 700) hud.hurtArc(g, p.amount, g.id);
+  hurtSrc.pending = null; hurtSrc.guess = null;
+}
+// distancia mínima entre el segmento del disparo o→p y el eje vertical del
+// cuerpo (bx, y0..y1, bz): una bala que pasó por encima no es candidata
+function shotBodyDistance(o, p, bx, y0, y1, bz) {
+  const dx = p.x - o.x, dy = p.y - o.y, dz = p.z - o.z, e = y1 - y0;
+  const rx = o.x - bx, ry = o.y - y0, rz = o.z - bz;
+  const a = dx * dx + dy * dy + dz * dz, b = dy * e, c = dx * rx + dy * ry + dz * rz;
+  const f = e * ry, ee = e * e, cl = (v) => Math.max(0, Math.min(1, v));
+  const den = a * ee - b * b;
+  let sp = den > 1e-9 ? cl((b * f - c * ee) / den) : 0;
+  let tb = (b * sp + f) / ee;
+  if (tb < 0) { tb = 0; sp = a > 1e-9 ? cl(-c / a) : 0; }
+  else if (tb > 1) { tb = 1; sp = a > 1e-9 ? cl((b - c) / a) : 0; }
+  return Math.hypot(rx + dx * sp, ry + dy * sp - e * tb, rz + dz * sp);
+}
+
+// Estado por cuadro para el audio (latido, protección, pedestal, cohetes,
+// cama del menú). Objeto reutilizado: sin asignaciones por cuadro.
+const audioFrame = { menu: false, playing: false, alive: false, hp01: 1, prot: 0,
+  rockets: null, pedestal: null, holdT: 0, holdMax: SPECIAL_HOLD_TIME };
+function updateAudioFrame(dt) {
+  audioFrame.menu = !G.mode;
+  audioFrame.playing = G.mode === 'online' || G.mode === 'bots' || G.mode === 'practice';
+  audioFrame.alive = !!G.selfAlive && !!G.player && !G.player.dead;
+  // pausa/presentación: hp01 = 1 apaga el latido (vuelve solo al reanudar)
+  audioFrame.hp01 = (G.mode === 'online' || G.mode === 'bots') && !(G.mode && G.feedbackQuiet)
+    ? G.selfHp / TUNING.combat.hp : 1;
+  audioFrame.prot = G.spawnProt;
+  audioFrame.rockets = rockets.list;
+  audioFrame.pedestal = specials.active;
+  audioFrame.holdT = specials.holdT;
+  audio.update(dt, audioFrame);
+}
 
 // ---------- eventos del controller (feel: sonido + polvo + shake) ----------
 const ctrlEvents = {
-  onSlideStart: () => { audio.whoosh(); },
+  onSlideStart: () => { audio.slide(); if (G.player) effects.dust(G.player.pos, 'slide', G.player.y); },
   onCoverEnter: () => {
     audio.thump();
     shoulderCam.addShake(0.35);
     input.pad.rumble(60, 0.15, 0.4);
-    if (G.player) effects.dust(G.player.pos);
+    if (G.player) effects.dust(G.player.pos, 'cover', G.player.y);
   },
   onBounce: (chain) => {
     audio.whoosh();
-    if (G.player) effects.dust(G.player.pos);
+    if (G.player) effects.dust(G.player.pos, 'bounce', G.player.y);
     if (chain >= 2) hud.hint(t('msg.bounce', { count: chain }), 700);
   },
-  onDive: () => { audio.whoosh(); },
+  onDive: () => { audio.dive(); },
   onJump: () => { audio.jump(); },
   onDoubleJump: () => {
     audio.whoosh();
@@ -559,15 +640,14 @@ const ctrlEvents = {
     audio.whoosh();
     audio.jump();
     input.pad.rumble(70, 0.25, 0.45);
-    if (G.player) effects.dust(G.player.pos);
+    if (G.player) effects.dust(G.player.pos, 'wall', G.player.y);
   },
   onLand: () => {
     audio.land();
-    if (G.player) effects.dust(G.player.pos);
+    if (G.player) effects.dust(G.player.pos, 'land', G.player.y);
   },
   onMantle: () => {
-    audio.footstep('jump', 0.9);
-    audio.whoosh();
+    audio.mantle();
   },
   // Rival enganchable por la embestida: de frente, cerca, a la vista.
   meleeTarget: (range, arcDeg) => {
@@ -590,7 +670,7 @@ const ctrlEvents = {
   onMeleeStart: () => {
     // El golpe tiene prioridad sobre una recarga, pero no inventa munición:
     // conserva cargador/reserva exactamente donde estaban.
-    G.weapons?.interruptReload?.();
+    G.weapons?.interruptReload?.(); audio.cancelHandling();
     G.fireBuffer = 0;
   },
 };
@@ -662,6 +742,10 @@ function prepareGame() {
   preparePromise = (async () => {
     await new Promise(requestAnimationFrame); // pintar PREPARANDO antes del trabajo GPU
     await Promise.all([audioReady, effects.prepare(renderer, camera, pipeline.compileTarget()), preloadUrbanAssets()]);
+    // El mapa de fondo del menú se construyó ANTES de tener los modelos: sin
+    // rehacerlo, la primera partida en ese mismo mapa (setLayout no repite un
+    // mapa ya puesto) se jugaba con los sustitutos procedurales.
+    if (!G.mode && world.layout) world.setLayout(world.layout, true);
     await new Promise(requestAnimationFrame);
   })();
   return preparePromise;
@@ -692,7 +776,11 @@ document.addEventListener('pointerout', (e) => {
   if (lastUiHover && !lastUiHover.contains(e.relatedTarget)) lastUiHover = null;
 });
 document.addEventListener('click', (e) => {
-  if (e.target.closest?.('button:not(:disabled)') && menuIsOpen()) audio.uiConfirm();
+  const button = e.target.closest?.('button:not(:disabled)');
+  if (!button || !menuIsOpen()) return;
+  // volver suena distinto de confirmar: el oído distingue avanzar de retroceder
+  if (button.dataset.i18n === 'common.back' || /(^|-)back$/.test(button.id)) audio.uiBack();
+  else audio.uiConfirm();
 });
 
 function openMenu() {
@@ -1334,6 +1422,8 @@ selQuality.addEventListener('change', () => {
     localStorage.setItem('breach.video.quality', gfxQuality);
   }
   pipeline.setQuality(gfxQuality);
+  world.look.setQuality(gfxQuality);
+  effects.setQuality(gfxQuality);
   applyShadowFilter();
   applyRenderSize();
 });
@@ -1527,7 +1617,12 @@ function visibleBounds(root, out) {
   root.updateWorldMatrix(true, true);
   const visit = (o) => {
     if (!o.visible) return;
-    if (o.isMesh && o.geometry) {
+    if (o.isSkinnedMesh) {
+      // cuerpo fusionado: sus vértices viven en el espacio de cada pieza; la
+      // caja real sale de la pose actual (SkinnedMesh aplica los huesos)
+      o.computeBoundingBox();
+      out.union(_framePart.copy(o.boundingBox).applyMatrix4(o.matrixWorld));
+    } else if (o.isMesh && o.geometry) {
       if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
       out.union(_framePart.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld));
     }
@@ -1742,6 +1837,7 @@ function deepCopy(src, dst) {
 let startSeq = 0; // n° de arranque de partida: invalida continuaciones tardías
 
 function teardown({ keepNet = false, keepLobby = true } = {}) {
+  audio.stopGameplay(); // recargas programadas, loops de cohete/pedestal
   G.protoView?.clear();G.protoEngine=null;G.protoSnapshot=null;G.protoStun=0;
   G.blastDebug?.dispose();G.blastDebug=null;
   resetSpectator();
@@ -1767,6 +1863,7 @@ function teardown({ keepNet = false, keepLobby = true } = {}) {
   hud.respawnTick(null);
   hud.centerOff();  // sin "GANA ROJO" colándose a la partida siguiente
   hud.clearFeed();
+  hurtSrc.confirmed = hurtSrc.guess = hurtSrc.pending = null; // nada del daño online pasa a otra partida
   hud.timer(null);
   hud.roundPips(null);
   hud.scoreboard(null);
@@ -1797,7 +1894,7 @@ function spawnLocal(team, spawn) {
   G.rig.collideFn = (p, y, r = RAGDOLL_R) => world.resolveCircle(p, r, y);
   G.player = new Controller(world, shoulderCam, ctrlEvents);
   G.player.respawn(spawn);
-  G.weapons.reset();
+  G.weapons.reset(); audio.cancelHandling();
   G.rig.setWeapon('smg');
 }
 
@@ -1861,7 +1958,8 @@ function damagePlayerLocal(dmg, fromName, shooter, hitCtx = null) {
     G.player.pos.z += (dz / len) * 0.13;
     world.resolveCircle(G.player.pos, PLAYER_R, G.player.y);
   }
-  audio.hurt();
+  audio.hurt({ position: shooter, amount: dmg });
+  hud.hurt(shooter, dmg, fromName); // arco hacia el atacante
   shoulderCam.addShake(0.35);
   input.pad.rumble(120, 0.4, 0.6);
   if (G.selfHp > 0 && ['bazooka','frag'].includes(hitCtx?.weapon)) {
@@ -1879,7 +1977,7 @@ function damagePlayerLocal(dmg, fromName, shooter, hitCtx = null) {
     const impact = shooter
       ? { x: G.player.pos.x - shooter.x, z: G.player.pos.z - shooter.z }
       : null;
-    G.weapons.cancelActions();
+    G.weapons.cancelActions(); audio.cancelHandling();
     // morir a mitad del lanzamiento: el bote NO sale de una mano muerta
     G.throwT = 0; G.throwPending = false; G.pendingThrows = 0;
     // contexto físico de la muerte ANTES de matar (kill() borra la velocidad):
@@ -1999,7 +2097,7 @@ function startBots(lobby = G.lobby || defaultLocalLobby()) {
       G.selfHp = TUNING.combat.hp;
       G.respawnT = 0;
       G.player.respawn(spawn);
-      G.weapons.reset();
+      G.weapons.reset(); audio.cancelHandling();
       exitSpectator();
       if (protect) grantSpawnProtection();
     },
@@ -2246,8 +2344,11 @@ function setupOnlineBots(roster) {
     stepSound,
     botFire: (bot, origin, point, wep, impacts) =>
       G.net?.botFire(bot.id, origin, point, wep, impacts, bot),
-    botHit: (bot, targetId, dmg, part, gib, point, meta) =>
-      G.net?.botHit(bot.id, targetId, dmg, part, gib, point, meta),
+    botHit: (bot, targetId, dmg, part, gib, point, meta) => {
+      // bot alojado que me pega: su posición orienta el arco de daño del snapshot
+      if (targetId === G.net?.id) noteHurtSource(true, bot.pos.x, bot.pos.z, bot.id);
+      return G.net?.botHit(bot.id, targetId, dmg, part, gib, point, meta);
+    },
     botNade: (bot, origin, velocity, cid) => G.net?.send({
       t: 'nade', bot: bot.id,
       o: [origin.x, origin.y, origin.z], v: [velocity.x, velocity.y, velocity.z],
@@ -2332,7 +2433,7 @@ function reconcileLocalOnlineSnapshot(snapshot) {
     // no reproduce gore ni audio, pero nunca deja un jugador vivo localmente
     // cuando el servidor ya lo considera eliminado.
     G.selfAlive = false;
-    G.weapons.cancelActions();
+    G.weapons.cancelActions(); audio.cancelHandling();
     if (!G.player.dead) G.player.kill();
     enterSpectator();
   } else if (serverAlive && !wasAlive) {
@@ -2340,7 +2441,7 @@ function reconcileLocalOnlineSnapshot(snapshot) {
     // camino reconcilia el estado si la UI se montó tarde o cambió de host.
     G.selfAlive = true;
     G.player.respawn({ x: snapshot.x, z: snapshot.z, yaw: snapshot.yaw || 0 });
-    G.weapons.reset();
+    G.weapons.reset(); audio.cancelHandling();
     G.rig?.setWeapon?.('smg');
     exitSpectator();
   } else {
@@ -2371,6 +2472,9 @@ function bindNet(net) {
   const alive = () => G.net === net;
   net.on('lobby', (m) => {
     if (!alive()) return;
+    // aviso sonoro de jugador nuevo en la sala (no en la primera foto)
+    const prevPlayers = G.lobbyKind === 'online' ? (G.lobby?.players?.length ?? 0) : 0;
+    if (!G.mode && prevPlayers > 0 && (m.players?.length ?? 0) > prevPlayers) audio.playerJoined();
     G.lobby = m; G.lobbyKind = 'online';
     const mine = m.players?.find((p) => p.id === net.id); if (mine) G.team = mine.team;
     if (!G.mode) lobbyUI.show(m, net.id, 'online');
@@ -2458,7 +2562,11 @@ function bindNet(net) {
       if (p.id === net.id) {
         // G.selfAlive: el golpe mortal ya sonó con 'death' — sin el guard
         // sonaba hurt + shake + rumble sobre un jugador ya muerto
-        if (p.hp < G.selfHp && G.selfAlive) { audio.hurt(); shoulderCam.addShake(0.4); input.pad.rumble(140, 0.5, 0.7); }
+        if (p.hp < G.selfHp && G.selfAlive) {
+          audio.hurt({ amount: G.selfHp - p.hp }); shoulderCam.addShake(0.4); input.pad.rumble(140, 0.5, 0.7);
+          // el snapshot no dice quién pegó: fuente confirmada o, si no llega, inferida
+          onlineHpDrop(G.selfHp - p.hp);
+        }
         G.selfHp = p.hp;
         reconcileLocalOnlineSnapshot(p);
         continue;
@@ -2481,7 +2589,15 @@ function bindNet(net) {
     // un melee ajeno no es un disparo: la animación viaja por el estado y el
     // resultado por 'death'; sin trazadora, flash ni sonido de bala
     if (m.w === 'melee') return;
-    effects.tracer(o, p);
+    // bala enemiga cuya trayectoria cruzó el cuerpo: candidata (inferida) a
+    // origen del daño del próximo snapshot; nunca pisa una fuente confirmada
+    if (r && r.team !== G.team && G.player && G.selfAlive) {
+      const py = G.player.y || 0;
+      if (shotBodyDistance(o, p, G.player.pos.x, py + 0.1, py + 1.8, G.player.pos.z) < 0.75) {
+        noteHurtSource(false, o.x, o.z, m.id);
+      }
+    }
+    effects.tracer(o, p, false, { team: r?.team, weapon: m.w });
     // Servidores nuevos reenvían todos los impactos estáticos de la escopeta;
     // con servidores anteriores, el endpoint único mantiene compatibilidad.
     const remoteMarks = Array.isArray(m.d) ? m.d.filter(okVec).slice(0, 8) : [m.p];
@@ -2499,8 +2615,9 @@ function bindNet(net) {
         }
       }
     }
-    effects.muzzleFlash(o, m.w === 'shotgun' || !!TUNING.weapons[m.w]?.special);
-    const remoteShot = { position: o };
+    effects.muzzleFlash(o, m.w === 'shotgun' || !!TUNING.weapons[m.w]?.special, { weapon: m.w, to: p, team: r?.team });
+    // el segmento disparo→impacto ya llega por red: basta para el silbido
+    const remoteShot = { position: o, end: p, enemy: r ? r.team !== G.team : true };
     audio.gun(m.w, remoteShot);
   });
   net.on('correction', (m) => {
@@ -2527,6 +2644,7 @@ function bindNet(net) {
       const victimRig = victimSelf ? G.rig : (victimRemote?.rig || victimBot?.rig);
       if (!victimPos) return;
       const ctx = { weapon: m.w, explosionPoint: m.ep };
+      if (victimSelf) noteHurtSource(true, +m.ep[0] || 0, +m.ep[2] || 0, m.from);
       // Solo el dueño de una entidad modifica su posición. Los demás clientes
       // reproducen la reacción del torso y dejan la posición a su snapshot.
       if (victimSelf || victimBot) {
@@ -2562,6 +2680,10 @@ function bindNet(net) {
       : victimBot?.yaw;
     const victimRig = victimSelf ? G.rig : (victimRemote?.rig || victimBot?.rig);
     // aturdimiento decidido por el servidor
+    if (victimSelf && attacker) {
+      const ap = attacker.pos || attacker;
+      noteHurtSource(true, ap.x, ap.z, m.from);
+    }
     if (+m.dz > 0) {
       if (victimSelf) { G.kickDaze = +m.dz; G.kickDazeImmune = +m.dz + TUNING.melee.dazeImmunity; }
       else if (victimBot) victimBot.dazeT = +m.dz;
@@ -2587,6 +2709,9 @@ function bindNet(net) {
     if (!okVec(m.o) || !okVec(m.d) || typeof m.rid !== 'string') return;
     const source = G.remotes.get(m.id) || G.onlineBots?.botById?.(m.id);
     source?.applyFirePose?.(m.fp, 'bazooka');
+    // el lanzamiento ajeno sonaba mudo online: solo se oía la explosión
+    // (los bots alojados aquí ya sonaron en su botmatch local)
+    if (!G.onlineBots?.botById?.(m.id)) audio.gun('bazooka', { position: { x: m.o[0], y: m.o[1], z: m.o[2] } });
     rockets.fire(
       { x: m.o[0], y: m.o[1], z: m.o[2] },
       new THREE.Vector3(m.d[0], m.d[1], m.d[2]).normalize(),
@@ -2633,7 +2758,7 @@ function bindNet(net) {
       return;
     }
     const removed = G.weapons.giveSpecial(m.wep);
-    audio.reloadDone();
+    audio.specialTaken();
     hud.hint(t('msg.specialTaken', {
       weapon: t(TUNING.weapons[m.wep].nameKey),
       removed: t(TUNING.weapons[removed].nameKey),
@@ -2736,7 +2861,8 @@ function bindNet(net) {
       } else if (m.gib) effects.gib(new THREE.Vector3(hostedPos.x, hostedPos.y, hostedPos.z), TEAM_HEX[hostedVictim.team]);
       else effects.blood(new THREE.Vector3(hostedVictim.pos.x, hostedVictim.y + 1, hostedVictim.pos.z), TEAM_HEX[hostedVictim.team]);
     }
-    hud.kill(m.kn, m.kt, m.vn, m.vt);
+    hud.kill(m.kn, m.kt, m.vn, m.vt, { weapon: m.w, head: m.part === 'head',
+      local: m.target === net.id ? 'victim' : m.from === net.id ? 'killer' : null });
     const killerRow = G.onlineRows.find((r) => r.id === m.from);
     const victimRow = G.onlineRows.find((r) => r.id === m.target);
     if (killerRow) { killerRow.kills++; killerRow.score = killerRow.kills * 100; }
@@ -2765,7 +2891,7 @@ function bindNet(net) {
       G.respawnT = Number.isFinite(Number(m.respawn))
         ? Math.max(0, Number(m.respawn)) : TUNING.combat.respawnTime;
       G.selfRespawnPending = G.respawnT > 0;
-      G.weapons.cancelActions();
+      G.weapons.cancelActions(); audio.cancelHandling();
       G.rig.setDeathContext({
         impact: deathImpactFor(G.player.pos),
         power: m.gib || m.w === 'melee' || explosiveLevel ? 1 : sniperHeadshot ? 0.95 : 0.6,
@@ -2778,10 +2904,10 @@ function bindNet(net) {
       audio.death();
       input.pad.rumble(350, 0.8, 1.0);
     } else if (m.from === net.id) {
-      audio.kill();
-      hud.hitmarker();
-    } else {
-      audio.kill();
+      // confirmación SOLO de bajas propias (antes sonaba en cualquier muerte)
+      audio.kill(m.part === 'head');
+      hud.hitmarker('kill');
+      hud.killConfirm(m.vn, m.w, m.part === 'head');
     }
   });
   net.on('crate', (m) => {
@@ -2791,7 +2917,7 @@ function bindNet(net) {
     // la caja + reintento de 1.5s daba munición infinita si otro la ganó)
     if (!m.up && m.by === net.id && G.weapons) {
       G.weapons.refill();
-      audio.reloadDone();
+      audio.crate();
       hud.hint(t('msg.ammoFull'), 1400);
       input.pad.rumble(60, 0.2, 0.3);
     }
@@ -2820,7 +2946,7 @@ function bindNet(net) {
       s.mag = Math.min(def.mag, Math.max(0, m.mag || 0));
       s.reserve = Math.min(def.reserve, Math.max(0, m.res || 0));
       G.rig?.setWeapon?.(G.weapons.cur);
-      audio.reloadDone();
+      audio.weaponPickup();
       hud.hint(t('msg.weaponRecovered', { weapon: t(def.nameKey) }), 1500);
       return;
     }
@@ -2828,7 +2954,7 @@ function bindNet(net) {
     const total = m.amount || 0;
     const gained = Math.min(def.reserve, s.reserve + total) - s.reserve;
     s.reserve += gained;
-    audio.reloadDone();
+    audio.ammoPickup();
     hud.hint(t('msg.bulletsOf', { count: gained, weapon: t(def.nameKey) }), 1500);
   });
   net.on('respawn', (m) => {
@@ -2839,7 +2965,7 @@ function bindNet(net) {
       G.respawnT = 0;
       G.selfRespawnPending = false;
       G.player.respawn(m.spawn);
-      G.weapons.reset();
+      G.weapons.reset(); audio.cancelHandling();
       G.rig.setWeapon('smg');
       exitSpectator();
       // El reset de fin de partida coloca al jugador antes de la presentación;
@@ -2898,7 +3024,7 @@ function bindNet(net) {
         if (p.id === net.id) {
           G.selfAlive = true; G.selfHp = TUNING.combat.hp; G.respawnT = 0;
           G.selfRespawnPending = false;
-          G.player.respawn(spawn); G.weapons.reset(); exitSpectator();
+          G.player.respawn(spawn); G.weapons.reset(); audio.cancelHandling(); exitSpectator();
         } else if (G.onlineBots?.botById(p.id)) G.onlineBots.respawnExternal(p.id, spawn);
         else {
           const r = G.remotes.get(p.id);
@@ -2930,9 +3056,10 @@ function bindNet(net) {
 
 // ---------- pasos posicionales (bots / remotos) ----------
 // Todos los pasos ajenos usan la misma curva 3D que disparos e impactos.
-function stepSound(x, z, kind, y = 0) {
+// `team` separa pasos aliados (atenuados) de enemigos (presentes y nítidos).
+function stepSound(x, z, kind, y = 0, team = null) {
   if (!G.player) return;
-  audio.footstep(kind, { position: { x, y: y + 0.22, z } });
+  audio.footstep(kind, { position: { x, y: y + 0.22, z }, team });
 }
 
 // ---------- disparos ----------
@@ -3236,19 +3363,19 @@ function explodeRocket(pos, mine = true, owner = null, boomInfo = null) {
     if(target.id==='player'){
       if(G.mode==='practice')continue;
       const died=damagePlayerLocal(dmg,owner?.name??G.name,ctx.explosionPoint,ctx);
-      if(died){if(self)G.botMatch?.playerSelfDeath();else G.botMatch?._onDeath('player',ownerId,false);}
+      if(died){if(self)G.botMatch?.playerSelfDeath();else G.botMatch?._onDeath('player',ownerId,false,ctx);}
     }else if(G.botMatch){
       const killed=G.botMatch.damageBot(target.id,dmg,ownerId,false,self,ctx);
-      if(!owner&&killed!==null){hud.hitmarker();if(!killed)audio.hit();}
+      if(!owner&&killed!==null){hud.hitmarker(killed?'kill':'body');if(!killed)audio.hit();}
     }else if(G.dummies){
       effects.blood(_v3.set(target.x,(target.y??0)+.9,target.z),TEAM_HEX.blue);
       const killed=G.dummies.damage(target.id,dmg,dd=>{
         dd.rig.setDeathContext({...ctx,impact:{x:dd.x-pos.x,z:dd.z-pos.z},
           power:Math.min(1,dmg/55),vel:{x:0,z:0},state:'idle',rocketDeathLevel:rocketDeathLevel(ctx)});
         rocketDeathFx({x:dd.x,y:0,z:dd.z},'blue',ctx,0);
-        G.scores.red++;hud.score(G.scores.red,G.scores.blue);hud.kill(G.name,'red',dd.name,'blue');audio.kill();
+        G.scores.red++;hud.score(G.scores.red,G.scores.blue);hud.kill(G.name,'red',dd.name,'blue',{weapon:'bazooka',local:'killer'});hud.killConfirm(dd.name,'bazooka');audio.kill();
       });
-      hud.hitmarker();if(!killed)audio.hit();
+      hud.hitmarker(killed?'kill':'body');if(!killed)audio.hit();
     }
   }
 }
@@ -3284,7 +3411,7 @@ function prototypeEvent(e){
   }else if(e.kind==='stun'){audio.electric({position:e.p});}
   else if(e.kind==='fuse')audio.grenadeTick({position:e.p});
   else if(e.kind==='launch'){
-    if(e.weapon==='stun')audio.electric({position:e.p});else audio.whoosh();
+    if(e.weapon==='stun')audio.electric({position:e.p});else audio.throwNade({position:e.p});
     const remote=G.remotes.get(e.owner);remote?.applyFirePose(null,e.weapon);
     if(remote&&e.weapon==='stun'){effects.muzzleFlash(new THREE.Vector3(e.p.x,e.p.y,e.p.z));remote.rig.kick(.2);}
   }
@@ -3369,7 +3496,7 @@ function throwSmoke() {
   };
   const cid = G.mode === 'online' ? `p:${G.net?.id || 'local'}:${++G.smokeSeq}` : null;
   smoke.throwNade(o, v, cid ? { id: cid, authoritative: true } : undefined);
-  audio.whoosh();
+  audio.throwNade();
   input.pad.rumble(45, 0.25, 0.35);
   G.rig.kick(0.5);
   G.net?.send({
@@ -3448,7 +3575,8 @@ function resolveMelee() {
       });
       G.scores.red++;
       hud.score(G.scores.red, G.scores.blue);
-      hud.kill(G.name, 'red', d.name, 'blue');
+      hud.kill(G.name, 'red', d.name, 'blue', { weapon: 'melee', local: 'killer' });
+      hud.killConfirm(d.name, 'melee');
       audio.kill();
     });
     if (!killed) audio.hit();
@@ -3482,7 +3610,7 @@ function resolveMelee() {
   }
   if (connected) {
     effects.meleeImpact(point, TEAM_HEX[victimTeam], impactDir);
-    hud.hitmarker();
+    hud.hitmarker(killed ? 'kill' : 'body');
     audio.meleeImpact(null, killed);
     input.pad.rumble(killed ? 115 : 85, 0.58, killed ? 0.95 : 0.78);
     shoulderCam.addShake((killed ? 0.48 : 0.34) + (tackle || backstab ? 0.3 : 0));
@@ -3612,7 +3740,7 @@ function fireShot() {
       true, null, cid, G.mode === 'online');
     // replicar el proyectil: los demás clientes lo ven volar y explotar
     G.net?.rocket(muzzle, projectileDir, cid, G.player);
-    effects.muzzleFlash(muzzle, true);
+    effects.muzzleFlash(muzzle, true, { weapon: 'bazooka', dir: projectileDir });
     audio.gun(w.cur);
     input.pad.rumble(110, 0.6, 1.0);
     G.rig.kick(def.recoil * 0.5);
@@ -3667,7 +3795,7 @@ function fireShot() {
         }
       }
     }
-    effects.tracer(tracerFrom, hit.point, scoped && w.cur === 'sniper');
+    effects.tracer(tracerFrom, hit.point, scoped && w.cur === 'sniper', { team: G.team, weapon: w.cur });
     if (hit.kind === 'world') {
       effects.impact(hit.point, hit.normal, hit.surface, {
         origin: damageOrigin,
@@ -3691,7 +3819,7 @@ function fireShot() {
     }
   }
   // feedback de disparo (flash grande + rumble fuerte para armas pesadas)
-  effects.muzzleFlash(muzzle, w.cur === 'shotgun' || !!def.special);
+  effects.muzzleFlash(muzzle, w.cur === 'shotgun' || !!def.special, { weapon: w.cur, dir: baseDir, team: G.team });
   audio.gun(w.cur);
   if (def.recoil >= 1.5) input.pad.rumble(90, 0.5, 0.9);
   else if (def.recoil >= 0.5) input.pad.rumble(55, 0.28, 0.5);
@@ -3701,7 +3829,7 @@ function fireShot() {
   shoulderCam.addPitchRecoil(def.recoil * 0.006);
 
   // aplicar daño
-  let hitSomeone = false;
+  let hitSomeone = false, hitHead = false, hitKill = false; // rango del marcador
   const onlineClaims = [];
   for (const [id, e] of dmgByTarget) {
     if (e.dmg <= 0) continue;
@@ -3727,12 +3855,14 @@ function fireShot() {
         });
         G.scores.red++;
         hud.score(G.scores.red, G.scores.blue);
-        hud.kill(G.name, 'red', d.name, 'blue');
-        audio.kill();
+        hud.kill(G.name, 'red', d.name, 'blue', { weapon: w.cur, head: e.part === 'head', local: 'killer' });
+        hud.killConfirm(d.name, w.cur, e.part === 'head');
+        audio.kill(e.part === 'head');
         if (sniperHeadshot) effects.sniperHeadshot(e.point, TEAM_HEX.blue, impact);
         else if (gib) effects.gib(new THREE.Vector3(d.x, 0, d.z), TEAM_HEX.blue);
       });
-      if (!killed) audio.hit();
+      if (!killed) audio.hit(e.part === 'head');
+      if (killed) hitKill = true;
     } else if (G.mode === 'bots' && G.botMatch) {
       const killed = G.botMatch.damageBot(id, e.dmg, 'player', gib, false, {
         weapon: w.cur, distance: e.dist, damage: e.dmg, part: e.part,
@@ -3740,7 +3870,8 @@ function fireShot() {
       });
       if (killed === null) continue; // protegido o inválido: sin feedback falso
       hitSomeone = true;
-      if (!killed) audio.hit();
+      if (!killed) audio.hit(e.part === 'head');
+      if (killed) hitKill = true;
     } else if (G.net) {
       const r = G.remotes.get(id);
       const b = G.onlineBots?.botById(id);
@@ -3750,10 +3881,12 @@ function fireShot() {
       onlineClaims.push({
         id, dmg: e.dmg, part: e.part, gib, point: e.point, pellets: e.pellets,
       });
-      audio.hit();
+      audio.hit(e.part === 'head');
     }
+    if (e.part === 'head') hitHead = true;
   }
-  if (hitSomeone) hud.hitmarker();
+  // la baja online la confirma el servidor ('death'); aquí solo cuerpo/cabeza
+  if (hitSomeone) hud.hitmarker(hitKill ? 'kill' : hitHead ? 'head' : 'body');
 
   // replicar visual
   if (G.net && anyPoint) {
@@ -3841,7 +3974,7 @@ function simStep(dt) {
   p.dazed = dazed;
   if (dazed) { input.firePressed = false; input.meleePressed = false; G.fireBuffer = 0; hud.hint('ATURDIDO', 100); }
   if(G.protoStun>0&&!p.dead){
-    G.weapons.cancelActions();G.fireBuffer=0;G.pendingShots=0;G.pendingRays.length=0;G.pendingThrows=0;G.throwT=0;G.throwPending=false;
+    G.weapons.cancelActions(); audio.cancelHandling();G.fireBuffer=0;G.pendingShots=0;G.pendingRays.length=0;G.pendingThrows=0;G.throwT=0;G.throwPending=false;
     p.aim=false;p.vel.x=0;p.vel.z=0;p.firingBlind=0;
     // Keep the exact cover anchor; cancel transient evade/melee gestures.
     if(p.state!=='cover')p.state='idle';
@@ -3942,7 +4075,7 @@ function simStep(dt) {
         G.weapons.replaceSlot(slot, d.wep, d.mag, d.res);
         G.rig.setWeapon(G.weapons.cur);
         G.drops.remove(id);
-        audio.reloadDone();
+        audio.weaponPickup();
       }
     }
   }
@@ -3969,7 +4102,7 @@ function simStep(dt) {
           // práctica: el pedestal reaparece al instante con LA OTRA especial
           // (sniper↔bazooka) — ambas se prueban sin reiniciar la sesión
           if (G.mode === 'practice') { G.specialRound++; spawnSpecialForRound(); }
-          audio.reloadDone();
+          audio.specialTaken();
           hud.hint(t('msg.specialTaken', {
             weapon: t(TUNING.weapons[wep].nameKey),
             removed: t(TUNING.weapons[removed].nameKey),
@@ -4030,6 +4163,9 @@ function simStep(dt) {
   canFire = stateOkAfter && p.fireAligned() && coverPoseReady(p.aim, wantsFire);
   const fired = p.dead ? false
     : G.weapons.update(dt, input.fireHeld && !dazed, input.firePressed || G.fireBuffer > 0, canFire && !dazed);
+  // gatillo en seco: pulsación nueva sin balas en el cargador ni recarga posible
+  if (!fired && !p.dead && input.firePressed && canFire && !dazed && G.weapons.st.mag <= 0 &&
+      !G.weapons.reloading && !G.weapons.swapping && !G.weapons.def.thrown) audio.dry();
   // Tras la primera inserción desde 0, conservar margen para que cover/arma
   // alcancen una pose válida antes de consumir el click que estaba esperando.
   if (G.weapons.reloadInserted > 0 && G.fireBuffer > 0) G.fireBuffer = Math.max(G.fireBuffer, 0.3);
@@ -4068,11 +4204,13 @@ function simStep(dt) {
   if (input.reloadPressed && p.state !== 'melee' && !G.weapons.reloading) {
     G.weapons.startReload();
   }
-  if (!wasReloading && G.weapons.reloading) audio.reload(); // incluye auto-recarga
-  // Una recarga interrumpida abandona el gesto sin reproducir el sonido que
-  // comunica cargador completo.
-  if (G.weapons.reloadInserted > 0) audio.reloadDone();
-  else if (wasReloading && !G.weapons.reloading && !G.weapons.reloadInterrupted) audio.reloadDone();
+  // incluye auto-recarga; la secuencia se programa sobre la duración real
+  if (!wasReloading && G.weapons.reloading) audio.reload(G.weapons.cur, G.weapons.def.reloadTime);
+  // Cada cartucho suena al entrar. Una recarga interrumpida corta la
+  // secuencia y no reproduce la pieza que comunica cargador completo.
+  if (G.weapons.reloadInserted > 0) audio.shellIn();
+  if (G.weapons.reloadInterrupted) audio.reloadCancel();
+  else if (wasReloading && !G.weapons.reloading) audio.reloadDone(G.weapons.cur);
 
   // práctica = munición de reserva infinita (nunca te quedas sin disparar)
   if (G.mode === 'practice') {
@@ -4100,7 +4238,7 @@ function simStep(dt) {
       swapped = G.weapons.startSwap(swapTarget);
     }
     if (swapped) {
-      audio.reload();
+      audio.swap(swapTarget);
       hud.weaponWheel(G.weapons, swapTarget);
     }
   }
@@ -4116,7 +4254,7 @@ function simStep(dt) {
   if (p.state === 'melee') {
     if (!G.meleeSwung) {
       G.meleeSwung = true;
-      audio.whoosh();
+      audio.meleeSwing();
       input.pad.rumble(40, 0.3, 0.2);
     }
     if (!G.meleeHitDone && p.meleeT >= TUNING.melee.hitAt) {
@@ -4136,6 +4274,7 @@ function simStep(dt) {
     if (G.footAcc > (roadie ? 2.1 : 1.7)) {
       G.footAcc = 0;
       audio.footstep(roadie ? 'roadie' : (p.speed < 3 ? 'walk' : 'run'));
+      if (p.speed > 4) effects.dust(p.pos, 'step', p.y);
     }
   } else if (p.state === 'cover' && p.speed > 1) {
     // paso lateral pegado al muro: shuffle corto
@@ -4166,7 +4305,7 @@ function simStep(dt) {
       const gained = takeDropAmmo(d, def.reserve - s.reserve);
       s.reserve += gained;
       if (d.mag + d.res <= 0) G.drops.remove(id);
-      audio.reloadDone();
+      audio.ammoPickup();
       hud.hint(t('msg.bulletsOf', { count: gained, weapon: t(def.nameKey) }), 1500);
       input.pad.rumble(50, 0.15, 0.25);
     });
@@ -4180,7 +4319,7 @@ function simStep(dt) {
         return;
       }
       G.weapons.refill();
-      audio.reloadDone();
+      audio.crate();
       hud.hint(t('msg.ammoFull'), 1400);
       input.pad.rumble(60, 0.2, 0.3);
     });
@@ -4229,11 +4368,14 @@ function frame(now) {
   if (gfxAuto && autoGfx.sample((now - last) / 1000, document.visibilityState === 'visible')) {
     gfxQuality = autoGfx.quality;
     pipeline.setQuality(gfxQuality);
+    world.look.setQuality(gfxQuality);
+    effects.setQuality(gfxQuality);
     applyShadowFilter();
     applyRenderSize();
     console.info('[gfx] auto →', gfxQuality, 'x' + autoGfx.scale, '(' + autoGfx.lastFps.toFixed(0) + ' c/s)');
   }
   last = now;
+  world.look.update(dt, camera);
 
   // MODO EDITOR: cámara y overlays propios; el gameplay no corre
   if (G.mode === 'editor') {
@@ -4391,18 +4533,24 @@ function frame(now) {
         const roadie = r.st === 'roadie';
         if (r._facc > (roadie ? 2.1 : 1.7)) {
           r._facc = 0;
-          stepSound(r.x, r.z, roadie ? 'roadie' : 'run', r.y ?? 0);
+          stepSound(r.x, r.z, roadie ? 'roadie' : 'run', r.y ?? 0, r.team);
         }
       } else {
         r._facc = 0;
       }
-      if (r._wasAir && !airborne && r.alive) stepSound(r.x, r.z, 'land', r.y ?? 0);
+      if (r._wasAir && !airborne && r.alive) stepSound(r.x, r.z, 'land', r.y ?? 0, r.team);
       r._wasAir = airborne;
     }
 
     hud.ammo(G.weapons);
-    hud.health(G.spectator.active ? 1
+    // en pausa (práctica/bots) o con la presentación encima no hay vida baja
+    // visible ni latido: se reanudan solos al volver al juego
+    G.feedbackQuiet = paused || !!flowView;
+    hud.health(G.spectator.active || G.feedbackQuiet ? 1
       : (G.mode === 'online' || G.mode === 'bots' ? G.selfHp / TUNING.combat.hp : 1));
+    if (G.mode === 'online') resolveOnlineHurt();
+    // arcos de daño: rumbo desde el jugador, orientados con el yaw de cámara
+    hud.feedback(paused ? 0 : dt, camera, G.player.pos.x, G.player.pos.z);
     // countdown grande de reaparición (no en fin de ronda/partida: ahí la
     // cola de respawns se vació y el contador mentía, pisando "ROUND PARA…")
     const bmPhase = G.botMatch?.phase;
@@ -4435,6 +4583,7 @@ function frame(now) {
   // la espoleta necesita el bando de cada cuerpo: un cohete de bot no debe
   // detonar al rozar a un compañero
   rockets.update(dt, G.mode ? allCharacterTargets() : [], explodeRocket);
+  updateAudioFrame(dt);
   renderFrame();
   input.endFrame();
 }

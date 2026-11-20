@@ -7,7 +7,7 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2317181c'/%3E%3Ccircle cx='16' cy='16' r='8' fill='none' stroke='%23ff8a3d' stroke-width='3'/%3E%3Ccircle cx='16' cy='16' r='2.5' fill='%23ff8a3d'/%3E%3C/svg%3E" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800;900&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
 <style>
   :root {
     --bg: #080a0d;
@@ -66,15 +66,8 @@
     margin: -7px 0 0 -7px; display: none; }
   #barrel-dot.on { display: block; }
 
-  #vignette { position: fixed; inset: 0; pointer-events: none; opacity: 0;
-    background: radial-gradient(ellipse at center, transparent 42%, rgba(190,30,20,.55) 100%);
-    transition: opacity .15s; }
-
-  #hitmarker { position: fixed; left: 50%; top: 50%; width: 22px; height: 22px;
-    transform: translate(-50%,-50%); opacity: 0; }
-  #hitmarker.pop { animation: hm .18s ease-out; }
-  @keyframes hm { 0% { opacity: 1; transform: translate(-50%,-50%) scale(1.4); }
-    100% { opacity: 0; transform: translate(-50%,-50%) scale(.9); } }
+  /* Vignette de vida, marcador de impacto, arcos de daño y confirmación de
+     baja: estilos en src/ui/visual-system.css (bloque "feedback de combate"). */
 
   .hud-panel { position: fixed; background: var(--hud-bg); border: 1px solid var(--hud-line);
     padding: 10px 14px; box-shadow: 0 10px 32px rgba(0,0,0,.24), inset 0 1px rgba(255,255,255,.025);
@@ -99,9 +92,6 @@
     gap: 3px; background: rgba(5,7,10,.32); }
   #score .sep { color: var(--text); font-size: 14px; font-weight: 600; letter-spacing: .08em; }
   #score .mode { color: var(--accent); font-size: 9px; letter-spacing: .16em; }
-  #score .score-bump { animation: scorebump .28s ease-out; }
-  @keyframes scorebump { 0% { color: #fff; transform: scale(1.22); text-shadow: 0 0 16px currentColor; }
-    100% { transform: scale(1); } }
 
   #weapon { right: 16px; bottom: 16px; width: 278px; min-height: 145px; padding: 14px 16px 13px;
     text-align: right; font-family: var(--mono); overflow: hidden;
@@ -137,13 +127,9 @@
   #weapon .res-value { margin-top: 2px; color: #d9dde0; font-size: 17px; font-weight: 600; }
   #weapon .reload { margin-top: 6px; font-size: 11px; color: var(--accent); letter-spacing: .1em;
     min-height: 12px; text-transform: uppercase; }
-  #weapon.ammo-change .mag { animation: ammoclick .2s ease-out; }
-  #weapon.weapon-change { animation: wepswap .32s ease-out; }
   #weapon.low-ammo .mag { color: #ff9b59; }
   #weapon.low-ammo #wep-bar .fill, #weapon.low-ammo #wep-bar .seg.on { background: #ff9b59; }
   #weapon.low-ammo:not(.reloading) .mag { animation: lowammo 1.25s ease-in-out infinite; }
-  @keyframes ammoclick { 0% { transform: translateY(-2px); color: var(--accent); } }
-  @keyframes wepswap { 0% { opacity: .42; transform: translateX(8px); } }
   @keyframes lowammo { 50% { opacity: .65; } }
   /* barra de munición compacta por segmentos */
   #wep-bar { display: flex; gap: 3px; justify-content: flex-end; margin-top: 8px; height: 5px; }
@@ -679,10 +665,15 @@
   <div id="barrel-dot">
     <svg width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="none" stroke="#ff8a3d" stroke-width="1.3" opacity=".9"/><circle cx="7" cy="7" r="1.2" fill="#ff8a3d"/></svg>
   </div>
-  <div id="hitmarker">
-    <svg width="22" height="22" viewBox="0 0 22 22" stroke="#fff" stroke-width="2">
-      <path d="M4 4l4 4M18 4l-4 4M4 18l4-4M18 18l-4-4"/></svg>
+  <div id="hurt-flash"></div>
+  <div id="dmg-dir" aria-hidden="true">
+    <div class="dmg-arc"><svg viewBox="-100 -100 200 200"><path class="arc" d="M-31.5 -77.9 A84 84 0 0 1 31.5 -77.9"/><path class="chev" d="M0 -98 L9 -88.5 L0 -91.5 L-9 -88.5 Z"/></svg></div>
+    <div class="dmg-arc"><svg viewBox="-100 -100 200 200"><path class="arc" d="M-31.5 -77.9 A84 84 0 0 1 31.5 -77.9"/><path class="chev" d="M0 -98 L9 -88.5 L0 -91.5 L-9 -88.5 Z"/></svg></div>
+    <div class="dmg-arc"><svg viewBox="-100 -100 200 200"><path class="arc" d="M-31.5 -77.9 A84 84 0 0 1 31.5 -77.9"/><path class="chev" d="M0 -98 L9 -88.5 L0 -91.5 L-9 -88.5 Z"/></svg></div>
+    <div class="dmg-arc"><svg viewBox="-100 -100 200 200"><path class="arc" d="M-31.5 -77.9 A84 84 0 0 1 31.5 -77.9"/><path class="chev" d="M0 -98 L9 -88.5 L0 -91.5 L-9 -88.5 Z"/></svg></div>
   </div>
+  <div id="hitmarker" data-k="body" aria-hidden="true"><i></i><i></i><i></i><i></i><b></b></div>
+  <div id="kill-confirm" aria-live="polite"></div>
   <div id="score" class="hud-panel">
     <span class="t red-team">
       <span class="team-name"><span class="chip" style="background:var(--red);color:var(--red)"></span><span data-i18n="hud.red">RED</span></span>

@@ -1,7 +1,16 @@
-// Audio WebAudio: sintético procedural + samples de armas (public/audio).
-// La mezcla separa eventos locales/UI de fuentes del mundo. Estas últimas
-// comparten una curva espacial coherente: distancia 3D, paneo, pérdida gradual
-// de agudos y oclusión por geometría. M = mute.
+// Audio WebAudio de Breach. Facade estable sobre el motor portado de
+// Crashterra (src/audio/): banco de ~90 sonidos procedurales renderizados en
+// un worker, pool fijo de voces con prioridades y topes por grupo, limitador
+// maestro + soft-clip, cola acústica por mapa. Los cuatro MP3 del dueño
+// (public/audio) siguen siendo el cuerpo de los disparos.
+// La espacialización es la de Breach y vive aquí: distancia 3D, paneo,
+// pérdida gradual de agudos y oclusión por geometría (spatialAudioMix +
+// callback de rayo de main). Mientras el banco no terminó de renderizar, cada
+// evento cae al sintetizador original de abajo: el primer disparo nunca espera.
+// M = mute.
+import { Engine } from '../audio/engine.js';
+import { buildBank, SAMPLE_FILES } from '../audio/catalog.js';
+import { IR_OF_MAP } from '../audio/sfx-world.js';
 
 export const AUDIO_PROFILES = Object.freeze({
   footstep: Object.freeze({ near: 1.6, far: 26, rolloff: 0.16, farHz: 3200,
@@ -21,6 +30,17 @@ export const AMBIENCE_PROFILES = Object.freeze({
   metro: Object.freeze({ continuousNoise: false, gain: 0.016, pulseMinMs: 4300 }),
   prision: Object.freeze({ continuousNoise: false, gain: 0.012, pulseMinMs: 6500 }),
   pueblo: Object.freeze({ continuousNoise: false, gain: 0.012, pulseMinMs: 7000 }),
+});
+
+// Cola acústica por mapa (IR del banco + nivel de retorno). Los mapas
+// heredados reutilizan la respuesta más parecida.
+export const SPACE_PROFILES = Object.freeze({
+  fortaleza: Object.freeze({ ir: IR_OF_MAP.fortaleza, level: 0.55 }),
+  azoteas: Object.freeze({ ir: IR_OF_MAP.azoteas, level: 0.4 }),
+  calle: Object.freeze({ ir: IR_OF_MAP.calle, level: 0.5 }),
+  metro: Object.freeze({ ir: IR_OF_MAP.calle, level: 0.6 }),
+  prision: Object.freeze({ ir: IR_OF_MAP.fortaleza, level: 0.45 }),
+  pueblo: Object.freeze({ ir: IR_OF_MAP.fortaleza, level: 0.35 }),
 });
 
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
@@ -58,6 +78,54 @@ export function spatialAudioMix(distance, lateral = 0, occluded = false,
   };
 }
 
+// Paso por la cabeza del oyente: punto más cercano del segmento disparo→
+// impacto que ya llega por red. Pura para poder verificarla en Node. null si
+// la bala no pasa cerca, si nace junto al oyente (ya suena el disparo) o si
+// el punto más cercano cae fuera del tramo recorrido.
+export function bulletPass(origin, end, listener, radius = 3.2) {
+  if (!origin || !end || !listener) return null;
+  const dx = end.x - origin.x, dy = end.y - origin.y, dz = end.z - origin.z;
+  const len2 = dx * dx + dy * dy + dz * dz;
+  if (len2 < 1) return null;
+  const lx = listener.x - origin.x, ly = listener.y - origin.y, lz = listener.z - origin.z;
+  if (lx * lx + ly * ly + lz * lz < 16) return null;
+  const t = (lx * dx + ly * dy + lz * dz) / len2;
+  // t > 1: el punto más cercano cae más allá del impacto (la bala se detuvo
+  // antes, p. ej. en un muro delante del oyente): no pasó a su lado
+  if (t <= 0.02 || t > 1) return null;
+  const px = origin.x + dx * t, py = origin.y + dy * t, pz = origin.z + dz * t;
+  const ox = px - listener.x, oy = py - listener.y, oz = pz - listener.z;
+  const dist = Math.hypot(ox, oy, oz);
+  if (dist > radius) return null;
+  const right = listener.right ?? { x: 1, z: 0 };
+  const h = Math.max(0.001, Math.hypot(ox, oz));
+  const side = dist < 0.25 ? 0 : (ox * right.x + oz * right.z) / h;
+  return { dist, t, point: { x: px, y: py, z: pz }, side: Math.max(-0.92, Math.min(0.92, side)),
+    gain: Math.pow(1 - dist / radius, 1.2) };
+}
+
+// Relación del oyente con quien emite el sonido: propio / aliado / enemigo.
+// Sin bando conocido se trata como enemigo (la información de amenaza manda).
+export function footstepRelation(listenerTeam, sourceTeam) {
+  if (!sourceTeam || !listenerTeam) return 'enemy';
+  return sourceTeam === listenerTeam ? 'friend' : 'enemy';
+}
+
+// Ganancias de los samples: las mismas que Breach ya tenía (cuerpo intacto).
+const LOCAL_GAIN = { smg: 0.39, shotgun: 0.46, pistol: 0.42, sniper: 0.55 };
+const REMOTE_GAIN = { smg: 0.34, shotgun: 0.39, pistol: 0.36, sniper: 0.48 };
+const HEAVY = new Set(['shotgun', 'sniper', 'bazooka']);
+const STEP_OF = { stone: 'step_stone', metal: 'step_metal', concrete: 'step_concrete', glass: 'step_concrete' };
+const IMPACT_OF = { metal: 'imp_metal', stone: 'imp_stone', glass: 'imp_glass' };
+// pasos: propio discreto, aliado atenuado y oscuro, enemigo presente y nítido
+const STEP_REL = Object.freeze({
+  own: Object.freeze({ volume: 0.8, cut: 20000, prio: 60 }),
+  friend: Object.freeze({ volume: 0.55, cut: 2600, prio: 45 }),
+  enemy: Object.freeze({ volume: 1.35, cut: 20000, prio: 86 }),
+});
+const STEP_KIND_VOL = { walk: 0.7, run: 0.92, roadie: 1.05, land: 1.1, jump: 0.6 };
+const ROCKET_LOOPS = 3;
+
 export class Audio {
   constructor() {
     this.ctx = null;
@@ -71,18 +139,84 @@ export class Audio {
     this._prepared = false;
     this._listener = null;
     this._occluded = null;
+    this._surfaceAt = null;
     this.combatBus = null;
     this.worldBus = null;
+    this.uiBus = null;
+    this.ambBus = null;
     this._impactWindow = 0;
     this._impactCount = 0;
     this._ambienceName = null;
     this._ambienceNodes = null;
+    // motor portado de Crashterra: el catálogo se declara ya (barato) y el
+    // PCM se renderiza en un worker desde la carga de la página
+    this.bank = buildBank();
+    this.bank.releasePcm = typeof window !== 'undefined' && typeof Worker !== 'undefined';
+    this.engine = null;
+    this._worker = null;
+    this._useWorker = false;
+    this._pumpTimer = null;
+    this._threat = null;
+    this._menuOn = false;
+    this._heartNext = 0;
+    this._prot = 0;
+    this._lastRoundStart = -10;
+    this._pedestal = null;
+    this._pedestalTick = 0;
+    this._rocketSlots = new Array(ROCKET_LOOPS).fill(null);
+    this._startRender();
+  }
+
+  // ---------- render del banco ----------
+  _startRender() {
+    if (typeof window === 'undefined' || this.bank.pending <= 0) return;
+    if (typeof Worker !== 'undefined') {
+      try {
+        const w = new Worker(new URL('../audio/render.worker.js', import.meta.url), { type: 'module' });
+        this._worker = w;
+        this._useWorker = true;
+        w.onmessage = (e) => {
+          const m = e.data;
+          if (m.done) { w.terminate(); this._worker = null; this._useWorker = false; return; }
+          this._renderer = 'worker';
+          this.bank.accept(m.name, m.v, m.ch, m.ms);
+        };
+        w.onerror = (e) => {
+          e.preventDefault?.();
+          console.warn('[audio] worker de render falló; render en el hilo principal');
+          w.terminate();
+          this._worker = null;
+          this._useWorker = false;
+          this._pump();
+        };
+        w.postMessage('go');
+        return;
+      } catch { /* sin worker de módulo: render troceado abajo */ }
+    }
+    this._pump();
+  }
+
+  // Respaldo: trabajos de 4 ms con huecos para no robar cuadros.
+  _pump() {
+    if (this._pumpTimer !== null) return;
+    this._renderer = 'main';
+    const tick = () => {
+      this._pumpTimer = null;
+      if (this.bank.step(4)) return;
+      this._pumpTimer = setTimeout(tick, 8);
+    };
+    this._pumpTimer = setTimeout(tick, 0);
   }
 
   // Los callbacks viven en main para que Audio no dependa de Three.js/World.
   setSpatialContext(listener, occluded = null) {
     this._listener = listener;
     this._occluded = occluded;
+  }
+
+  // (x, y, z) → 'stone' | 'concrete' | 'metal' | 'glass'. Lo da main.
+  setSurfaceQuery(fn) {
+    this._surfaceAt = fn;
   }
 
   setVolume(v) {
@@ -93,23 +227,16 @@ export class Audio {
 
   ensure() {
     if (!this.ctx) {
-      this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-      this.master = this.ctx.createGain();
+      this.ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+      this.engine = new Engine(this.ctx, this.bank, this.ctx.destination);
+      this.master = this.engine.master;
       this.master.gain.value = this.muted ? 0 : this.volume;
-      this.master.connect(this.ctx.destination);
-      // Los picos de varias armas simultáneas se controlan aquí; pasos y UI no
-      // quedan enterrados por el compresor del bus de combate.
-      this.combatBus = this.ctx.createGain();
-      const limiter = this.ctx.createDynamicsCompressor();
-      limiter.threshold.value = -10;
-      limiter.knee.value = 14;
-      limiter.ratio.value = 5;
-      limiter.attack.value = 0.004;
-      limiter.release.value = 0.16;
-      this.combatBus.connect(limiter).connect(this.master);
-      this.worldBus = this.ctx.createGain();
-      this.worldBus.gain.value = 1;
-      this.worldBus.connect(this.master);
+      // combatBus conserva el compresor de pegamento de antes; pasos y UI no
+      // quedan enterrados por él. Todo termina en el limitador maestro.
+      this.combatBus = this.engine.combat;
+      this.worldBus = this.engine.world;
+      this.uiBus = this.engine.ui;
+      this.ambBus = this.engine.amb;
       const len = this.ctx.sampleRate * 1;
       const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
       const d = buf.getChannelData(0);
@@ -117,6 +244,7 @@ export class Audio {
       this._noise = buf;
       this._samplesReady = this._loadSamples();
       if (this._ambienceName) this._startAmbience(this._ambienceName);
+      this._applySpace();
     }
     const resumed = this.ctx.state === 'suspended' ? this.ctx.resume() : Promise.resolve();
     return Promise.all([resumed, this._samplesReady || Promise.resolve()]);
@@ -127,18 +255,21 @@ export class Audio {
     if (this._samplesReq) return this._samplesReady || Promise.resolve();
     this._samplesReq = true;
     const jobs = [];
-    for (const [k, url] of [['smg', 'audio/smg.mp3'], ['shotgun', 'audio/shotgun.mp3'],
-      ['sniper', 'audio/sniper.mp3'], ['pistol', 'audio/pistol.mp3']]) {
+    for (const [k, url] of Object.entries(SAMPLE_FILES)) {
       jobs.push(fetch(url)
         .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.arrayBuffer(); })
         .then((ab) => this.ctx.decodeAudioData(ab))
-        .then((buf) => { this.samples[k] = buf; })
+        .then((buf) => {
+          this.samples[k] = buf;
+          this.bank.setExternal(`gun_${k}`, buf);
+          this.bank.setExternal(`gun_${k}_remote`, buf);
+        })
         .catch(() => { /* sin sample: fallback sintético */ }));
     }
     return Promise.all(jobs);
   }
 
-  // Se llama desde el gesto de ENTRAR: desbloquea WebAudio, espera los dos
+  // Se llama desde el gesto de ENTRAR: desbloquea WebAudio, espera los
   // samples y ejercita silenciosamente los nodos usados durante gameplay.
   // Así el primer disparo/pickup no paga inicialización del motor de audio.
   async prepare() {
@@ -159,12 +290,17 @@ export class Audio {
     if (pan) pan.connect(silent);
     src.start(t, 0, 0.002);
     osc.start(t); osc.stop(t + 0.002);
+    // AudioBuffers de la banda de armas ya renderizada: el primer disparo
+    // no paga la copia del PCM.
+    for (const def of this.bank.defs.values()) {
+      if (def.order > 1 || def.external) continue;
+      for (let v = 0; v < def.variants; v++) if (this.bank.ready(def.name, v)) this.bank.buffer(this.ctx, def.name, v);
+    }
     await new Promise((resolve) => setTimeout(resolve, 0));
     silent.disconnect();
   }
 
-  // true si el sample sonó; rate con leve variación evita el efecto metralla
-  // de fotocopia (mismo golpe idéntico 10 veces por segundo)
+  // Mezcla espacial de un evento del mundo (null = local/frontal).
   _spatial(position, profileName) {
     if (!position || !this._listener) return spatialAudioMix(0, 0, false, profileName);
     const listener = this._listener();
@@ -183,46 +319,34 @@ export class Audio {
     return spatialAudioMix(distance, lateral, blocked, profileName);
   }
 
-  _eventOutput(baseGain, options, profileName, destination) {
-    if (!this.ctx) return null;
-    const opts = options && typeof options === 'object' ? options : {};
-    const mix = this._spatial(opts.position, profileName);
-    const gain = baseGain * (opts.gain ?? 1) * mix.gain;
-    if (gain <= 0.001) return null;
-    const out = this.ctx.createGain();
-    out.gain.value = gain;
-    let tail = out;
-    if (mix.cutoff < 18500) {
-      const filter = this.ctx.createBiquadFilter();
-      filter.type = 'lowpass';
-      filter.Q.value = mix.occluded ? 0.72 : 0.25;
-      filter.frequency.value = Math.max(500, mix.cutoff);
-      tail.connect(filter);
-      tail = filter;
-    }
-    if (opts.position && this.ctx.createStereoPanner) {
-      const pan = this.ctx.createStereoPanner();
-      pan.pan.value = mix.pan;
-      tail.connect(pan);
-      tail = pan;
-    }
-    tail.connect(destination || this.master);
-    return out;
+  _listenerPose() {
+    try { return this._listener?.() ?? null; } catch { return null; }
   }
 
-  _sample(k, gain, rate = 1, options = null) {
-    const buf = this.samples[k];
-    if (!buf || !this.ctx) return false;
-    const out = this._eventOutput(gain, options, 'gunshot', this.combatBus || this.master);
-    // Fuente demasiado lejana: se considera atendida para no disparar el
-    // fallback sintético sin atenuación.
-    if (!out) return true;
-    const src = this.ctx.createBufferSource();
-    src.buffer = buf;
-    src.playbackRate.value = rate;
-    src.connect(out);
-    src.start(this.ctx.currentTime);
-    return true;
+  // Reproduce un sonido del banco. false = no listo / culled / sin motor
+  // (el llamador decide si cae al sintetizador original).
+  // true también si el motor lo rechazó a propósito (tope de voces, hueco
+  // mínimo, inaudible): el sintetizador original es SOLO para "el banco aún
+  // no tiene este sonido", nunca una vía para saltarse el pool de 32 voces.
+  _play(name, opts) {
+    const eng = this.engine;
+    if (!eng) return false;
+    if (eng.play(name, opts)) return true;
+    return eng.lastReject !== 'missing' && eng.lastReject !== 'notReady';
+  }
+
+  // Igual que _play pero con la mezcla espacial ya resuelta para `position`.
+  _playAt(name, position, profileName, opts = {}) {
+    if (!this.engine) return false;
+    if (!position) return this._play(name, opts);
+    const mix = this._spatial(position, profileName);
+    if (mix.gain <= 0.001) return this.bank.ready(name, 0); // demasiado lejos: atendido
+    opts.mix = mix;
+    return this._play(name, opts);
+  }
+
+  _now() {
+    return this.ctx ? this.ctx.currentTime : 0;
   }
 
   toggleMute() {
@@ -232,6 +356,7 @@ export class Audio {
     return this.muted;
   }
 
+  // ---------- ambiente y espacio del mapa ----------
   // Un único bed ambiental, muy por debajo de pasos y combate. Se conserva
   // la intención antes de que WebAudio se desbloquee y se cambia con fade para
   // que menú/transiciones de mapa nunca produzcan un corte audible.
@@ -242,6 +367,14 @@ export class Audio {
     this._ambienceName = next;
     this._stopAmbience();
     if (next && this.ctx && this._noise) this._startAmbience(next);
+    this._applySpace();
+  }
+
+  // El IR puede no estar renderizado aún: update() reintenta.
+  _applySpace() {
+    if (!this.engine) return;
+    const sp = SPACE_PROFILES[this._ambienceName];
+    this._spaceOk = this.engine.setSpace(sp?.ir ?? null, sp?.level ?? 0);
   }
 
   _stopAmbience() {
@@ -267,7 +400,7 @@ export class Audio {
     const gain = this.ctx.createGain();
     gain.gain.setValueAtTime(0.0001, now);
     gain.gain.exponentialRampToValueAtTime(AMBIENCE_PROFILES[name].gain, now + 0.8);
-    gain.connect(this.worldBus || this.master);
+    gain.connect(this.ambBus || this.master);
     const nodes = { gain, sources: [], timers: new Set() };
     const hum = this.ctx.createOscillator();
     // Cama tonal casi imperceptible: sitúa el lugar sin crear una capa de
@@ -379,6 +512,147 @@ export class Audio {
     nodes.timers.add(timer);
   }
 
+  // ---------- por cuadro: loops, latido, protección, cama del menú ----------
+  // f: { menu, playing, alive, hp01, prot, rockets, pedestal, holdT, holdMax }
+  // (objeto reutilizado por main: sin asignaciones por cuadro en el llamador).
+  update(dt, f) {
+    const eng = this.engine;
+    if (!eng || !f) return;
+    if (!this._spaceOk) this._applySpace();
+    this._updateMenuBed(!!f.menu);
+    this._updateHeart(f);
+    this._updateProtection(f);
+    this._updatePedestal(f);
+    this._updateRockets(f.rockets);
+  }
+
+  _updateMenuBed(on) {
+    const l = this.engine.loop('menu_bed');
+    if (!l) return;
+    if (on && !this._menuOn) {
+      if (!l.running && !l.start()) return;
+      l.set(1, 1, 20000, 0, 0.8);
+      this._menuOn = true;
+    } else if (!on && this._menuOn) {
+      this._menuOn = false;
+      l.stop(1.2);
+    }
+  }
+
+  // Vida baja: latido cuyo tempo sube a medida que baja la vida.
+  _updateHeart(f) {
+    const now = this._now();
+    if (!f.playing || !f.alive || !(f.hp01 < 0.3)) { this._heartNext = 0; return; }
+    if (!this._heartNext) this._heartNext = now;
+    if (now < this._heartNext) return;
+    const bpm = 72 + (0.3 - f.hp01) * 160;
+    this._heartNext = now + 60 / bpm;
+    this._play('heartbeat', { volume: 0.7 + (0.3 - f.hp01) * 1.2 });
+  }
+
+  // Protección de spawn: subida = reaparición, bajada a 0 = ya eres vulnerable.
+  _updateProtection(f) {
+    const p = f.prot > 0 ? f.prot : 0;
+    if (f.alive && f.playing) {
+      if (p > 0 && this._prot <= 0 && this._now() - this._lastRoundStart > 1.5) this.respawn();
+      else if (p <= 0 && this._prot > 0) this.protectionEnd();
+    }
+    this._prot = p;
+  }
+
+  _updatePedestal(f) {
+    const a = f.pedestal;
+    const hum = this.engine.loop('pedestal_hum');
+    const hold = this.engine.loop('pedestal_hold');
+    if (a !== this._pedestal) {
+      if (a && f.playing) this.specialSpawn({ x: a.x, y: (a.y ?? 0) + 0.9, z: a.z });
+      this._pedestal = a;
+    }
+    if (!a || !f.playing) {
+      hum?.stop(0.4);
+      hold?.stop(0.1);
+      return;
+    }
+    // zumbido posicional; el rayo de oclusión se refresca cada 4 cuadros
+    if (hum && (hum.running || hum.start()) && (this._pedestalTick = (this._pedestalTick + 1) % 4) === 0) {
+      const mix = this._spatial({ x: a.x, y: (a.y ?? 0) + 0.9, z: a.z }, 'footstep');
+      hum.set(mix.gain, 1, mix.cutoff, mix.pan, 0.12);
+    }
+    const k = f.holdMax > 0 ? clamp01(f.holdT / f.holdMax) : 0;
+    if (k > 0 && hold && (hold.running || hold.start())) hold.set(0.6 + 0.6 * k, 0.8 + 0.7 * k, 20000, 0, 0.03);
+    else hold?.stop(0.08);
+  }
+
+  // Vuelo de cohetes: hasta 3 loops posicionales, asignados por objeto.
+  _updateRockets(list) {
+    const slots = this._rocketSlots;
+    for (let i = 0; i < slots.length; i++) {
+      const s = slots[i];
+      if (s && !(list && list.includes(s))) {
+        slots[i] = null;
+        this.engine.loop('rocket_loop', `rocket${i}`)?.stop(0.12);
+      }
+    }
+    if (!list) return;
+    for (const r of list) {
+      let i = slots.indexOf(r);
+      if (i < 0) {
+        i = slots.indexOf(null);
+        if (i < 0) continue;
+        slots[i] = r;
+      }
+      const l = this.engine.loop('rocket_loop', `rocket${i}`);
+      if (!l || !(l.running || l.start(i * 0.37))) continue;
+      const mix = this._spatial(r, 'gunshot');
+      l.set(mix.gain, 1, mix.cutoff, mix.pan, 0.03);
+    }
+  }
+
+  // ---------- síntesis original (respaldo mientras el banco renderiza) ----------
+  _eventOutput(baseGain, options, profileName, destination) {
+    if (!this.ctx) return null;
+    const opts = options && typeof options === 'object' ? options : {};
+    const mix = this._spatial(opts.position, profileName);
+    const gain = baseGain * (opts.gain ?? 1) * mix.gain;
+    if (gain <= 0.001) return null;
+    const out = this.ctx.createGain();
+    out.gain.value = gain;
+    let tail = out;
+    if (mix.cutoff < 18500) {
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.Q.value = mix.occluded ? 0.72 : 0.25;
+      filter.frequency.value = Math.max(500, mix.cutoff);
+      tail.connect(filter);
+      tail = filter;
+    }
+    if (opts.position && this.ctx.createStereoPanner) {
+      const pan = this.ctx.createStereoPanner();
+      pan.pan.value = mix.pan;
+      tail.connect(pan);
+      tail = pan;
+    }
+    tail.connect(destination || this.uiBus || this.master);
+    return out;
+  }
+
+  // true si el sample sonó; rate con leve variación evita el efecto metralla
+  // de fotocopia (mismo golpe idéntico 10 veces por segundo)
+  _sample(k, gain, rate = 1, options = null) {
+    const buf = this.samples[k];
+    if (!buf || !this.ctx) return false;
+    const out = this._eventOutput(gain, options, 'gunshot', this.combatBus || this.master);
+    // Fuente demasiado lejana: se considera atendida para no disparar el
+    // fallback sintético sin atenuación.
+    if (!out) return true;
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    src.playbackRate.value = rate;
+    src.connect(out);
+    src.start(this.ctx.currentTime);
+    return true;
+  }
+
   _env(gainNode, t0, a, peak, dec) {
     const g = gainNode.gain;
     g.setValueAtTime(0.0001, t0);
@@ -397,7 +671,7 @@ export class Audio {
     f.frequency.exponentialRampToValueAtTime(freq1, t + dec);
     const g = this.ctx.createGain();
     this._env(g, t, 0.004, peak, dec);
-    src.connect(f).connect(g).connect(destination || this.master);
+    src.connect(f).connect(g).connect(destination || this.uiBus || this.master);
     src.start(t); src.stop(t + dec + 0.05);
   }
 
@@ -410,39 +684,75 @@ export class Audio {
     o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t + dec);
     const g = this.ctx.createGain();
     this._env(g, t, 0.004, peak, dec);
-    o.connect(g).connect(destination || this.master);
+    o.connect(g).connect(destination || this.uiBus || this.master);
     o.start(t); o.stop(t + dec + 0.05);
   }
 
   // ---------- pasos ----------
-  // Paso sobre losa de piedra: golpe de talón (banda media) + toque de punta
-  // más agudo un instante después + "tick" de suela dura + golpe de peso en
-  // los pesados. Jitter aleatorio por paso: ningún paso suena igual al
-  // anterior. Para compatibilidad, también acepta (kind, vol, pan), aunque el
-  // gameplay usa {position, gain} para aplicar distancia/altura/oclusión.
+  // Superficie bajo el emisor (piedra/hormigón/metal), relación con el oyente
+  // (propio/aliado/enemigo) y tipo de paso. Para compatibilidad también acepta
+  // (kind, vol, pan): esa firma antigua usa el sintetizador original.
+  // options: { position, team, gain }.
   footstep(kind = 'run', options = null, legacyPan = 0) {
     if (!this.ctx) return;
-    const P = STEP_KINDS[kind] ?? STEP_KINDS.run;
-    let opts;
     if (typeof options === 'number') {
-      opts = { gain: options };
+      this._legacyFootstep(kind, { gain: options }, legacyPan);
+      return;
+    }
+    const opts = options || {};
+    if (this._bankStep(kind, opts)) return;
+    this._legacyFootstep(kind, opts, 0);
+  }
+
+  _surfaceUnder(pos) {
+    if (!this._surfaceAt || !pos) return 'concrete';
+    try { return this._surfaceAt(pos.x, pos.y, pos.z) || 'concrete'; } catch { return 'concrete'; }
+  }
+
+  _bankStep(kind, opts) {
+    if (!this.engine) return false;
+    const own = !opts.position;
+    let feet = opts.position ? { x: opts.position.x, y: (opts.position.y ?? 0) - 0.22, z: opts.position.z } : null;
+    if (own) {
+      const L = this._listenerPose();
+      feet = L ? { x: L.x, y: L.y - 1.15, z: L.z } : null;
+    }
+    const rel = own ? 'own' : footstepRelation(this._listenerPose()?.team, opts.team);
+    const R = STEP_REL[rel];
+    const name = kind === 'shuffle' ? 'step_scuff' : STEP_OF[this._surfaceUnder(feet)] ?? 'step_concrete';
+    const volume = (STEP_KIND_VOL[kind] ?? 1) * R.volume * (opts.gain ?? 1);
+    const base = { volume, cut: R.cut, prio: R.prio, pitch: kind === 'roadie' ? 0.93 : kind === 'land' ? 0.9 : 1 };
+    const ok = own ? this._play(name, base) : this._playAt(name, opts.position, 'footstep', base);
+    if (!ok) return false;
+    if (kind === 'roadie') {
+      const g = { volume: volume * 0.8, cut: R.cut, prio: R.prio - 5 };
+      if (own) this._play('gear', g); else this._playAt('gear', opts.position, 'footstep', g);
+    } else if (kind === 'land') {
+      const g = { volume: own ? 1 : volume, prio: R.prio };
+      if (own) this._play('land', g); else this._playAt('land', opts.position, 'footstep', g);
+    }
+    return true;
+  }
+
+  _legacyFootstep(kind, opts, legacyPan) {
+    const P = STEP_KINDS[kind] ?? STEP_KINDS.run;
+    if (legacyPan && this.ctx.createStereoPanner) {
       // La firma antigua ya traía paneo calculado externamente.
-      if (legacyPan && this.ctx.createStereoPanner) {
-        const out = this.ctx.createGain();
-        out.gain.value = options;
-        const sp = this.ctx.createStereoPanner();
-        sp.pan.value = Math.max(-1, Math.min(1, legacyPan));
-        out.connect(sp).connect(this.worldBus || this.master);
-        this._renderFootstep(P, kind, out);
-        return;
-      }
-    } else opts = options || {};
+      const out = this.ctx.createGain();
+      out.gain.value = opts.gain ?? 1;
+      const sp = this.ctx.createStereoPanner();
+      sp.pan.value = Math.max(-1, Math.min(1, legacyPan));
+      out.connect(sp).connect(this.worldBus || this.master);
+      this._renderFootstep(P, kind, out);
+      return;
+    }
     const localGain = opts.position ? 1.18 : 1.08;
     const out = this._eventOutput(localGain, opts, 'footstep', this.worldBus || this.master);
     if (!out) return;
     this._renderFootstep(P, kind, out);
   }
 
+  // Paso sintético original: talón + punta + tick de suela + peso.
   _renderFootstep(P, kind, out) {
     if (!this.ctx) return;
     const j = (a, b) => a + Math.random() * (b - a);
@@ -480,9 +790,58 @@ export class Audio {
     src.stop(t + dec + 0.06);
   }
 
+  // ---------- armas ----------
   // El arma propia permanece frontal y con presencia. Una posición convierte
-  // el evento en disparo ajeno: espacial, atenuado y filtrado por el mundo.
+  // el evento en disparo ajeno: espacial, atenuado, filtrado por el mundo y
+  // cruzado con su versión lejana. options: { position, end, team, enemy }.
+  _shot(w, options) {
+    if (!this.engine) return false;
+    const remote = !!options?.position;
+    if (!remote) {
+      if (!this._play(`gun_${w}`, { volume: LOCAL_GAIN[w] })) return false;
+      if (w === 'smg') { this._play('mech_smg'); this._play('punch_light'); }
+      else if (w === 'pistol') { this._play('mech_pistol'); this._play('punch_light'); }
+      else if (w === 'shotgun') {
+        this._play('punch_heavy');
+        // bombeo tras el disparo (cadencia 95 rpm → ciclo de 0.63 s)
+        this._play('pump', { at: this._now() + 0.3, tag: 'pump' });
+      } else this._play('punch_heavy');
+      return true;
+    }
+    const mix = this._spatial(options.position, 'gunshot');
+    this._bulletPass(w, options);
+    if (mix.gain <= 0.001) return !!this.samples[w];
+    // cercano → sample; lejano → "pop" y rebotes. Cruce entre 16 y 50 m.
+    const far = clamp01((mix.distance - 16) / 34);
+    const ok = this._play(`gun_${w}_remote`, { volume: REMOTE_GAIN[w] * (1 - far * 0.65), mix });
+    if (!ok) return false;
+    this._distantLayer(w, mix, far);
+    return true;
+  }
+
+  _distantLayer(w, mix, far) {
+    if (far <= 0.05) return;
+    // el lejano cae más despacio que el cercano: se oye "a lo lejos"
+    const farMix = { gain: Math.pow(mix.gain, 0.6), pan: mix.pan, cutoff: Math.min(mix.cutoff, 3000), occluded: mix.occluded };
+    this._play(HEAVY.has(w) ? 'dist_heavy' : 'dist_light', { volume: far * 0.9, mix: farMix });
+  }
+
+  // Silbido o chasquido de una bala enemiga que pasa cerca + recuerdo de la
+  // dirección de la amenaza (para el daño direccional sin dato de origen).
+  _bulletPass(w, options) {
+    if (!options.end || w === 'bazooka') return;
+    const L = this._listenerPose();
+    if (!L) return;
+    const enemy = options.enemy ?? (footstepRelation(L.team, options.team) === 'enemy');
+    if (!enemy) return;
+    const pass = bulletPass(options.position, options.end, L);
+    if (!pass) return;
+    this._threat = { x: options.position.x, z: options.position.z, t: this._now() };
+    this._play(w === 'sniper' ? 'crack' : 'whiz', { volume: pass.gain * 1.2, pan: pass.side, force: true });
+  }
+
   smg(options = null) {
+    if (this._shot('smg', options)) return;
     const remote = !!options?.position;
     const gain = remote ? 0.34 : 0.39;
     if (this._sample('smg', gain, 0.97 + Math.random() * 0.06, options)) return;
@@ -492,6 +851,7 @@ export class Audio {
     this._tone('square', 190, 90, 0.12, 0.06, out);
   }
   shotgun(options = null) {
+    if (this._shot('shotgun', options)) return;
     const remote = !!options?.position;
     const gain = remote ? 0.39 : 0.46;
     if (this._sample('shotgun', gain, 0.98 + Math.random() * 0.04, options)) return;
@@ -503,6 +863,7 @@ export class Audio {
   // pistola: sample real (Elevenlabs de Chuck) — pegada seca y compacta;
   // el sintético queda de respaldo si el mp3 no carga
   pistol(options = null) {
+    if (this._shot('pistol', options)) return;
     const remote = !!options?.position;
     const gain = remote ? 0.36 : 0.42;
     if (this._sample('pistol', gain, 0.97 + Math.random() * 0.06, options)) return;
@@ -511,10 +872,10 @@ export class Audio {
     this._noiseShot(0.5, 0.06, 4200, 1400, 1.1, out);
     this._tone('square', 300, 130, 0.1, 0.045, out);
   }
-  // francotirador: crack violento con cola grave (eco de cañón largo)
+  // francotirador: sample real (Elevenlabs de Chuck): crack + eco de cañón largo
   sniper(options = null) {
+    if (this._shot('sniper', options)) return;
     const remote = !!options?.position;
-    // sample real (Elevenlabs de Chuck): crack + eco de cañón largo
     const gain = remote ? 0.48 : 0.55;
     if (this._sample('sniper', gain, 0.98 + Math.random() * 0.04, options)) return;
     const out = this._eventOutput(remote ? 0.8 : 0.9, options, 'gunshot', this.combatBus || this.master);
@@ -523,18 +884,37 @@ export class Audio {
     this._noiseShot(0.4, 0.34, 700, 140, 1.8, out);
     this._tone('sine', 100, 40, 0.5, 0.3, out);
   }
-  // bazooka: golpe sordo del lanzamiento + whoosh del cohete saliendo
+  // bazooka: golpe sordo del lanzamiento + chorro del cohete saliendo
   bazooka(options = null) {
     const remote = !!options?.position;
+    if (!remote && this._play('bazooka_fire', { volume: 1 })) { this._play('punch_heavy'); return; }
+    if (remote) {
+      const mix = this._spatial(options.position, 'gunshot');
+      if (mix.gain <= 0.001 && this.bank.ready('bazooka_fire', 0)) return;
+      const far = clamp01((mix.distance - 16) / 34);
+      if (this._play('bazooka_fire', { volume: 0.85 * (1 - far * 0.6), mix })) { this._distantLayer('bazooka', mix, far); return; }
+    }
     const out = this._eventOutput(remote ? 0.78 : 0.88, options, 'gunshot', this.combatBus || this.master);
     if (!out) return;
     this._noiseShot(0.7, 0.2, 900, 180, 1.6, out);
     this._noiseShot(0.35, 0.4, 1900, 2600, 0.7, out);
     this._tone('sine', 85, 40, 0.5, 0.28, out);
   }
-  // explosión del cohete: impacto grave con escombros
+  // explosión: transiente + cola grave cercana, retumbo lejano, crack extra
+  // en impacto directo. Una explosión cercana baja el ambiente un instante.
   explosion(options = null) {
     const direct = !!options?.direct;
+    if (this.engine && this.bank.ready('boom', 0)) {
+      const mix = this._spatial(options?.position, 'gunshot');
+      if (mix.gain <= 0.001) return;
+      const far = clamp01((mix.distance - 14) / 30);
+      if (this._play('boom', { volume: (direct ? 1.1 : 1) * (1 - far * 0.7), mix })) {
+        if (far > 0.05) this._play('boom_far', { volume: far, mix: { gain: Math.pow(mix.gain, 0.6), pan: mix.pan, cutoff: Math.min(mix.cutoff, 2000), occluded: mix.occluded } });
+        if (direct) this._play('boom_direct', { mix });
+        if (mix.distance < 30) this.engine.duck(6 * (1 - mix.distance / 30));
+        return;
+      }
+    }
     const out = this._eventOutput(direct ? 1.08 : 0.96, options,
       'gunshot', this.combatBus || this.master);
     if (!out) return;
@@ -550,6 +930,7 @@ export class Audio {
   }
   // rebote metálico del bote de humo contra el suelo/paredes
   nadeBounce(options = null) {
+    if (this._playAt('nade_bounce', options?.position, 'impact', {})) return;
     const out = this._eventOutput(0.5, options, 'impact', this.combatBus || this.master);
     if (!out) return;
     this._noiseShot(0.18, 0.05, 4800, 1700, 2.2, out);
@@ -557,6 +938,7 @@ export class Audio {
   }
   // siseo del humo activándose
   smokePop(options = null) {
+    if (this._playAt('smoke_hiss', options?.position, 'impact', {})) return;
     const out = this._eventOutput(0.6, options, 'impact', this.combatBus || this.master);
     if (!out) return;
     this._noiseShot(0.4, 0.6, 2400, 3200, 0.5, out);
@@ -583,6 +965,12 @@ export class Audio {
     // Una escopeta conserva varios contactos, pero no crea ocho transientes
     // idénticos que tapen pasos/disparos.
     if (this._impactCount >= 2) return;
+    const name = IMPACT_OF[surface] ?? 'imp_concrete';
+    if (this.bank.ready(name, 0)) {
+      // jitter por contacto: dos perdigones no suenan como un solo golpe
+      if (this._playAt(name, position, 'impact', { at: now + this._impactCount * 0.011, force: this._impactCount > 0 })) this._impactCount++;
+      return;
+    }
     const out = this._eventOutput(surface === 'metal' ? 0.52 : 0.42,
       { position }, 'impact', this.combatBus || this.master);
     if (!out) return;
@@ -597,20 +985,125 @@ export class Audio {
       this._tone('triangle', stone ? 180 : 135, 70, 0.055, 0.065, out);
     }
   }
-  reload() { this._tone('square', 700, 500, 0.07, 0.04); }
-  reloadDone() { this._tone('square', 900, 1200, 0.08, 0.05); }
-  hit() { this._tone('sine', 1150, 900, 0.14, 0.045); }
-  kill() { this._tone('sine', 500, 150, 0.3, 0.25); this._noiseShot(0.2, 0.2, 900, 200); }
-  whoosh() { this._noiseShot(0.22, 0.16, 500, 2400, 0.6); }
-  electric(options=null){
-    const out=this._eventOutput(.55,options,'impact',this.combatBus||this.master);if(!out)return;
-    this._tone('sawtooth',1250,130,.10,.22,out);this._noiseShot(.12,.16,3500,700,1.6,out);
+
+  // ---------- recarga, cambio, seco ----------
+  // Secuencia programada sobre la duración REAL de la recarga del arma; la
+  // pieza final suena en reloadDone, en el instante exacto en que el
+  // cargador queda lleno. Cancelar (melee, disparo, cambio) corta lo pendiente.
+  reload(wep = null, duration = 0) {
+    if (!wep || !(duration > 0) || !this.engine) {
+      if (!wep || !this.engine) this._tone('square', 700, 500, 0.07, 0.04);
+      return;
+    }
+    this.reloadCancel();
+    const t0 = this._now();
+    const T = (k) => ({ at: t0 + k * duration, tag: 'reload' });
+    let ok = true;
+    if (wep === 'smg') ok = this._play('mag_out', T(0.15)) && this._play('mag_in', T(0.62));
+    else if (wep === 'pistol') ok = this._play('mag_out_light', T(0.12)) && this._play('mag_in_light', T(0.55));
+    else if (wep === 'sniper') ok = this._play('bolt_open', T(0.08)) && this._play('round_in', T(0.5));
+    else if (wep === 'bazooka') ok = this._play('tube_slide', T(0.25));
+    else if (wep === 'stun') ok = this._play('stun_charge', T(0.15));
+    // escopeta: cada cartucho suena al insertarse (shellIn), sin pieza inicial
+    if (!ok && wep !== 'shotgun') this._tone('square', 700, 500, 0.07, 0.04);
   }
-  grenadeTick(options=null){
-    const out=this._eventOutput(.22,options,'impact',this.combatBus||this.master);if(out)this._tone('square',1450,1700,.08,.055,out);
+  reloadDone(wep = null) {
+    const piece = { smg: 'rack', pistol: 'slide_release', sniper: 'bolt_close', bazooka: 'tube_lock', stun: 'ready_chirp' }[wep];
+    if (wep === 'shotgun' && this._play('pump', { at: this._now() + 0.08, tag: 'pump' })) return;
+    if (piece && this._play(piece)) return;
+    this._tone('square', 900, 1200, 0.08, 0.05);
   }
-  thump() { this._tone('sine', 110, 55, 0.4, 0.11); this._noiseShot(0.12, 0.07, 500, 150); }
+  reloadCancel() {
+    this.engine?.stopTag('reload', 0.04);
+  }
+  shellIn() {
+    if (!this._play('shell_in')) this._tone('square', 900, 1200, 0.08, 0.05);
+  }
+  swap(target = null) {
+    this.reloadCancel();
+    this.engine?.stopTag('pump', 0.04);
+    const light = target === 'pistol' || target === 'stun' || target === 'frag' || target === 'grenade';
+    if (!this._play(light ? 'swap_light' : 'swap_heavy')) this._tone('square', 700, 500, 0.07, 0.04);
+  }
+  dry() {
+    if (!this._play('dry')) this._tone('square', 1800, 1500, 0.04, 0.02);
+  }
+
+  // ---------- feedback de combate ----------
+  hit(head = false) {
+    if (this._play(head ? 'hit_head' : 'hit_tick')) return;
+    this._tone('sine', head ? 1500 : 1150, 900, 0.14, 0.045);
+  }
+  kill(head = false) {
+    if (this._play(head ? 'kill_head' : 'kill_confirm')) return;
+    this._tone('sine', 500, 150, 0.3, 0.25); this._noiseShot(0.2, 0.2, 900, 200);
+  }
+  // Daño recibido con dirección: paneo hacia quien disparó (dato del golpe o,
+  // si no llega, el último disparo enemigo que pasó cerca).
+  hurt(options = null) {
+    let src = options?.position ?? null;
+    if (!src && this._threat && this._now() - this._threat.t < 0.7) src = this._threat;
+    let pan = 0;
+    const L = src ? this._listenerPose() : null;
+    if (L) {
+      const dx = src.x - L.x, dz = src.z - L.z;
+      const d = Math.hypot(dx, dz) || 1;
+      const right = L.right ?? { x: 1, z: 0 };
+      pan = ((dx * right.x + dz * right.z) / d) * 0.55;
+    }
+    const amount = options?.amount ?? 20;
+    if (this._play('hurt', { pan, volume: Math.max(0.55, Math.min(1.3, 0.55 + amount / 40)) })) return;
+    this._tone('sawtooth', 220, 90, 0.2, 0.12);
+  }
+  death() {
+    this._heartNext = 0;
+    this._stopHandling();
+    if (!this._play('death')) this._tone('sawtooth', 320, 60, 0.35, 0.5);
+  }
+  respawn() { this._play('respawn'); }
+  protectionEnd() { this._play('prot_end'); }
+
+  // ---------- recogidas y pedestal ----------
+  crate() { if (!this._play('crate')) this._tone('square', 900, 1200, 0.08, 0.05); }
+  ammoPickup() { if (!this._play('ammo_pickup')) this._tone('square', 900, 1200, 0.08, 0.05); }
+  weaponPickup() {
+    this._stopHandling(); // el arma en mano cambió: la recarga pendiente no sigue
+    if (!this._play('weapon_pickup')) this._tone('square', 900, 1200, 0.08, 0.05);
+  }
+  specialTaken() {
+    this._stopHandling();
+    this.engine?.loop('pedestal_hold')?.stop(0.05);
+    if (!this._play('special_taken')) this._tone('square', 900, 1200, 0.08, 0.05);
+  }
+  specialSpawn(position = null) { this._playAt('pedestal_spawn', position, 'gunshot', {}); }
+
+  // ---------- movimiento ----------
+  whoosh() { if (!this._play('whoosh')) this._noiseShot(0.22, 0.16, 500, 2400, 0.6); }
+  meleeSwing() { if (!this._play('melee_swing')) this.whoosh(); }
+  slide() { if (!this._play('slide')) this.whoosh(); }
+  dive() { if (!this._play('dive')) this.whoosh(); }
+  mantle() {
+    if (this._play('mantle')) return;
+    this.footstep('jump', 0.9);
+    this.whoosh();
+  }
+  electric(options = null) {
+    if (this._playAt('stun_zap', options?.position, 'impact', {})) return;
+    const out = this._eventOutput(0.55, options, 'impact', this.combatBus || this.master); if (!out) return;
+    this._tone('sawtooth', 1250, 130, 0.10, 0.22, out); this._noiseShot(0.12, 0.16, 3500, 700, 1.6, out);
+  }
+  grenadeTick(options = null) {
+    if (this._playAt('fuse_tick', options?.position, 'impact', {})) return;
+    const out = this._eventOutput(0.22, options, 'impact', this.combatBus || this.master); if (out) this._tone('square', 1450, 1700, 0.08, 0.055, out);
+  }
+  throwNade(options = null) { if (!this._playAt('throw', options?.position, 'impact', {})) this.whoosh(); }
+  // contacto con la cobertura (nombre heredado: thump)
+  thump() {
+    if (this._play('cover_hit')) return;
+    this._tone('sine', 110, 55, 0.4, 0.11); this._noiseShot(0.12, 0.07, 500, 150);
+  }
   meleeImpact(options = null, lethal = false) {
+    if (this._playAt('melee_hit', options?.position, 'impact', { volume: lethal ? 1.2 : 1, pitch: lethal ? 0.9 : 1 })) return;
     const out = this._eventOutput(lethal ? 0.78 : 0.66, options,
       'impact', this.combatBus || this.master);
     if (!out) return;
@@ -620,32 +1113,117 @@ export class Audio {
     this._noiseShot(lethal ? 0.42 : 0.32, 0.075, 1250, 220, 1.45, out);
     this._tone('triangle', 620, 190, 0.055, 0.055, out);
   }
-  jump() { this.footstep('jump'); this._noiseShot(0.1, 0.09, 800, 2300, 0.6); }
+  jump() {
+    if (this._play('jump')) return;
+    this.footstep('jump'); this._noiseShot(0.1, 0.09, 800, 2300, 0.6);
+  }
   land() { this.footstep('land'); }
-  hurt() { this._tone('sawtooth', 220, 90, 0.2, 0.12); }
-  death() { this._tone('sawtooth', 320, 60, 0.35, 0.5); }
-  win() { for (const [f, d] of [[520, 0], [660, 0.12], [780, 0.24]]) setTimeout(() => this._tone('sine', f, f, 0.25, 0.3), d * 1000); }
-  uiMove() { this._tone('sine', 690, 760, 0.035, 0.035); }
-  uiConfirm() { this._tone('triangle', 410, 620, 0.065, 0.075); }
+
+  // ---------- ronda, menú y lobby ----------
+  win() {
+    if (this._play('match_win')) return;
+    for (const [f, d] of [[520, 0], [660, 0.12], [780, 0.24]]) setTimeout(() => this._tone('sine', f, f, 0.25, 0.3), d * 1000);
+  }
+  uiMove() { if (!this._play('ui_move')) this._tone('sine', 690, 760, 0.035, 0.035); }
+  uiConfirm() { if (!this._play('ui_confirm')) this._tone('triangle', 410, 620, 0.065, 0.075); }
+  uiBack() { if (!this._play('ui_back')) this._tone('triangle', 620, 410, 0.06, 0.07); }
   lobbyEnter() {
+    if (this._play('lobby_enter')) return;
     this._tone('triangle', 220, 360, 0.09, 0.13);
     setTimeout(() => this._tone('sine', 520, 620, 0.06, 0.11), 85);
   }
+  playerJoined() { if (!this._play('player_joined')) this._tone('sine', 990, 1320, 0.05, 0.12); }
   countdown(value = 3) {
     const last = value <= 1;
+    if (this._play('count_tick', { pitch: last ? 1.5 : 1 })) return;
     this._tone('square', last ? 560 : 420, last ? 760 : 470, last ? 0.14 : 0.09, last ? 0.13 : 0.08);
   }
   roundStart() {
+    this._lastRoundStart = this._now();
+    if (this._play('count_go')) return;
     this._tone('triangle', 260, 520, 0.15, 0.18);
     setTimeout(() => this._tone('sine', 720, 880, 0.11, 0.16), 95);
   }
-  roundEnd() { this._tone('triangle', 460, 230, 0.12, 0.24); }
-  defeat() { this._tone('sawtooth', 260, 95, 0.12, 0.34); }
+  roundEnd() { if (!this._play('round_end')) this._tone('triangle', 460, 230, 0.12, 0.24); }
+  defeat() { if (!this._play('match_lose')) this._tone('sawtooth', 260, 95, 0.12, 0.34); }
   mvp() {
+    if (this._play('mvp')) return;
     for (const [f, d] of [[330, 0], [440, 0.09], [660, 0.2]]) {
       setTimeout(() => this._tone('triangle', f, f * 1.05, 0.075, 0.16), d * 1000);
     }
   }
+
+  // ---------- diagnóstico (window.BREACH_AUDIO.debug) ----------
+  get debug() {
+    const eng = this.engine;
+    return {
+      started: eng ? eng.started : {},
+      stats: eng ? eng.stats : null,
+      voices: eng ? eng.activeCount() : 0,
+      liveNodes: eng ? eng.liveNodes() : 0,
+      totalNodes: eng ? eng.totalNodes() : 0,
+      pendingRenders: this.bank.pending,
+      renderMs: +this.bank.totalMs.toFixed(1),
+      maxJobMs: +this.bank.maxJobMs.toFixed(1),
+      worker: this._useWorker,
+      renderer: this._renderer ?? null,
+      pcmMB: +(this.bank.pcmBytes() / 1e6).toFixed(2),
+      space: eng?.space ?? null,
+      state: this.ctx?.state ?? 'none',
+    };
+  }
+
+  // Recarga y bombeo programados: mueren con el jugador o con su arma.
+  _stopHandling() {
+    this.engine?.stopTag('reload', 0.04);
+    this.engine?.stopTag('pump', 0.04);
+  }
+
+  // Acción de arma cancelada por el juego (aturdido, muerte por snapshot,
+  // espectador, reinicio de armas): corta recarga y bombeo programados.
+  cancelHandling() {
+    this._stopHandling();
+  }
+
+  // Fin de partida / salida al menú: nada del gameplay sigue sonando.
+  stopGameplay() {
+    this._stopHandling();
+    this._heartNext = 0;
+    const eng = this.engine;
+    if (!eng) return;
+    for (let i = 0; i < this._rocketSlots.length; i++) {
+      this._rocketSlots[i] = null;
+      eng.loop('rocket_loop', `rocket${i}`)?.stop(0.1);
+    }
+    eng.loop('pedestal_hum')?.stop(0.3);
+    eng.loop('pedestal_hold')?.stop(0.05);
+    this._pedestal = null;
+    eng.stopBuses(['combat', 'world'], 0.08);
+  }
+}
+
+// Blindaje: ningún método público del audio puede lanzar hacia el juego (un
+// fallo de WebAudio jamás corta un cambio de mapa ni el arranque de partida).
+const audioFaults = new Set();
+function audioFault(key, e) {
+  if (audioFaults.has(key)) return;
+  audioFaults.add(key);
+  console.warn(`[audio] ${key} falló y se ignoró:`, e?.message ?? e);
+}
+for (const key of Object.getOwnPropertyNames(Audio.prototype)) {
+  if (key === 'constructor' || key.startsWith('_')) continue;
+  const desc = Object.getOwnPropertyDescriptor(Audio.prototype, key);
+  if (typeof desc.value !== 'function') continue;
+  const fn = desc.value;
+  Audio.prototype[key] = function guarded(...args) {
+    try {
+      const r = fn.apply(this, args);
+      return r && typeof r.then === 'function' ? r.catch((e) => audioFault(key, e)) : r;
+    } catch (e) {
+      audioFault(key, e);
+      return undefined;
+    }
+  };
 }
 
 // parámetros por tipo de paso (ganancias de talón/punta/peso/tick + freq base)

@@ -1,6 +1,7 @@
 import { Color, Group, Vector3 } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { attachSkinDetails } from './soldier-skins.js';
+import { bakeSoldierBody, bakeSoldierGun } from './soldier-bake.js';
 
 // Native art is the browser default. Explicit legacy mode remains available.
 export function blenderSoldierEnabled() {
@@ -137,8 +138,15 @@ export async function attachBlenderSoldier(rig) {
     for (const [parent, object] of replacements) parent.add(object);
     attachSkinDetails(rig);
     rig._blenderWeaponTemplates=assets.weapons;
-    for(const [key,gun] of Object.entries(rig.guns))attachBlenderWeapon(rig,gun,key);
+    for(const [key,gun] of Object.entries(rig.guns)){
+      // solo se re-fusiona un arma que de verdad recibió el modelo GLB
+      const before=gun.userData.blenderVisual;attachBlenderWeapon(rig,gun,key);
+      if(gun.userData.blenderVisual!==before)bakeSoldierGun(rig,gun,key);
+    }
     rig.blenderSoldier = true;
+    // Todo el cuerpo (segmentos + detalles de la variante) pasa a UN mesh
+    // con skinning rígido sobre las mismas piezas que anima el rig.
+    bakeSoldierBody(rig);
     rig._pendingBlenderSoldier = null;
     rig._prot = undefined;
     rig.setProtected(protectedState);

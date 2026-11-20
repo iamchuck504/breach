@@ -121,18 +121,21 @@ export class Rockets {
     const body = new THREE.Mesh(this._bodyGeo, this._bodyMat);
     body.rotation.x = Math.PI / 2;
     g.add(body);
+    // Object3D.lookAt orienta +Z hacia el destino: la punta va en +Z y la
+    // tobera/cola en -Z (antes estaba al revés y el cohete volaba de culo).
     const tip = new THREE.Mesh(this._tipGeo, this._tipMat);
-    tip.rotation.x = -Math.PI / 2;
-    tip.position.z = -0.26;
+    tip.rotation.x = Math.PI / 2;
+    tip.position.z = 0.26;
     g.add(tip);
     const glow = new THREE.Mesh(this._glowGeo, this._glowMat);
-    glow.position.z = 0.26;
+    glow.position.z = -0.26;
     g.add(glow);
     // Silueta/cola visible durante el vuelo sin crear partículas por frame.
     const trail = new THREE.Mesh(this._trailGeo, this._trailMat);
-    trail.rotation.x = Math.PI / 2;
-    trail.position.z = 0.53;
-    trail.renderOrder = 5;
+    trail.rotation.x = -Math.PI / 2;
+    trail.position.z = -0.53;
+    // antes que el humo (3): un cohete dentro de una nube no se delata por la cola
+    trail.renderOrder = 2;
     g.add(trail);
     return g;
   }

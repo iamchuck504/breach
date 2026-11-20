@@ -13,7 +13,7 @@ import { getMap, isCustomLayout, cratesOf, specialOf, spawnsOf, footprint, palet
 import { cloneUrbanAsset } from './urban-assets.js';
 import { HELIPAD, collisionBoxesFor, helipadSegments } from './collision-layouts.js';
 import { CALLE_2, calle2FurnitureZ, calle2VehiclePosition, calle2AccessOffset } from './calle-expansion.js';
-import { decorateCalleExpansion } from './calle-expansion-art.js';
+import { decorateCalleExpansion, optimizeCalle2, buildCalle2Continuation } from './calle-expansion-art.js';
 import { GridNavigation } from './grid-navigation.js';
 import { MAP_DIMS, MAP_FLOORS } from './map-dims.js';
 import { decorateMapV3 } from './maps-v3-art.js';
@@ -24,6 +24,7 @@ import { polishArchitecture } from './architecture-polish.js';
 import {galleryHeight,FORT_GALLERY} from './fortaleza-galleries.js';
 import {addFortalezaGalleries} from './fortaleza-gallery-art.js';
 import {addMapIdentity} from './map-identity.js';
+import { MapLook } from '../look/index.js';
 
 const FIELD_X = 15, FIELD_Z = 18; // semiancho / semilargo
 const SOLDIER_HEIGHT = 1.63;
@@ -89,12 +90,111 @@ const IMPACT_DIR = new THREE.Vector3();
 const IMPACT_WORLD = new THREE.Matrix4();
 const IMPACT_INSTANCE = new THREE.Matrix4();
 const IMPACT_NORMAL_MATRIX = new THREE.Matrix3();
+// Proyección de impactos sobre mallas grandes: una rejilla XZ de triángulos
+// por geometría (en su espacio local), construida la primera vez que hace
+// falta. Sin ella, cada bala recorría TODOS los triángulos de cada malla
+// fusionada del mapa (sillería, galerías, kit): unos 4 ms por impacto, 35 ms
+// un escopetazo.
+const IMPACT_GRIDS = new WeakMap();
+const IMPACT_GRID_MIN_TRIS = 400;
+const IMPACT_SEG_BOX = new THREE.Box3();
+const IMPACT_LOCAL_RAY = new THREE.Ray();
+const IMPACT_INV = new THREE.Matrix4();
+const IMPACT_A = new THREE.Vector3(), IMPACT_B = new THREE.Vector3(), IMPACT_C = new THREE.Vector3();
+const IMPACT_P = new THREE.Vector3(), IMPACT_Q = new THREE.Vector3();
+const IMPACT_HITS = [];
+
+function impactGrid(geometry) {
+  const pos = geometry.attributes.position, idx = geometry.index;
+  const total = pos ? (idx ? idx.count : pos.count) : 0;
+  // igual que Mesh.raycast: triples a partir del inicio del tramo dibujado
+  const first = Math.min(total, Math.max(0, geometry.drawRange.start));
+  const last = Math.min(total, first + geometry.drawRange.count);
+  // La rejilla vale mientras no cambien los datos (los mismos atributos, en
+  // la misma versión) ni el tramo dibujado.
+  const key = `${pos?.version ?? 0}:${idx?.version ?? 0}:${first}:${last}`;
+  const cached = IMPACT_GRIDS.get(geometry);
+  if (cached && cached.key === key && cached.pos === pos && cached.idx === idx) return cached.grid;
+  let grid = null;
+  if (pos && !pos.isInterleavedBufferAttribute && last - first >= 3) {
+    geometry.computeBoundingBox();
+    const box = geometry.boundingBox;
+    const triCount = Math.floor((last - first) / 3);
+    const sx = box.max.x - box.min.x, sz = box.max.z - box.min.z;
+    // celdas de ~1.5 m (en unidades de la geometría), con tope de 96 por lado
+    const nx = Math.max(1, Math.min(96, Math.ceil(sx / 1.5))), nz = Math.max(1, Math.min(96, Math.ceil(sz / 1.5)));
+    const cx = sx / nx || 1, cz = sz / nz || 1;
+    const cellOf = (v, min, size, n) => Math.max(0, Math.min(n - 1, Math.floor((v - min) / size)));
+    const counts = new Uint32Array(nx * nz + 1);
+    const span = new Uint16Array(triCount * 4);
+    const vi = (t, c) => (idx ? idx.getX(first + t * 3 + c) : first + t * 3 + c);
+    for (let t = 0; t < triCount; t++) {
+      let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+      for (let c = 0; c < 3; c++) {
+        const i = vi(t, c), x = pos.getX(i), z = pos.getZ(i);
+        if (x < x0) x0 = x; if (x > x1) x1 = x; if (z < z0) z0 = z; if (z > z1) z1 = z;
+      }
+      const i0 = cellOf(x0, box.min.x, cx, nx), i1 = cellOf(x1, box.min.x, cx, nx);
+      const j0 = cellOf(z0, box.min.z, cz, nz), j1 = cellOf(z1, box.min.z, cz, nz);
+      span[t * 4] = i0; span[t * 4 + 1] = i1; span[t * 4 + 2] = j0; span[t * 4 + 3] = j1;
+      for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) counts[j * nx + i + 1]++;
+    }
+    for (let k = 1; k < counts.length; k++) counts[k] += counts[k - 1];
+    const items = new Uint32Array(counts[counts.length - 1]);
+    const fill = counts.slice(0, nx * nz);
+    for (let t = 0; t < triCount; t++) {
+      for (let i = span[t * 4]; i <= span[t * 4 + 1]; i++) for (let j = span[t * 4 + 2]; j <= span[t * 4 + 3]; j++) items[fill[j * nx + i]++] = t;
+    }
+    grid = { nx, nz, cx, cz, minx: box.min.x, minz: box.min.z, starts: counts, items, first, stamp: new Uint32Array(triCount), tick: 0 };
+  }
+  IMPACT_GRIDS.set(geometry, { key, pos, idx, grid });
+  return grid;
+}
+
+// Mismo criterio que Mesh.raycast (cara visible según el lado del material),
+// pero solo sobre los triángulos de las celdas que cruza el tramo del rayo.
+function impactGridRaycast(mesh, grid, ray, near, far, out) {
+  const geometry = mesh.geometry, pos = geometry.attributes.position, idx = geometry.index;
+  const side = mesh.material.side;
+  IMPACT_INV.copy(mesh.matrixWorld).invert();
+  IMPACT_LOCAL_RAY.copy(ray).applyMatrix4(IMPACT_INV);
+  IMPACT_P.copy(ray.origin).addScaledVector(ray.direction, near).applyMatrix4(IMPACT_INV);
+  IMPACT_Q.copy(ray.origin).addScaledVector(ray.direction, far).applyMatrix4(IMPACT_INV);
+  const cell = (v, min, size, n) => Math.max(0, Math.min(n - 1, Math.floor((v - min) / size)));
+  const i0 = cell(Math.min(IMPACT_P.x, IMPACT_Q.x), grid.minx, grid.cx, grid.nx), i1 = cell(Math.max(IMPACT_P.x, IMPACT_Q.x), grid.minx, grid.cx, grid.nx);
+  const j0 = cell(Math.min(IMPACT_P.z, IMPACT_Q.z), grid.minz, grid.cz, grid.nz), j1 = cell(Math.max(IMPACT_P.z, IMPACT_Q.z), grid.minz, grid.cz, grid.nz);
+  if (++grid.tick === 0xffffffff) { grid.stamp.fill(0); grid.tick = 1; }
+  for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+    const k = j * grid.nx + i;
+    for (let n = grid.starts[k]; n < grid.starts[k + 1]; n++) {
+      const t = grid.items[n];
+      if (grid.stamp[t] === grid.tick) continue;
+      grid.stamp[t] = grid.tick;
+      const at = grid.first + t * 3;
+      IMPACT_A.fromBufferAttribute(pos, idx ? idx.getX(at) : at);
+      IMPACT_B.fromBufferAttribute(pos, idx ? idx.getX(at + 1) : at + 1);
+      IMPACT_C.fromBufferAttribute(pos, idx ? idx.getX(at + 2) : at + 2);
+      const hit = side === THREE.BackSide
+        ? IMPACT_LOCAL_RAY.intersectTriangle(IMPACT_C, IMPACT_B, IMPACT_A, true, IMPACT_P)
+        : IMPACT_LOCAL_RAY.intersectTriangle(IMPACT_A, IMPACT_B, IMPACT_C, side === THREE.FrontSide, IMPACT_P);
+      if (!hit) continue;
+      const point = IMPACT_P.clone().applyMatrix4(mesh.matrixWorld);
+      const distance = ray.origin.distanceTo(point);
+      if (distance < near || distance > far) continue;
+      const normal = new THREE.Vector3();
+      THREE.Triangle.getNormal(IMPACT_A, IMPACT_B, IMPACT_C, normal);
+      out.push({ distance, point, object: mesh, face: { normal } });
+    }
+  }
+}
 
 export class World {
   constructor(scene, layout = 'foundry') {
     this.scene = scene;
     this._initTextures();
     this._buildLights();
+    // capa de presentación (color, materiales, vida): ver src/look/index.js
+    this.look = new MapLook(scene);
     this.mapGroup = null;
     this.layout = null;
     this.setLayout(layout);
@@ -190,7 +290,9 @@ export class World {
     if (decorBase) decorateMapV3(this, decorBase);
     this._addMapPeriphery(theme);
     this._flushBoxBatch();
-    if (this._fortLook) this._weatherFortaleza();
+    // con look, la piedra la envejece su propio sombreador (y los materiales
+    // compartidos de los GLB no se tocan)
+    if (this._fortLook && !this.look.has(theme)) this._weatherFortaleza();
     this._buildSpawns();
     // Rutas de bots: una rejilla rellenada desde los spawns con la física del
     // juego. Sirve para cualquier distribución (ver grid-navigation.js).
@@ -216,6 +318,9 @@ export class World {
       this.amb.intensity *= 0.88;
       this.sun.intensity *= 0.90;
     }
+    // El look va al final: recolorea lo ya construido y añade su decoración
+    // en un grupo aparte (fuera de mapGroup: no existe para el gameplay).
+    this.look.apply(this);
     // El raycast visual de impactos trabaja con matrices estáticas ya
     // resueltas. La lista de receptores se reconstruye al cambiar de mapa.
     this.mapGroup.updateWorldMatrix(true, true);
@@ -586,12 +691,12 @@ export class World {
           ${grain ? `float fine = texture2D(uMacro, macroUv * 1.7 + 0.11).r;
           float finer = texture2D(uMacro, macroUv * 5.9).g;
           diffuseColor.rgb *= mix(0.90, 1.08, fine) * mix(0.95, 1.04, finer);` : ''}
-          ${damp ? `float macroDamp = macroFlat ? smoothstep(0.52, 0.24, broad) * 0.55
-            : smoothstep(1.25, 0.0, vMacroPos.y) * smoothstep(0.66, 0.28, mid);
+          ${damp ? `float macroDamp = macroFlat ? (1.0 - smoothstep(0.24, 0.52, broad)) * 0.55
+            : (1.0 - smoothstep(0.0, 1.25, vMacroPos.y)) * (1.0 - smoothstep(0.28, 0.66, mid));
           diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.80, 0.89, 0.72), macroDamp * 0.6);` : ''}
           ${wet ? `if (macroFlat) {
             float pool = texture2D(uMacro, macroUv * 0.047 + 0.61).g * 0.6 + broad * 0.4;
-            macroWet = smoothstep(0.50, 0.34, pool) * ${wet.toFixed(2)};
+            macroWet = (1.0 - smoothstep(0.34, 0.50, pool)) * ${wet.toFixed(2)};
             diffuseColor.rgb *= mix(1.0, 0.62, macroWet);
           }` : ''}
         }`)
@@ -1142,11 +1247,13 @@ export class World {
   }
 
   _newBatch() {
-    return { pos: [], norm: [], uv: [], color: [], idx: [], count: 0 };
+    return { pos: [], norm: [], uv: [], color: [], box: [], meta: [], idx: [], count: 0 };
   }
 
   // Agrega un quad al batch. Los UV pueden exceder 1: la textura usa RepeatWrapping.
-  _batchQuad(batch, verts, normal, uv, color) {
+  // face = [ancho, alto] de la cara en metros y meta = [id, altura] del
+  // bloque: el look dibuja con ellos sillares que casan con cada bloque.
+  _batchQuad(batch, verts, normal, uv, color, face = null, meta = null) {
     const base = batch.count;
     for (let i = 0; i < 4; i++) {
       const c = new THREE.Color(Array.isArray(color) ? color[i] : color);
@@ -1154,6 +1261,10 @@ export class World {
       batch.norm.push(...normal);
       batch.uv.push(...uv[i]);
       batch.color.push(c.r, c.g, c.b);
+      // esquinas en el orden de verts: (0,0) (0,alto) (ancho,alto) (ancho,0)
+      if (face) batch.box.push(i < 2 ? 0 : face[0], i === 1 || i === 2 ? face[1] : 0, face[0], face[1]);
+      else batch.box.push(0, 0, 1, 1);
+      batch.meta.push(meta ? meta[0] : 0, meta ? meta[1] : 0);
     }
     batch.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
     batch.count += 4;
@@ -1171,22 +1282,24 @@ export class World {
     const bottom = new THREE.Color(sideColor).multiplyScalar(0.74).getHex();
     const upper = new THREE.Color(sideColor).multiplyScalar(1.07).getHex();
     const sideGradient = [bottom, upper, upper, bottom];
+    // id estable por bloque (posición): mismo dibujo en todos los clientes
+    const meta = [(Math.abs(Math.sin(x * 12.9898 + z * 78.233) * 43758.5453)) % 1, h];
 
     this._batchQuad(b.sides,
       [[x1, 0, z0], [x1, h, z0], [x1, h, z1], [x1, 0, z1]],
-      [1, 0, 0], [[0, 0], [0, vh], [ud, vh], [ud, 0]], sideGradient);
+      [1, 0, 0], [[0, 0], [0, vh], [ud, vh], [ud, 0]], sideGradient, [d, h], meta);
     this._batchQuad(b.sides,
       [[x0, 0, z1], [x0, h, z1], [x0, h, z0], [x0, 0, z0]],
-      [-1, 0, 0], [[0, 0], [0, vh], [ud, vh], [ud, 0]], sideGradient);
+      [-1, 0, 0], [[0, 0], [0, vh], [ud, vh], [ud, 0]], sideGradient, [d, h], meta);
     this._batchQuad(b.sides,
       [[x1, 0, z1], [x1, h, z1], [x0, h, z1], [x0, 0, z1]],
-      [0, 0, 1], [[0, 0], [0, vh], [uw, vh], [uw, 0]], sideGradient);
+      [0, 0, 1], [[0, 0], [0, vh], [uw, vh], [uw, 0]], sideGradient, [w, h], meta);
     this._batchQuad(b.sides,
       [[x0, 0, z0], [x0, h, z0], [x1, h, z0], [x1, 0, z0]],
-      [0, 0, -1], [[0, 0], [0, vh], [uw, vh], [uw, 0]], sideGradient);
+      [0, 0, -1], [[0, 0], [0, vh], [uw, vh], [uw, 0]], sideGradient, [w, h], meta);
     this._batchQuad(b.tops,
       [[x0, h, z0], [x0, h, z1], [x1, h, z1], [x1, h, z0]],
-      [0, 1, 0], [[0, 0], [0, ud], [uw, ud], [uw, 0]], topColor);
+      [0, 1, 0], [[0, 0], [0, ud], [uw, ud], [uw, 0]], topColor, [w, d], meta);
   }
 
   _flushBoxBatch() {
@@ -1197,6 +1310,8 @@ export class World {
       g.setAttribute('normal', new THREE.Float32BufferAttribute(batch.norm, 3));
       g.setAttribute('uv', new THREE.Float32BufferAttribute(batch.uv, 2));
       g.setAttribute('color', new THREE.Float32BufferAttribute(batch.color, 3));
+      g.setAttribute('aBox', new THREE.Float32BufferAttribute(batch.box, 4));
+      g.setAttribute('aBoxMeta', new THREE.Float32BufferAttribute(batch.meta, 2));
       g.setIndex(batch.idx);
       g.computeBoundingSphere();
       const surface = {
@@ -3075,15 +3190,23 @@ export class World {
     // La continuidad exterior reutiliza edificios reales de esta misma calle.
     // Al clonarlos solo se reduce su luz/color con la distancia; no se cambia
     // su geometría, fachada, ventanas, rótulo ni lenguaje visual.
+    // Un clon por (material, tono), compartido entre módulos. El clon NO hereda
+    // la marca urbanAssetShared (Material.clone copia userData): con ella,
+    // setLayout lo creía de la caché y no lo liberaba nunca.
+    const dimmed = new Map();
     const dimStreetObject = (object, shade) => {
       if (!object || shade >= 0.999) return object;
       object.traverse((part) => {
         if (!part.isMesh) return;
         const sourceMaterials = Array.isArray(part.material) ? part.material : [part.material];
         const materials = sourceMaterials.map((source) => {
+          const key = `${source.uuid}:${shade}`;
+          if (dimmed.has(key)) return dimmed.get(key);
           const material = source.clone();
+          material.userData = { ...source.userData, urbanAssetShared: false };
           if (material.color) material.color.multiplyScalar(shade);
           if (material.emissive) material.emissive.multiplyScalar(shade);
+          dimmed.set(key, material);
           return material;
         });
         part.material = Array.isArray(part.material) ? materials : materials[0];
@@ -3440,7 +3563,12 @@ export class World {
     // No se inventa una versión simplificada para el fondo: cada módulo es un
     // clon real de uno de los edificios ya presentes en la fila. Esto mantiene
     // exactamente las mismas ventanas, cornisas, persianas, toldos y rótulos.
-    for (const dir of [-1, 1]) {
+    // Calle 2: lo mismo, horneado y recortado sobre el muro (ver
+    // buildCalle2Continuation), farolas incluidas.
+    if (expanded) buildCalle2Continuation(this, streetBuildings, {
+      modules: continuationModules, step: continuationStep, shades: continuationShades,
+    });
+    else for (const dir of [-1, 1]) {
       for (const side of [-1, 1]) {
         const sources = streetBuildings
           .filter((building) => building.userData.streetBuilding.side === side)
@@ -3941,7 +4069,7 @@ export class World {
     }
     // La infraestructura exterior usa el mismo asset GLB streetlight que la
     // zona jugable. Solo pierde contraste por distancia y nunca crea collider.
-    for (const dir of [-1, 1]) for (let depth = 0; depth < continuationModules; depth++) {
+    if (!expanded) for (const dir of [-1, 1]) for (let depth = 0; depth < continuationModules; depth++) {
       const z = dir * (this.fz + 3 + depth * 10);
       for (const side of [-1, 1]) {
         const pole = this._addUrbanAsset('streetlight', side * 11.72, z, {
@@ -4039,6 +4167,8 @@ export class World {
       this.mapGroup.add(b);
     }
     if (expanded) decorateCalleExpansion(this, streetBuildings);
+    // con todo construido: fusión por material y sombras solo de lo grande
+    if (expanded) optimizeCalle2(this);
   }
 
   // Mapa "Estación de Metro" (32×52): subterráneo de luz artificial. Dos
@@ -5867,7 +5997,7 @@ export class World {
 
   _getImpactReceivers() {
     if (this._impactReceivers) return this._impactReceivers;
-    const receivers = [];
+    const receivers = [], boxes = [];
     this.mapGroup?.traverse((object) => {
       if (!object.isMesh || !object.geometry || object.userData?.noBulletDecal) return;
       const materials = Array.isArray(object.material) ? object.material : [object.material];
@@ -5875,9 +6005,24 @@ export class World {
         material.visible !== false && material.colorWrite !== false &&
         material.blending !== THREE.AdditiveBlending &&
         (!material.transparent || material.opacity >= 0.35));
-      if (hasVisibleSurface) receivers.push(object);
+      if (!hasVisibleSurface) return;
+      // caja en mundo de cada receptor: la inmensa mayoría queda lejos del
+      // contacto y se descarta sin tocar su geometría
+      let box = null;
+      if (object.isInstancedMesh) {
+        if (!object.boundingBox) object.computeBoundingBox();
+        box = object.boundingBox ? object.boundingBox.clone().applyMatrix4(object.matrixWorld) : null;
+      } else if (!object.isSkinnedMesh) {
+        if (!object.geometry.boundingBox) object.geometry.computeBoundingBox();
+        box = object.geometry.boundingBox.clone().applyMatrix4(object.matrixWorld);
+      }
+      receivers.push(object);
+      boxes.push(box);
     });
+    // La lista sigue siendo de mallas (la usan pruebas y herramientas con un
+    // Raycaster normal); las cajas van aparte, en el mismo orden.
     this._impactReceivers = receivers;
+    this._impactReceiverBoxes = boxes;
     return receivers;
   }
 
@@ -5896,7 +6041,25 @@ export class World {
     IMPACT_RAY.set(origin, IMPACT_DIR);
     IMPACT_RAY.near = Math.max(0.001, contactDistance - 0.75);
     IMPACT_RAY.far = contactDistance + 1.50;
-    const intersections = IMPACT_RAY.intersectObjects(this._getImpactReceivers(), false);
+    const near = IMPACT_RAY.near, far = IMPACT_RAY.far;
+    IMPACT_SEG_BOX.makeEmpty();
+    IMPACT_SEG_BOX.expandByPoint(IMPACT_P.copy(origin).addScaledVector(IMPACT_DIR, near));
+    IMPACT_SEG_BOX.expandByPoint(IMPACT_P.copy(origin).addScaledVector(IMPACT_DIR, far));
+    IMPACT_SEG_BOX.expandByScalar(0.05);
+    const intersections = IMPACT_HITS;
+    intersections.length = 0;
+    const receivers = this._getImpactReceivers(), boxes = this._impactReceiverBoxes;
+    for (let r = 0; r < receivers.length; r++) {
+      const object = receivers[r], box = boxes[r];
+      if (box && !box.intersectsBox(IMPACT_SEG_BOX)) continue;
+      const geometry = object.geometry;
+      const tris = (geometry.index ? geometry.index.count : geometry.attributes.position?.count ?? 0) / 3;
+      const grid = !object.isInstancedMesh && !object.isSkinnedMesh && !Array.isArray(object.material) && tris >= IMPACT_GRID_MIN_TRIS
+        ? impactGrid(geometry) : null;
+      if (grid) impactGridRaycast(object, grid, IMPACT_RAY.ray, near, far, intersections);
+      else IMPACT_RAY.intersectObject(object, false, intersections);
+    }
+    intersections.sort((a, b) => a.distance - b.distance);
     const hit = intersections.find((candidate) => {
       let object = candidate.object;
       while (object && object !== this.mapGroup) {

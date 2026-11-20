@@ -144,17 +144,24 @@ try {
     for (const weapon of ['smg', 'shotgun', 'pistol', 'grenade', 'sniper', 'bazooka']) {
       G.rig.setWeapon(weapon);
       const gun = G.rig.activeGun;
-      let meshes = 0;
-      gun.traverse((o) => { if (o.isMesh) meshes++; });
+      // Cada arma se dibuja ya como UNA malla fusionada (soldier-bake.js): el
+      // detalle del modelo se mide en triángulos, no en número de mallas.
+      let meshes = 0, tris = 0;
+      gun.traverse((o) => {
+        if (!o.isMesh) return;
+        meshes++;
+        const g = o.geometry;
+        tris += Math.floor((g.index ? g.index.count : g.attributes.position.count) / 3);
+      });
       const a = gun.userData;
       const finite = ['muzzle', 'grip'].every((key) => a[key] &&
         [a[key].position.x, a[key].position.y, a[key].position.z].every(Number.isFinite));
-      result[weapon] = { meshes, finite, muzzleZ: a.muzzle?.position.z, oneHand: !!a.oneHand };
+      result[weapon] = { meshes, tris, finite, muzzleZ: a.muzzle?.position.z, oneHand: !!a.oneHand };
     }
     return result;
   });
   check('los seis modelos refinados construyen sin anchors inválidos',
-    Object.values(models).every((m) => m.meshes >= 4 && m.finite), JSON.stringify(models));
+    Object.values(models).every((m) => m.meshes >= 1 && m.tris >= 48 && m.finite), JSON.stringify(models));
   check('siluetas mantienen categorías y escala relativa',
     models.sniper.muzzleZ < models.shotgun.muzzleZ &&
     models.shotgun.muzzleZ < models.pistol.muzzleZ && models.pistol.oneHand && models.grenade.oneHand,
