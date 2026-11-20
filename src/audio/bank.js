@@ -124,7 +124,10 @@ export class Bank {
     const t = performance.now();
     const r = new R((this.seed ^ hash(d.name)) + v * 7919);
     const ch = d.gen(r, v);
-    for (const c of ch) for (let i = 0; i < c.length; i++) if (!Number.isFinite(c[i])) c[i] = 0;
+    // no finitos y colas por debajo de 1e-20 (−400 dBFS) a cero exacto: en
+    // Float32 eran miles de subnormales, que en algunas CPU vuelven lento el
+    // convolver/mezclador sin aportar nada audible
+    for (const c of ch) for (let i = 0; i < c.length; i++) if (!(Math.abs(c[i]) >= 1e-20)) c[i] = 0;
     const arr = this.data.get(d.name);
     if (!arr[v]) this.done++;
     arr[v] = ch;

@@ -55,6 +55,11 @@ proveedor). `GET /healthz` responde `ok` para el health check.
 Sin la variable nada cambia: LAN por `ws://IP:8787` y, en https, el campo
 queda vacío para escribir la URL a mano.
 
+Vite reserva `dist/build/` para archivos con hash de contenido. Vercel los
+sirve en `/build/` con un año de caché inmutable. El HTML y los archivos de
+`public/` (`/assets/`, `/audio/` y `/draco/`) conservan sus URLs y la
+revalidación en cada petición para recoger cambios al desplegar.
+
 ## Modos
 
 - **VS Bots (4v4):** TDM por rondas (5 min, mejor de 3, 15 vidas por equipo)
@@ -384,6 +389,34 @@ BASE=http://127.0.0.1:5200 node scripts/shot-look.mjs <mapa> <carpeta> [--look=c
 # costo de render en una partida real 4v4 con bots (bench-map mide el mapa vacío)
 node scripts/bench-match.mjs <mapa> [carpeta]     # GFX=…  LOOK=classic  BASE=…
 ```
+
+### Carga de modelos por mapa (`src/world/urban-assets.js`)
+
+Un manifiesto único dice qué modelos usa cada mapa. Al pulsar ENTER solo se
+descargan los del fondo del menú; práctica, VS Bots, la rotación y el playtest
+del editor esperan a los de SU mapa antes de construirlo, y los demás mapas
+jugables se bajan después, con el navegador desocupado. En online no se espera
+nada entre los mensajes del servidor y la construcción del mundo: abrir la
+pantalla de multijugador carga los modelos de toda la rotación y conectar
+espera a que estén. Una descarga sin avance durante 15 s se aborta y se
+reintenta en el siguiente uso; si un modelo falta, el mapa usa su sustituto y
+se rehace solo cuando llega. El editor carga la biblioteca completa.
+`npm run check:online-late-join` cubre la entrada a media partida con la red
+limitada.
+
+### Modelos de personajes y armas
+
+Los GLB de `public/assets/characters/blender/` salen de los originales de
+`art/characters/blender-source/` con `node scripts/simplify-soldier-art.mjs`
+(colapso de aristas con error acotado a ~1 mm; mismos nodos, anclajes y
+materiales; la misma entrada da los mismos bytes; falla si un modelo trae
+datos que no sabe conservar). Armas largas 3 000 triángulos, pistola y
+granada 1 500, cuerpo ~16 000. Tras reexportar desde Blender: copiar los GLB
+nuevos a la carpeta de originales y volver a correr la herramienta.
+
+Defecto conocido: en reposo y al trotar la mano izquierda no alcanza el arma
+(queda abierta junto al cajón). Solo es visual. `scripts/poses.mjs` lo
+reporta; arreglarlo exige acercar el arma al cuerpo, lo que mueve el cañón.
 
 ### Soldados (`src/player/soldier-bake.js`)
 

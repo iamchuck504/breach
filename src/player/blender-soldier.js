@@ -1,7 +1,13 @@
-import { Color, Group, Vector3 } from 'three';
+import { Box3, Color, Group, Vector3 } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { attachSkinDetails } from './soldier-skins.js';
 import { bakeSoldierBody, bakeSoldierGun } from './soldier-bake.js';
+
+// Longitudes de pierna del modelo exportado (scripts/blender/export-soldier-body.py):
+// muslo y tibia de 0,32 m; la bota cuelga 0,32 m bajo la rodilla.
+const BLENDER_ANKLE = 0.32;
+// Factor común de muslo y tibia (rig.js lo usa también en sus pruebas).
+export const BLENDER_LEG_SCALE = 0.87;
 
 // Native art is the browser default. Explicit legacy mode remains available.
 export function blenderSoldierEnabled() {
@@ -115,6 +121,19 @@ export async function attachBlenderSoldier(rig) {
       o.receiveShadow = true;
       o.userData.blenderSoldier = true;
     });
+    const name = source.name || '';
+    // Piernas: muslo y tibia exportados a 0,32 m + bota de 0,13 m no caben
+    // bajo una cadera a 0,68 m (la bota quedaba 9 cm bajo el suelo). Se
+    // acortan ambos por igual; la bota cuelga del tobillo para pisar plana.
+    if (/^segment_(thigh|shin)_/.test(name)) object.scale.y *= BLENDER_LEG_SCALE;
+    if (/^segment_foot_/.test(name)) {
+      const leg = name.endsWith('_R') ? rig.legR : rig.legL;
+      const box = new Box3().setFromObject(object);
+      const ax = (box.min.x + box.max.x) / 2;
+      // la bota se exportó con su tobillo a 0,32 m bajo la rodilla
+      object.position.set(-ax, BLENDER_ANKLE, 0);
+      return [leg.ankle, object, { leg, ax }];
+    }
     return [targetFor(rig, source.userData.runtimeTarget), object];
   });
   // Death effects clone materials and track hidden nodes. Wait until alive so
@@ -135,7 +154,14 @@ export async function attachBlenderSoldier(rig) {
       }
     };
     collect(rig.root);
-    for (const [parent, object] of replacements) parent.add(object);
+    for (const [parent, object, foot] of replacements) {
+      parent.add(object);
+      if (!foot) continue;
+      // rodilla y tobillo del esqueleto acortado (ver BLENDER_LEG_SCALE)
+      foot.leg.knee.position.y = -BLENDER_ANKLE * BLENDER_LEG_SCALE;
+      foot.leg.ankle.position.set(foot.ax, -BLENDER_ANKLE * BLENDER_LEG_SCALE, 0);
+    }
+    rig._calibrateLegs();
     attachSkinDetails(rig);
     rig._blenderWeaponTemplates=assets.weapons;
     for(const [key,gun] of Object.entries(rig.guns)){
@@ -147,6 +173,8 @@ export async function attachBlenderSoldier(rig) {
     // Todo el cuerpo (segmentos + detalles de la variante) pasa a UN mesh
     // con skinning rígido sobre las mismas piezas que anima el rig.
     bakeSoldierBody(rig);
+    // armas guardadas: se recolocan sobre el cuerpo y los modelos nuevos
+    rig._placeStowed?.();
     rig._pendingBlenderSoldier = null;
     rig._prot = undefined;
     rig.setProtected(protectedState);

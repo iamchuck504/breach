@@ -10,7 +10,7 @@ import { decorateMapV2 } from './maps-v2-art.js';
 import { BLOCK } from './block-heights.js';
 import { getMap, isCustomLayout, cratesOf, specialOf, spawnsOf, footprint, paletteById }
   from './map-data.js';
-import { cloneUrbanAsset } from './urban-assets.js';
+import { cloneUrbanAsset, beginUrbanBuild, endUrbanBuild, urbanAssetsArrived } from './urban-assets.js';
 import { HELIPAD, collisionBoxesFor, helipadSegments } from './collision-layouts.js';
 import { CALLE_2, calle2FurnitureZ, calle2VehiclePosition, calle2AccessOffset } from './calle-expansion.js';
 import { decorateCalleExpansion, optimizeCalle2, buildCalle2Continuation } from './calle-expansion-art.js';
@@ -204,8 +204,11 @@ export class World {
   // 'foundry' | 'arena' (compacto) | 'fortaleza' (día) | 'azoteas' (noche)
   // force: el editor reconstruye el MISMO id tras cada cambio de datos
   setLayout(layout, force = false) {
-    if (!force && this.layout === layout && this.mapGroup) return;
+    // mismo mapa: no se rehace, salvo que haya llegado un modelo que en la
+    // construcción anterior faltaba (se había usado su sustituto)
+    if (!force && this.layout === layout && this.mapGroup && !urbanAssetsArrived(this._urbanStandIns)) return;
     this.layout = layout;
+    beginUrbanBuild(layout);
     if (this.mapGroup) {
       this.scene.remove(this.mapGroup);
       this.mapGroup.traverse((o) => {
@@ -325,6 +328,7 @@ export class World {
     // resueltas. La lista de receptores se reconstruye al cambiar de mapa.
     this.mapGroup.updateWorldMatrix(true, true);
     this._impactReceivers = null;
+    this._urbanStandIns = endUrbanBuild();
   }
 
   // Builder original de cada mapa hecho a mano. También lo corre

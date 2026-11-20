@@ -82,25 +82,36 @@ check('bot entra en estado melee a bocajarro', melee.sawState === true, JSON.str
 check('el melee del bot hace daño real', melee.minHp < melee.hp0, JSON.stringify(melee));
 
 // 2) el melee del bot NO atraviesa una pared MID
+// (la pared se busca en la geometría actual: la de (-8.5,-16) desapareció con
+// la reforma de Fortaleza y el caso medía el daño de los tiros de otros bots;
+// ahora se cuentan los golpes que CONECTAN, no la vida)
 const wallMelee = await page.evaluate(async () => {
-  const M = window.BREACH.botMatch;
+  const M = window.BREACH.botMatch, W = window.BREACH_WORLD;
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const a = M.bots.find((b) => b.alive && b.team === 'red');
   const d = M.bots.find((b) => b.alive && b.team === 'blue');
   if (!a || !d) return { why: 'sin pareja' };
-  d.hp = 100;
-  const hp0 = d.hp;
+  const wall = W.colliders.find((c) => !c.walkSurface && !c.moveOnly && !c.minY && c.h > 1.3 && c.h < 2.6 &&
+    Math.min(c.maxx - c.minx, c.maxz - c.minz) < 1.2 && Math.max(c.maxx - c.minx, c.maxz - c.minz) > 3 &&
+    Math.abs((c.minz + c.maxz) / 2) < 20 && Math.abs((c.minx + c.maxx) / 2) < 20);
+  if (!wall) return { why: 'sin muro MID' };
+  const alongX = wall.maxx - wall.minx > wall.maxz - wall.minz;
+  const cx = (wall.minx + wall.maxx) / 2, cz = (wall.minz + wall.maxz) / 2;
+  const half = alongX ? (wall.maxz - wall.minz) / 2 : (wall.maxx - wall.minx) / 2;
+  let hits = 0, swings = 0;
+  const melee = M.botMelee;
+  M.botMelee = (bot) => { const r = melee.call(M, bot); if (bot === a) { swings++; if (r.connected) hits++; } return r; };
   for (let i = 0; i < 20; i++) {
-    // muro MID de base en (-8.5,-16) 5×1: uno a cada lado
-    a.pos.x = -8.5; a.pos.z = -16.9; a.y = 0;
-    d.pos.x = -8.5; d.pos.z = -15.1; d.y = 0;
+    a.pos.x = alongX ? cx : cx - half - 0.45; a.pos.z = alongX ? cz - half - 0.45 : cz; a.y = 0;
+    d.pos.x = alongX ? cx : cx + half + 0.45; d.pos.z = alongX ? cz + half + 0.45 : cz; d.y = 0;
     a.yaw = Math.atan2(-(d.pos.x - a.pos.x), -(d.pos.z - a.pos.z));
     a.meleeCd = 0;
     await wait(120);
   }
-  return { hp0, hp1: d.hp };
+  M.botMelee = melee;
+  return { wall: [cx, cz, wall.h], swings, hits };
 });
-check('melee de bot bloqueado por muro MID', wallMelee.hp1 === wallMelee.hp0,
+check('melee de bot bloqueado por muro MID', wallMelee.hits === 0 && !wallMelee.why,
   JSON.stringify(wallMelee));
 
 // 3) HUMO defensivo: bot herido con amenaza a media distancia lo lanza
@@ -130,12 +141,22 @@ const special = await page.evaluate(async () => {
   const M = window.BREACH.botMatch, S = window.BREACH_SPECIALS;
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const a = S.active;
-  if (!a || a.wep !== 'sniper') return { why: 'pedestal no es sniper' };
+  // un bot pudo recogerlo ya jugando durante las fases anteriores (mismo
+  // camino real de recogida): entonces se mide con ese dueño
+  const pre = M.bots.find((x) => x.alive && x.wep === 'sniper' && x.specialAmmo > 0);
+  if (!pre && (!a || a.wep !== 'sniper')) return { why: 'pedestal no es sniper' };
+  if (!pre) {
   window.__ensure('red', 2); // las fases anteriores dejan bajas
+  // sin rivales en medio: se mide la recogida, no un tiroteo junto al
+  // pedestal (desde que los bots pelean de verdad, el que iba a por el arma
+  // podía morir antes de llegar y el caso dependía de la suerte)
+  for (const e of M.bots) if (e.team !== 'red' && e.alive) { e.alive = false; e.rig.setVisible(false); }
+  M.specialSeeker.red = null;
   const near = M.bots.find((x) => x.alive && x.team === 'red');
   if (!near) return { why: 'sin bots rojos' };
   near.hp = 100;
   near.pos.x = a.x - 3; near.pos.z = a.z; near.y = a.y;
+  }
   // CUALQUIER bot puede ganar la carrera al pedestal: el dueño es quien
   // completa el hold, no el que yo empujé
   const t0 = performance.now();
@@ -153,11 +174,17 @@ const special = await page.evaluate(async () => {
     owner.specialAmmo = 1;
     owner.shotCd = 0;
     owner.reactT = 0;
+    owner.swapAnim = 0; // el gesto de recogida (como el del jugador) aún podía estar en curso
+    owner.fireHoldT = 0; // y la espera a difundir la pose tras moverlo a mano
+    window.__ensure(owner.team === 'red' ? 'blue' : 'red', 1);
     const e = M.bots.find((x) => x.alive && x.team !== owner.team);
     if (e) {
       e.pos.x = owner.pos.x; e.pos.z = owner.pos.z + 14;
       owner.yaw = Math.atan2(-(e.pos.x - owner.pos.x), -(e.pos.z - owner.pos.z));
-      owner._fireAt(0.05, M, { id: e.id, x: e.pos.x, z: e.pos.z, y: e.y }, 14);
+      // el tiro debe SALIR (un tiro declinado por línea tapada ya no gasta
+      // munición): lo que se prueba es la vuelta a la primaria tras el último
+      const shooting = Object.assign(Object.create(M), { botShoot: () => true });
+      owner._fireAt(0.05, shooting, { id: e.id, x: e.pos.x, z: e.pos.z, y: e.y }, 14);
     }
     await wait(300);
     after = owner.wep; ammoAfter = owner.specialAmmo;

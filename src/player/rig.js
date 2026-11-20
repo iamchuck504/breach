@@ -502,16 +502,19 @@ export const WEAPON_SCALES = {
 // La granada sí admite escala uniforme porque su muzzle es el punto de suelta.
 export const EQUIPPED_WEAPON_VISUAL_SCALE = 0.8;
 
-const ADS_WEAPON_POSES = Object.freeze({
+// fwd: el arma avanza hacia la mano (m) hasta que la culata queda en el
+// hombro en vez de atravesar pecho y hombrera. blade: el pecho se perfila
+// (hombro derecho atrás) como al encarar un arma; el cañón no cambia de eje.
+export const ADS_WEAPON_POSES = Object.freeze({
   // ADS no se obtiene acercando la cámara a la espalda. Cada pose desplaza
   // físicamente arma y manos desde el low-ready lateral hacia la línea de
   // visión, manteniendo la cámara sobre el hombro con espacio libre delante.
-  pistol:  { damp: 18, center: 0.15, mount: [0.045, 0.10, -0.42], torsoPitch: -0.07, head: 0.30 },
-  smg:     { damp: 16, center: 0.14, mount: [0.10, 0.055, -0.10], torsoPitch: -0.12, head: 0.25 },
-  shotgun: { damp: 13.5, center: 0.15, mount: [0.11, 0.045, 0.00], torsoPitch: -0.15, head: 0.22 },
-  sniper:  { damp: 12.5, center: 0.16, mount: [0.12, 0.085, 0.00], torsoPitch: -0.17, head: 0.18 },
-  bazooka: { damp: 12.5, center: 0.10, mount: [0.17, 0.15, 0.02], torsoPitch: -0.19, head: 0.13 },
-  grenade: { damp: 17, center: 0.12, mount: [0.06, 0.08, -0.38], torsoPitch: -0.09, head: 0.28 },
+  pistol:  { damp: 18, center: 0.15, mount: [0.045, 0.10, -0.42], torsoPitch: -0.07, head: 0.30, fwd: 0, blade: 0 },
+  smg:     { damp: 16, center: 0.14, mount: [0.10, 0.055, -0.10], torsoPitch: -0.12, head: 0.25, fwd: 0.25, blade: 0.7 },
+  shotgun: { damp: 13.5, center: 0.15, mount: [0.11, 0.045, 0.00], torsoPitch: -0.15, head: 0.22, fwd: 0.45, blade: 0.7 },
+  sniper:  { damp: 12.5, center: 0.16, mount: [0.12, 0.085, 0.00], torsoPitch: -0.17, head: 0.18, fwd: 0.5, blade: 0.7 },
+  bazooka: { damp: 11.5, center: 0.10, mount: [0.17, 0.15, 0.02], torsoPitch: -0.19, head: 0.13, fwd: 0, blade: 0 },
+  grenade: { damp: 17, center: 0.12, mount: [0.06, 0.08, -0.38], torsoPitch: -0.09, head: 0.28, fwd: 0, blade: 0 },
 });
 
 export function applyEquippedWeaponVisualScale(group, weapon) {
@@ -561,13 +564,141 @@ const IK_N = new THREE.Vector3(), IK_U = new THREE.Vector3();
 const IK_X = new THREE.Vector3(), IK_Y = new THREE.Vector3(), IK_Z = new THREE.Vector3();
 const IK_T1 = new THREE.Vector3(), IK_T2 = new THREE.Vector3(), IK_H = new THREE.Vector3();
 const IK_M = new THREE.Matrix4(), IK_Q = new THREE.Quaternion(), IK_QE = new THREE.Quaternion();
-const IK_BQ = new THREE.Quaternion();
+const IK_BQ = new THREE.Quaternion(), IK_E = new THREE.Vector3();
 const AXIS_X = new THREE.Vector3(1, 0, 0);
 const TMP_A = new THREE.Vector3(), TMP_B = new THREE.Vector3();
 const BLIND_DIRECTION_Q = new THREE.Quaternion();
 const BLIND_EULER = new THREE.Euler();
+const BLIND_Q = new THREE.Quaternion(), BLIND_YAW_Q = new THREE.Quaternion();
+const AXIS_Y = new THREE.Vector3(0, 1, 0);
+// Blindfire lateral: la pelvis (y con ella las piernas) gira hacia la abertura
+// en vez de mirar hacia donde va el tiro. Antes la raíz seguía a la cámara y
+// el pecho contrarrotaba 63-80°: rodillas contra el bloque y la cintura
+// retorcida. El pecho, los brazos y el arma conservan su pose en mundo.
+export const BLIND_PELVIS = Object.freeze({ low: 1.4, high: 1.4 });
+// Giro del pecho respecto del tiro (rad) e inclinación del agachado: valores
+// de siempre (afinados para la protección); ahora la pelvis lo acompaña.
+export const BLIND_CHEST = Object.freeze({ low: 1.40, high: 1.10, lowLean: -0.42 });
+// Blindfire por encima: el cuerpo se agacha tras el bloque (cabeza bajo el
+// borde) y el brazo derecho alza el arma; la palma izquierda en el borde.
+export const BLIND_OVER = Object.freeze({
+  drop: 0.26, lean: -0.12, rise: 0.26,
+  // palma izquierda apoyada en el borde del bloque (cover bajo de 1,1 m)
+  palm: [-0.2, 1.12, -0.44],
+});
+// Euler (XYZ) de una rotación local del torso que, bajo una pelvis girada
+// pelvisYaw, deja al pecho con la orientación (x, y, z) relativa a la raíz.
+function torsoUnderPelvis(x, y, z, pelvisYaw, out) {
+  BLIND_Q.setFromEuler(BLIND_EULER.set(x, y, z));
+  BLIND_YAW_Q.setFromAxisAngle(AXIS_Y, -pelvisYaw).multiply(BLIND_Q);
+  return out.setFromQuaternion(BLIND_YAW_Q);
+}
+const TORSO_E = new THREE.Euler();
+const AREF_Q = new THREE.Quaternion(), AREF_D = new THREE.Quaternion(), AREF_E = new THREE.Euler(), AREF_V = new THREE.Vector3();
+// Postura de cadera (idle/trote): el pecho se perfila (hombro derecho atrás)
+// para que la mano izquierda llegue al arma; el montaje compensa el giro y
+// el arma queda exactamente donde estaba (mismo muzzle y eje a pitch 0).
+export const HIP_BLADE = 0.8;
+// armas guardadas (marco del torso / muslo; ver _placeStowed)
+// centro algo a la izquierda: el extremo bajo (derecha) no invade el centro de la pantalla
+export const STOW_BACK_X = -0.08, STOW_BACK_Y = 0.42, STOW_BACK_TOP = 0.92, STOW_GAP = 0.004;
+export const STOW_HOLSTER = [-0.17, 0.06], STOW_HOLSTER_TILT = 0.2;
+const HIP_MOUNT = [0.245, -0.15, -0.40], HIP_YAW = 0.18;
 const RAG_P = { x: 0, z: 0 }; // punto mutable para la colisión del cadáver
+// RECARGAS POR FASES (reloadT 0→1). Los instantes son los de los sonidos de
+// src/fx/audio.js (reload: smg mag_out 0.15 / mag_in 0.62; pistola 0.12 /
+// 0.55; sniper bolt_open 0.08 / round_in 0.5; bazooka tube_slide 0.25) y el
+// último sonido (rack, slide_release, bolt_close, tube_lock) suena en
+// reloadDone, cuando weapons.js da la munición: la mano cierra la acción al
+// llegar a 1. La escopeta repite el ciclo por cartucho (reloadT vuelve a 0 en
+// cada uno; shellIn suena al cerrarlo, en 1) y bombea al terminar.
+// Puntos: nombre de anclaje del arma (grip/forend/mag) o del cuerpo
+// ('pouch', marco del torso) + desplazamiento en el marco del arma (sin
+// escalar). tilt: [t, giro x (boca abajo −), alabeo z (hacia la izquierda +)].
+const RELOAD_POINTS = {
+  pouch: [-0.12, 0.14, -0.3],      // portacargadores delante, izquierda del cinturón
+  hipPouch: [-0.3, 0.06, -0.08],   // bolsa en la cadera izquierda (cohete)
+};
+export const RELOAD_GESTURES = Object.freeze({
+  smg: {
+    tilt: [[0, 0, 0], [0.1, -0.12, 0.38], [0.66, -0.12, 0.38], [0.8, 0, 0.12], [1, 0, 0.12]],
+    left: [[0, 'forend'], [0.1, 'mag'], [0.15, 'mag'], [0.27, 'mag', 0, -0.22, 0.05], [0.4, 'pouch'],
+      [0.54, 'mag', 0, -0.16, 0], [0.62, 'mag'], [0.68, 'mag'], [0.82, 'grip', -0.07, 0.2, -0.05], [0.93, 'grip', -0.07, 0.2, 0.06], [1, 'grip', -0.07, 0.2, 0.02]],
+  },
+  pistol: {
+    tilt: [[0, 0, 0], [0.1, 0.2, 0.45], [0.6, 0.2, 0.45], [0.75, 0.05, 0.25], [1, 0.05, 0.25]],
+    left: [[0, 'aimSupport'], [0.12, 'pouch'], [0.3, 'pouch'], [0.46, 'mag', 0, -0.14, 0], [0.55, 'mag'], [0.62, 'mag'],
+      [0.78, 'grip', 0, 0.17, 0.02], [0.93, 'grip', 0, 0.17, 0.1], [1, 'grip', 0, 0.17, 0.04]],
+  },
+  sniper: {
+    tilt: [[0, 0, 0], [0.06, -0.05, 0.3], [0.85, -0.05, 0.3], [1, 0, 0.1]],
+    left: [[0, 'forend'], [0.1, 'forend'], [0.24, 'pouch'], [0.4, 'grip', -0.02, 0.24, -0.16], [0.5, 'grip', -0.02, 0.14, -0.14],
+      [0.58, 'grip', -0.02, 0.18, -0.16], [0.75, 'forend'], [1, 'forend']],
+    // la derecha deja el grip para el cerrojo (lado derecho del cajón)
+    right: [[0, 'grip'], [0.05, 'grip', 0.06, 0.12, -0.04], [0.08, 'grip', 0.07, 0.15, 0.06], [0.82, 'grip', 0.07, 0.15, 0.06],
+      [0.95, 'grip', 0.06, 0.12, -0.04], [1, 'grip', 0.05, 0.1, -0.04]],
+  },
+  bazooka: {
+    tilt: [[0, 0, 0], [0.12, 0.18, 0.3], [0.85, 0.18, 0.3], [1, 0.05, 0.1]],
+    left: [[0, 'forend'], [0.12, 'hipPouch'], [0.2, 'mag', 0, 0.06, 0.3], [0.25, 'mag', 0, 0.06, 0.3], [0.45, 'mag', 0, 0.06, 0.12],
+      [0.6, 'mag', -0.08, 0.12, 0.05], [0.9, 'mag', -0.08, 0.12, 0.05], [0.96, 'mag', -0.08, 0.09, 0.05], [1, 'mag', -0.08, 0.12, 0.05]],
+  },
+  // un cartucho: de la recámara a la cartuchera y vuelta, empuje al cerrar
+  shotgun: {
+    tilt: [[0, -0.1, 0.5], [1, -0.1, 0.5]],
+    left: [[0, 'mag', 0, -0.06, 0], [0.12, 'mag', 0, -0.08, 0.02], [0.38, 'pouch'], [0.62, 'mag', 0, -0.17, 0.04],
+      [0.84, 'mag', 0, -0.07, 0.02], [0.94, 'mag', 0, -0.05, 0], [1, 'mag', 0, -0.06, 0]],
+  },
+});
+const THROW_WHIP_YAW = -0.1;
+const PUMP_TIME = 0.34; // bombeo tras recargar la escopeta (pump suena 0,08 s después)
+// interpolación suave entre fotogramas clave [t, a, b]
+const reloadKey = (keys, t) => {
+  let i = 0;
+  while (i < keys.length - 2 && t > keys[i + 1][0]) i++;
+  const a = keys[i], b = keys[Math.min(i + 1, keys.length - 1)];
+  const u = b[0] > a[0] ? Math.max(0, Math.min(1, (t - a[0]) / (b[0] - a[0]))) : 1, e = u * u * (3 - 2 * u);
+  RELOAD_K[0] = a[1] + (b[1] - a[1]) * e; RELOAD_K[1] = a[2] + (b[2] - a[2]) * e;
+  return RELOAD_K;
+};
+const RELOAD_K = [0, 0];
+const PUMP_KEYS = [[0, 'forend'], [1, 'forend', 0, 0, 0.13]]; // giro del pecho al final del latigazo (de frente)
+const SWAP_HALF = 0.275; // mitad de SWAP_TIME (src/combat/weapons.js)
+const SWAP_FRONT = new THREE.Vector3(0.3, -0.12, -0.3); // inicio del gesto de cambio (aimRig)
+// paso del gesto de cambio por fuera del hombro derecho, arma vertical
+const SWAP_SIDE = [0.62, -0.1, 0.02, 1.2, 0.9, 0.15];
 const clamp01 = (v) => Math.min(1, Math.max(-1, v));
+
+// PIERNAS. La suela real se mide sobre el avatar dibujado (_calibrateLegs):
+// el resolvedor supuso durante mucho tiempo una suela a 0,375 m bajo la
+// rodilla, pero la bota del modelo Blender llega a 0,449 m y el soldado
+// pisaba 9 cm bajo el suelo de pie (30 cm agachado). Valores del avatar
+// procedural; la cadera (y con ella torso y cabeza) no se mueve nunca.
+const LEG_PROC = Object.freeze({ up: 0.32, ankle: [0, -0.29, 0] });
+// (el modelo Blender acorta muslo y tibia: BLENDER_LEG_SCALE en blender-soldier.js)
+const legCal = (src) => ({ up: src.up, h: 0.085, pts: Float32Array.of(-0.09, -0.085, -0.21, 0.09, -0.085, -0.21, -0.09, -0.085, 0.065, 0.09, -0.085, 0.065) });
+// direcciones (marco del tobillo) en las que se busca el punto más bajo de la bota
+const SOLE_DIRS = [];
+for (let a = -1.52; a <= 1.521; a += 0.19) for (const r of [-0.3, 0, 0.3]) {
+  SOLE_DIRS.push([Math.sin(r), -Math.cos(a) * Math.cos(r), Math.sin(a) * Math.cos(r)]);
+}
+// límites del tobillo respecto de la tibia (rad): punta arriba / abajo, giro
+const ANKLE_UP = 0.9, ANKLE_DOWN = 1.0, ANKLE_ROLL = 0.22, ANKLE_TWIST = 0.3;
+const LEG_RATE = 14;          // entrada/salida del apoyo (1/s)
+const FLOOR_RATE = 24;        // seguimiento del suelo bajo cada pie (1/s), como la raíz
+// temporales del apoyo de piernas
+const GL_H = new THREE.Vector3(), GL_A = new THREE.Vector3(), GL_K = new THREE.Vector3();
+const GL_T = new THREE.Vector3(), GL_P = new THREE.Vector3(), GL_C = new THREE.Vector3();
+const GL_V = new THREE.Vector3(), GL_W = new THREE.Vector3(), GL_F = new THREE.Vector3();
+const GL_B1 = new THREE.Vector3(), GL_B2 = new THREE.Vector3(), GL_B3 = new THREE.Vector3();
+const GL_A1 = new THREE.Vector3(), GL_A2 = new THREE.Vector3(), GL_A3 = new THREE.Vector3();
+const GL_MA = new THREE.Matrix4(), GL_MB = new THREE.Matrix4(), GL_MI = new THREE.Matrix4();
+const GL_Q = new THREE.Quaternion(), GL_Q2 = new THREE.Quaternion(), GL_QF = new THREE.Quaternion();
+const GL_QK = new THREE.Quaternion(), GL_QP = new THREE.Quaternion(), GL_QC = new THREE.Quaternion();
+const GL_E = new THREE.Euler(0, 0, 0, 'YXZ');
+// peso de apoyo suavizado (un valor inválido se reinicia al objetivo)
+const dampW = (w, key, t, k) => { const v = w[key]; w[key] = v === undefined || !Number.isFinite(v) ? t : v + (t - v) * k; };
+
 
 export class Rig {
   constructor(scene, team, name = null, variant = 0) {
@@ -672,11 +803,17 @@ export class Rig {
       knee.add(armorPlate(LIMB_GEO, 0.135, 0.14, 0.04, MID, 0, -0.15, -0.125));
       knee.add(armorPlate(SHIELD_GEO, 0.16, 0.11, 0.04, tc, 0, -0.04, -0.13));
       knee.add(glowBox(0.075, 0.018, 0.018, tc, 0, -0.04, -0.155));
-      knee.add(armorBox(0.23, 0.13, 0.34, DARK, 0, -0.31, -0.075));// bota común
-      knee.add(box(0.19, 0.055, 0.07, MID, 0, -0.29, -0.25));      // puntera reforzada
-      knee.add(box(0.13, 0.04, 0.035, tc, 0, -0.29, -0.29));
-      knee.add(glowBox(0.065, 0.015, 0.018, tc, 0, -0.29, -0.314));
-      return { hip, knee };
+      // TOBILLO: la bota cuelga de él para apoyarse plana en el suelo aunque
+      // la tibia se incline (antes iba rígida con la tibia y se hundía)
+      const ankle = new THREE.Group();
+      ankle.position.set(LEG_PROC.ankle[0] * s, LEG_PROC.ankle[1], LEG_PROC.ankle[2]);
+      knee.add(ankle);
+      const ay = -LEG_PROC.ankle[1];
+      ankle.add(armorBox(0.23, 0.13, 0.34, DARK, 0, ay - 0.31, -0.075));// bota común
+      ankle.add(box(0.19, 0.055, 0.07, MID, 0, ay - 0.29, -0.25));      // puntera reforzada
+      ankle.add(box(0.13, 0.04, 0.035, tc, 0, ay - 0.29, -0.29));
+      ankle.add(glowBox(0.065, 0.015, 0.018, tc, 0, ay - 0.29, -0.314));
+      return { hip, knee, ankle, side: s, cal: legCal(LEG_PROC) };
     };
     this.legL = mkLeg('L');
     this.legR = mkLeg('R');
@@ -684,19 +821,14 @@ export class Rig {
 
     // arma activa montada al pecho (las manos la alcanzan por IK);
     // la primaria guardada va cargada a la ESPALDA en diagonal y la pistola
-    // enfundada en la cadera derecha
+    // enfundada en la parte baja de la espalda; cada arma se coloca según su propia
+    // geometría y la del cuerpo dibujado (_placeStowed)
     this.gunMount = new THREE.Group();
     this.aimRig.add(this.gunMount);
     this.backMount = new THREE.Group();
-    // detrás de las placas dorsales (z 0.31); el EXPLORADOR lleva mochila
-    // (hasta z 0.40): su arma va aún más afuera para no incrustarse
-    this.backMount.position.set(-0.06, 0.3, variant === 2 ? 0.44 : 0.34);
-    this.backMount.rotation.set(Math.PI / 2, 0, 0.4);
     this.torso.add(this.backMount);
     this.holsterMount = new THREE.Group();
-    this.holsterMount.position.set(0.26, 0.04, 0.1);
-    this.holsterMount.rotation.set(1.35, 0, -0.12);
-    this.hips.add(this.holsterMount);
+    this.torso.add(this.holsterMount);
     // Los detalles se conservan, pero quedan agrupados por material dentro de
     // cada pieza animada: menos draw calls sin congelar brazos, piernas o armas.
     for (const group of [
@@ -704,6 +836,7 @@ export class Rig {
       this.armL.shoulder, this.armL.elbow, this.armL.hand,
       this.armR.shoulder, this.armR.elbow, this.armR.hand,
       this.legL.hip, this.legL.knee, this.legR.hip, this.legR.knee,
+      this.legL.ankle, this.legR.ankle,
     ]) mergeDirectMeshes(group);
     // Modelos de arma bajo demanda (_gunModel): todos los rigs llevan smg,
     // escopeta y pistola de fábrica; granada/especiales se crean al usarse.
@@ -717,8 +850,12 @@ export class Rig {
     this.setWeapon('smg');
 
     if (name) this._addNameTag(name, tc);
+    this._calibrateLegs();
     // Avatar de respaldo (antes de que cargue el GLB) también en una llamada.
     bakeSoldierBody(this);
+    // las armas guardadas se colocan sobre el cuerpo YA fusionado (setWeapon
+    // corrió antes, sin cuerpo: la escopeta del explorador quedaba 21 cm dentro)
+    this._placeStowed();
 
     this.phase = 0;
     this._recoil = 0;
@@ -1192,23 +1329,175 @@ export class Rig {
     this.gunMount.add(act);
     act.position.set(0, 0, 0);
     act.rotation.set(0, 0, 0);
-    if (back && back !== wep) {
-      const bg = this._gunModel(back);
-      this.backMount.add(bg);
-      bg.position.set(0, 0, 0);
-      bg.rotation.set(0, 0, 0);
-    }
+    if (back && back !== wep) this.backMount.add(this._gunModel(back));
     const pistol = this.guns.pistol;
-    if (pistol && !pistol.parent) {
-      this.holsterMount.add(pistol);
-      pistol.position.set(0, 0, 0);
-      pistol.rotation.set(0, 0, 0);
-    }
+    if (pistol && !pistol.parent) this.holsterMount.add(pistol);
+    this._placeStowed();
     // solo el arma en mano proyecta sombra; las guardadas no la necesitan
     for (const k in this.guns) {
       const baked = this.guns[k].userData.bakedMesh;
       if (baked) baked.castShadow = this.guns[k].parent === this.gunMount;
     }
+  }
+
+  // ARMAS GUARDADAS. Antes la de la espalda giraba sobre su propio cañón
+  // (rotation z con orden XYZ): en vez de cruzar la espalda se clavaba en la
+  // placa dorsal por un extremo, flotaba por el otro y la boca asomaba sobre
+  // el casco; la pistola iba boca arriba dentro de la cadera. Ahora:
+  //  · espalda: plana contra las placas (el costado del arma hacia el
+  //    cuerpo), en diagonal con la boca arriba a la IZQUIERDA (lejos de la
+  //    retícula, que queda a la derecha del personaje), por debajo del casco y
+  //    separada lo justo del punto más saliente de la espalda bajo su huella;
+  //  · pistola: funda horizontal en la parte baja de la espalda (izquierda),
+  //    con la empuñadura hacia la mano derecha.
+  _placeStowed() {
+    const pts = this._stowBodyPoints();
+    for (const k in this.guns) {
+      const g = this.guns[k];
+      if (g.parent === this.backMount) this._stowOnBack(g, pts.back, Math.min(STOW_BACK_TOP, pts.headTop - 0.14));
+      else if (g.parent === this.holsterMount) this._stowInHolster(g, pts.back);
+    }
+  }
+
+  // Caja del arma en su marco local, ya escalada (el modelo visible fusionado).
+  _gunBox(g) {
+    const m = g.userData.bakedMesh;
+    const box = (g.userData._stowBox ??= new THREE.Box3());
+    if (m) {
+      if (!m.geometry.boundingBox) m.geometry.computeBoundingBox();
+      box.copy(m.geometry.boundingBox);
+    } else box.setFromCenterAndSize(TMP_A.set(0, 0, 0), TMP_B.set(0.1, 0.2, 0.8));
+    box.min.multiply(g.scale); box.max.multiply(g.scale);
+    return box;
+  }
+
+  // Puntos de la espalda dibujada (marco del torso, sin cabeza ni brazos).
+  // Se recalculan solo cuando cambia el cuerpo fusionado.
+  _stowBodyPoints() {
+    const body = this._bodyMesh;
+    if (this._stowPts && this._stowPts.body === body) return this._stowPts;
+    const back = [];
+    let headTop = 1.14;
+    if (body) {
+      this.root.updateMatrixWorld(true);
+      const pos = body.geometry.attributes.position, si = body.geometry.attributes.skinIndex;
+      const torsoInv = new THREE.Matrix4().copy(this.torso.matrixWorld).invert();
+      const rel = body.skeleton.bones.map((b) => {
+        for (let n = b; n && n !== this.root; n = n.parent) {
+          if (n === this.head) return { head: new THREE.Matrix4().multiplyMatrices(torsoInv, b.matrixWorld) };
+          if (n === this.aimRig) return null;
+          if (n === this.torso) return new THREE.Matrix4().multiplyMatrices(torsoInv, b.matrixWorld);
+        }
+        return null;
+      });
+      headTop = -Infinity;
+      for (let i = 0; i < pos.count; i += 2) {
+        const m = rel[si.getX(i)];
+        if (!m) continue;
+        if (m.head) { headTop = Math.max(headTop, GL_V.fromBufferAttribute(pos, i).applyMatrix4(m.head).y); continue; }
+        GL_V.fromBufferAttribute(pos, i).applyMatrix4(m);
+        if (GL_V.z > 0.12) back.push(GL_V.x, GL_V.y, GL_V.z);
+      }
+    }
+    return (this._stowPts = { body, back, headTop });
+  }
+
+  _stowOnBack(g, back, top = STOW_BACK_TOP, out = g) {
+    const box = this._gunBox(g);
+    const len = box.max.z - box.min.z;
+    // inclinación desde la vertical: la boca no pasa de 1,0 m sobre la pelvis
+    // (≈1,66 m del suelo) ni de 14 cm bajo lo alto del casco; nunca más
+    // vertical que 43°
+    const tilt = Math.max(0.75, Math.acos(Math.min(1, (top - STOW_BACK_Y) / (len / 2))));
+    const s = Math.sin(tilt), c = Math.cos(tilt);
+    // ejes del arma en el torso: +z (culata) abajo-derecha, +y (miras)
+    // arriba-derecha, +x (costado derecho) hacia el cuerpo
+    this._stowFlat(g, box, back, GL_A1.set(0, 0, -1), GL_A2.set(c, s, 0), GL_A3.set(s, -c, 0), STOW_BACK_X, STOW_BACK_Y, out);
+  }
+
+  // Coloca el arma con sus ejes (marco del torso) de modo que el centro de su
+  // caja caiga en (x, y) sobre la espalda y su costado quede a STOW_GAP del
+  // punto más saliente del cuerpo bajo su huella. El costado derecho del arma
+  // (+x) mira al cuerpo (−z).
+  _stowFlat(g, box, back, ax, ay, az, x, y, out = g, gap = STOW_GAP) {
+    IK_M.makeBasis(ax, ay, az);
+    out.quaternion.setFromRotationMatrix(IK_M);
+    const cx = (box.min.x + box.max.x) / 2, cy = (box.min.y + box.max.y) / 2, cz = (box.min.z + box.max.z) / 2;
+    const ox = x - (cx * ax.x + cy * ay.x + cz * az.x);
+    const oy = y - (cx * ax.y + cy * ay.y + cz * az.y);
+    let maxZ = 0.2;
+    for (let i = 0; i < back.length; i += 3) {
+      const dx = back[i] - ox, dy = back[i + 1] - oy;
+      const gy = dx * ay.x + dy * ay.y, gz = dx * az.x + dy * az.y;
+      if (gy < box.min.y - 0.01 || gy > box.max.y + 0.01 || gz < box.min.z - 0.01 || gz > box.max.z + 0.01) continue;
+      if (back[i + 2] > maxZ) maxZ = back[i + 2];
+    }
+    // z en el torso de un punto local del arma = oz − x
+    out.position.set(ox, oy, maxZ + box.max.x + gap);
+  }
+
+  // Pistola: funda horizontal en la parte baja de la espalda, a la izquierda
+  // (empuñadura hacia la mano derecha, boca a la izquierda y algo abajo). En
+  // el muslo la atravesaban el brazo y la bota al agacharse en cobertura.
+  _stowInHolster(g, back, out = g) {
+    const box = this._gunBox(g), a = STOW_HOLSTER_TILT;
+    this._stowFlat(g, box, back, GL_A1.set(0, 0, -1), GL_A2.set(-Math.sin(a), Math.cos(a), 0),
+      GL_A3.set(Math.cos(a), Math.sin(a), 0), STOW_HOLSTER[0], STOW_HOLSTER[1], out, 0.015);
+  }
+
+  // Punto del gesto de recarga en el instante t (marco del aimRig): entre dos
+  // fotogramas clave, cada uno un anclaje del arma o del cuerpo + desplazamiento.
+  _reloadTarget(gun, keys, t, out) {
+    let i = 0;
+    while (i < keys.length - 2 && t > keys[i + 1][0]) i++;
+    const a = keys[i], b = keys[Math.min(i + 1, keys.length - 1)];
+    const u = b[0] > a[0] ? Math.max(0, Math.min(1, (t - a[0]) / (b[0] - a[0]))) : 1, e = u * u * (3 - 2 * u);
+    this._reloadPoint(gun, a, out);
+    this._reloadPoint(gun, b, GL_W);
+    return out.lerp(GL_W, e);
+  }
+
+  _reloadPoint(gun, key, out) {
+    const body = RELOAD_POINTS[key[1]];
+    if (body) {
+      out.set(body[0], body[1], body[2]);
+      this.torso.localToWorld(out);
+    } else {
+      const sock = gun.userData[key[1]] ?? gun.userData.grip;
+      out.copy(sock.position).add(GL_C.set(key[2] ?? 0, key[3] ?? 0, key[4] ?? 0));
+      gun.localToWorld(out);
+    }
+    return this.aimRig.worldToLocal(out);
+  }
+
+  // Postura del gunMount (marco del aimRig) que lleva el arma en mano hacia
+  // donde va guardada (espalda o funda), hasta donde llega el brazo derecho:
+  // el gesto de cambio la deja / la toma de su sitio.
+  _swapPose(out) {
+    const g = this.activeGun;
+    const pts = this._stowBodyPoints();
+    const key = g.userData.oneHand ? 'holster' : 'back';
+    let c = g.userData._swapStow;
+    if (!c || c.body !== pts.body || c.key !== key) {
+      c = g.userData._swapStow = { body: pts.body, key, position: new THREE.Vector3(), quaternion: new THREE.Quaternion() };
+      if (key === 'holster') this._stowInHolster(g, pts.back, c);
+      else this._stowOnBack(g, pts.back, Math.min(STOW_BACK_TOP, pts.headTop - 0.14), c);
+    }
+    // del torso al aimRig (el aimRig va sin giro durante el gesto)
+    this.root.updateMatrixWorld(true);
+    GL_MA.compose(c.position, c.quaternion, GL_V.set(1, 1, 1));
+    GL_MB.copy(this.aimRig.matrixWorld).invert().multiply(this.torso.matrixWorld).multiply(GL_MA);
+    GL_MB.decompose(GL_T, GL_Q, GL_V);
+    // posición al alcance: el grip a menos de un brazo del hombro derecho
+    const grip = g.userData.grip.position, sh = this.armR.shoulder.position;
+    let f = 1;
+    for (let it = 0; it < 8; it++) {
+      GL_C.copy(grip).multiply(g.scale).applyQuaternion(GL_Q).add(GL_P.copy(GL_T).multiplyScalar(f)).add(GL_W.copy(SWAP_FRONT).multiplyScalar(1 - f));
+      if (GL_C.distanceTo(sh) <= L1 + L2 - 0.05) break;
+      f -= 0.1;
+    }
+    GL_T.multiplyScalar(f).add(GL_W.copy(SWAP_FRONT).multiplyScalar(1 - f));
+    return out.setFromQuaternion(GL_Q, 'XYZ');
   }
 
   get activeGun() { return this.guns[this._wep] ?? this.guns.smg; }
@@ -1294,9 +1583,272 @@ export class Rig {
     }
   }
 
+  // Mide la suela real bajo cada tobillo con las piezas que cuelgan de él:
+  // altura tobillo→suela y huella de apoyo (vértices a <1,2 cm del fondo).
+  // Sirve para ambos avatares; se llama antes de fusionar el cuerpo.
+  _calibrateLegs() {
+    this.root.updateMatrixWorld(true);
+    for (const leg of [this.legL, this.legR]) {
+      GL_MI.copy(leg.ankle.matrixWorld).invert();
+      let minY = Infinity;
+      const meshes = [];
+      leg.ankle.traverse((o) => { if (o.isMesh && o.visible !== false && o.geometry?.attributes.position) meshes.push(o); });
+      for (const o of meshes) {
+        GL_MA.multiplyMatrices(GL_MI, o.matrixWorld);
+        const pos = o.geometry.attributes.position;
+        for (let i = 0; i < pos.count; i++) {
+          const y = GL_V.fromBufferAttribute(pos, i).applyMatrix4(GL_MA).y;
+          if (y < minY) minY = y;
+        }
+      }
+      if (!Number.isFinite(minY)) continue;
+      // puntos de apoyo: el vértice más bajo de la bota para cada inclinación
+      // que el tobillo admite (punta, talón, cantos redondeados incluidos)
+      const best = SOLE_DIRS.map(() => [-Infinity, 0, 0, 0]);
+      for (const o of meshes) {
+        GL_MA.multiplyMatrices(GL_MI, o.matrixWorld);
+        const pos = o.geometry.attributes.position;
+        for (let i = 0; i < pos.count; i++) {
+          GL_V.fromBufferAttribute(pos, i).applyMatrix4(GL_MA);
+          for (let k = 0; k < SOLE_DIRS.length; k++) {
+            const d = SOLE_DIRS[k], v = GL_V.x * d[0] + GL_V.y * d[1] + GL_V.z * d[2];
+            if (v > best[k][0]) { best[k][0] = v; best[k][1] = GL_V.x; best[k][2] = GL_V.y; best[k][3] = GL_V.z; }
+          }
+        }
+      }
+      const pts = [];
+      for (const b of best) {
+        if (pts.some((q) => Math.abs(q[0] - b[1]) + Math.abs(q[1] - b[2]) + Math.abs(q[2] - b[3]) < 0.004)) continue;
+        pts.push([b[1], b[2], b[3]]);
+      }
+      leg.cal = { up: -leg.knee.position.y, h: -minY, pts: Float32Array.from(pts.flat()) };
+    }
+  }
+
+  // Cadera→rodilla→tobillo hacia `target` (mundo). `pole` (mundo): hacia dónde
+  // debe salir la rodilla respecto de la línea cadera-tobillo. La rodilla es
+  // una bisagra (x ≤ 0): nunca se hiperextiende, y cerca de la extensión
+  // completa el alcance se suaviza para que no dé un tirón.
+  _solveLeg(leg, H, target, pole) {
+    const L1 = leg.cal.up, o = leg.ankle.position, ax = o.x, ay = o.y;
+    const dMax = Math.hypot(ax, L1 - ay), soft = 0.01;
+    let d = GL_T.copy(target).sub(H).length();
+    if (d > dMax - soft) d = dMax - soft + soft * (1 - Math.exp(-(d - dMax + soft) / soft));
+    const c = (ax * ax + L1 * L1 + ay * ay - d * d) / (2 * L1 * ay);
+    const th = -Math.min(2.75, Math.max(0.02, Math.acos(Math.max(-1, Math.min(1, c)))));
+    // marco del muslo: tobillo resultante y dirección en que sobresale la rodilla
+    GL_A1.set(ax, -L1 + ay * Math.cos(th), ay * Math.sin(th)).normalize();
+    GL_V.set(0, -L1 + ay * Math.cos(th), ay * Math.sin(th)).normalize();
+    GL_A2.set(0, -GL_V.z, GL_V.y);
+    GL_A2.addScaledVector(GL_A1, -GL_A2.dot(GL_A1)).normalize();
+    GL_A3.crossVectors(GL_A1, GL_A2);
+    // mismo marco en el mundo: hacia el objetivo, rodilla hacia el polo
+    GL_B1.copy(GL_T).normalize();
+    GL_B2.copy(pole).addScaledVector(GL_B1, -pole.dot(GL_B1));
+    if (GL_B2.lengthSq() < 1e-8) { GL_B2.set(-Math.sin(this.root.rotation.y), 0, -Math.cos(this.root.rotation.y)); GL_B2.addScaledVector(GL_B1, -GL_B2.dot(GL_B1)); }
+    GL_B2.normalize();
+    GL_B3.crossVectors(GL_B1, GL_B2);
+    GL_MA.makeBasis(GL_A1, GL_A2, GL_A3).transpose();
+    GL_MB.makeBasis(GL_B1, GL_B2, GL_B3).multiply(GL_MA);
+    GL_Q.setFromRotationMatrix(GL_MB);
+    leg.hip.parent.getWorldQuaternion(GL_Q2);
+    leg.hip.quaternion.copy(GL_Q2.invert().multiply(GL_Q));
+    leg.knee.rotation.set(th, 0, 0);
+    leg.hip.updateMatrixWorld(true);
+  }
+
+  // Punto más bajo de la suela con el pie orientado `q` y el tobillo en `A`,
+  // respecto de un suelo a altura g con pendiente `slope` en la dirección `fwd`.
+  // Devuelve la altura (A.y + desplazamiento − suelo) y, si root, la del plano
+  // de la raíz (para la marcha).
+  _soleLow(leg, A, q, g, slope, fwd, rootInv = null) {
+    const pts = leg.cal.pts;
+    let low = Infinity, lowRoot = Infinity;
+    for (let k = 0; k < pts.length; k += 3) {
+      GL_C.set(pts[k], pts[k + 1], pts[k + 2]).applyQuaternion(q);
+      const h = A.y + GL_C.y - (g + slope * (GL_C.x * fwd.x + GL_C.z * fwd.z));
+      if (h < low) low = h;
+      if (rootInv) { GL_C.add(A).applyMatrix4(rootInv); if (GL_C.y < lowRoot) lowRoot = GL_C.y; }
+    }
+    this._lowRoot = lowRoot;
+    return low;
+  }
+
+  // Suela de una pierna en el mundo: centro de la huella (lowest=false) o su
+  // punto más bajo. Lo usan las métricas y las pruebas de apoyo.
+  soleWorld(leg, out, lowest = false) {
+    const pts = leg.cal.pts;
+    leg.ankle.updateWorldMatrix(true, false);
+    if (!lowest) {
+      let x = 0, z = 0, n = 0;
+      for (let k = 0; k < pts.length; k += 3) { x += pts[k]; z += pts[k + 2]; n++; }
+      return out.set(x / n, -leg.cal.h, z / n).applyMatrix4(leg.ankle.matrixWorld);
+    }
+    let best = Infinity;
+    for (let k = 0; k < pts.length; k += 3) {
+      GL_C.set(pts[k], pts[k + 1], pts[k + 2]).applyMatrix4(leg.ankle.matrixWorld);
+      if (GL_C.y < best) { best = GL_C.y; out.copy(GL_C); }
+    }
+    return out;
+  }
+
+  // Orientación del pie limitada a lo que el tobillo admite sobre la tibia.
+  _clampFoot(qKnee, q, out) {
+    GL_QC.copy(qKnee).invert().multiply(q);
+    GL_E.setFromQuaternion(GL_QC, 'YXZ');
+    GL_E.set(Math.max(-ANKLE_DOWN, Math.min(ANKLE_UP, GL_E.x)),
+      Math.max(-ANKLE_TWIST, Math.min(ANKLE_TWIST, GL_E.y)),
+      Math.max(-ANKLE_ROLL, Math.min(ANKLE_ROLL, GL_E.z)), 'YXZ');
+    GL_QC.setFromEuler(GL_E);
+    return out.copy(qKnee).multiply(GL_QC);
+  }
+
+  // APOYO DE PIERNAS, después de toda la pose (suavizado, vuelta, ragdoll).
+  // plant: la pierna pisa (suela en el suelo real, pie paralelo a él);
+  // gait: conserva la alzada del paso medida sobre el suelo local; clamp: una
+  // pierna libre (salto, patada, esquiva) no atraviesa el suelo. Los pesos
+  // entran y salen con la misma constante a cualquier frecuencia de cuadro.
+  _groundLegs(dt, plantL, plantR, gaitT, clampT, groundPitch, classic = 0) {
+    const kW = this._legW ? 1 - Math.exp(-LEG_RATE * dt) : 1;
+    const W = this._legW ??= [{}, {}];
+    let active = false;
+    // (sin arrays ni closures por cuadro: corre para cada soldado)
+    for (let i = 0; i < 2; i++) {
+      const w = W[i], pt = i ? plantR : plantL;
+      dampW(w, 'plant', pt, kW); dampW(w, 'gait', gaitT, kW); dampW(w, 'clamp', clampT, kW); dampW(w, 'orient', Math.max(pt, gaitT), kW);
+      active ||= w.plant > 1e-3 || w.gait > 1e-3 || w.clamp > 1e-3 || w.orient > 1e-3;
+    }
+    if (!active) {
+      for (const leg of [this.legL, this.legR]) leg.ankle.quaternion.identity();
+      return;
+    }
+    this.root.updateMatrixWorld(true);
+    GL_MI.copy(this.root.matrixWorld).invert();
+    const yaw = this.root.rotation.y;
+    GL_F.set(-Math.sin(yaw), 0, -Math.cos(yaw));
+    const slope = Math.tan(groundPitch || 0);
+    const footY = this._footY ?? this.root.position.y;
+    const kF = 1 - Math.exp(-FLOOR_RATE * dt);
+    [this.legL, this.legR].forEach((leg, i) => {
+      const w = W[i];
+      leg.ankle.quaternion.identity();
+      leg.ankle.updateMatrixWorld(true);
+      GL_H.setFromMatrixPosition(leg.hip.matrixWorld);
+      GL_A.setFromMatrixPosition(leg.ankle.matrixWorld);
+      leg.knee.getWorldQuaternion(GL_QK);
+      // polo: el lado hacia el que sobresale la rodilla en la pose de partida
+      const th0 = leg.knee.rotation.x, L1 = leg.cal.up, ay = leg.ankle.position.y;
+      GL_V.set(0, -L1 + ay * Math.cos(th0), ay * Math.sin(th0)).normalize();
+      GL_P.set(0, -GL_V.z, GL_V.y);
+      if (GL_P.lengthSq() < 1e-6) GL_P.set(0, 0, -1);
+      leg.hip.getWorldQuaternion(GL_Q2);
+      GL_P.applyQuaternion(GL_Q2);
+      // suelo bajo el pie (seguido como la raíz: un peldaño no es un salto)
+      // una muestra inválida (NaN/undefined) conserva el último suelo válido
+      // en vez de envenenar el apoyo de ese pie para siempre
+      let g0 = this.groundFn ? this.groundFn(GL_A.x, GL_A.z, footY) : footY;
+      if (!Number.isFinite(g0)) g0 = Number.isFinite(leg._floorRaw) ? leg._floorRaw : (Number.isFinite(footY) ? footY : 0);
+      if (!Number.isFinite(leg._floorOff)) leg._floorOff = 0;
+      if (!Number.isFinite(leg._pen)) leg._pen = 0;
+      // las rampas se siguen exactas; un desnivel brusco (peldaño, borde de
+      // un bloque) se reparte en ~0,1 s como hace la raíz
+      if (!Number.isFinite(leg._floorRaw) || Math.abs(g0 - leg._floorRaw) > 1.2) leg._floorOff = 0;
+      else if (Math.abs(g0 - leg._floorRaw) > 0.04) leg._floorOff += leg._floorRaw - g0;
+      leg._floorRaw = g0;
+      leg._floorOff *= 1 - kF;
+      const g = g0 + leg._floorOff;
+      // pie: rígido con la tibia (libre) → paralelo al suelo (apoyado)
+      GL_W.set(0, 0, -1).applyQuaternion(GL_QK);
+      const footYaw = GL_W.x * GL_W.x + GL_W.z * GL_W.z > 1e-4 ? Math.atan2(-GL_W.x, -GL_W.z) : yaw;
+      const pitchF = Math.atan(slope * Math.cos(footYaw - yaw));
+      GL_QF.setFromEuler(GL_E.set(pitchF, footYaw, 0, 'YXZ'));
+      GL_QP.copy(GL_QK).slerp(GL_QF, w.orient);
+      this._clampFoot(GL_QK, GL_QP, GL_QP);
+      // altura buscada para el punto más bajo de la suela, medida en la pose
+      // de partida; luego se itera (secante): con el tobillo en su tope, el
+      // pie cambia de inclinación al moverse la tibia y un paso fijo oscila
+      const hAct0 = this._soleLow(leg, GL_A, GL_QP, g, slope, GL_F, GL_MI);
+      const hInt = hAct0 + (this._lowRoot - hAct0) * w.gait;
+      // carrera clásica (zancada por tiempo): la pierna se sube entera lo que
+      // su arco se hundía en el último ciclo, en vez de aplanar el arco contra
+      // el suelo (eso arrastraba la suela durante media zancada)
+      leg._pen = Math.max(-hInt, (leg._pen ?? 0) * Math.exp(-dt / 2.5), 0);
+      const lifted = hInt + leg._pen * w.gait;
+      const clamped = hInt + (Math.max(0, hInt) - hInt) * w.clamp;
+      const want = (1 - w.plant) * (clamped + (Math.max(clamped, lifted) - clamped) * classic);
+      let y = GL_A.y, r = hAct0 - want, rate = 1;
+      for (let pass = 0; pass < 4 && Math.abs(r) > 0.0005; pass++) {
+        const y1 = y - r / rate;
+        GL_A.y = y1;
+        this._solveLeg(leg, GL_H, GL_A, GL_P);
+        leg.knee.getWorldQuaternion(GL_QK);
+        GL_QP.copy(GL_QK).slerp(GL_QF, w.orient);
+        this._clampFoot(GL_QK, GL_QP, GL_QP);
+        const r1 = this._soleLow(leg, GL_A, GL_QP, g, slope, GL_F) - want;
+        if (Math.abs(y1 - y) > 1e-5) rate = Math.max(0.5, Math.min(4, (r1 - r) / (y1 - y)));
+        y = y1; r = r1;
+      }
+      // fuera de alcance (cadera alta sobre cobertura baja): de puntillas
+      leg.ankle.updateMatrixWorld(true);
+      GL_K.setFromMatrixPosition(leg.ankle.matrixWorld);
+      const short = (GL_K.y - GL_A.y) * w.plant;
+      if (short > 0.004) {
+        const base = this._soleLow(leg, GL_K, GL_QP, g, slope, GL_F);
+        let lo = 0, hi = ANKLE_DOWN;
+        for (let it = 0; it < 10; it++) {
+          const mid = (lo + hi) / 2;
+          GL_Q.copy(GL_QP).multiply(GL_Q2.setFromAxisAngle(AXIS_X, -mid));
+          this._clampFoot(GL_QK, GL_Q, GL_Q);
+          if (this._soleLow(leg, GL_K, GL_Q, g, slope, GL_F) > base - short) lo = mid; else hi = mid;
+        }
+        GL_QP.multiply(GL_Q2.setFromAxisAngle(AXIS_X, -hi));
+        this._clampFoot(GL_QK, GL_QP, GL_QP);
+      }
+      leg.ankle.quaternion.copy(GL_QK.invert().multiply(GL_QP));
+    });
+  }
+
+  // MARCO DE REFERENCIA DEL ARMA. Hip fire y blindfire disparan por el eje
+  // físico del cañón, así que perfilar el pecho (cadera, ADS) o agacharse en
+  // blind_over no puede moverlo. El aimRig (brazos+arma) cuelga del pecho
+  // visible; aquí se re-expresa respecto del pecho "de siempre" (el visible
+  // más la diferencia amortiguada) y, en altura, de la pelvis de siempre. La
+  // pose lógica se guarda y se restaura al empezar el cuadro siguiente.
+  // Referencia absoluta: scripts/fixtures/fire-reference.json.
+  _aimRef(dPitch, dYaw, dRoll, dLift, k) {
+    const R = this._aimRefD ??= { x: 0, y: 0, z: 0, h: 0 };
+    R.x += (dPitch - R.x) * k; R.y += (dYaw - R.y) * k; R.z += (dRoll - R.z) * k; R.h += (dLift - R.h) * k;
+    const S = this._aimRefState ??= { rot: new THREE.Euler(), pos: new THREE.Vector3(), written: new THREE.Quaternion() };
+    S.rot.copy(this.aimRig.rotation); S.pos.copy(this.aimRig.position);
+    if (Math.abs(R.x) + Math.abs(R.y) + Math.abs(R.z) + Math.abs(R.h) > 1e-6) {
+      const t = this.torso.rotation;
+      // D = pecho⁻¹ · pecho_de_referencia
+      AREF_Q.setFromEuler(AREF_E.set(t.x + R.x, t.y + R.y, t.z + R.z, t.order));
+      AREF_D.copy(this.torso.quaternion).invert().multiply(AREF_Q);
+      this.aimRig.quaternion.premultiply(AREF_D);
+      this.aimRig.position.applyQuaternion(AREF_D);
+      // la pelvis de referencia está R.h más arriba (en el marco del pecho)
+      AREF_V.set(0, R.h, 0).applyQuaternion(AREF_Q.copy(this.torso.quaternion).invert());
+      this.aimRig.position.add(AREF_V);
+    }
+    S.written.copy(this.aimRig.quaternion);
+  }
+
   // p: {state, speed, aim, aimPitch, twist}
   update(dt, p) {
-    const LEG_UP = 0.32, LEG_LOW = 0.375; // muslo y pierna hasta la suela
+    // el aimRig parte de su pose lógica (sin el marco de referencia aplicado)
+    const AR = this._aimRefState;
+    if (AR && this.aimRig.quaternion.equals(AR.written)) {
+      this.aimRig.rotation.copy(AR.rot); this.aimRig.position.copy(AR.pos);
+    }
+    // las piernas parten de su pose propia (sin el apoyo del cuadro anterior)
+    if (this._legFK) {
+      const F = this._legFK;
+      [this.legL, this.legR].forEach((leg, i) => {
+        leg.hip.rotation.set(F[i * 6], F[i * 6 + 1], F[i * 6 + 2]);
+        leg.knee.rotation.set(F[i * 6 + 3], F[i * 6 + 4], F[i * 6 + 5]);
+      });
+    }
     // seguimiento de altura (ver setTransform): solo con los pies en el suelo
     this._ySnap = p.state === 'jump' || p.state === 'flip' || p.state === 'dead' || p.state === 'mantle' || !!this.rag;
     if (!this._ySnap && this._footY !== undefined && this._visY !== undefined) {
@@ -1331,7 +1883,15 @@ export class Rig {
     };
 
     let hipsY = 0.66, aimRigX = 0, aimRigY = 0.5, rootRotX = 0, damp = 12;
-    let leftOnGun = false, ikArms = true;
+    // apoyo por pierna [izq, der] (1 = pisa) y si una pierna libre puede
+    // atravesar el suelo (0 en vuelta, mantle y muerte)
+    let plantL = 1, plantR = 1, legClamp = 1;
+    // giro de pelvis propio del rig (solo blindfire lateral lo usa)
+    set(this.hips.rotation, 'y', 0);
+    let leftOnGun = false, ikArms = true, adsBody = false, hipHold = false;
+    // diferencia entre el pecho visible y el "de referencia" al que se ata el
+    // arma (perfil de cadera/ADS, agachado de blind_over): ver _aimRef
+    let refYaw = 0, refPitch = 0, refRoll = 0, refLift = 0;
     // Visual cadence follows acceleration without changing movement, aiming or
     // weapon timing. Keep the phase continuous when releasing/reapplying input.
     const gaitTarget = ['run','roadie'].includes(p.state) ? Math.min(1,Math.max(0,p.speed??0)) : 0;
@@ -1414,10 +1974,10 @@ export class Rig {
         // (la respiración casi no mueve el torso: el arma en reposo y al
         // disparar comparten boca de cañón; respiran la cabeza y la pelvis)
         R(this.torso, (lean + leanAcc) * (1 - classic) + (-0.1 * m + Math.sin(ph * 0.4) * 0.015 + leanAcc * 0.5) * classic + breath * 0.004 * (1 - m),
-          tw * 0.55 + swing * 0.03 * m * calm * (1 - classic),
+          tw * 0.55 - HIP_BLADE + swing * 0.03 * m * calm * (1 - classic),
           (swing * 0.035 * m * calm + leanSide - side * 0.05 * m * calm) * (1 - classic) + (cSwing * 0.04 * m + leanSide * 0.5) * classic);
         // la cabeza se queda nivelada y acompaña la mirada vertical
-        R(this.head, 0.05 * m - leanAcc * 0.6 + pitch * 0.3 * calm + breath * 0.02 * (1 - m), tw * 0.35, -leanSide * 0.7);
+        R(this.head, 0.05 * m - leanAcc * 0.6 + pitch * 0.3 * calm + breath * 0.02 * (1 - m), tw * 0.35 + HIP_BLADE, -leanSide * 0.7);
         // (las piernas las coloca el resolvedor de marcha, tras el suavizado)
         leftOnGun = true;
         // El arma permanece al frente, sostenida por ambas manos y apenas por
@@ -1425,7 +1985,9 @@ export class Rig {
         // apuntar ópticamente. El target es idéntico antes/durante fire: no hay
         // elevación súbita del muzzle ni salto de retícula al primer click.
         damp = p.firing ? 18 : 14;
-        M(0.245, -0.15, -0.40, 0, 0.18, 0);
+        M(HIP_MOUNT[0], HIP_MOUNT[1], HIP_MOUNT[2], 0, HIP_YAW, 0);
+        refYaw = HIP_BLADE; // el arma ignora el perfil del pecho (ver _aimRef)
+        hipHold = true;
         // la pelvis baja en el apoyo y sube en el vuelo; en reposo respira
         hipsY = 0.66 - bob * (0.018 + 0.022 * sp) * m * (1 - classic) + bob * 0.045 * m * classic + breath * 0.004 * (1 - m);
         break;
@@ -1448,6 +2010,7 @@ export class Rig {
         M(0.16, -0.14 - 0.03 * fall, -0.34, 0, 0, 0);
         hipsY = 0.66 + 0.02 * rise;
         this._airVy = vy;
+        plantL = plantR = 0;
         break;
       }
       case 'mantle': {
@@ -1465,10 +2028,12 @@ export class Rig {
         R(this.armR.shoulder, 0.5 + 0.7 * over, 0, 0.2); R(this.armR.elbow, 0.3 + 0.5 * out, 0, 0);
         R(this.legL.hip, 0.4 + 1.1 * over, 0, 0.1); R(this.legL.knee, -0.6 - 1.3 * over, 0, 0);
         R(this.legR.hip, 0.35 * over + 0.5 * out, 0, -0.05); R(this.legR.knee, -0.5 - 0.5 * out, 0, 0);
-        ikArms = false; // manos al borde, no al arma
+        // la izquierda al borde (pose propia); la derecha no suelta el arma:
+        // antes las dos iban al borde y el arma quedaba a 0,5 m de la mano
         M(0.14, -0.05, -0.2, 0.9 * over, 0, 0.15 * over);
         R(this.aimRig, 0, 0, 0);
         hipsY = 0.62 - 0.12 * over;
+        plantL = plantR = 0; legClamp = 0; // cruza el bloque: el suelo bajo el pie salta
         break;
       }
 
@@ -1485,6 +2050,7 @@ export class Rig {
         set(this.aimRig.rotation, 'x', pitch); // apunta con la cámara en el aire
         set(this.aimRig.rotation, 'y', p.aimYawErr ?? 0);
         hipsY = 0.72;
+        plantL = plantR = 0; legClamp = 0;
         break;
       }
       case 'dive': {
@@ -1495,10 +2061,11 @@ export class Rig {
         R(this.torso, -0.2 - 0.65 * evade, 0, -0.12 * evade);
         R(this.head, 0.3, 0, 0);
         R(this.legL.hip, 0.35 + 0.65 * evade, 0, 0); R(this.legL.knee, -0.4 - evade, 0, 0);
-        R(this.legR.hip, -0.35 * evade, 0, 0); R(this.legR.knee, -0.3 - 0.6 * evade, 0, 0);
+        R(this.legR.hip, -0.9 * evade, 0, 0); R(this.legR.knee, -0.3 - 0.9 * evade, 0, 0); // la de atrás, con el pie en el aire
         leftOnGun = true;
         M(0.12, -0.22, -0.28, -0.3, 0, 0);
         hipsY = 0.62 - 0.23 * evade;
+        plantR = 1 - evade; // la pierna izquierda apoya; la derecha va en el aire
         break;
       }
       case 'slide': {
@@ -1506,8 +2073,12 @@ export class Rig {
         R(this.torso, 0.2, 0, 0.1);
         R(this.head, -0.05, 0, 0);
         R(this.legL.hip, 1.2, 0, 0); R(this.legL.knee, -0.3, 0, 0);   // pierna extendida
-        R(this.legR.hip, 0.55, 0, 0); R(this.legR.knee, -1.3, 0, 0);  // pierna doblada
-        R(this.armL.shoulder, -0.6, 0, -0.5); R(this.armL.elbow, 0.3, 0, 0); // brazo atrás
+        // pierna doblada: rodilla arriba y bota plana delante de la cadera (con
+        // la pelvis a 0,38 m el muslo apenas sube; antes la bota se hundía 41 cm)
+        R(this.legR.hip, 1.85, 0, 0); R(this.legR.knee, -1.85, 0, 0);
+        // la izquierda sujeta el guardamanos: el "brazo atrás" quedaba a 1,2 m
+        // del arma y a ~0,3 m del suelo (con el pecho erguido no lo alcanza)
+        leftOnGun = true;
         M(0.12, -0.15, -0.32, 0.05, 0, 0);
         hipsY = 0.38;
         break;
@@ -1551,14 +2122,25 @@ export class Rig {
       case 'blind_over': {
         damp = 15;
         const blindPose = coverBlindPose({ kind: p.coverKind, h: 1.1 }, pitch);
-        R(this.torso, -0.05, 0, 0);
-        R(this.head, 0.25, 0, 0);
-        R(this.legL.hip, 1.3, 0, 0); R(this.legL.knee, -1.7, 0, 0);
-        R(this.legR.hip, 1.15, 0, 0); R(this.legR.knee, -1.65, 0, 0);
-        // arma por encima del cover, mano izq. apoyada cerca del pecho
-        R(this.armL.shoulder, 0.5, -0.5, -0.15); R(this.armL.elbow, 1.4, 0, 0);
+        // Disparo a ciegas por encima: agachado TRAS el bloque con la cabeza
+        // bajo el borde, el brazo derecho alza el arma por encima y la palma
+        // izquierda se apoya en el bloque. Antes se arrodillaba con casco y
+        // hombros por encima del borde y la izquierda suelta junto al pecho
+        // (un brazo de 0,64 m no alcanza a sostener el arma con las dos manos
+        // por encima de la cabeza sin dejarla sobre el casco). El arma y su
+        // eje son los de siempre: el marco de referencia del arma (_aimRef)
+        // deshace la bajada, la inclinación y el ladeo del cuerpo; solo el
+        // ajuste de alcance del brazo la acerca al hombro (≤6 cm apuntando
+        // abajo, ≤22 cm nivelado/arriba; check-fire-direction).
+        const down = Math.max(0, Math.min(1, -pitch / 0.55));
+        refPitch = -0.05 - BLIND_OVER.lean; refRoll = 0.04;
+        refLift = BLIND_OVER.drop - down * BLIND_OVER.rise;
+        R(this.torso, BLIND_OVER.lean, 0, -0.04);
+        R(this.head, 0.12, 0.1, 0);
+        R(this.legL.hip, 1.7, 0, 0.14); R(this.legL.knee, -2.25, 0, 0);
+        R(this.legR.hip, 1.55, 0, -0.1); R(this.legR.knee, -2.15, 0, 0);
         M(0.06, 0.28, -0.32 - blindPose.gunForward, 0, 0, 0);
-        hipsY = blindPose.hipsY;
+        hipsY = blindPose.hipsY - BLIND_OVER.drop + down * BLIND_OVER.rise;
         aimRigY = blindPose.aimRigY;
         break;
       }
@@ -1569,15 +2151,19 @@ export class Rig {
         const low = p.state.startsWith('blind_low_');
         const side = p.state.endsWith('_right') ? 1 : -1;
         const down = Math.max(0, Math.min(1, -pitch / 0.55));
+        const pelvis = -side * (low ? BLIND_PELVIS.low : BLIND_PELVIS.high);
+        set(this.hips.rotation, 'y', pelvis);
         if (low) {
-          R(this.torso, -0.42, -side * 1.40, side * 0.08);
+          torsoUnderPelvis(BLIND_CHEST.lowLean, -side * BLIND_CHEST.low, side * 0.08, pelvis, TORSO_E);
+          R(this.torso, TORSO_E.x, TORSO_E.y, TORSO_E.z);
           R(this.head, 0.36, 0, side * 0.04);
           R(this.legL.hip, 1.82, 0, 0); R(this.legL.knee, -2.3, 0, 0);
           R(this.legR.hip, 1.72, 0, 0); R(this.legR.knee, -2.25, 0, 0);
           hipsY = 0.14;
           aimRigY = 0.68 + down * 0.08;
         } else {
-          R(this.torso, 0.05, -side * 1.10, side * 0.08);
+          torsoUnderPelvis(0.05, -side * BLIND_CHEST.high, side * 0.08, pelvis, TORSO_E);
+          R(this.torso, TORSO_E.x, TORSO_E.y, TORSO_E.z);
           R(this.head, 0.08, 0.12, 0);
           R(this.legL.hip, -0.04, 0, 0.08); R(this.legL.knee, -0.18, 0, 0);
           R(this.legR.hip, 0.04, 0, -0.08); R(this.legR.knee, -0.16, 0, 0);
@@ -1625,6 +2211,7 @@ export class Rig {
         // pierna de apoyo (izquierda): algo flexionada y atrás; en salto, recogida
         R(this.legL.hip, up * (-0.2 + fly * 0.75), 0, 0.08 * up);
         R(this.legL.knee, -(0.22 + fly * 1.1) * up - 0.08, 0, 0);
+        plantR = 1 - up; plantL = 1 - fly * up;
         // el arma se queda pegada al pecho, cruzada, mientras patea
         M(0.2, -0.1, -0.3, 0.05 + 0.2 * up, 0.28 * up, 0.12 * up);
         R(this.armL.shoulder, 0.55 + up * 0.2, 0, -0.2);
@@ -1665,6 +2252,7 @@ export class Rig {
         R(this.legR.knee, rp[14]-.35*buckle, 0, 0);
         R(this.aimRig, 0, 0, 0);
         M(0.12, -0.18, -0.14, 0.4, 0, 0.2);
+        plantL = plantR = 0; legClamp = 0;
         break;
       }
     }
@@ -1698,16 +2286,22 @@ export class Rig {
       const torsoPitch = adsPose.torsoPitch - (coverPose?.torsoLean ?? 0);
       // Compensar inclinación de root+torso: el cañón visual conserva el pitch
       // de cámara en vez de sumar accidentalmente la postura inclinada.
+      // ADS perfilado solo en campo abierto y con armas largas al hombro; el
+      // cover conserva su pose (afinada para la protección) y pistola/bazooka
+      // ya sostenían el arma sin atravesar el pecho
+      adsBody = !aimingFromCover && (adsPose.blade ?? 0) > 0;
       const chestYaw=aimingFromCover?-.35:0;
+      // ADS sustituye a la postura de cadera: su perfil ya no cuenta
+      refYaw = adsBody ? adsPose.blade : 0; hipHold = false;
       R(this.aimRig, pitch - rootRotX - torsoPitch, (p.aimYawErr ?? 0)-chestYaw, lean * 0.1);
-      R(this.torso, torsoPitch, chestYaw, -lean * 0.22);
+      R(this.torso, torsoPitch, chestYaw - (adsBody ? adsPose.blade : 0), -lean * 0.22);
       R(this.head, pitch * adsPose.head, 0, lean * 0.08);
       // Pistola extendida, armas largas apoyadas y bazooka alta al hombro.
       // Cero rotación local evita que el modelo prometa otra dirección.
       // Left-edge support: move the two-handed grip slightly toward the
       // opening, not the barrel axis toward the wall. IK still limits reach.
       M(adsPose.mount[0] - (aimingFromCover&&lean<0?.035:0), adsPose.mount[1] - (aimingFromCover&&poseKey!=='bazooka'?.12:0),
-        adsPose.mount[2] - (coverPose?.gunForward ?? 0) - (aimingFromCover&&poseKey!=='pistol'&&poseKey!=='bazooka'?.32:0), 0, 0, 0);
+        adsPose.mount[2] - (coverPose?.gunForward ?? 0) - (aimingFromCover&&poseKey!=='pistol'&&poseKey!=='bazooka'?.32:(adsBody?adsPose.fwd:0)), 0, 0, 0);
       if (coverPose) {
         hipsY = coverPose.hipsY;
         aimRigY = coverPose.aimRigY;
@@ -1766,10 +2360,29 @@ export class Rig {
 
     // cambio de arma: el arma barre hacia el hombro/espalda y regresa
     // (el modelo se intercambia a mitad del gesto, en Weapons.update)
+    // Progreso real del cambio: un reloj desde el flanco de `swapping` (main,
+    // remotos y bots solo envían el booleano; dura SWAP_TIME de weapons.js) y
+    // la mitad la marca el cambio REAL de modelo: hasta que llega se guarda
+    // el arma que sale, después se saca la que entra. Encadenado (cola de
+    // Weapons) = un ciclo nuevo; soltado (melee, muerte) = vuelve a su pose.
+    if (!p.swapping || p.state === 'dead') { this._swapClock = undefined; this._swapPhase = null; }
     if (p.swapping && p.state !== 'dead') {
-      // barrido POR FUERA, junto al hombro derecho: por el centro atravesaba
-      // los cascos Vanguard (mucho más grandes que el casco original)
-      M(0.33, 0.2, -0.16, 1.35, -0.3, 0.6);
+      // el arma va (y vuelve) de donde se guarda: espalda en diagonal o funda
+      // en la parte baja de la espalda; el modelo se cambia a mitad del gesto.
+      // Pasa por FUERA del hombro derecho: directo atravesaba pecho y brazo.
+      if (!Number.isFinite(this._swapClock) ||
+          (this._swapPhase === 'in' && this._swapClock - this._swapSwitch >= SWAP_HALF)) {
+        this._swapClock = 0; this._swapFrom = this._wep; this._swapPhase = 'out';
+      }
+      this._swapClock += Math.max(0, dt || 0);
+      if (this._swapPhase === 'out' && this._wep !== this._swapFrom) { this._swapPhase = 'in'; this._swapSwitch = this._swapClock; }
+      const out = this._swapPhase === 'out';
+      const f = out ? this._swapClock / SWAP_HALF : (this._swapClock - this._swapSwitch) / SWAP_HALF;
+      if (out ? f < 0.4 : f > 0.45) M(SWAP_SIDE[0], SWAP_SIDE[1], SWAP_SIDE[2], SWAP_SIDE[3], SWAP_SIDE[4], SWAP_SIDE[5]);
+      else {
+        const e = this._swapPose(GL_E);
+        M(GL_T.x, GL_T.y, GL_T.z, e.x, e.y, e.z);
+      }
       set(this.aimRig.rotation, 'x', 0);
       set(this.aimRig.rotation, 'y', 0); // sin guiño lateral heredado del latch de tiro
     }
@@ -1778,9 +2391,19 @@ export class Rig {
     // atrás por encima del hombro y latigazo al frente; el bote sale en el
     // punto de release que controla main, así la mano y el proyectil
     // coinciden.
+    this._throwExact = null;
     if (p.throwT > 0 && p.state !== 'dead') {
       const total = p.throwTotal || 0.5;
-      const ph = 1 - Math.max(0, Math.min(1, p.throwT / total)); // 0→1
+      let ph = 1 - Math.max(0, Math.min(1, p.throwT / total)); // 0→1
+      // En el cuadro de la suelta la mano se evalúa EXACTAMENTE en la fase de
+      // suelta: main la decide en el primer cuadro que la cruza y a 30 Hz ese
+      // cuadro llegaba hasta 33 ms más tarde (mano ~10 cm más abajo que a 60).
+      const def = TUNING.weapons[this._wep]?.throwRelease ? TUNING.weapons[this._wep] : TUNING.weapons.grenade;
+      const relPh = def.throwRelease / (def.throwTime || total);
+      // La diferencia se recupera en ~0,1 s (sin parar el gesto en seco).
+      if (p.throwReleased && !this._throwWasReleased && ph >= relPh && ph < relPh + 0.2) this._throwLag = ph - relPh;
+      else this._throwLag = (this._throwLag ?? 0) * Math.exp(-dt / 0.04);
+      ph -= this._throwLag;
       // Tres tiempos CONTINUOS y con curva: armar (0→0.36), latigazo
       // (0.36→0.66, el bote sale a ~0.56 con el brazo ya al frente) y
       // acompañamiento, que devuelve el cuerpo a su pose base mezclando en
@@ -1789,13 +2412,34 @@ export class Rig {
       const ease = (x) => x * x * (3 - 2 * x);
       const wind = ease(Math.min(1, ph / 0.36));
       const whip = ph < 0.36 ? 0 : ease(Math.min(1, (ph - 0.36) / 0.30));
-      const weight = ph < 0.66 ? ease(Math.min(1, ph / 0.1)) : 1 - ease((ph - 0.66) / 0.34);
-      const blend = (o, key, v) => {
-        const base = T.get(o)?.[key] ?? o[key];
-        set(o, key, base + (v - base) * weight);
+      const weight = ph < 0.66 ? ease(Math.min(1, ph / 0.24)) : 1 - ease((ph - 0.66) / 0.34);
+      // Pose del gesto sin suavizado: la mezcla con la base ya es continua y
+      // así la mano está en el mismo sitio a 30, 60 o 144 Hz.
+      // mapas propios reutilizados (antes uno nuevo por cuadro)
+      const exact = this._throwExact = this._throwExactMap ??= new Map();
+      for (const keys of exact.values()) keys.clear();
+      const kb = 1 - Math.exp(-Math.max(damp, 30) * dt);
+      const B = this._throwBase ??= new Map();
+      const blend = (o, key, v, rel = false) => {
+        // base: la pose de siempre, suavizada aparte (sin el gesto encima)
+        const target = T.get(o)?.[key] ?? o[key];
+        let store = B.get(o);
+        if (!store) B.set(o, store = {});
+        const base = store[key] = (store[key] ?? o[key]) + (target - (store[key] ?? o[key])) * kb;
+        set(o, key, rel ? base + v * weight : base + (v - base) * weight);
+        let keys = exact.get(o);
+        if (!keys) exact.set(o, keys = new Set());
+        keys.add(key);
       };
       blend(this.torso.rotation, 'x', -0.06 * wind + 0.22 * whip);
-      blend(this.torso.rotation, 'y', 0.34 * wind - 0.74 * whip);
+      // giro del pecho: al armar se perfila un poco MÁS desde su postura
+      // (hombro derecho atrás; antes iba a un giro absoluto y desde la
+      // perfilada de cadera, HIP_BLADE, saltaba 0,24 rad por cuadro) y el
+      // latigazo lo trae de frente
+      {
+        const base = B.get(this.torso.rotation)?.y ?? this.torso.rotation.y;
+        blend(this.torso.rotation, 'y', -0.25 * wind + (THROW_WHIP_YAW - (base - 0.25)) * whip, true);
+      }
       blend(this.torso.rotation, 'z', 0);
       blend(this.gunMount.position, 'x', 0.3 + 0.08 * wind - 0.3 * whip);
       blend(this.gunMount.position, 'y', 0.28 + 0.22 * wind - 0.6 * whip);
@@ -1806,8 +2450,8 @@ export class Rig {
       // el brazo debe SEGUIR la curva: con el suavizado normal de la pose
       // llegaba tarde al latigazo
       damp = Math.max(damp, 30);
-      set(this.aimRig.rotation, 'x', 0);
-      set(this.aimRig.rotation, 'y', 0);
+      blend(this.aimRig.rotation, 'x', 0);
+      blend(this.aimRig.rotation, 'y', 0);
       leftOnGun = false;
       // el brazo libre equilibra el gesto (antes se quedaba congelado donde estuviera)
       blend(this.armL.shoulder.rotation, 'x', 0.55 - 0.5 * whip);
@@ -1819,11 +2463,27 @@ export class Rig {
     } else if (this.activeGun.userData.thrown && !this.rag) {
       this.activeGun.visible = true;
     }
+    this._throwWasReleased = p.throwT > 0 && !!p.throwReleased;
+    if (!(p.throwT > 0)) { this._throwLag = 0; this._throwBase?.clear(); }
 
-    // recarga: el arma se inclina y la mano izquierda baja al cargador
-    if (reloadPose && p.state !== 'dead') {
-      set(this.gunMount.rotation, 'x', -0.12);
-      set(this.gunMount.rotation, 'z', 0.3);
+    // recarga: el arma gira hacia la mano izquierda según la fase de cada
+    // arma (RELOAD_GESTURES); el bombeo de la escopeta tras el último cartucho
+    const gesture = RELOAD_GESTURES[this._wep === 'stun' ? 'pistol' : this._wep];
+    // Bombeo solo si la recarga TERMINÓ: lo que le faltaba en el cuadro
+    // anterior cabía en este (weapons.js mete el último cartucho y suelta
+    // `reloading`). Cancelar (disparo, melee, cambio) la corta antes.
+    if (this._wep === 'shotgun' && this._reloadWas && !p.reloading && p.state !== 'dead' &&
+        (1 - (this._reloadLastT ?? 0)) * TUNING.weapons.shotgun.reloadTime <= dt + 1e-4) this._pumpT = 0;
+    this._reloadWas = !!p.reloading && reloadPose;
+    this._reloadLastT = p.reloadT ?? 0;
+    if (this._pumpT !== undefined) {
+      this._pumpT += dt;
+      if (this._pumpT > PUMP_TIME || p.state === 'dead' || p.reloading || p.swapping || this._wep !== 'shotgun') this._pumpT = undefined;
+    }
+    if (reloadPose && gesture && p.state !== 'dead') {
+      const k = reloadKey(gesture.tilt, p.reloadT ?? 0);
+      set(this.gunMount.rotation, 'x', k[0]);
+      set(this.gunMount.rotation, 'z', k[1]);
     }
 
     // Encaje direccional del impacto sobre la pose que ya tenía la víctima.
@@ -1887,14 +2547,9 @@ export class Rig {
         const bend = side < 0 ? .48 : .14;
         const spread = side * .20;
         R(leg.hip, bend, 0, spread);
-        // Inverse Euler order matters: compensate the full thigh rotation,
-        // rather than cancelling individual angles in the same XYZ order.
-        const inverse = new THREE.Quaternion().setFromEuler(new THREE.Euler(bend, 0, spread)).invert();
-        const knee = new THREE.Euler().setFromQuaternion(inverse);
-        R(leg.knee, knee.x, knee.y, knee.z);
-        // Keep the same sole height on both legs despite the stagger, without
-        // moving the pelvis/weapon or changing shot clearance.
-        set(leg.hip.position, 'y', .68 - hipsY - .32 * (1 - Math.cos(bend) * Math.cos(spread)));
+        // rodilla algo flexionada: el apoyo (_groundLegs) lleva cada suela al
+        // suelo y deja el pie plano, sin mover pelvis, arma ni holgura del tiro
+        R(leg.knee, -0.3, 0, 0);
       }
     }
 
@@ -1933,9 +2588,12 @@ export class Rig {
     hipsY -= landDrop;
     if (landDrop) add(this.torso.rotation, 'x', -landDrop * 1.4);
     const k = 1 - Math.exp(-damp * dt);
+    const exact = this._throwExact;
     for (const [o, props] of T) {
-      for (const prop in props) o[prop] += (props[prop] - o[prop]) * k;
+      const keys = exact?.get(o);
+      for (const prop in props) o[prop] += (props[prop] - o[prop]) * (keys?.has(prop) ? 1 : k);
     }
+    this._aimRef(refPitch, refYaw, refRoll, refLift, k);
     // desplazamiento lateral de cadera al asomarse (lean)
     const hipsX = p.aim && p.coverLean ? -p.coverLean * 0.02 : 0;
     this.hips.position.x += (hipsX - this.hips.position.x) * k;
@@ -1985,8 +2643,10 @@ export class Rig {
         const fz = restZ * (1 - m) + dirZ * s * m;
         const fy = lift * m;
         leg.hip.position.y += ((0.02 - hipDrop) - leg.hip.position.y) * kl;
-        // vector cadera → suela, en el marco de la pelvis
-        let vx = fx - (side * 0.15 + this.hips.position.x), vy = fy - (this.hips.position.y + leg.hip.position.y), vz = fz;
+        // vector cadera → tobillo (suela + altura medida de la bota), en el
+        // marco de la pelvis; muslo y tibia medidos sobre el avatar
+        const LEG_UP = leg.cal.up, LEG_LOW = Math.hypot(leg.ankle.position.y, leg.ankle.position.z);
+        let vx = fx - (side * 0.15 + this.hips.position.x + leg.ankle.position.x), vy = fy + leg.cal.h - (this.hips.position.y + leg.hip.position.y), vz = fz;
         let d = Math.hypot(vx, vy, vz);
         const maxD = LEG_UP + LEG_LOW - 0.012;
         if (d > maxD) { const c = maxD / d; vx *= c; vy *= c; vz *= c; d = maxD; }
@@ -2129,6 +2789,26 @@ export class Rig {
       }
     }
 
+    // De espaldas contra la cobertura alta el pecho se echa atrás y gira con
+    // el paso lateral: el arma de la espalda (que va con el pecho) metía sus
+    // extremos en la pared. Ahí se queda paralela al muro: deshace el giro
+    // del pecho sobre el centro de la espalda.
+    const bm = this.backMount;
+    if (p.state === 'cover_high') GL_Q.copy(this.torso.quaternion).invert();
+    else GL_Q.identity();
+    bm.quaternion.slerp(GL_Q, 1 - Math.exp(-12 * dt));
+    GL_V.set(STOW_BACK_X, STOW_BACK_Y, 0.45);
+    bm.position.copy(GL_V).sub(GL_C.copy(GL_V).applyQuaternion(bm.quaternion));
+
+    // apoyo de piernas: se guarda la pose propia y se ajusta al suelo real
+    const F = this._legFK ??= new Float32Array(12);
+    [this.legL, this.legR].forEach((leg, i) => {
+      F[i * 6] = leg.hip.rotation.x; F[i * 6 + 1] = leg.hip.rotation.y; F[i * 6 + 2] = leg.hip.rotation.z;
+      F[i * 6 + 3] = leg.knee.rotation.x; F[i * 6 + 4] = leg.knee.rotation.y; F[i * 6 + 5] = leg.knee.rotation.z;
+    });
+    const gaitOn = walking && p.state !== 'dead' ? 1 : 0;
+    this._groundLegs(dt, gaitOn ? 0 : plantL, gaitOn ? 0 : plantR, gaitOn, legClamp, p.groundPitch ?? 0, gaitOn ? classic * (this._gaitW ?? 0) : 0);
+
     // IK: manos sobre el arma (después del damping, sobre la pose ya aplicada)
     // Keep the approved shoulder/barrel clearance while tucking the pelvis
     // and feet behind it. The torso, not detached arm sockets, carries lean.
@@ -2140,7 +2820,8 @@ export class Rig {
         // Independently damping both rotations left a one-frame inward shot
         // when the body finished turning from its back-to-wall resting pose.
         BLIND_DIRECTION_Q.setFromEuler(BLIND_EULER.set(pitch,p.aimYawErr??0,0));
-        this.aimRig.quaternion.copy(this.torso.quaternion).invert().multiply(BLIND_DIRECTION_Q);
+        // (pelvis·pecho)⁻¹: la dirección del tiro sigue relativa a la raíz
+        this.aimRig.quaternion.copy(this.hips.quaternion).multiply(this.torso.quaternion).invert().multiply(BLIND_DIRECTION_Q);
       }
       this.root.updateWorldMatrix(true, true);
       const gun = this.activeGun;
@@ -2156,22 +2837,56 @@ export class Rig {
         this.root.updateWorldMatrix(true,true);
       }
       const coverPoseActive=p.state.startsWith('cover_')||p.state.startsWith('blind_');
+      // ADS también ancla los hombros al pecho: desplazar el aimRig ya no
+      // separa la hombrera derecha del torso ni hunde la izquierda en él.
+      const anchored=coverPoseActive||adsBody;
       // The aim pivot may move/rotate the gun, never detach the shoulder
       // sockets from the chest. Express fixed chest sockets in aim space.
+      // al entrar/salir de ADS el anclaje se mezcla (cover/blind: inmediato)
+      // (la cadera perfilada también: el aimRig ya no gira con el pecho)
+      // (primer cuadro: arranca anclado, sin hombros sueltos al construir el rig)
+      const anchorT=adsBody||hipHold?1:0;
+      this._anchorW=coverPoseActive?1:(this._anchorW??anchorT)+(anchorT-(this._anchorW??anchorT))*(1-Math.exp(-16*dt));
       for(const [arm,side] of [[this.armL,-1],[this.armR,1]]){
-        if(coverPoseActive){
+        if(this._anchorW>1e-3){
           TMP_A.set(side*.36,.5,0);
           this.torso.localToWorld(TMP_A);
-          arm.shoulder.position.copy(this.aimRig.worldToLocal(TMP_A));
+          this.aimRig.worldToLocal(TMP_A);
+          arm.shoulder.position.set(side*.36,0,0).lerp(TMP_A,this._anchorW);
         }else arm.shoulder.position.set(side*.36,0,0);
       }
-      if(coverPoseActive){
+      // ADS con arma larga: la izquierda sujeta el punto más adelantado del
+      // arma (grip→guardamanos) que el brazo alcanza. Antes el guardamanos
+      // fuera de alcance arrastraba el arma hacia atrás y la culata cruzaba
+      // pecho y hombrera.
+      let adsSupport=null;
+      if((adsBody||(hipHold&&!p.aim)||p.state==='slide')&&leftOnGun&&!gun.userData.oneHand&&gun.userData.forend&&!reloadPose){
+        adsSupport=gun.userData.adsSupportNode;
+        if(!adsSupport){adsSupport=new THREE.Group();gun.add(adsSupport);gun.userData.adsSupportNode=adsSupport;}
+        this.root.updateWorldMatrix(true,true);
+        gun.userData.grip.getWorldPosition(TMP_A);this.aimRig.worldToLocal(TMP_A);
+        gun.userData.forend.getWorldPosition(TMP_B);this.aimRig.worldToLocal(TMP_B);
+        const reach=L1+L2-.05,sh=this.armL.shoulder.position;
+        let best=0;
+        for(let q=20;q>=0;q--){const f=q/20;IK_E.copy(TMP_A).lerp(TMP_B,f);if(IK_E.distanceTo(sh)<=reach){best=f;break;}}
+        // el asidero se desliza suave (sin saltos de un cuadro a otro)
+        this._adsS=this._adsGun===gun?(this._adsS??best)+(best-(this._adsS??best))*(1-Math.exp(-14*dt)):best;
+        this._adsGun=gun;
+        gun.userData.grip.getWorldPosition(TMP_A);gun.userData.forend.getWorldPosition(TMP_B);
+        TMP_A.lerp(TMP_B,this._adsS);gun.worldToLocal(TMP_A);adsSupport.position.copy(TMP_A);
+        this.root.updateWorldMatrix(true,true);
+      }
+      // expuesto solo mientras la mano lo usa (diagnóstico/pruebas)
+      gun.userData.adsSupport=adsSupport??undefined;
+      if(anchored){
         if(blindSupport){
           // A side-on torso lets both hands reach around the edge while the
           // head stays inside it. Position the real grip, not a guessed mount.
           const side=p.state.endsWith('_left')?-1:1;
           const crouched=p.state.startsWith('blind_low_');
-          TMP_A.set(side*.46,crouched?.46:.50,(side<0?0:.04)-(crouched?.18:0));this.hips.localToWorld(TMP_A);
+          TMP_A.set(side*.46,crouched?.46:.50,(side<0?0:.04)-(crouched?.18:0));
+          // el punto era de la pelvis sin girar: deshacer su giro lo deja igual en mundo
+          TMP_A.applyAxisAngle(AXIS_Y,-this.hips.rotation.y);this.hips.localToWorld(TMP_A);
           this.aimRig.worldToLocal(TMP_A);
           gun.userData.grip.getWorldPosition(TMP_B);this.aimRig.worldToLocal(TMP_B);
           this.gunMount.position.add(TMP_A.sub(TMP_B));
@@ -2180,7 +2895,7 @@ export class Rig {
         // Fit the weapon to both arms instead of stretching an arm toward an
         // unreachable grip. Translation preserves the physical barrel axis.
         const grips=[[this.armR,gun.userData.grip],
-          ...(leftOnGun&&(!gun.userData.oneHand||blindSupport)?[[this.armL,blindSupport??gun.userData.forend]]:[])];
+          ...(leftOnGun&&(!gun.userData.oneHand||blindSupport)?[[this.armL,blindSupport??adsSupport??gun.userData.forend]]:[])];
         for(let pass=0;pass<8;pass++)for(const [arm,anchor] of grips){
           if(!anchor)continue;
           this.root.updateWorldMatrix(true,true);
@@ -2196,27 +2911,79 @@ export class Rig {
       this._ikR = Math.min(1, (this._ikR ?? 1) + dt / 0.14);
       const blendIn = (t) => t >= 1 ? 1 : 1 - Math.exp(-26 * dt);
       gun.userData.grip.getWorldPosition(TMP_A);
-      this._ikArm(this.armR, 1, this.aimRig.worldToLocal(TMP_A), coverPoseActive ? (p.aim ? 1 : 0) : this._shoulderW, blendIn(this._ikR));
+      this.aimRig.worldToLocal(TMP_A);
+      // la derecha sale del grip solo en el cerrojo del sniper; vuelve suave
+      const rightGesture = reloadPose && gesture?.right;
+      this._rReload = (this._rReload ?? 0) + ((rightGesture ? 1 : 0) - (this._rReload ?? 0)) * (1 - Math.exp(-22 * dt));
+      if (this._rReload > 1e-3 && RELOAD_GESTURES.sniper.right) {
+        this._reloadTarget(gun, RELOAD_GESTURES.sniper.right, rightGesture ? (p.reloadT ?? 0) : 0, TMP_B);
+        TMP_A.lerp(TMP_B, this._rReload);
+      }
+      this._ikArm(this.armR, 1, TMP_A, coverPoseActive ? (p.aim ? 1 : 0) : this._shoulderW, blendIn(this._ikR));
       // el gesto de recarga solo aplica en posturas con el arma al frente
       // (misma whitelist que reloadPose, calculada arriba). Las armas de una
       // mano (granada) no lleva la izquierda al arma; la pistola sí usa apoyo
       // de dos manos únicamente al apuntar.
-      const reloadIk = reloadPose;
+      const reloadIk = reloadPose && !!gesture;
+      const pumping = this._pumpT !== undefined && !reloadIk && !gun.userData.oneHand;
       const oneHand = !!gun.userData.oneHand;
       const pistolAimSupport = p.aim ? gun.userData.aimSupport : null;
-      if ((leftOnGun && (!oneHand || pistolAimSupport || blindSupport)) || reloadIk) {
-        const a = reloadIk
-          ? (gun.userData.mag ?? gun.userData.forend ?? gun.userData.aimSupport)
-          : (blindSupport ?? pistolAimSupport ?? gun.userData.forend);
-        a.getWorldPosition(TMP_B);
-        const tgt = this.aimRig.worldToLocal(TMP_B);
-        if (reloadIk) tgt.y -= 0.16 * Math.sin(Math.PI * (p.reloadT ?? 0));
+      if ((leftOnGun && (!oneHand || pistolAimSupport || blindSupport)) || reloadIk || pumping) {
+        // recarga y bombeo: un asidero propio que recorre las fases del gesto
+        const live = reloadIk || pumping ? (gun.userData.reloadHand ??= anchor(gun, 0, 0, 0)) : null;
+        const a = live ?? (blindSupport ?? pistolAimSupport ?? adsSupport ?? gun.userData.forend);
+        let tgt;
+        if (live) {
+          if (reloadIk) this._reloadTarget(gun, gesture.left, p.reloadT ?? 0, TMP_B);
+          else {
+            // bombeo: el guardamanos atrás y adelante
+            const q = Math.sin(Math.PI * Math.min(1, this._pumpT / PUMP_TIME));
+            this._reloadTarget(gun, PUMP_KEYS, q, TMP_B);
+          }
+          tgt = TMP_B;
+        } else {
+          a.getWorldPosition(TMP_B);
+          tgt = this.aimRig.worldToLocal(TMP_B);
+        }
         // cambiar de asidero (guardamanos ↔ cargador ↔ apoyo de pistola) también entra suave
         if (a !== this._ikLAnchor) { this._ikLAnchor = a; this._ikL = 0; }
         this._ikL = Math.min(1, (this._ikL ?? 1) + dt / 0.14);
         this._ikArm(this.armL, -1, tgt, reloadIk ? 0 : (coverPoseActive ? (p.aim ? 1 : 0) : this._shoulderW), blendIn(this._ikL));
-      } else this._ikL = 0;
-    } else { this._ikR = 0; this._ikL = 0; }
+      } else if (p.state === 'blind_over') {
+        // palma izquierda sobre el borde del bloque (entra suave como un asidero)
+        const P0 = BLIND_OVER.palm;
+        TMP_B.set(P0[0], P0[1], P0[2]); this.root.localToWorld(TMP_B);
+        const tgt = this.aimRig.worldToLocal(TMP_B);
+        if (this._ikLAnchor !== 'palm') { this._ikLAnchor = 'palm'; this._ikL = 0; }
+        this._ikL = Math.min(1, (this._ikL ?? 1) + dt / 0.14);
+        this._ikArm(this.armL, -1, tgt, 0, blendIn(this._ikL));
+      } else {
+        this._ikL = 0;
+        // Brazo libre (pistola/granada en la cadera, al soltar el apoyo de
+        // ADS): sin pose propia el brazo se quedaba con la mano ahuecada
+        // donde estuvo el arma. Cuelga relajado y acompaña el paso.
+        if (!T.has(this.armL.shoulder.rotation)) {
+          const kf = 1 - Math.exp(-10 * dt), sw = this._strideWeight ?? 0;
+          GL_Q.setFromEuler(GL_E.set(0.12 + Math.cos(this.phase) * 0.35 * sw, 0, -0.14, 'XYZ'));
+          this.armL.shoulder.quaternion.slerp(GL_Q, kf);
+          this.armL.elbow.rotation.set(this.armL.elbow.rotation.x + (0.35 + 0.25 * sw - this.armL.elbow.rotation.x) * kf, 0, 0);
+        }
+      }
+    } else {
+      this._ikR = 0; this._ikL = 0;
+      // Sin IK (muerte, ragdoll) los hombros siguen en su encaje del pecho:
+      // anclados en cadera/ADS, al girar luego el aimRig se quedaban 26 cm
+      // detrás y la hombrera atravesaba el arma de la espalda.
+      if ((this._anchorW ?? 0) > 1e-3) {
+        this.root.updateWorldMatrix(true, true);
+        for (const [arm, side] of [[this.armL, -1], [this.armR, 1]]) {
+          TMP_A.set(side * .36, .5, 0);
+          this.torso.localToWorld(TMP_A);
+          this.aimRig.worldToLocal(TMP_A);
+          arm.shoulder.position.set(side * .36, 0, 0).lerp(TMP_A, this._anchorW);
+        }
+      }
+    }
   }
 
   setTransform(x, z, yaw, y = 0) {

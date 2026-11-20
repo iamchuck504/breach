@@ -2,11 +2,19 @@
 // el reloj/deadline del navegador no puede adelantar movimiento ni disparos.
 import { chromium } from 'playwright-core';
 import { spawn } from 'node:child_process';
+import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const PORT = 8813;
+// puerto libre: dos copias de la suite en paralelo no comparten servidor
+const PORT = await new Promise((resolve, reject) => {
+  const srv = net.createServer(); srv.once('error', reject);
+  srv.listen(0, '127.0.0.1', () => { const { port } = srv.address(); srv.close(() => resolve(port)); });
+});
+// Esperas de pared = SOLO red de seguridad generosa (runner sin GPU ~13× más
+// lento); lo que se comprueba es el contrato de fases del servidor.
+const SAFETY = 240000;
 import { CHROME } from './lib-chrome.mjs';
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
@@ -20,7 +28,10 @@ const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')],
     NODE_ENV: 'test', ALLOW_TEST_TELEPORTS: '1' },
   stdio: 'ignore',
 });
-await wait(750);
+for (let i = 0; i < 600; i++) { // servidor listo cuando responde
+  try { if ((await fetch(`http://127.0.0.1:${PORT}/`)).ok) break; } catch { /* arrancando */ }
+  await wait(100);
+}
 
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
 const failures = [];
@@ -32,7 +43,12 @@ const check = (name, ok, extra = '') => {
 async function client(name) {
   const context = await browser.newContext();
   const page = await context.newPage();
-  await page.goto(`http://localhost:${PORT}/?nolock=1`, { waitUntil: 'networkidle' });
+  page.setDefaultTimeout(SAFETY);
+  // THROTTLE=12: CPU 12× más lenta (CDP), para comprobarlo como en el runner
+  if (Number(process.env.THROTTLE) > 1) {
+    await (await context.newCDPSession(page)).send('Emulation.setCPUThrottlingRate', { rate: Number(process.env.THROTTLE) });
+  }
+  await page.goto(`http://localhost:${PORT}/?nolock=1`, { waitUntil: 'networkidle', timeout: SAFETY });
   await page.evaluate(() => document.getElementById('btn-enter')?.click());
   await page.waitForSelector('#splash.off', { state: 'attached' });
   await page.evaluate((value) => {
@@ -45,17 +61,26 @@ async function client(name) {
 const a = await client('FLOW-A');
 const b = await client('FLOW-B');
 try {
+  // Sala REAL: A conectado y anfitrión, B dentro de la misma sala (el botón
+  // START habilitado por sí solo no garantiza que la conexión exista).
   await a.evaluate(() => document.getElementById('btn-lobby-create').click());
-  await a.waitForTimeout(500);
+  await a.waitForFunction(() => !!window.BREACH?.net?.id && window.BREACH?.lobby?.hostId === window.BREACH.net.id,
+    null, { polling: 100 });
   await b.evaluate(() => document.getElementById('btn-lobby-join').click());
   await a.waitForFunction(() => {
-    const button = document.getElementById('btn-lobby-start');
-    return button && !button.disabled;
-  }, null, { timeout: 10000 });
+    const G = window.BREACH, button = document.getElementById('btn-lobby-start');
+    return (G.lobby?.players || []).filter((p) => !p.bot).length >= 2 && button && !button.disabled;
+  }, null, { polling: 100 });
   await a.evaluate(() => document.getElementById('btn-lobby-start').click());
-  for (const page of [a, b]) await page.waitForFunction(() =>
-    window.BREACH?.mode === 'online' && window.BREACH?.onlinePhase === 'intro',
-  null, { timeout: 10000 });
+  // Contrato: ambos clientes siguen la fase del servidor. Se espera el modo
+  // online en CUALQUIER fase; las comprobaciones de intro exigen después que
+  // el cliente haya llegado aún en intro (INTRO_TIME=15 s de servidor: si no,
+  // es un arranque lento de verdad y debe fallar, no esperar más).
+  for (const page of [a, b]) await page.waitForFunction(() => window.BREACH?.mode === 'online',
+    null, { polling: 50 });
+  const arrived = await Promise.all([a, b].map((p) => p.evaluate(() => window.BREACH.onlinePhase)));
+  check('ambos clientes entran a la partida aún en intro (siguen la fase del servidor)',
+    arrived.every((ph) => ph === 'intro'), JSON.stringify(arrived));
 
   // Conservar el último snapshot crudo para validar el contrato del server.
   await a.evaluate(() => {
@@ -101,7 +126,11 @@ try {
     G.net.send({ t: 's', x: G.player.pos.x + 6, y: G.player.y, z: G.player.pos.z + 6,
       yaw: 0, st: 'run', w: 'smg', am: 50, ar: 150 });
   });
-  await a.waitForTimeout(180);
+  // dar al servidor tiempo de reenviar (o no) esa pose: 2 snapshots de B
+  await b.evaluate(() => new Promise((resolve) => {
+    let n = 0; const G = window.BREACH, orig = G.net.handlers.snap;
+    G.net.handlers.snap = (m) => { orig(m); if (++n >= 2) { G.net.handlers.snap = orig; resolve(); } };
+  }));
   const remoteAfter = await b.evaluate((id) => {
     const r = window.BREACH.remotes.get(id);
     return { x: r?.x, z: r?.z };
@@ -111,7 +140,7 @@ try {
     JSON.stringify({ remoteBefore, remoteAfter }));
 
   await a.waitForFunction(() => window.BREACH.onlinePhase === 'playing', null,
-    { timeout: 40000 });
+    { timeout: SAFETY });
 
   // El intermedio debe bloquear igual aunque no exista deadline pendiente.
   const intermission = await a.evaluate(async () => {

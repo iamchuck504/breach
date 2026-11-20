@@ -11,11 +11,15 @@ for (const fps of [30, 60, 144]) for (const state of ['cover_high', 'blind_high_
       assert.ok(Math.abs(rig.torso.position.x-side*.12)<.001, 'chest preserves barrel clearance without moving the feet out');
     }
     const feet = [rig.legL,rig.legR].map(leg=>{
-      const up = new T.Vector3(0,1,0).transformDirection(leg.knee.matrixWorld);
-      assert.ok(up.y>.9999, 'sole must remain level');
-      return leg.knee.localToWorld(new T.Vector3(0,-.375,0));
+      // el pie cuelga del tobillo (rig.js _groundLegs): es él el que va plano
+      const up = new T.Vector3(0,1,0).transformDirection(leg.ankle.matrixWorld);
+      assert.ok(up.y>.999, 'sole must remain level');
+      // suela real (soleWorld), en el suelo; en el marco de la pelvis: en
+      // blindfire lateral la pelvis gira hacia la abertura (BLIND_PELVIS)
+      assert.ok(Math.abs(rig.soleWorld(leg,new T.Vector3(),true).y)<.015,'sole on the floor');
+      return rig.hips.worldToLocal(rig.soleWorld(leg,new T.Vector3()));
     });
-    assert.ok(Math.abs(feet[0].y-feet[1].y)<.001,'both feet share the ground plane');
+    assert.ok(Math.abs(feet[0].y-feet[1].y)<.01,'both feet share the ground plane');
     assert.ok(feet[1].x-feet[0].x>.4,'knees/boots must not pinch inward');
     assert.ok(Math.abs(feet[0].z-feet[1].z)>.08,'staggered support');
   }

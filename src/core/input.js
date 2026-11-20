@@ -4,6 +4,12 @@
 import { BINDS, PAD_DPAD_SLOTS } from './bindings.js';
 import { PadInput } from './gamepad.js';
 
+// macOS no emite keyup de las teclas soltadas mientras Cmd está abajo (en
+// Windows/Linux sí): solo ahí hace falta limpiar al soltar Cmd.
+const MAC_KEYS = /Mac|iPhone|iPad/i.test(
+  (typeof navigator !== 'undefined' && (navigator.userAgentData?.platform || navigator.platform)) || '');
+const isMeta = (c) => c === 'MetaLeft' || c === 'MetaRight' || c === 'OSLeft' || c === 'OSRight';
+
 export class Input {
   constructor(canvas) {
     this.canvas = canvas;
@@ -22,6 +28,10 @@ export class Input {
     this._discardNextLookMotion = false;
     this._mouseFire = false; this._mouseAim = false;
     this.firePressed = false;
+    // flanco de suelta del gatillo: una suelta y re-pulsación entre dos pasos
+    // de simulación no se ve en fireHeld; se retiene hasta el paso siguiente
+    // para que el arma descarte su crédito de cadencia
+    this.fireReleased = false;
     this.evadePressed = false;
     this.pickupPressed = false;
     this.jumpPressed = false;
@@ -38,6 +48,12 @@ export class Input {
     // ratón y teclado ya respondan.
     this.presentation = false;
     this.heldRaw = new Set(); // teclas físicamente mantenidas, haya o no captura
+    // macOS: teclas ya mantenidas cuando bajó Cmd. Si se sueltan con Cmd
+    // abajo su keyup no llega; al soltar Cmd se descartan (un repeat posterior
+    // las restaura si de verdad siguen pulsadas).
+    this._metaSuspects = null;
+    this.macKeys = MAC_KEYS;
+    this.onAnyPress = null; // main: saltar la presentación (tecla/click/botón)
     this.onLockedMouseDown = null;
     this.onLockedMouseUp = null;
     // invert Y separado por dispositivo. Por defecto NO invertido (lo que
@@ -61,15 +77,16 @@ export class Input {
     canvas.addEventListener('mousedown', (e) => {
       this.lastDevice = 'keyboard';
       // con ?nolock el juego opera SIN lock: el click va directo al gameplay
-      if (!this.locked && !this.lockDisabled) { this.requestLock(); return; }
+      if (!this.locked && !this.lockDisabled) { this.onAnyPress?.('mouse'); this.requestLock(); return; }
       // el cursor virtual del menú consume el click (pausa con lock activo)
+      if (this.suppress && this.presentation) this.onAnyPress?.('mouse'); // saltar la presentación
       if (this.onLockedMouseDown?.(e.button)) return;
       if (e.button === 0) { this._mouseFire = true; this.firePressed = true; }
       if (e.button === 2) this._mouseAim = true;
     });
     window.addEventListener('mouseup', (e) => {
       this.onLockedMouseUp?.(e.button);
-      if (e.button === 0) this._mouseFire = false;
+      if (e.button === 0) { if (this._mouseFire) this.fireReleased = true; this._mouseFire = false; }
       if (e.button === 2) this._mouseAim = false;
     });
     window.addEventListener('mousemove', (e) => {
@@ -102,6 +119,8 @@ export class Input {
       // sostenida durante la cuenta regresiva): cuentan desde este instante.
       // Sin esto había que soltarlas y volver a pulsarlas (keydown repetido
       // se ignora) y el personaje arrancaba la ronda clavado.
+      // heldRaw es estado físico veraz (down/up balanceados, limpio en blur
+      // y en los acordes de Cmd de macOS): se importa entero, sin flancos.
       if (this.locked) for (const code of this.heldRaw) this.keys.add(code);
       // Chromium puede entregar un último movementX/Y del cursor anterior o
       // del warp de recaptura. Ignorarlo evita saltos de cámara al pausar.
@@ -155,6 +174,7 @@ export class Input {
     // recapturar el cursor al hacer clic en el canvas; el editor procesa ese
     // mismo evento con sus propios controles de selección/arrastre.
     if (this.lockDisabled || (this.suppress && !this.presentation)) return;
+    this.captureAt = performance.now();
     try {
       const q = this.canvas.requestPointerLock();
       if (q && q.catch) q.catch(() => {});
@@ -167,10 +187,60 @@ export class Input {
     }
   }
 
+  // Captura pedida DENTRO del gesto que arranca la partida (click en START):
+  // pasados 13 s el navegador ya no la concede sin un gesto nuevo.
+  captureNow() {
+    if (this.lockDisabled || this.locked) return;
+    this.captureAt = performance.now();
+    try {
+      const q = this.canvas.requestPointerLock();
+      if (q && q.catch) q.catch(() => {});
+    } catch { /* sin soporte */ }
+  }
+
+  // Olvidar todo lo mantenido (cambio de fase/foco): solo cuenta lo que se
+  // pulse a partir de ahora.
+  clearHeld() {
+    this.keys.clear(); this.heldRaw.clear(); this._metaSuspects = null;
+    this._mouseFire = false; this._mouseAim = false;
+    this.consumeEdges();
+  }
+
   _key(e, down) {
-    if (down) this.lastDevice = 'keyboard';
-    if (e.repeat) return;
     const c = e.code;
+    if (down) this.lastDevice = 'keyboard';
+    // keyup SIEMPRE se procesa (aunque el foco esté en un campo de texto): un
+    // keyup descartado deja la tecla "pulsada" para siempre
+    if (!down) {
+      this.keys.delete(c);
+      this.heldRaw.delete(c);
+      this._metaSuspects?.delete(c);
+      if (isMeta(c) && this._metaSuspects) {
+        // macOS: lo que se mantenía al bajar Cmd y no avisó su keyup pudo
+        // soltarse sin aviso (Cmd+W, Cmd+Tab…): fuera
+        for (const k of this._metaSuspects) { this.keys.delete(k); this.heldRaw.delete(k); }
+        this._metaSuspects = null;
+      }
+      return;
+    }
+    if (isMeta(c)) {
+      if (this.macKeys && !e.repeat) this._metaSuspects = new Set(this.heldRaw);
+      return;
+    }
+    // Cmd/Win+tecla es un atajo del sistema/navegador, no un movimiento (en
+    // macOS además su keyup nunca llegaría)
+    if (e.metaKey) return;
+    if (e.repeat) {
+      // auto-repeat = la tecla sigue físicamente abajo: restaura el estado
+      // mantenido si algo lo había descartado, pero NUNCA dispara acciones
+      if (e.target && e.target.tagName === 'INPUT') return;
+      if (c === 'Escape' || /^F\d/.test(c)) return;
+      this.heldRaw.add(c);
+      this._metaSuspects?.delete(c);
+      if (this.locked || this.lockDisabled) this.keys.add(c);
+      return;
+    }
+    if (!/^(Shift|Control|Alt|Meta|OS)/.test(c)) this.pad.disarm?.(); // el teclado manda: el pad vuelve a reposo
     // Escape SIEMPRE funciona, incluso con el foco en un input de texto
     // (si no, enfocar el campo "Nombre" mataba la pausa para siempre)
     if (down && c === 'Escape') {
@@ -193,7 +263,14 @@ export class Input {
       // (Escape ya se atendió arriba con return: NO repetir onEscape aquí,
       // duplicarlo togglearía el menú dos veces en el mismo keydown)
       this.heldRaw.add(c); // estado físico, con o sin captura (ver pointerlockchange)
-      if (!this.locked && !this.lockDisabled) return;
+      if (c !== 'F9' && c !== 'F10' && c !== 'KeyM' && !/^F\d/.test(c)) this.onAnyPress?.('key');
+      if (!this.locked && !this.lockDisabled) {
+        // jugando sin captura: la tecla es un gesto válido para pedirla ya
+        // (antes el keeper la pedía hasta 1.6 s después y el personaje
+        // arrancaba solo con la tecla que se pulsó antes)
+        this.requestLock();
+        return;
+      }
       this.keys.add(c);
       if (c === BINDS.kb.evade) this.evadePressed = true;
       if (c === BINDS.kb.pickup) this.pickupPressed = true;
@@ -205,9 +282,6 @@ export class Input {
       if (c === BINDS.kb.slot2) this.slotPressed = 1;
       if (c === BINDS.kb.slot3) this.slotPressed = 2;
       if (c === BINDS.kb.slot4) this.slotPressed = 3;
-    } else {
-      this.keys.delete(c);
-      this.heldRaw.delete(c);
     }
   }
 
@@ -216,9 +290,13 @@ export class Input {
   pollPad(dt, gameplay) {
     const wasFire = this.pad.fireHeld;
     this.pad.poll(dt);
-    if (this.pad.justPressed.size || Math.hypot(this.pad.moveX || 0, this.pad.moveZ || 0) > 0.25) this.lastDevice = 'pad';
+    // cualquier stick armado cuenta (jugar solo con el derecho también es
+    // "usar el control": prompts del pad y sin aviso de "clic para jugar")
+    if (this.pad.justPressed.size || Math.hypot(this.pad.moveX || 0, this.pad.moveZ || 0) > 0.25 ||
+        Math.hypot(this.pad.camX || 0, this.pad.camY || 0) > 0.06) this.lastDevice = 'pad';
     // durante un rebind, el botón de pausa actual no debe cerrar el menú
     if (!this.rebinding && this.pad.justPressed.has(BINDS.pad.pause)) this.onEscape?.();
+    else if (this.pad.justPressed.size) this.onAnyPress?.('pad');
     if (!gameplay) return;
     // en el control, recoger sigue en el botón de evadir
     if (this.pad.justPressed.has(BINDS.pad.evade)) { this.evadePressed = true; this.pickupPressed = true; }
@@ -229,6 +307,7 @@ export class Input {
       if (this.pad.justPressed.has(+btn)) this.slotPressed = PAD_DPAD_SLOTS[btn];
     }
     if (!wasFire && this.pad.fireHeld) this.firePressed = true;
+    if (wasFire && !this.pad.fireHeld) this.fireReleased = true;
   }
 
   get fireHeld() { return !this.suppress && (this._mouseFire || this.pad.fireHeld); }
@@ -268,6 +347,7 @@ export class Input {
   // frame de render ejecuta dos pasos de física)
   consumeEdges() {
     this.firePressed = false;
+    this.fireReleased = false;
     this.evadePressed = false;
     this.pickupPressed = false;
     this.jumpPressed = false;

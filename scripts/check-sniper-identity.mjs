@@ -216,10 +216,13 @@ try {
   });
   check('weapon switch inicia correctamente', duringSwap.started && duringSwap.swapping,
     JSON.stringify(duringSwap));
-  // left = fracción del swap que quedaba cuando el scope se cerró: más de la
-  // mitad significa que salió en el primer tramo.
+  // left = fracción del swap que quedaba cuando el scope se cerró. Debe
+  // cerrarse en el PRIMER cuadro de juego tras iniciar el cambio: el paso de
+  // simulación está acotado a 0.1 s y el swap dura 0.55 s, así que incluso en
+  // la máquina más lenta queda más del 80 %. Y el FOV ya debe ir de vuelta.
   check('weapon switch cancela el scope desde el primer tramo',
-    !duringSwap.scope && !duringSwap.dom && duringSwap.left > 0.5 && duringSwap.fov > duringSwap.fov0,
+    !duringSwap.scope && !duringSwap.dom && duringSwap.frames <= 1 && duringSwap.left > 0.8 &&
+      duringSwap.fov > duringSwap.fov0 + 0.05,
     JSON.stringify(duringSwap));
 
   await page.waitForFunction(() => !window.BREACH.weapons.swapping,

@@ -10,12 +10,36 @@ const server = spawn(process.execPath, [
   path.join(root, 'node_modules', 'vite', 'bin', 'vite.js'),
   '--host', '127.0.0.1', '--port', String(port),
 ], { cwd: root, stdio: 'ignore' });
-await new Promise((resolve) => setTimeout(resolve, 850));
+for (let i = 0; i < 600; i++) { // Vite listo cuando responde (no tras una espera fija)
+  try { if ((await fetch(`http://127.0.0.1:${port}/`)).ok) break; } catch { /* arrancando */ }
+  await new Promise((resolve) => setTimeout(resolve, 100));
+}
 
 let browser;
 try {
-  browser = await chromium.launch({ executablePath: CHROME, headless: true });
+  // SWIFT=1 (render por software, como el runner sin GPU), THROTTLE=12 (CPU
+  // 12× más lenta por CDP), FRAME_MS=700 (cada cuadro dura eso): condiciones
+  // lentas para comprobar que nada depende del reloj de pared.
+  browser = await chromium.launch({ executablePath: CHROME, headless: true,
+    args: process.env.SWIFT ? ['--use-angle=swiftshader', '--disable-gpu'] : [] });
   const page = await browser.newPage({ viewport: { width: 1366, height: 768 } });
+  page.setDefaultTimeout(300000);
+  if (Number(process.env.THROTTLE) > 1) {
+    await (await page.context().newCDPSession(page)).send('Emulation.setCPUThrottlingRate', { rate: Number(process.env.THROTTLE) });
+  }
+  // Reloj de cuadros: cada cuadro del juego hace UN poll del gamepad, así que
+  // las ayudas mantienen botones/ejes durante cuadros, no milisegundos (un
+  // botón más corto que un cuadro no lo ve ninguna Gamepad API). __slowFrames
+  // fuerza cuadros largos (global con FRAME_MS, o por sección).
+  await page.addInitScript((ms) => {
+    const native = window.requestAnimationFrame.bind(window);
+    window.__slowFrames = ms;
+    window.requestAnimationFrame = (cb) => (window.__slowFrames
+      ? setTimeout(() => cb(performance.now()), window.__slowFrames) : native(cb));
+    window.__frames = 0;
+    const tick = () => { window.__frames++; window.requestAnimationFrame(tick); };
+    window.requestAnimationFrame(tick);
+  }, Number(process.env.FRAME_MS) || 0);
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.addInitScript(() => {
@@ -37,15 +61,20 @@ try {
       if (window.__focusLog.length > 40) window.__focusLog.shift();
     }, true);
   });
-  await page.goto(`http://127.0.0.1:${port}/?nolock=1`, { waitUntil: 'networkidle' });
+  await page.goto(`http://127.0.0.1:${port}/?nolock=1`, { waitUntil: 'networkidle', timeout: 300000 });
 
+  // espera a que el juego haya corrido `n` cuadros completos desde ahora
+  const frames = async (n = 2) => {
+    const f0 = await page.evaluate(() => window.__frames);
+    await page.waitForFunction((t) => window.__frames >= t, f0 + n, { polling: 20, timeout: 300000 });
+  };
+  // pulso: abajo durante ≥ 2 cuadros (al menos un poll lo ve pulsado) y ≥ 2
+  // cuadros soltado (el poll ve la suelta) — vale con cuadros de 16 o 700 ms
   const tap = async (button) => {
     await page.evaluate(([i, down]) => window.__padButton(i, down), [button, true]);
-    // En gameplay headless el render 3D puede bajar de 12 fps durante carga;
-    // mantener el pulso al menos dos frames evita falsos negativos del poll.
-    await page.waitForTimeout(190);
+    await frames(2);
     await page.evaluate(([i, down]) => window.__padButton(i, down), [button, false]);
-    await page.waitForTimeout(95);
+    await frames(2);
   };
   const tapMirrored = async (button, key) => {
     await page.evaluate(({ button, key }) => {
@@ -55,12 +84,25 @@ try {
         document.dispatchEvent(new KeyboardEvent('keydown', { key, code: key, repeat: true, bubbles: true }));
       }
     }, { button, key });
+    // pulso de pared A PROPÓSITO (190 ms): con cuadros largos ningún poll lo
+    // ve y la flecha espejada debe pagar el paso (menu-controller owedStep)
     await page.waitForTimeout(190);
     await page.evaluate(({ button, key }) => {
       window.__padButton(button, false);
       document.dispatchEvent(new KeyboardEvent('keyup', { key, code: key, bubbles: true }));
     }, { button, key });
-    await page.waitForTimeout(95);
+    await frames(2);
+  };
+  // orden inverso: el pad ya movió (lo vio un poll) y la flecha llega después
+  const tapMirroredLate = async (button, key) => {
+    await page.evaluate((b) => window.__padButton(b, true), button);
+    await frames(2);
+    await page.evaluate(({ button, key }) => {
+      window.__padButton(button, false);
+      document.dispatchEvent(new KeyboardEvent('keydown', { key, code: key, bubbles: true }));
+      document.dispatchEvent(new KeyboardEvent('keyup', { key, code: key, bubbles: true }));
+    }, { button, key });
+    await frames(2);
   };
   const focus = (selector) => page.$eval(selector, (el) => el.focus());
   const active = () => page.evaluate(() => ({
@@ -75,10 +117,14 @@ try {
   }));
   // Espera acotada: sin GPU (CI) un frame puede durar ~700 ms y la
   // restauración del foco llega uno o dos frames después del gesto.
+  // tope: 2.5 s de pared Y al menos 6 cuadros (con cuadros de 700 ms, 2.5 s
+  // son 3 cuadros y la restauración de foco puede tardar uno o dos)
   const expectFocus = async (expected, message, timeout = 2500) => {
     const matches = (got) => Object.entries(expected).every(([k, v]) => got[k] === v);
     let got = await active();
-    for (const t0 = Date.now(); !matches(got) && Date.now() - t0 < timeout;) {
+    const f0 = await page.evaluate(() => window.__frames);
+    for (const t0 = Date.now(); !matches(got) &&
+      (Date.now() - t0 < timeout || await page.evaluate((f) => window.__frames < f + 6, f0));) {
       await page.waitForTimeout(50);
       got = await active();
     }
@@ -87,18 +133,22 @@ try {
       throw new Error(`${message}: ${JSON.stringify(got)}\nfoco reciente: ${log}`);
     }
   };
-  const tilt = async (axis, value, duration = 150) => {
+  // el stick se mantiene CUADROS, no ms: la repetición del menú empieza a
+  // 0.46 s de tiempo de juego (dt ≤ 0.1 s por cuadro). Un cuadro basta para que
+  // un poll lo vea; dos inclinaciones seguidas suman ≤ 4 cuadros (≤ 0.4 s), así
+  // que un runner lento no convierte una inclinación corta en repetición.
+  const tilt = async (axis, value) => {
     await page.evaluate(([i, v]) => window.__padAxis(i, v), [axis, value]);
-    await page.waitForTimeout(duration);
+    await frames(1);
   };
   const neutral = async () => {
     await page.evaluate(() => { window.__padAxis(0, 0); window.__padAxis(1, 0); });
-    await page.waitForTimeout(100);
+    await Promise.all([page.waitForTimeout(100), frames(2)]);
   };
 
   await tap(0); // A: splash
   await page.waitForSelector('#splash.off', { state: 'attached' });
-  await page.waitForTimeout(80);
+  await frames(2);
   if (!await page.$eval('body', (el) => el.classList.contains('using-controller'))) {
     throw new Error('el gamepad no activó el modo controller');
   }
@@ -117,6 +167,21 @@ try {
   // ArrowDown (incluyendo repeats). Debe seguir siendo exactamente un paso.
   await tapMirrored(13, 'ArrowDown');
   await expectFocus({ id: 'btn-practice' }, 'D-pad vertical no siguió la jerarquía del main menu');
+  await tap(12);
+  await expectFocus({ id: 'btn-bots' }, 'arriba no regresó a VS Bots');
+
+  // Gesto espejado con cuadros MÁS LARGOS que la pulsación (CI sin GPU): en
+  // ambos órdenes debe ser exactamente un paso (antes: 0 o 2).
+  await page.evaluate(() => { window.__slowFrames = 700; });
+  await frames(1);
+  await tapMirrored(13, 'ArrowDown');
+  await expectFocus({ id: 'btn-practice' }, 'cuadros largos: el gesto espejado no dio exactamente un paso');
+  await tapMirroredLate(12, 'ArrowUp');
+  await expectFocus({ id: 'btn-bots' }, 'cuadros largos: la flecha tardía duplicó el paso del pad');
+  await page.evaluate((ms) => { window.__slowFrames = ms; }, Number(process.env.FRAME_MS) || 0);
+  await frames(1);
+  await tap(13);
+  await expectFocus({ id: 'btn-practice' }, 'abajo desde VS Bots no llegó a Practice');
   await tap(15); // Practice -> Map, relación explícita entre columnas
   await expectFocus({ id: 'btn-map' }, 'derecha desde Practice no llegó a Map');
   await tap(14);
@@ -125,18 +190,30 @@ try {
   await expectFocus({ id: 'btn-bots' }, 'arriba no regresó a VS Bots');
 
   // Deadzone + flanco: una inclinación corta produce exactamente un paso.
-  await tilt(1, 0.45, 180); // bajo deadzone
+  await tilt(1, 0.45); // bajo deadzone
   await expectFocus({ id: 'btn-bots' }, 'el stick se movió dentro de la deadzone');
   await neutral();
-  await tilt(1, 0.9, 180);
-  await expectFocus({ id: 'btn-practice' }, 'la inclinación inicial no produjo exactamente un paso');
-  await tilt(0, 0.95, 120); // cambiar de eje sin neutral no debe relanzar
-  await expectFocus({ id: 'btn-practice' }, 'el stick cambió de eje sin volver a neutral');
+  // Inclinación y cambio de eje en UNA secuencia dentro de la página, contada
+  // en cuadros: el stick queda inclinado 4 cuadros (≤ 0.4 s de juego, bajo los
+  // 0.46 s de la repetición) aunque cada viaje de Playwright tarde mucho.
+  const stick = await page.evaluate(async () => {
+    const raf = () => new Promise((r) => requestAnimationFrame(r));
+    const id = () => document.activeElement?.id || '';
+    window.__padAxis(1, 0.9); await raf(); await raf();
+    const first = id();
+    window.__padAxis(0, 0.95); await raf(); await raf(); // cambiar de eje sin neutral
+    const afterSwitch = id();
+    window.__padAxis(0, 0); window.__padAxis(1, 0); await raf(); await raf();
+    return { first, afterSwitch };
+  });
+  if (stick.first !== 'btn-practice') throw new Error(`la inclinación inicial no produjo exactamente un paso: ${JSON.stringify(stick)}`);
+  if (stick.afterSwitch !== 'btn-practice') throw new Error(`el stick cambió de eje sin volver a neutral: ${JSON.stringify(stick)}`);
   await neutral();
   await tap(12);
 
   await tap(0);  // open local lobby
-  await page.waitForTimeout(240);
+  await page.waitForFunction(() => !document.getElementById('lobby-card').classList.contains('off'), null, { timeout: 5000, polling: 50 }).catch(() => {});
+  await frames(2);
   if (!await page.$eval('#lobby-card', (el) => !el.classList.contains('off'))) {
     const state = await page.evaluate(() => ({
       focus: document.activeElement?.id,
@@ -212,7 +289,7 @@ try {
   await tap(0);
   await page.waitForSelector('#menu.off', { state: 'attached' });
   await tap(9); // MENU: pause
-  await page.waitForTimeout(160);
+  await page.waitForFunction(() => !document.getElementById('menu').classList.contains('off'), null, { timeout: 5000, polling: 50 }).catch(() => {});
   if (!await page.$eval('#menu', (el) => !el.classList.contains('off'))) {
     const state = await page.evaluate(() => ({
       mode: window.BREACH?.mode,
@@ -231,7 +308,7 @@ try {
   await tap(9);
   await page.waitForSelector('#menu:not(.off)');
   await page.mouse.move(40, 40);
-  await page.waitForTimeout(40);
+  await frames(2);
   if (await page.$eval('body', (el) => el.classList.contains('using-controller'))) {
     throw new Error('mouse no recuperó el modo de input');
   }
@@ -239,10 +316,10 @@ try {
   if (keyboardPrompts !== 'none') throw new Error('prompts de controller siguieron visibles con mouse');
 
   // Reinicio completo: la inicialización debe conservar el mismo debounce.
-  await page.reload({ waitUntil: 'networkidle' });
+  await page.reload({ waitUntil: 'networkidle', timeout: 300000 });
   await tap(0);
   await page.waitForSelector('#splash.off', { state: 'attached' });
-  await page.waitForTimeout(80);
+  await frames(2);
   await tapMirrored(13, 'ArrowDown');
   await expectFocus({ id: 'btn-practice' }, 'tras reiniciar, una pulsación volvió a producir múltiples saltos');
   if (errors.length) throw new Error(errors.join(' · '));

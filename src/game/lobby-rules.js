@@ -78,8 +78,10 @@ export const isCustomMapId = (id) => typeof id === 'string' && id.startsWith('cu
 export function normalizeLobbySettings(value = {}, { allowCustom = false } = {}) {
   // Old saved street selections now open the retained expanded map.
   if(value.map==='calle')value={...value,map:'calle2'};
-  const rounds = Number(value.rounds);
-  const lives = Number(value.lives);
+  // Number() de un objeto de la red puede lanzar ({"valueOf":1}): solo números o textos
+  const toNum = (v) => (typeof v === 'number' || typeof v === 'string' ? Number(v) : NaN);
+  const rounds = toNum(value.rounds);
+  const lives = toNum(value.lives);
   const mapOk = MAPS.includes(value.map) || (allowCustom && isCustomMapId(value.map));
   return {
     mode: 'tdm',

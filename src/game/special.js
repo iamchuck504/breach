@@ -11,6 +11,8 @@ export const SPECIAL_HOLD_TIME = 0.6;
 const TMP_V = new THREE.Vector3();
 const TMP_D = new THREE.Vector3();
 const TMP_BACK = new THREE.Vector3();
+const TMP_F = new THREE.Vector3();
+const TMP_L = new THREE.Vector3();
 
 function colliderContainsPoint(c, x, y, z) {
   if (!c || y < -0.1 || y > c.h) return false;
@@ -142,8 +144,10 @@ export class Rockets {
 
   // En local, mine/owner deciden quién aplica el daño. En online,
   // authoritative=true conserva solo la predicción visual: el servidor envía
-  // después el contacto y el splash definitivos.
-  fire(o, dir, mine = true, owner = null, id = null, authoritative = false) {
+  // después el contacto y el splash definitivos. `shooter` ({id, team}) es la
+  // identidad para la espoleta cuando owner es null (cohete del jugador: main
+  // usa owner=null para su hitmarker y su nombre en el feed).
+  fire(o, dir, mine = true, owner = null, id = null, authoritative = false, shooter = null) {
     const d = TUNING.weapons.bazooka;
     const mesh = this._buildMesh();
     mesh.position.set(o.x, o.y, o.z);
@@ -151,13 +155,15 @@ export class Rockets {
     this.scene.add(mesh);
     this.list.push({
       mesh, mine, owner, id, authoritative,
+      shooterId: shooter?.id ?? owner?.id ?? null,
+      team: shooter?.team ?? owner?.team ?? null,
       x: o.x, y: o.y, z: o.z,
       vx: dir.x * d.projSpeed, vy: dir.y * d.projSpeed, vz: dir.z * d.projSpeed,
       t: 0, maxT: (d.range / d.projSpeed) + 0.2,
     });
   }
 
-  // targets: [{x,z,y,alive}] para la espoleta de proximidad
+  // targets: [{id,x,z,y,alive,team,protected}] para la espoleta de proximidad
   update(dt, targets, onExplode) {
     for (let i = this.list.length - 1; i >= 0; i--) {
       const r = this.list[i];
@@ -180,7 +186,43 @@ export class Rockets {
       const hit = this.world.raycastHit(TMP_V, TMP_D, step + 0.12);
       let boom = null;
       let boomInfo = null;
-      if (hit) {
+      // Espoleta de proximidad BARRIDA (como el servidor): el punto del
+      // segmento de este paso más cercano a cada torso, hasta el primer
+      // contacto con el mundo. Muestrear solo el extremo dejaba huecos de
+      // hasta 2.6 m en un tirón y el cohete atravesaba a un enemigo. Nunca
+      // el propio tirador, su bando ni un cuerpo con protección de spawn.
+      const sweep = hit ? Math.min(step, hit.t) : step;
+      let fuse = null;
+      for (const tg of targets) {
+        if (tg.alive === false || tg.protected) continue;
+        if (r.shooterId && tg.id === r.shooterId) continue;
+        if (r.team && tg.team && tg.team === r.team) continue;
+        const rx = tg.x - r.x, ry = (tg.y ?? 0) + 0.9 - r.y, rz = tg.z - r.z;
+        const along = Math.max(0, Math.min(sweep, rx * TMP_D.x + ry * TMP_D.y + rz * TMP_D.z));
+        const sx = rx - TMP_D.x * along, sy = ry - TMP_D.y * along, sz = rz - TMP_D.z * along;
+        if (sx * sx + sy * sy + sz * sz >= 0.7 * 0.7 || (fuse && along >= fuse.along)) continue;
+        // el contacto estático gana en el empate (candidato recortado a la
+        // pared) y la espoleta necesita ver el torso: sin esto un cuerpo
+        // 0.45 m detrás de un muro recibía impacto directo en la pared
+        if (hit && along >= hit.t - 1e-6) continue;
+        if (sx * sx + sy * sy + sz * sz > 1e-6) {
+          TMP_F.set(r.x + TMP_D.x * along, r.y + TMP_D.y * along, r.z + TMP_D.z * along);
+          TMP_L.set(sx, sy, sz);
+          const sep = TMP_L.length();
+          if (this.world.raycastHit(TMP_F, TMP_L.multiplyScalar(1 / sep), sep)) continue;
+        }
+        fuse = { tg, along };
+      }
+      if (fuse) {
+        r.x += TMP_D.x * fuse.along; r.y += TMP_D.y * fuse.along; r.z += TMP_D.z * fuse.along;
+        boom = { x: r.x, y: r.y, z: r.z };
+        boomInfo = {
+          kind: 'direct', direct: true, targetId: fuse.tg.id,
+          surface: 'flesh', normal: { x: -TMP_D.x, y: -TMP_D.y, z: -TMP_D.z },
+          visualPos: { x: r.x, y: r.y, z: r.z },
+          direction: { x: TMP_D.x, y: TMP_D.y, z: TMP_D.z },
+        };
+      } else if (hit) {
         // separar la explosión de la superficie por la NORMAL del impacto:
         // detonar exactamente sobre el collider auto-ocluía la línea de
         // efecto contra esa misma pared y el splash no dañaba a nadie
@@ -215,24 +257,7 @@ export class Rockets {
         };
       } else {
         r.x += r.vx * dt; r.y += r.vy * dt; r.z += r.vz * dt;
-        // espoleta de proximidad: pasar a <0.7m del torso de un objetivo
-        for (const tg of targets) {
-          if (tg.alive === false) continue;
-          // la espoleta no se activa con el propio bando de quien lo lanzó
-          if (r.owner && tg.team && tg.team === r.owner.team) continue;
-          const dx = tg.x - r.x, dy = (tg.y ?? 0) + 0.9 - r.y, dz = tg.z - r.z;
-          if (dx * dx + dy * dy + dz * dz < 0.7 * 0.7) {
-            boom = { x: r.x, y: r.y, z: r.z };
-            boomInfo = {
-              kind: 'direct', direct: true, targetId: tg.id,
-              surface: 'flesh', normal: { x: -TMP_D.x, y: -TMP_D.y, z: -TMP_D.z },
-              visualPos: { x: r.x, y: r.y, z: r.z },
-              direction: { x: TMP_D.x, y: TMP_D.y, z: TMP_D.z },
-            };
-            break;
-          }
-        }
-        if (!boom && (r.t >= r.maxT || r.y < -0.5)) {
+        if (r.t >= r.maxT || r.y < -0.5) {
           boom = { x: r.x, y: r.y, z: r.z };
           boomInfo = {
             kind: 'air', direct: false, surface: 'concrete',

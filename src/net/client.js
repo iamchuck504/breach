@@ -31,6 +31,23 @@ export class NetClient {
 
   on(type, cb) { this.handlers[type] = cb; }
 
+  // Retener los mensajes (en orden) mientras el cliente prepara la entrada a
+  // una partida (modelos del mapa). Al soltar se aplican tal cual llegaron:
+  // nada del estado del servidor (cajas, armas, muertes, fases) se pierde y
+  // el servidor nunca espera a este cliente.
+  hold() { if (!this._held) this._held = []; }
+  release() {
+    const queue = this._held; this._held = null;
+    if (!queue) return;
+    for (let i = 0; i < queue.length; i++) {
+      if (this.dead) return;
+      this.handlers[queue[i].t]?.(queue[i]);
+      // un mensaje repetido pidió retener otra vez (otra entrada a partida):
+      // el resto espera, en orden, a la nueva suelta
+      if (this._held) { this._held.push(...queue.slice(i + 1)); return; }
+    }
+  }
+
   connect(url, name, variant = 0, action = 'join') {
     return new Promise((resolve, reject) => {
       let settled = false;
@@ -40,7 +57,8 @@ export class NetClient {
         if (!settled) { settled = true; this.ws.close(); reject(new Error(t('network.timeout'))); }
       }, 6000);
       this.ws.onopen = () => {
-        this.send({ t: 'join', action, name, v: variant });
+        // hp: modelo de impacto por pose (hit-pose.js); un servidor anterior lo ignora
+        this.send({ t: 'join', action, name, v: variant, hp: 2 });
       };
       this.ws.onmessage = (ev) => {
         if (this.dead) return; // sesión desechada: los mensajes bufereados
@@ -62,6 +80,7 @@ export class NetClient {
           reject(new Error(t(`lobby.error.${msg.code}`)));
           return;
         }
+        if (this._held) { this._held.push(msg); return; }
         this.handlers[msg.t]?.(msg);
       };
       this.ws.onerror = () => {
@@ -104,14 +123,19 @@ export class NetClient {
       w: wep.cur,
       am: wep.st.mag, ar: wep.st.reserve, // para el drop del arma al morir
       sp: +Math.min(1, player.speed / TUNING.move.roadieSpeed).toFixed(2),
+      // progreso de recarga para el rig de los demás (como reloadT del rig
+      // local; la escopeta, por cartucho). Solo mientras recarga: 10 bytes.
+      ...(wep.reloading ? { rl: +Math.max(0, Math.min(1, 1 - wep.st.reload / wep.def.reloadTime)).toFixed(2) } : {}),
     });
   }
 
   fire(origin, point, wep, impacts = [], player = null) {
     const pack = (v) => [+v.x.toFixed(2), +v.y.toFixed(2), +v.z.toFixed(2)];
     const fp = packedFirePose(player);
+    // `sq` creciente: el servidor descarta duplicados y ata cada claim a SU disparo
+    this.shotSeq = (this.shotSeq || 0) + 1;
     this.send({ t: 'fire', o: pack(origin), p: pack(point), w: wep,
-      d: impacts.slice(0, 8).map(pack), ...(fp ? { fp } : {}) });
+      d: impacts.slice(0, 8).map(pack), ...(fp ? { fp } : {}), sq: this.shotSeq });
   }
 
   rocket(origin, direction, cid = null, player = null, bot = null) {
@@ -127,6 +151,7 @@ export class NetClient {
       t: 'hit', target: targetId, dmg: Math.round(dmg), part,
       gib: gib ? 1 : 0, ...(p ? { p } : {}),
       ...(meta?.pellets ? { pellets: Math.round(meta.pellets) } : {}),
+      ...(this.shotSeq ? { sq: this.shotSeq } : {}),
     });
   }
 
@@ -140,9 +165,14 @@ export class NetClient {
   botState(bots) {
     this.send({ t: 'botState', bots: bots.map((b) => ({
       id: b.id, x: +b.pos.x.toFixed(3), z: +b.pos.z.toFixed(3), y: +b.y.toFixed(2),
-      yaw: +b.yaw.toFixed(3), st: b.animState(), aim: b.aim ? 1 : 0,
-      p: +(b.aimPitch || 0).toFixed(3), ae: 0, cl: 0, ce: 1,
-      w: b.wep, sp: +Math.min(1, Math.hypot(b.velX || 0, b.velZ || 0) / TUNING.move.roadieSpeed).toFixed(2),
+      // lo que DIBUJA el bot alojado (cuerpo, lean/exposición en cover, arma
+      // en mano durante los gestos), con los mismos campos que un jugador
+      yaw: +(b.rigYaw ?? b.yaw).toFixed(3), st: b.animState(), aim: b.aim ? 1 : 0,
+      p: +(b.aimPitch || 0).toFixed(3), ae: +(b.aimYawErr || 0).toFixed(3), cl: +(b.coverLean || 0).toFixed(2),
+      ce: Number.isFinite(b.coverExposure) && b.animState() === 'cover_low' ? +b.coverExposure.toFixed(2) : 1,
+      ...(b.coverKind ? { ck: b.coverKind } : {}),
+      w: b.shownWep ?? b.wep, sp: +Math.min(1, Math.hypot(b.velX || 0, b.velZ || 0) / TUNING.move.roadieSpeed).toFixed(2),
+      ...(b.reloadT > 0 && b._reloadPhase ? { rl: +b._reloadPhase().toFixed(2) } : {}),
     })) });
   }
 
