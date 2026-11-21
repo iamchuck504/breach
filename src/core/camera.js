@@ -34,7 +34,8 @@ export class ShoulderCamera {
     // escala por FOV: al apuntar (FOV cerrado) la sensibilidad baja proporcionalmente,
     // Sensibilidad de apuntado derivada del zoom real.
     const zoomScale = this._scoped ? TUNING.cam.zoomSens : 1;
-    const s = TUNING.cam.sens * DEG * (this.fov / TUNING.cam.fovNormal) * zoomScale;
+    // fovRef: [FP] solo lo fija la primera persona (su FOV de hip); sin ella, el de siempre
+    const s = TUNING.cam.sens * DEG * (this.fov / (this.fovRef ?? TUNING.cam.fovNormal)) * zoomScale;
     let yawStep = -dx * s;
     let pitchStep = (invertY ? dy : -dy) * s;
     // Un hitch o warp tardío de pointer-lock puede acumular miles de píxeles
@@ -87,7 +88,7 @@ export class ShoulderCamera {
   // stick derecho del gamepad (valores -1..1 ya con curva), escala por FOV
   applyStick(cx, cy, dt, invertY) {
     const zoomScale = this._scoped ? TUNING.cam.zoomSens : 1;
-    const s = TUNING.cam.padSens * DEG * dt * (this.fov / TUNING.cam.fovNormal) * zoomScale;
+    const s = TUNING.cam.padSens * DEG * dt * (this.fov / (this.fovRef ?? TUNING.cam.fovNormal)) * zoomScale;
     this.yaw -= cx * s;
     const pitchStep = (invertY ? cy : -cy) * s;
     if (pitchStep < 0 && this.pitchRecoil > 0) {
@@ -111,6 +112,14 @@ export class ShoulderCamera {
   setScoped(on) { this._scoped = !!on; }
 
   update(dt, player) {
+    // [FP] primera persona (src/view/first-person.js): si está activa, la
+    // cámara va en los ojos y este método no hace nada más. Al soltarla, el
+    // brazo de hombro arranca de cero (_first) en vez de arrastrarse desde
+    // donde quedó.
+    if (this.fp) {
+      if (this.fp.claim(player)) { this.fp.updateCamera(dt, player, this); this._fpPrev = true; return; }
+      if (this._fpPrev) { this._fpPrev = false; this.fp.release(this); this._first = true; }
+    }
     const c = TUNING.cam;
     const st = player.camState(); // { mode, side? }
 

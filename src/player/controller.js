@@ -447,6 +447,10 @@ export class Controller {
             const f = this.facing();
             dx = f.x * mw.mag; dz = f.z * mw.mag;
           }
+        } else if (this.fpYawLock > 0) {
+          // [FP] primera persona: el cuerpo sigue a la vista (strafe y
+          // retroceso como en un FPS); las piernas ya strafean con moveSide
+          this.yaw = approachAngle(this.yaw, this.cam.yaw, this.fpYawLock * Math.PI / 180 * dt);
         } else if (this.aim || firing) {
           // DISPARAR MANDA sobre correr: el cuerpo encara a la cámara aunque
           // te muevas hacia atrás o de lado (las piernas strafean). El límite

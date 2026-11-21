@@ -7,6 +7,7 @@ import { BINDS, KB_LABELS, PAD_LABELS, keyLabel, padBtnName, loadBinds, saveBind
 import { LANGUAGES, t, getLanguage, setLanguage, applyTranslations, onLanguageChange } from './core/i18n.js';
 import { Input } from './core/input.js';
 import { ShoulderCamera } from './core/camera.js';
+import { FirstPerson, FP_TURN_DEG } from './view/first-person.js'; // [FP] prototipo local
 import { World } from './world/world.js';
 import { preloadUrbanAssets, ensureMapAssets, ensurePlayableMapAssets, playableMapAssetsReady, mapAssetsReady, prefetchOtherMapAssets, onUrbanAssetArrived, urbanAssetState } from './world/urban-assets.js';
 import { Rig, RAGDOLL_R } from './player/rig.js';
@@ -239,6 +240,14 @@ const G = {
   footAcc: 0,
   presentationAudioKey: '',
 };
+// [FP] primera persona (apagada por defecto: ?fp=1 o la tecla P en partida)
+const firstPerson = new FirstPerson({
+  scene, camera, world, G,
+  hint: (text, ms) => hud.hint(text, ms),
+  canToggle: () => !!G.mode && G.mode !== 'editor' && !!G.player && !menuIsOpen() && !input.rebinding,
+});
+shoulderCam.fp = firstPerson;
+window.BREACH_FP = firstPerson; // capturas y diagnóstico
 
 // los mapas del editor traen su propio nombre; los del juego pasan por i18n
 const mapLabel = (map) => (isCustomLayout(map)
@@ -3689,6 +3698,9 @@ function throwSmoke() {
   const d = TUNING.weapons.grenade;
   G.rig.setTransform(p.pos.x, p.pos.z, p.yaw, p.y);
   const muzzle = G.rig.muzzleWorld(_v1);
+  // [FP] el bote sale delante de la cámara; en cover, de la mano del rig
+  // (por encima del parapeto, como en 3P): desde el ojo chocaría con él
+  if (firstPerson.live && p.state !== 'cover') firstPerson.launchPoint(muzzle);
   // La intención es SIEMPRE la de la cámara (hip igual que ADS): de la mano
   // hacia el punto del centro de pantalla. En hip se usaba el eje del bote
   // en la mano, que gira con el latigazo: su ángulo en el cuadro de suelta
@@ -3945,18 +3957,35 @@ function fireShot() {
   // scope aún activo); recalcular aquí usaría la cámara post-salto
   const ray = G.pendingRays.shift() ?? shoulderCam.aimRay();
   const cameraOrigin = ray.origin.clone();
+  // [FP] primera persona: TODO tiro va por el rayo central de la cámara (ojos)
+  // con la dispersión de siempre (hip/ADS/blind). Blindfire: la bala sale del
+  // arma del rig (por encima/al costado del cover, como en 3P) paralela al
+  // rayo central; el ojo queda protegido. Los efectos salen del arma en
+  // primera persona. Con el modo apagado `fp` es false y nada cambia.
+  const fp = firstPerson.live;
+  const fpBlind = fp && !aiming && inCover;
+  if (fp) firstPerson.muzzleWorld(muzzle);
   // ADS usa la intención óptica central; hip/blindfire conservan el eje físico.
   // En ambos casos el origen balístico sigue siendo el muzzle.
-  const baseDir = aiming ? ray.dir.clone() : barrelDirection(new THREE.Vector3());
+  const baseDir = aiming || fp ? ray.dir.clone() : barrelDirection(new THREE.Vector3());
+  if (fp && (w.cur === 'stun' || def.projectile)) {
+    // proyectiles: delante de la cámara (o el arma del rig en blindfire)
+    if (fpBlind) muzzle.copy(origin); else firstPerson.launchPoint(muzzle);
+  }
   if(w.cur==='stun'){
-    const dir=applySpread(aiming?currentFireDirection(muzzle,def.range).clone():baseDir,spread);
+    const dir=applySpread(fp?baseDir:aiming?currentFireDirection(muzzle,def.range).clone():baseDir,spread);
     prototypeFire('stun',muzzle,dir);effects.muzzleFlash(muzzle);G.rig.kick(.2);return;
   }
 
   // bazooka: proyectil REAL, sin hitscan — el cohete hace el daño al explotar
   if (def.projectile) {
     let projectileDir = baseDir;
-    if (aiming) {
+    if (fp) {
+      // [FP] hacia el punto del centro de pantalla desde la salida
+      const guide = resolveShot(world, currentTargets(), cameraOrigin, ray.dir, def.range, null);
+      const to = _v3.copy(guide.point).sub(muzzle);
+      projectileDir = to.length() > 1.2 ? to.normalize().clone() : ray.dir.clone();
+    } else if (aiming) {
       const targets = currentTargets();
       // elevar/arrimar el origen si un borde cercano taparía el cohete (solo
       // si el círculo promete más lejos); la dirección apunta al guide
@@ -3995,7 +4024,7 @@ function fireShot() {
   let falloffBase = 0;
   let planeVec = null; // pecho − cámara (solo ADS)
   if (aiming) {
-    adsAdjustFireOrigin(targets, cameraOrigin, baseDir, muzzle, def.range, def);
+    if (!fp) adsAdjustFireOrigin(targets, cameraOrigin, baseDir, muzzle, def.range, def);
     damageOrigin = cameraOrigin.clone();
     // misma pose que el servidor ve en el estado: yaw del cuerpo y pitch de cámara
     const c = adsSetback({ x: G.player.pos.x, y: G.player.y ?? 0, z: G.player.pos.z,
@@ -4003,7 +4032,7 @@ function fireShot() {
     // sin cámara plausible (colisión extrema) el servidor no descuenta nada
     planeVec = c;
     falloffBase = planeBaseAlong(planeVec, ray.dir.toArray());
-  }
+  } else if (fp && !fpBlind) damageOrigin = cameraOrigin.clone(); // [FP] hip: desde los ojos
   const dmgByTarget = new Map();
   let anyPoint = null;
   const worldImpacts = [];
@@ -4023,7 +4052,7 @@ function fireShot() {
     // pliega al punto del eje a la altura del arma. La "impresión de que la
     // bala atraviesa la esquina" era exactamente esta línea cosmética.
     let tracerFrom = fxAboveGround(_fxO.copy(muzzle), G.player.y ?? 0); // solo efecto
-    if (aiming) {
+    if (aiming || fp) {
       const segLen = _v2.copy(hit.point).sub(muzzle).length();
       if (segLen > 0.4) {
         _v2.multiplyScalar(1 / segLen);
@@ -4181,7 +4210,8 @@ function updateReticle() {
   // Sin ADS, la marca representa la trayectoria física actual del barrel.
   // Un arrojadizo no tiene cañón: su lanzamiento sigue al centro de cámara.
   hud.sniperScope(false);
-  hud.reticle(false, G.weapons.def.thrown
+  // [FP] en primera persona todo tiro va por el rayo central: marca al centro
+  hud.reticle(false, G.weapons.def.thrown || firstPerson.live
     ? { x: innerWidth / 2, y: innerHeight / 2 } : barrelReticleXY());
 }
 
@@ -4794,14 +4824,18 @@ function frame(now) {
     // El sniper usa 20° solo durante un scope realmente válido. Al iniciar
     // swap/melee vuelve de inmediato al ADS estándar aunque LT siga pulsado.
     shoulderCam.setAimFov(scopeNow ? G.weapons.def.fovAim : TUNING.cam.fovAim);
+    firstPerson.live = false; // [FP] lo vuelve a encender shoulderCam.update si la vista es la de los ojos
     if (flowView && flowView.phase !== 'countdown') updateMatchCamera(now, flowView);
     else if (G.spectator.active) updateSpectatorCamera(dt, now);
     else shoulderCam.update(dt, G.player);
+    // [FP] cuerpo bloqueado a la vista solo mientras la cámara es la de los ojos
+    G.player.fpYawLock = firstPerson.live ? FP_TURN_DEG : 0;
     G.rig.setWeapon(G.weapons.cur, backWeapon()); // el intercambio real ocurre a mitad del gesto
     // Soldado propio visto desde SU cámara: de cerca no tapa la retícula y
     // en el scope no se dibuja delante de la lente (la sombra se queda).
     const ownView = !(flowView && flowView.phase !== 'countdown') && !G.spectator.active;
-    syncLocalSoldierView(G.rig, camera, ownView ? (scopeNow ? 'hidden' : 'near') : 'off', shoulderCam.crowd, shoulderCam.ghost);
+    // [FP] en primera persona el soldado propio tampoco se dibuja (su sombra sí)
+    syncLocalSoldierView(G.rig, camera, ownView ? (scopeNow || firstPerson.live ? 'hidden' : 'near') : 'off', shoulderCam.crowd, shoulderCam.ghost);
     // protección de spawn: highlight sutil en el color del equipo
     G.rig.root.visible = true;
     G.rig.setProtected(G.spawnProt > 0);
@@ -4817,6 +4851,9 @@ function frame(now) {
       reloadT: G.weapons.reloading ? 1 - G.weapons.st.reload / G.weapons.def.reloadTime : 0,
       aimLift: G.aimOver.lift,
     });
+    // [FP] arma en primera persona: después de la pose del rig (recarga,
+    // cambio, kick) y antes de los tiros (su muzzle origina tracer y fogonazo)
+    if (firstPerson.live || firstPerson.vm) firstPerson.updateViewModel(dt, shoulderCam);
     while (G.pendingShots > 0) {
       fireShot();
       G.pendingShots--;
