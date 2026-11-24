@@ -1,4 +1,5 @@
 // Diagnóstico del flujo cover→mantle del smoke: ¿por qué el snap no entra?
+import { actionKeys } from './lib-test.mjs';
 import { chromium } from 'playwright-core';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -49,7 +50,8 @@ const pre = await page.evaluate(() => {
   };
 });
 console.log('PRE:', JSON.stringify(pre));
-await page.keyboard.press('Space');
+const { evade } = await actionKeys(page, 'evade');
+await page.keyboard.press(evade);
 await page.waitForTimeout(300);
 const post = await page.evaluate(() => ({
   state: window.BREACH.player.state,

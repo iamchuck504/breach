@@ -1,12 +1,17 @@
 // Contrato mínimo de autoridad online: un hit sin disparo no vale; cada tiro
 // tiene cadencia, rango temporal, un target por claim y presupuesto de daño.
 import { WebSocket } from 'ws';
+import { withSamples, nextN } from './lib-fps-sample.mjs';
+
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { freePort } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const port = 8794;
+const port = FREE_PORT;
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
   // Esta prueba aísla autoridad balística; el flujo de presentación tiene su
   // propio contrato y aquí se desactiva para no añadir 13 s a cada ejecución.
@@ -19,7 +24,7 @@ function connect(name, action) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}`);
     const peer = { ws, welcome: null, messages: [], waiters: [] };
-    ws.on('open', () => ws.send(JSON.stringify({ t: 'join', action, name, v: 0 })));
+    ws.on('open', () => ws.send(JSON.stringify({ t: 'join', action, name, v: 0, hp: 2, fps: 1 })));
     ws.on('error', reject);
     ws.on('message', (raw) => {
       const msg = JSON.parse(raw);
@@ -50,10 +55,17 @@ function waitFor(peer, pred, timeout = 1200) {
   });
 }
 
-const send = (peer, msg) => peer.ws.send(JSON.stringify(msg));
+// muestra `fs` obligatoria (ronda 2): la añade lib-fps-sample desde el último estado
+const send = withSamples((peer, msg) => peer.ws.send(JSON.stringify(msg)));
+// Clientes FPS (corrida 6): el tiro sale del ojo (≤0.4 m del centro de la
+// cabeza, server.js fpsOriginLegal); antes salía a 1.1 m sobre los pies.
+const EYE = 1.6; // ojo de pie (0.08 sobre el centro de cabeza)
+// el origen ligado a SU muestra: el ojo exacto de su estado (idle, sin apuntar)
+const { eyeWorld } = await import('../src/combat/hit-pose.js');
+const eyeAt = (x, z, yaw = 0) => eyeWorld({ st: 'idle' }, x, 0, z, yaw).map((v) => +v.toFixed(3));
 const firePacket = (peer, target) => ({
   t: 'fire', w: 'smg',
-  o: [peer.self.x, 1.1, peer.self.z],
+  o: eyeAt(peer.self.x, peer.self.z, peer.self.yaw ?? 0),
   p: [target.self.x, 1.1, target.self.z], d: [],
 });
 const hpOf = (snap, id) => snap.ps.find((p) => p.id === id)?.hp;
@@ -82,13 +94,13 @@ try {
   // colocaban detrás del escudo de spawn y dependían de atravesar ese muro.
   const bx = 3, bz = -2;
   send(b, { t: 's', x: bx, z: bz, y: 0, yaw: Math.PI, st: 'idle', w: 'smg', am: 50, ar: 150 });
-  b.self.x = bx; b.self.z = bz;
+  b.self.x = bx; b.self.z = bz; b.self.yaw = Math.PI;
   // Firing must preserve the target's five-second spawn shield.
   send(b, firePacket(b, a));
   await delay(80);
 
   send(a, { t: 's', x: bx, z: bz - 4, y: 0, yaw: 0, st: 'idle', w: 'smg', am: 50, ar: 150 });
-  a.self.x = bx; a.self.z = bz - 4;
+  a.self.x = bx; a.self.z = bz - 4; a.self.yaw = 0;
   await delay(100);
 
   send(a, firePacket(a, b));
@@ -146,7 +158,7 @@ try {
   send(b, { t: 's', x: -16, z: -24, y: 0, yaw: Math.PI,
     st: 'idle', w: 'smg', am: 49, ar: 150 });
   await delay(120);
-  send(a, { t: 'fire', w: 'smg', o: [-16, 1.1, 24], p: [-16, 1.0, -24], d: [] });
+  send(a, { t: 'fire', w: 'smg', o: eyeAt(-16, 24, 0), p: [-16, 1.0, -24], d: [] });
   send(a, { t: 'hit', target: b.welcome.id, dmg: 120, part: 'body', gib: 0,
     p: [-16, 1.0, -24] });
   a.messages.length = 0;
@@ -160,7 +172,7 @@ try {
   send(b, { t: 's', x: bx, z: bz, y: 0, yaw: 0, st: 'idle', w: 'smg', am: 49, ar: 150 });
   send(a, { t: 's', x: bx, z: bz - 1.5, y: 0, yaw: 0, st: 'idle', w: 'shotgun', am: 8, ar: 24 });
   await delay(700);
-  send(a, { t: 'fire', w: 'shotgun', o: [bx, 1.1, bz - 1.5], p: [bx, 1.1, bz], d: [] });
+  send(a, { t: 'fire', w: 'shotgun', o: eyeAt(bx, bz - 1.5, 0), p: [bx, 1.1, bz], d: [] });
   send(a, { t: 'hit', target: b.welcome.id, dmg: 1, part: 'body', gib: 1,
     pellets: 8, p: [bx, 1.0, bz] });
   const death = await waitFor(a, (m) => m.t === 'death' && m.target === b.welcome.id);
@@ -173,7 +185,7 @@ try {
   // Two nearby peers claim only compatible ammo, leaving the remainder.
   const floor = await waitFor(a, m => m.t === 'dropA');
   send(c, { t: 's', x: bx, z: bz - 1, y: 0, yaw: 0, st: 'idle', w: 'smg', am: 49, ar: 150 });
-  send(c, { t: 'fire', w: 'smg', o: [bx, 1.1, bz - 1], p: [bx, 1.1, bz + 5], d: [] });
+  send(c, { t: 'fire', w: 'smg', o: eyeAt(bx, bz - 1, 0), p: [bx, 1.1, bz + 5], d: [] });
   send(a, { t: 'takeDrop', id: floor.id, capacity: 1 });
   send(c, { t: 'takeDrop', id: floor.id, capacity: 1 });
   const ammoA = await waitFor(a, m => m.t === 'dropGive');
@@ -194,13 +206,13 @@ try {
   const dx = 3, dz = 4;
   send(d, { t: 's', x: dx, z: dz, y: 0, yaw: Math.PI,
     st: 'idle', w: 'smg', am: 50, ar: 150 });
-  d.self.x = dx; d.self.z = dz;
+  d.self.x = dx; d.self.z = dz; d.self.yaw = Math.PI;
   send(d, firePacket(d, a));
   await delay(1550);
   send(a, { t: 's', x: dx, z: dz - 4, y: 0, yaw: 0,
     st: 'idle', w: 'sniper', am: 1, ar: 5 });
   a.self.x = dx; a.self.z = dz - 4;
-  send(a, { t: 'fire', w: 'sniper', o: [dx, 1.1, dz - 4], p: [dx, 1.52, dz], d: [] });
+  send(a, { t: 'fire', w: 'sniper', o: eyeAt(dx, dz - 4, 0), p: [dx, 1.52, dz], d: [] });
   send(a, { t: 'hit', target: d.welcome.id, dmg: 1, part: 'head', gib: 0,
     p: [dx, 1.52, dz] });
   const sniperDeath = await waitFor(a,
@@ -226,15 +238,15 @@ try {
   const rx = 3, rz = 4;
   send(b, { t: 's', x: rx, z: rz, y: 0, yaw: Math.PI,
     st: 'idle', w: 'smg', am: 50, ar: 150 });
-  b.self.x = rx; b.self.z = rz;
+  b.self.x = rx; b.self.z = rz; b.self.yaw = Math.PI;
   send(b, firePacket(b, a));
   await delay(80);
   send(a, { t: 's', x: rx, z: rz - 4, y: 0, yaw: 0,
     st: 'idle', w: 'sniper', am: 1, ar: 4 });
-  a.self.x = rx; a.self.z = rz - 4;
+  a.self.x = rx; a.self.z = rz - 4; a.self.yaw = 0;
   await delay(80);
   a.messages.length = 0;
-  send(a, { t: 'fire', w: 'sniper', o: [rx, 1.1, rz - 4], p: [rx, 1.0, rz], d: [] });
+  send(a, { t: 'fire', w: 'sniper', o: eyeAt(rx, rz - 4, 0), p: [rx, 1.0, rz], d: [] });
   send(a, { t: 'hit', target: b.welcome.id, dmg: 999, part: 'head', gib: 0,
     p: [rx, 1.52, rz] });
   const spoofSnap = await waitFor(a,
@@ -245,7 +257,7 @@ try {
   }
 
   await delay(1600);
-  send(a, { t: 'fire', w: 'sniper', o: [rx, 1.1, rz - 4], p: [rx, 1.52, rz], d: [] });
+  send(a, { t: 'fire', w: 'sniper', o: eyeAt(rx, rz - 4, 0), p: [rx, 1.52, rz], d: [] });
   send(a, { t: 'hit', target: b.welcome.id, part: 'head', dmg: 999, p: [rx, 1.52, rz] });
   const newDrop = await waitFor(a, m => m.t === 'dropA', 1800);
   send(a, { t: 's', x: rx, z: rz - 0.5, y: 0, yaw: 0, st: 'idle', w: 'sniper', am: 1, ar: 2 });

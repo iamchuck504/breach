@@ -18,7 +18,11 @@ import { pathToFileURL } from 'node:url';
 
 import { MAP_DIMS } from '../src/world/map-dims.js';
 export const DIMS = MAP_DIMS;
-const CELL = 0.5, R = 0.38, EYE = 1.5, JOG = 4.8, SPRINT = 7.6;
+// ojo y sprint del jugador FPS (corrida 6): el ojo sale de eyeFromPose (fuente
+// única: cámara, servidor y bots) y el sprint de TUNING.fp
+import { eyeFromPose } from '../src/combat/hit-pose.js';
+import { TUNING as _T } from '../src/config/tuning.js';
+const CELL = 0.5, R = 0.38, EYE = eyeFromPose({ st: 'idle' }).y, JOG = _T.fp.runSpeed ?? 4.8, SPRINT = _T.fp.sprintSpeed;
 
 export function analyze(layout, override = {}) {
   const [fx, fz] = DIMS[layout];

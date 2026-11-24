@@ -1,10 +1,12 @@
 // Jugador remoto: buffer de snapshots + interpolación con retraso fijo.
 import * as THREE from 'three';
 import { TUNING } from '../config/tuning.js';
+import { dodgeCues, DODGE_PREP } from './dodge.js';
+import { pushRemoteSample, dodgeFraction, advanceMissingDodge } from './dodge-playback.js';
 import { Rig } from './rig.js';
 // inferFlip y la duración del salto de pared viven en hit-pose.js: el
 // servidor reconstruye la vuelta con las mismas reglas al validar impactos
-import { inferFlip, WALL_FLIP_DUR, hitModel } from '../combat/hit-pose.js';
+import { inferFlip, WALL_FLIP_DUR, hitModel, poseAt, transitionOf } from '../combat/hit-pose.js';
 export { inferFlip };
 
 // módulo, NO bucle while: con un delta enorme (dato remoto corrupto) el
@@ -18,7 +20,8 @@ const lerpAngle = (a, b, k) => {
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const fin = (v, d = 0) => (Number.isFinite(v) ? v : d);
 
-// El snapshot no trae velocidades ni fases: se derivan de lo que el
+// El snapshot trae la fase de esquiva. Las demás fases y velocidades
+// se derivan de lo que el
 // observador ya tiene (pares de snapshots y el instante de entrada a cada
 // estado). Ventana de 0,15 s: con server y cliente a 20 Hz sin sincronizar,
 // a veces llegan dos estados iguales seguidos y un par suelto daba 0 y luego
@@ -66,8 +69,9 @@ export class RemotePlayer {
   }
 
   push(s, rt = performance.now() / 1000) {
-    this.buf.push({ rt, ...s });
-    if (this.buf.length > 40) this.buf.shift();
+    // `at` = rt: el buffer sirve tal cual de historial a hit-pose.js
+    // (poseAt/transitionOf), sin copiarlo en cada consulta de impacto
+    pushRemoteSample(this.buf, s, rt);
   }
 
   // posición interpolada del buffer en un instante de recepción dado
@@ -78,9 +82,10 @@ export class RemotePlayer {
     const s1 = b[Math.max(0, i - 1)], s2 = b[i];
     const span = Math.max(1e-4, s2.rt - s1.rt);
     const k = clamp((rt - s1.rt) / span, 0, 1);
-    out.x = s1.x + (s2.x - s1.x) * k;
-    out.y = fin(s1.y) + (fin(s2.y) - fin(s1.y)) * k;
-    out.z = s1.z + (s2.z - s1.z) * k;
+    const posK = dodgeFraction(s1, s2, rt, k);
+    out.x = s1.x + (s2.x - s1.x) * posK;
+    out.y = fin(s1.y) + (fin(s2.y) - fin(s1.y)) * posK;
+    out.z = s1.z + (s2.z - s1.z) * posK;
     return out;
   }
 
@@ -96,27 +101,20 @@ export class RemotePlayer {
   // interpola con retraso. Aplicar este pequeño snapshot visual evita mostrar
   // el flash sobre low-ready cuando el tirador ya había asentado ADS.
   applyFirePose(pose, weapon) {
+    // Corrida 6: el evento de fuego solo da fogonazo y brazos (lado del
+    // arma). Cabeza, torso y volumen salen SIEMPRE de la pose aceptada e
+    // interpolada de los snapshots: antes `fp` imponía postura, ADS,
+    // exposición e inclinación ~160 ms (y una ráfaga lo renovaba) mientras
+    // los impactos se resolvían contra los snapshots.
     const hasPose = !!pose && typeof pose === 'object' && !Array.isArray(pose);
-    if (hasPose) {
-      if (typeof pose.st === 'string') this.st = pose.st;
-      this.aim = !!pose.a;
-      if (Number.isFinite(pose.p)) this.pitch = pose.p;
-      if (Number.isFinite(pose.ae)) this.aimErr = pose.ae;
-      if (Number.isFinite(pose.cl)) this.coverLean = pose.cl;
-      if (Number.isFinite(pose.ce)) { this.coverExposure = hitModel() === 2 ? pose.ce : 0; this.ceKnown = true; }
-      this.coverKind = typeof pose.ck === 'string' ? pose.ck : null;
-      // El evento de fuego llega antes que el snapshot interpolado: cambiar de
-      // hombro aquí evita mostrar un disparo izquierdo con la pose derecha.
-      this.aimSide = this.aim && Math.abs(this.coverLean) > 0.1
-        ? Math.sign(this.coverLean) : 1;
+    if (hasPose && Number.isFinite(pose.cl) && pose.a) {
+      this.aimSide = Math.abs(pose.cl) > 0.1 ? Math.sign(pose.cl) : 1;
     }
     if (typeof weapon === 'string') {
       this._lastW = weapon;
       this.rig.setWeapon(weapon);
     }
-    // Un servidor anterior no envía `fp`. En ese caso no congeles la pose
-    // interpolada: una ráfaga automática podría renovar el hold para siempre.
-    if (hasPose) this.firePoseT = TUNING.net.interpDelay + 0.04;
+    this.rig.fireWeaponParts?.();
     this.firing = 0.45;
   }
 
@@ -126,6 +124,16 @@ export class RemotePlayer {
   applyThrow() {
     const g = TUNING.weapons.grenade;
     this.throwT = g.throwTime - g.throwRelease;
+  }
+
+  _onEvent(type, weapon, now) {
+    this._evSeen = true;
+    const g = TUNING.weapons.grenade;
+    if (type === 'swapStart') this._swapShown = now;
+    else if (type === 'reloadCancel') { this.reloading = false; this.reloadT = 0; this._reloadDone = true; }
+    else if (type === 'throwStart') this.throwT = g.throwTime;
+    else if (type === 'throwRelease') this.applyThrow();
+    else if (type === 'throwCancel') this.throwT = 0;
   }
 
   // Su golpe conectó (hitConfirm): como en controller.js, el gesto termina
@@ -229,9 +237,11 @@ export class RemotePlayer {
       s1 = b[Math.max(0, i - 1)]; s2 = b[i];
       const span = Math.max(1e-4, s2.rt - s1.rt);
       const k = Math.max(0, Math.min(1, (t - s1.rt) / span));
-      this.x = s1.x + (s2.x - s1.x) * k;
-      this.z = s1.z + (s2.z - s1.z) * k;
-      this.y = (s1.y ?? 0) + ((s2.y ?? 0) - (s1.y ?? 0)) * k;
+      const posK = dodgeFraction(s1, s2, t, k);
+      this.x = s1.x + (s2.x - s1.x) * posK;
+      this.z = s1.z + (s2.z - s1.z) * posK;
+      this.y = (s1.y ?? 0) + ((s2.y ?? 0) - (s1.y ?? 0)) * posK;
+      if (s2.dash && t > s2.rt) advanceMissingDodge(this, s2, t);
       this.yaw = lerpAngle(s1.yaw, s2.yaw, k);
       if (!holdFirePose) {
         this.st = typeof s2.st === 'string' ? s2.st : 'idle'; this.aim = !!s2.aim;
@@ -242,6 +252,8 @@ export class RemotePlayer {
         // (agachado) y el rig se dibuja igual: lo que se ve es lo impactable
         this.ceKnown = Number.isFinite(s2.ce);
         // con un servidor anterior (modelo 1) se dibuja agachado: es lo que se traza
+        // (crouch: altura de cabeza, interpolada desde la del snapshot previo
+        // aunque fuera de pie: ce=1 de pie, nunca salta)
         this.coverExposure = this.ceKnown && hitModel() === 2 ? (s1.ce ?? s2.ce) + (s2.ce - (s1.ce ?? s2.ce)) * k : 0;
         this.coverKind = s2.ck ?? null;
       }
@@ -250,11 +262,16 @@ export class RemotePlayer {
       // flip, fases, exposición, asomado). Un evento de fuego (applyFirePose)
       // solo sustituye la PRESENTACIÓN (this.st/aim/... de arriba), nunca esto.
       const hs = this._hitSnap ||= {};
+      if (s2.st === 'dodge') {
+        const age = s1.st === 'dodge' ? (s1.dg ?? 0) : 0;
+        this.dodgePhase = s2.dash ? clamp((t - s2.dash.start) / TUNING.dodge.duration, 0, 1) : Math.min(1, (age + ((s2.dg ?? age) - age) * k) / TUNING.dodge.duration);
+      }
       hs.st = s2.st; hs.aim = !!s2.aim;
       hs.pitch = (s1.p ?? 0) + ((s2.p ?? 0) - (s1.p ?? 0)) * k;
       hs.cl = (s1.cl ?? 0) + ((s2.cl ?? 0) - (s1.cl ?? 0)) * k;
       hs.ce = Number.isFinite(s2.ce) ? (s1.ce ?? s2.ce) + (s2.ce - (s1.ce ?? s2.ce)) * k : undefined;
       hs.w = s2.w ?? 'smg';
+      hs.sp = (s1.sp ?? 0) + ((s2.sp ?? 0) - (s1.sp ?? 0)) * k;
       // entrada al estado del SNAPSHOT (no al dibujado, que un evento de fuego
       // puede sustituir): de aquí sale la fase de dive/mantle/flip del volumen
       if (hs.st !== this._hsPrev) {
@@ -282,6 +299,14 @@ export class RemotePlayer {
       const v = this._velocity(t - VEL_WINDOW / 2, t + VEL_WINDOW / 2, this._sA);
       this.vx = v.x; this.vz = v.z; this.vy = v.y;
     }
+    const dash = this.alive ? s2?.dash : null;
+    if (dash) {
+      dodgeCues(dash, t - dash.start, this.x, this.y, this.z, dash.dx, dash.dz, this.team, this.onDodgeCue, false);
+    } else if (this._shownDash && this.alive && b.length && this._shownDash.end) {
+      const d = this._shownDash, end = d.end;
+      dodgeCues(d, end.dg, end.x, end.y, end.z, d.dx, d.dz, this.team, this.onDodgeCue, true);
+    }
+    this._shownDash = dash;
     // fases por tiempo desde la entrada al estado (tiempo de pantalla)
     if (this.st !== this._stPrev) {
       // el estado se dibuja desde que empieza el par (s1 → s2), pero empezó
@@ -300,8 +325,17 @@ export class RemotePlayer {
     // Cambio de arma: el modelo cambia a mitad del gesto. El buffer va unos
     // 0,12 s por delante de lo dibujado: si ya trae otra arma, el gesto
     // empieza ahora, y sigue media duración después del cambio visible.
+    // Eventos de acción (`ev` del snapshot, una vez): se aplican cuando su
+    // snapshot llega al instante dibujado. Con eventos, el cambio de arma ya
+    // no se infiere por `w`.
+    const events = [];
+    for (const q of b) {
+      if (q.rt > t || q._evDone || !Array.isArray(q.ev)) continue;
+      q._evDone = true;
+      for (const e of q.ev) { if (Array.isArray(e)) { events.push(e); this._onEvent(e[0], e[1], now); } }
+    }
     let swapAhead = false;
-    for (let j = b.length - 1; j >= 0 && b[j].rt > t; j--) {
+    if (!this._evSeen) for (let j = b.length - 1; j >= 0 && b[j].rt > t; j--) {
       if (b[j].rt <= t + SWAP_HALF && (b[j].w ?? 'smg') !== this._lastW) { swapAhead = true; break; }
     }
     this.swapAnim = swapAhead || (this._swapShown && now - this._swapShown < SWAP_HALF) ? 1 : 0;
@@ -311,8 +345,13 @@ export class RemotePlayer {
     // (lo dibujado dura lo que duraron los snapshots, ±50 ms de 0,42 s)
     this.mantlePhase = this.st === 'mantle' ? this._mantlePhaseAt(this.stEntry, t) : 0;
     const ml = TUNING.melee;
-    const meleeEnd = this._meleeHitAt && now - this._meleeHitAt < ml.time ? ml.hitAt + ml.hitRecovery : ml.time;
-    this.meleePhase = this.st === 'melee' ? Math.min(1, since / meleeEnd) : 0;
+    // La confirmación se oye ya, aunque las poses se dibujen desde el búfer.
+    // En ese mismo cuadro la suela llega al blanco y aguanta el hit-stop.
+    const confirmed = this.st === 'melee' && Number.isFinite(this._meleeHitAt) &&
+      this._meleeHitAt >= this.stEntry && now - this._meleeHitAt < ml.time;
+    const meleeEnd = confirmed ? ml.hitAt + ml.hitRecovery : ml.time;
+    const elapsed = confirmed ? ml.hitAt + Math.max(0, now - this._meleeHitAt - ml.hitStop) : since;
+    this.meleePhase = this.st === 'melee' ? Math.min(1, elapsed / meleeEnd) : 0;
     this.rig.setTransform(this.x, this.z, this.yaw, this.y ?? 0);
     const targetAimSide = this.aim && Math.abs(this.coverLean) > 0.1
       ? this.coverLean : 1;
@@ -337,7 +376,10 @@ export class RemotePlayer {
     // dirección de la marcha respecto al cuerpo, como animParams() del
     // controller: con la velocidad real, no con el salto de un cuadro
     const hs = Math.hypot(this.vx, this.vz);
-    if (hs > 0.05) {
+    if (s2?.dash) {
+      this.moveForward = -s2.dash.dx * Math.sin(this.yaw) - s2.dash.dz * Math.cos(this.yaw);
+      this.moveSide = s2.dash.dx * Math.cos(this.yaw) - s2.dash.dz * Math.sin(this.yaw);
+    } else if (hs > 0.05) {
       this.moveForward = (-this.vx * Math.sin(this.yaw) - this.vz * Math.cos(this.yaw)) / hs;
       this.moveSide = (this.vx * Math.cos(this.yaw) - this.vz * Math.sin(this.yaw)) / hs;
     } else if (Math.hypot(this.x - oldX, this.z - oldZ) < 1e-4) {
@@ -354,8 +396,16 @@ export class RemotePlayer {
     const pitchTarget = grounded ? groundPitchTarget(this.rig.groundFn, this.x, this.z, this.yaw, this.y) : 0;
     this.groundPitch += (pitchTarget - this.groundPitch) * (1 - Math.exp(-TUNING.move.groundPitchLerp * dt));
     const g = TUNING.weapons.grenade;
+    // `crouch` (FPS): altura de cabeza en coverAimExposure (= ce, también sin
+    // apuntar) e inclinación en coverLean (= cl). Mientras el rig no tenga la
+    // pose propia (supportsState), se dibuja la de cobertura baja, que agacha
+    // igual y sube con `ce` al apuntar.
+    const rigState = this.st === 'crouch' && !this.rig.supportsState?.('crouch') ? 'cover_low' : this.st;
+    const prep = s2?.prepare;
+    const brace = prep ? clamp(1 - (prep.start - t) / DODGE_PREP, 0, 1) : 0;
     this.anim = {
-      state: this.alive ? this.st : 'dead',
+      dodgeBrace: brace,
+      state: this.alive ? rigState : 'dead',
       speed: this.sp,
       moveForward: this.moveForward ?? 1,
       moveSide: this.moveSide ?? 0,
@@ -375,9 +425,10 @@ export class RemotePlayer {
       flipT: this.flipT,
       flipDir: this.flipInfo?.dir ?? 1,
       flipAxis: this.flipInfo?.axis ?? 'z',
-      evadePhase: this.evadePhase,
+      evadePhase: this.st === 'dodge' ? this.dodgePhase : this.evadePhase,
       mantlePhase: this.mantlePhase,
       meleePhase: this.st === 'melee' ? this.meleePhase : undefined,
+      meleeEnd,
       meleeTackle: this.st === 'melee' && this.meleeTackle,
       swapping: this.swapAnim > 0,
       throwT: this.throwT,
@@ -385,6 +436,13 @@ export class RemotePlayer {
       throwReleased: this.throwT > 0,
       reloading: this.reloading,
       reloadT: this.reloadT,
+      // ce/cl ya vienen interpolados del flujo de snapshots (lo mismo que el
+      // volumen): el rig no los vuelve a filtrar y mezcla los cambios de
+      // estado con la MISMA transición que el volumen (ganchos/rig.md)
+      interpolated: true,
+      poseTr: this._poseTr(),
+      // eventos de este cuadro, una vez (ganchos/red.md "Para RIG")
+      events,
     };
     this.rig.update(dt, this.anim);
     // protección de spawn: highlight sutil del color del equipo
@@ -398,8 +456,20 @@ export class RemotePlayer {
     const hs = this._hitSnap;
     if (!hs) return { st: this.alive ? 'idle' : 'dead' };
     const st = this.alive ? (typeof hs.st === 'string' ? hs.st : 'idle') : 'dead';
+    // transición de estado (hit-pose.js transitionOf): la misma regla que el
+    // servidor sobre el mismo flujo de snapshots (tiempo de recepción)
+    const tr = this._poseTr();
     return { st, aim: hs.aim, ce: hs.ce, cl: hs.cl, pitch: hs.pitch, phase: this._hitPhase(st),
-      flipDir: this._hsFlip?.dir ?? 1, flipAxis: this._hsFlip?.axis ?? 'z', wep: hs.w };
+      flipDir: this._hsFlip?.dir ?? 1, flipAxis: this._hsFlip?.axis ?? 'z', wep: hs.w, sp: hs.sp, ...(tr || {}) };
+  }
+
+  // transición de estado en curso (hit-pose.js transitionOf) sobre el buffer,
+  // la misma para el volumen y para el rig
+  _poseTr() {
+    const hs = this._hitSnap;
+    if (!hs || !this.alive || this.buf.length < 2) return null;
+    const cur = poseAt(this.buf, hs.t);
+    return cur ? transitionOf(this.buf, cur.i, hs.t) : null;
   }
 
   // fase de la acción para el volumen, desde la entrada del estado del snapshot

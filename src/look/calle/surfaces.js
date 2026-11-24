@@ -13,7 +13,7 @@
 // Las piezas horneadas de Calle 2 (ver optimizeCalle2) se repintan con
 // retint() por material de origen, sin sumar llamadas de dibujo.
 import * as THREE from 'three';
-import { NOISE, patch } from '../glsl.js';
+import { FILTERED_DETAIL, NOISE, patch } from '../glsl.js';
 import { retint, tintOf, CALLE_LAMP_HEADS } from '../../world/calle-expansion-art.js';
 import { findSources, sourceState, WASH_VERT, washFrag, washPars, MAX_SOURCES } from './sources.js';
 
@@ -130,18 +130,18 @@ uniform sampler2D uLkMacro;
 uniform vec3 uLkAsphalt, uLkAsphaltWarm, uLkPuddle;
 ${GLOWS ? `uniform vec4 uLkGlowP[${GLOWS}];
 uniform vec3 uLkGlowC[${GLOWS}];` : ''}
-${NOISE}
+${NOISE}${FILTERED_DETAIL}
 float lkWet = 0.0; vec3 lkBump = vec3(0.0);`,
   fragment: /* glsl */`
 {
   vec2 p = vLkPos.xz;
   float broad = texture2D(uLkMacro, p * 0.045 + 0.13).r, mid = texture2D(uLkMacro, p * 0.21 + 0.61).g;
-  float grain = lkNoise(p * 11.0) * 0.55 + lkNoise(p * 37.0) * 0.45;
+  float grain = lkDetail(p * 11.0) * 0.55 + lkDetail(p * 37.0) * 0.45;
   float tone = dot(diffuseColor.rgb, vec3(0.3333));                       // grietas y árido de la textura de siempre
   vec3 col = mix(uLkAsphalt, uLkAsphaltWarm, smoothstep(0.35, 0.75, mid));
   col *= mix(0.82, 1.12, broad) * mix(0.86, 1.10, grain) * clamp(tone * 1.6, 0.5, 1.25);
   // parches de asfalto viejo y hollín: la calle lleva meses sin barrer
-  float patchy = smoothstep(0.62, 0.7, lkNoise(p * 0.33 + 4.0));
+  float patchy = smoothstep(0.62, 0.7, lkDetail(p * 0.33 + 4.0));
   col *= 1.0 - patchy * 0.18;
   // la cuneta junto al bordillo guarda agua; el centro de la calzada, menos
   float gutter = 1.0 - smoothstep(0.4, 1.6, abs(abs(p.x) - 11.2));
@@ -191,14 +191,14 @@ function wornPatch(NS, { glass = false, tv = false, neon = null, bar = null, bur
   const fragmentPars = `${NS ? washPars(NS) : 'varying vec3 vLkSW;'}
 varying vec3 vLkSN;
 uniform float uLookTime; uniform vec3 uLkDust, uLkCrackC, uLkTv; uniform vec4 uLkBar;
-${NOISE}
+${NOISE}${FILTERED_DETAIL}
 float lkCrack = 0.0, lkGone = 0.0;`;
   let fragment = /* glsl */`
 {
   vec3 n = normalize(vLkSN + vec3(0.0, 1e-5, 0.0));
   float up = smoothstep(0.5, 0.92, n.y), side = 1.0 - abs(n.y);
-  float blot = lkNoise(vLkSW.xz * 1.6 + vLkSW.y * 0.8);
-  float streak = lkNoise(vec2(dot(vLkSW.xz, vec2(0.71)) * 2.6, vLkSW.y * 0.3));
+  float blot = lkDetail(vLkSW.xz * 1.6 + vLkSW.y * 0.8);
+  float streak = lkDetail(vec2(dot(vLkSW.xz, vec2(0.71)) * 2.6, vLkSW.y * 0.3));
   // polvo de meses en techos, capós y tapas: se lee más claro que el asfalto
   diffuseColor.rgb = mix(diffuseColor.rgb, uLkDust * (0.8 + 0.3 * blot), up * (0.22 + 0.38 * blot));
   // mugre que sube del suelo y chorretones de hollín en las caras
@@ -210,7 +210,7 @@ float lkCrack = 0.0, lkGone = 0.0;`;
     // auto quemado: chapa carbonizada con óxido en placas
     fragment += /* glsl */`
 {
-  float r = lkNoise(vLkSW.xz * 2.3 + vLkSW.y * 3.1) * 0.6 + lkNoise(vLkSW.xy * 7.0) * 0.4;
+  float r = lkDetail(vLkSW.xz * 2.3 + vLkSW.y * 3.1) * 0.6 + lkDetail(vLkSW.xy * 7.0) * 0.4;
   diffuseColor.rgb = mix(vec3(0.012, 0.011, 0.01), vec3(0.13, 0.05, 0.02), smoothstep(0.62, 0.8, r));
 }`;
   }
@@ -227,12 +227,13 @@ float lkCrack = 0.0, lkGone = 0.0;`;
   float cell = lkHash21(id + 7.0);
   vec2 d = q - (id + 0.25 + 0.5 * lkHash22(id + 3.0)) * 1.3 + 1e-4;
   float r = length(d);
-  float a = atan(d.y, d.x) + 0.25 * (lkNoise(d * 9.0) - 0.5);
+  float a = atan(d.y, d.x) + 0.25 * (lkDetail(d * 9.0) - 0.5);
   float sp = fract(a * 1.4324 + cell * 7.0);                      // 9 radios
   float arc = min(sp, 1.0 - sp) * 0.698 * r;
   float spokes = (1.0 - smoothstep(0.003, 0.009, arc)) * (1.0 - smoothstep(0.2, 0.55 + 0.4 * cell, r));
-  float rings = (1.0 - smoothstep(0.0, 0.007, abs(r - 0.07 - 0.05 * cell))) + (1.0 - smoothstep(0.0, 0.006, abs(r - 0.19 - 0.08 * cell))) * step(0.4, lkNoise(d * 14.0));
+  float rings = (1.0 - smoothstep(0.0, 0.007, abs(r - 0.07 - 0.05 * cell))) + (1.0 - smoothstep(0.0, 0.006, abs(r - 0.19 - 0.08 * cell))) * step(0.4, lkDetail(d * 14.0));
   lkCrack = clamp(spokes + rings + (1.0 - smoothstep(0.0, 0.03, r)), 0.0, 1.0) * step(0.5, cell);
+  lkCrack *= 1.0-smoothstep(.008,.045,max(fwidth(q.x),fwidth(q.y)));
   lkGone = step(cell, 0.12);
   diffuseColor.rgb = mix(diffuseColor.rgb, uLkCrackC * 0.6, lkCrack * 0.5);
   diffuseColor.rgb *= 1.0 - lkGone * 0.8;

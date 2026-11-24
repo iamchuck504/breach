@@ -10,9 +10,12 @@ import { clearClip } from './lib-clip.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
 import { CHROME } from './lib-chrome.mjs';
+import { actionKeys, freePort } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
-  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: '8798', INTRO_TIME: '2', COUNTDOWN_TIME: '1',
+  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: String(FREE_PORT), INTRO_TIME: '2', COUNTDOWN_TIME: '1',
     NODE_ENV: 'test', ALLOW_TEST_TELEPORTS: '1' },
   stdio: 'ignore',
 });
@@ -30,12 +33,12 @@ const mkClient = async (name) => {
   const ctx = await browser.newContext();
   const pg = await ctx.newPage();
   pg.on('pageerror', (e) => { pageErrors++; console.log(`PAGEERROR ${name}:`, e.message); });
-  await pg.goto('http://localhost:8798/?nolock=1', { waitUntil: 'networkidle' });
+  await pg.goto(`http://localhost:${FREE_PORT}/?nolock=1`, { waitUntil: 'networkidle' });
   await pg.evaluate(() => document.getElementById('btn-enter')?.click());
   await pg.waitForSelector('#splash.off', { state: 'attached' });
   await pg.evaluate((n) => {
     document.getElementById('in-name').value = n;
-    document.getElementById('in-server').value = 'ws://localhost:8798';
+    document.getElementById('in-server').value = `ws://localhost:${FREE_PORT}`;
   }, name);
   return pg;
 };
@@ -155,18 +158,18 @@ const pedestalBoth = {
 check('el pedestal existe en ambos clientes', pedestalBoth.p1 === 'sniper' && pedestalBoth.p2 === 'sniper',
   JSON.stringify(pedestalBoth));
 
-// ambos se plantan encima y mantienen evadir a la vez
+// ambos se plantan encima y mantienen la tecla de recoger a la vez
 for (const pg of [p1, p2]) {
-  await pg.evaluate(() => {
+  await pg.evaluate(pickup => {
     const S = window.BREACH_SPECIALS, p = window.BREACH.player;
     if (S.active) { p.pos.x = S.active.x; p.pos.z = S.active.z; p.y = S.active.y; }
     p.vel.x = 0; p.vel.z = 0; p.state = 'idle'; p.cover = null;
-    window.BREACH_INPUT.keys.add('Space');
-  });
+    window.BREACH_INPUT.keys.add(pickup);
+  }, (await actionKeys(pg, 'pickup')).pickup);
 }
 await p1.waitForTimeout(1800);
 for (const pg of [p1, p2]) {
-  await pg.evaluate(() => window.BREACH_INPUT.keys.delete('Space'));
+  await pg.evaluate(pickup => window.BREACH_INPUT.keys.delete(pickup), (await actionKeys(pg, 'pickup')).pickup);
 }
 await p1.waitForTimeout(600);
 const claim = {

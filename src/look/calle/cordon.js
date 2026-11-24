@@ -13,7 +13,7 @@ export function build(ctx) {
   const S = ctx.calle.sources, list = S.list;
   if (!list.length) return null;
   const N = S.I.length;
-    const dot = new THREE.CanvasTexture(glowDot());
+  const dot = new THREE.CanvasTexture(glowDot());
   dot.colorSpace = THREE.SRGBColorSpace;
 
   // --- halos: un núcleo pequeño y un halo ancho por fuente. Aditivos, sin
@@ -22,8 +22,8 @@ export function build(ctx) {
   {
     const pos = [], col = [], src = [], size = [];
     list.forEach((s, i) => {
-      const core = { flare: 0.16, amber: 0.26, beacon: 0.3, ember: 0.22 }[s.kind] ?? 0.32;
-      const halo = { flare: 1.0, amber: 1.9, beacon: 2.6, ember: 0.9 }[s.kind] ?? 3.2;
+      const core = { flare: 0.16, amber: 0.09, beacon: 0.12, ember: 0.22 }[s.kind] ?? 0.14;
+      const halo = { flare: 1.0, amber: 0.22, beacon: 0.26, ember: 0.9 }[s.kind] ?? 0.42;
       const y = s.kind === 'flare' ? 0.07 : s.pos.y;
       for (const [sz, k] of [[core, 1], [halo, 0]]) {
         pos.push(s.pos.x, y, s.pos.z);
@@ -57,7 +57,7 @@ export function build(ctx) {
     });
     mat.onBeforeCompile = ((prev) => (shader, r) => {
       prev(shader, r);
-      shader.vertexShader = shader.vertexShader.replace('#include <fog_vertex>', 'gl_PointSize *= aSize;\n// de lejos no se encogen del todo: la barra se ve de punta a punta de la avenida\ngl_PointSize = max(gl_PointSize, vLkCore > 0.5 ? 4.0 : step(1.5, aSize) * 34.0 * min(vLkK, 1.0));\n#include <fog_vertex>');
+      shader.vertexShader = shader.vertexShader.replace('#include <fog_vertex>', 'gl_PointSize = max(1.0, gl_PointSize * aSize);\n#include <fog_vertex>');
     })(mat.onBeforeCompile);
     const pts = new THREE.Points(geo, mat);
     pts.name = 'cordon-halos';

@@ -4,9 +4,18 @@ import { WebSocket } from 'ws';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { eyeAt } from './lib-test.mjs';
+import { freePort } from './lib-test.mjs';
+import { withSamples } from './lib-fps-sample.mjs';
+// PRUEBAS (ronda 2 de RED): cada fire/rocket/nade/protoFire humano lleva su muestra `fs`
+// (n creciente, w = arma equipada) desde el último estado `s` de ese emisor
+const SAMPLED = withSamples((peer, m) => peer.ws.send(JSON.stringify(m)));
+
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const port = 8803;
+const port = FREE_PORT;
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
   env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: String(port), INTRO_TIME: '0', COUNTDOWN_TIME: '0',
     NODE_ENV: 'test', ALLOW_TEST_TELEPORTS: '1' },
@@ -20,7 +29,7 @@ function connect(name, action) {
     const ws = new WebSocket(`ws://127.0.0.1:${port}`);
     const p = { ws, id: null, messages: [] };
     peers.push(p);
-    ws.on('open', () => ws.send(JSON.stringify({ t: 'join', name, action, v: 0 })));
+    ws.on('open', () => ws.send(JSON.stringify({ t: 'join', name, action, v: 0, hp: 2, fps: 1 })));
     ws.on('error', reject);
     ws.on('message', (raw) => {
       const m = JSON.parse(raw);
@@ -29,7 +38,7 @@ function connect(name, action) {
     });
   });
 }
-const send = (p, m) => p.ws.send(JSON.stringify(m));
+const send = (p, m) => SAMPLED(p, m);
 async function waitFor(p, pred, timeout = 1800) {
   const t0 = Date.now();
   while (Date.now() - t0 < timeout) {
@@ -46,8 +55,12 @@ async function hp(p, id) {
 const state = (p, x, z, yaw) => send(p, {
   t: 's', x, z, y: 0, yaw, st: 'melee', w: 'smg', am: 50, ar: 200,
 });
-const strike = (a, b, ax, az, bx, bz) => {
-  send(a, { t: 'fire', w: 'melee', o: [ax, 1.08, az], p: [bx, 1.02, bz], d: [] });
+// PRUEBAS (corrida 6, auditoría): el golpe sale del OJO de la muestra (≤ 0.02 m;
+// antes ~4 m de margen). `yaw` = el del último estado; `shift` desplaza el origen
+// para el caso que el servidor debe rechazar.
+const strike = (a, b, ax, az, bx, bz, yaw = 0, shift = [0, 0, 0]) => {
+  const o = eyeAt(ax, 0, az, yaw, 'melee').map((v, i) => +(v + shift[i]).toFixed(3));
+  send(a, { t: 'fire', w: 'melee', o, p: [bx, 1.02, bz], d: [] });
   send(a, { t: 'hit', target: b.id, dmg: 60, part: 'body', gib: 0, p: [bx, 1.02, bz] });
 };
 
@@ -64,7 +77,7 @@ try {
   await delay(5100);
   state(b, 3, 0, Math.PI);
   await delay(80);
-  send(b, { t: 'fire', w: 'smg', o: [3, 1.1, 0], p: [3, 1.1, 6], d: [] });
+  send(b, { t: 'fire', w: 'smg', o: eyeAt(3, 0, 0, Math.PI), p: [3, 1.1, 6], d: [] });
   await delay(100);
 
   // Demasiado lejos: ni el fire queda pendiente ni el hit aplica.
@@ -80,6 +93,14 @@ try {
   await delay(160);
   const backHp = await hp(a, b.id);
   if (backHp !== 100) throw new Error(`melee trasero aceptado: hp=${backHp}`);
+
+  // Frente y en rango pero con el origen a 1 m del ojo de la muestra: rechazado.
+  await delay(420);
+  state(a, 3, 1.2, 0); state(b, 3, 0, Math.PI); await delay(140);
+  strike(a, b, 3, 1.2, 3, 0, 0, [1, 0, 0]);
+  await delay(160);
+  const offHp = await hp(a, b.id);
+  if (offHp !== 100) throw new Error(`melee con origen a 1 m del ojo aceptado: hp=${offHp}`);
 
   // Frente y en rango: daño autoritativo + evento de reacción.
   await delay(420);

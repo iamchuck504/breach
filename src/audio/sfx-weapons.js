@@ -5,10 +5,10 @@
 // un pitido placeholder. Helpers y varios diseños (clank/slide/thunk, bomba,
 // cartucho, cambio de arma, seco, patada, impactos, ticks) son los de
 // Crashterra (src/audio/sfx-weapons.ts), copiados tal cual o con el mínimo
-// ajuste anotado. Todo es mono: el paneo lo pone la mezcla espacial.
+// ajuste anotado. La patada conserva el estéreo de la fuente; la mezcla sitúa a cada actor.
 import {
   ad, bank, bp, clicks, curve, dcBlock, ed, hp, knock, loopify, lp, metal, mixInto, modes, mono, noise,
-  normalize, pulse, sat, scrape, SR, tone, trimTail, win,
+  normalize, pulse, sat, scrape, SR, tone, trimTail, widen, win, withRoom,
 } from './dsp.js';
 
 const TAU = Math.PI * 2;
@@ -106,6 +106,31 @@ function punch(r, heavy) {
   return M(x, 0.9);
 }
 
+/**
+ * Primera persona: la boca está a medio metro del oído. Lo que el sample
+ * ("grabado de lejos") no trae es la presión en el pecho y el chasquido
+ * seco de la boca: un pulso de presión grave (sin altura, dsp.pulse) y una
+ * ráfaga de ruido de 1–5 ms. Todo ruido: ningún parcial que se pueda
+ * tararear (misma compuerta de tonalidad que la mecánica).
+ */
+function nearBlast(r, heavy) {
+  const d = heavy ? 0.2 : 0.12;
+  const x = mono(d);
+  const k = r.vary(1, 0.22);
+  // presión: dos medios cosenos (onda N) — el segundo invertido y más ancho;
+  // frecuencias y separación cambian por variante (si no, todas iguales)
+  pulse(x, 0, (heavy ? 70 : 95) * k, 1);
+  pulse(x, (heavy ? 0.007 : 0.005) * r.range(0.8, 1.4), (heavy ? 45 : 60) * r.vary(1, 0.25), -r.range(0.4, 0.7));
+  noise(x, r, { dur: heavy ? 0.09 : 0.05, color: 'brown', type: 'lp', f: heavy ? 260 : 340, amp: heavy ? 1.3 : 1, env: (t) => ad(t, 0.0008, heavy ? 0.022 : 0.012) });
+  // chasquido de boca: corto y ancho, sin aire por encima de ~9 kHz
+  noise(x, r, { dur: 0.008, type: 'bp', f: r.range(2200, 3200), q: 0.6, amp: heavy ? 0.55 : 0.5, env: (t) => ed(t, 0.0014) });
+  noise(x, r, { dur: 0.03, type: 'bp', f: r.range(900, 1400), q: 0.7, amp: 0.35, env: (t) => ed(t, heavy ? 0.007 : 0.005) });
+  sat(x, heavy ? 1.8 : 1.5);
+  lp(x, 9000);
+  dcBlock(x);
+  return M(x, 0.9);
+}
+
 /* -------------------------------------------- disparo ajeno a distancia */
 
 // Un disparo lejano no es el cercano filtrado: pierde el crack, conserva un
@@ -165,6 +190,17 @@ function rocketLoop(r) {
   return [normalize([loopify(x, L, 0.3)], 0.8)[0]];
 }
 
+/** Paso cercano de un cohete: ráfaga de aire que crece y se va (sin silbido tonal). */
+function rocketPass(r) {
+  const d = 0.75;
+  const x = mono(d);
+  noise(x, r, { dur: d, color: 'pink', type: 'bp', f: curve([[0, 900], [0.45, 1700], [1, 500]]), q: 0.7, amp: 1, env: (t) => win(t / d, 0.42, 0.5) });
+  noise(x, r, { dur: d, color: 'brown', type: 'lp', f: 300, amp: 0.8, env: (t) => win(t / d, 0.45, 0.45) });
+  clicks(x, r, 0.2, 0.35, 60, 1500, 1.4, 0.2, 0.001);
+  lp(x, 6500);
+  return M(x, 0.85);
+}
+
 /* --------------------------------------------------------- explosiones */
 
 function boom(r, far) {
@@ -186,6 +222,24 @@ function boom(r, far) {
   if (!far) clicks(x, r, 0.08, 1, 55, 2600, 1.4, 0.3, 0.0012, (u) => (1 - u) * (1 - u));
   dcBlock(x);
   return M(x, 0.97);
+}
+/**
+ * Explosión a pocos metros en primera persona: el golpe de presión que se
+ * siente más que se oye. Pulsos anchos (25–45 Hz) y ruido marrón muy grave;
+ * el agudo lo recorta el oído (engine.earMuffle), no se añade aquí.
+ */
+function boomNear(r) {
+  const d = 0.7;
+  const x = mono(d);
+  const k = r.vary(1, 0.1);
+  pulse(x, 0, 42 * k, 1);
+  pulse(x, 0.012, 26 * k, -0.7);
+  noise(x, r, { dur: 0.6, color: 'brown', type: 'lp', f: 110 * k, amp: 2.2, env: (t) => ad(t, 0.004, 0.09) });
+  noise(x, r, { dur: 0.25, color: 'brown', type: 'lp', f: 320, amp: 0.8, env: (t) => ad(t, 0.002, 0.03) });
+  sat(x, 1.8);
+  lp(x, 700);
+  dcBlock(x, 12);
+  return M(x, 0.95);
 }
 /** Capa extra del impacto directo en un cuerpo: crack seco medio-agudo. */
 function boomDirect(r) {
@@ -447,38 +501,75 @@ function dryClick(r) {
   return M(x, 0.7);
 }
 
+/* --------------------------------- manejo en primera persona (por eventos) */
+
+// Cambio de arma en dos mitades, cada una en su evento: swapStart guarda el
+// arma (tela y correa, sin golpe), swapMid la saca: el golpe de las manos
+// cae ~0.14 s después, cuando el viewmodel asienta el arma (u ≈ 0.77–0.8 del
+// gesto de 0.55 s; profiles/common.js swap).
+function holster(r, light) {
+  const d = light ? 0.2 : 0.28;
+  const x = mono(d);
+  noise(x, r, { dur: d * 0.8, color: 'pink', type: 'bp', f: light ? 1200 : 850, q: 0.7, amp: 0.45, env: (t) => win(t / (d * 0.8), 0.3, 0.6) });
+  if (!light) scrape(x, r, 0.04, 0.12, 1000, 1400, 0.2, { q: 0.8, grain: 0.85 });
+  knock(x, r, d * 0.7, { amp: 0.25, bright: 1300, body: 360, dec: 0.008, weight: 0.2, weightF: 150, metal: 0.06, mf: [600, 2200], mt: [0.002, 0.008] });
+  lp(x, 7000);
+  return M(x, 0.75);
+}
+function draw(r, light) {
+  const x = mono(light ? 0.26 : 0.34);
+  noise(x, r, { dur: 0.11, type: 'bp', f: curve([[0, 800], [1, light ? 2000 : 1500]]), q: 0.8, amp: 0.4, env: (t) => win(t / 0.11, 0.4, 0.5) });
+  seat(x, r, 0.14, 1, light
+    ? { bright: 2200, body: 420, dec: 0.008, weight: 0.3, weightF: 140, metal: 0.2, mf: [1000, 5000], mt: [0.0015, 0.01] }
+    : { bright: 1600, body: 260, dec: 0.012, weight: 0.65, weightF: 95, metal: 0.25, mf: [600, 3500], mt: [0.002, 0.015] });
+  latch(x, r, light ? 0.19 : 0.21, 0.22, 2800);
+  lp(x, 8000);
+  return M(x, 0.85);
+}
+// throwStart: la mano suelta el guardamanos y toma el bote del chaleco
+function nadeReady(r) {
+  const x = mono(0.24);
+  noise(x, r, { dur: 0.1, color: 'pink', type: 'bp', f: 1100, q: 0.7, amp: 0.4, env: (t) => win(t / 0.1, 0.3, 0.6) });
+  knock(x, r, 0.07, { amp: 0.6, bright: 2100, body: 600, dec: 0.006, weight: 0.2, weightF: 200, metal: 0.25, mf: [1200, 5000], mt: [0.0015, 0.007] });
+  latch(x, r, 0.12, 0.3, 3000);
+  lp(x, 8000);
+  return M(x, 0.75);
+}
+
 /* ------------------------------------------------- cuerpo a cuerpo (Crashterra) */
 
 function meleeSwing(r) {
   const d = 0.26;
   const x = mono(d);
   noise(x, r, { dur: d, type: 'bp', f: curve([[0, 450], [0.45, 1900], [1, 600]]), q: 1.1, amp: 1, env: (t) => win(t / d, 0.45, 0.5) });
+  // La tela vibra mientras sale la bota.
   const flap = mono(d);
   noise(flap, r, { dur: d, type: 'lp', f: 900, amp: 1 });
   for (let i = 0; i < flap.length; i++) flap[i] *= (0.5 + 0.5 * Math.sin((TAU * 34 * i) / SR)) * win(i / flap.length, 0.3, 0.4);
   mixInto(x, flap, 0, 0.4);
-  return M(x, 0.85);
+  return trimTail(normalize(widen(x, 0.6), 0.85));
 }
+
 function meleeHit(r, v) {
-  const d = 0.6;
+  const d = 0.8;
   const x = mono(d);
+  // Peso de la bota en el contacto.
   const thud = mono(0.4);
   const kk = r.vary(1, 0.1) * (1 + (v - 1) * 0.07);
-  // cuerpo golpeado: pulso de presión + ruido grave (antes un seno que barría = bombo)
-  pulse(thud, 0, 110 * kk, 1);
-  noise(thud, r, { dur: 0.3, color: 'brown', type: 'lp', f: 420 * kk, amp: 1.4, env: (t) => ad(t, 0.0015, r.range(0.035, 0.06)) });
+  tone(thud, { dur: 0.4, f: curve([[0, 160 * kk], [0.1, 70 * kk], [1, 42 * kk]]), amp: 1, env: (t) => ad(t, 0.0015, r.range(0.06, 0.1)) });
   noise(thud, r, { dur: 0.1, type: 'lp', f: 600, amp: 0.8, env: (t) => ed(t, 0.02) });
   sat(thud, 2.5);
   mixInto(x, thud, 0, 1);
-  // contacto de equipo/armadura (en Crashterra era quitina)
+  // Crujido corto superpuesto al golpe.
   const cr = mono(0.12);
-  clicks(cr, r, 0, 0.05, 700, 1900, 1.2, 1, 0.001, (u) => 1 - u);
-  noise(cr, r, { dur: 0.08, type: 'bp', f: 1100, q: 1, amp: 0.6, env: (t) => ed(t, 0.014) });
+  clicks(cr, r, 0, 0.06, 900, 2200, 1.2, 1, 0.001, (u) => 1 - u);
+  noise(cr, r, { dur: 0.08, type: 'bp', f: 1300, q: 1, amp: 0.6, env: (t) => ed(t, 0.014) });
   sat(cr, 2);
-  mixInto(x, cr, 0.002, 0.4);
-  noise(x, r, { at: r.range(0.008, 0.03), dur: 0.4, color: 'brown', type: 'lp', f: 160 / kk, amp: 1.2 + v * 0.1, env: (t) => ad(t, 0.01, 0.09) });
+  mixInto(x, cr, 0.002, 0.5);
+  // Caída subgrave al final.
+  tone(x, { at: r.range(0.008, 0.03), dur: 0.6, f: curve([[0, 62 / kk], [1, 26 / kk]]), amp: 0.6 + v * 0.05, env: (t) => ad(t, 0.01, 0.18) });
   dcBlock(x);
-  return M(x, 0.97);
+  return trimTail(normalize(withRoom(x, 0.12, 0.5, 0.5, 0.9, 0.2), 0.97));
 }
 
 /* --------------------------------------------------------------- export */
@@ -491,6 +582,9 @@ export function addWeaponSounds(b) {
   b.add('punch_light', { ...L, gen: (r) => punch(r, false), variants: 3, db: -14 });
   b.add('punch_heavy', { ...L, gen: (r) => punch(r, true), variants: 3, db: -11 });
   b.add('bazooka_fire', { ...L, gen: bazookaFire, variants: 3, db: -4, max: 2, send: 0.18 });
+  // primera persona: presión y chasquido de la boca a medio metro del oído
+  b.add('near_light', { ...L, gen: (r) => nearBlast(r, false), variants: 3, db: -12, send: 0 });
+  b.add('near_heavy', { ...L, gen: (r) => nearBlast(r, true), variants: 3, db: -9, send: 0 });
   // ajeno a distancia: nunca roba a los cercanos
   const D = { bus: 'combat', prio: 62, cat: 'distant', order: 1, pitchVar: 0.05, dbVar: 1.5, max: 4, gap: 0.03, send: 0.2 };
   b.add('dist_light', { ...D, gen: (r) => distant(r, false), variants: 4, db: -6 });
@@ -515,13 +609,21 @@ export function addWeaponSounds(b) {
   b.add('swap_heavy', { ...F, gen: switchHeavy, variants: 3, db: -8, max: 1, group: 'swap' });
   b.add('swap_light', { ...F, gen: switchLight, variants: 3, db: -10, max: 1, group: 'swap' });
   b.add('dry', { ...F, gen: dryClick, variants: 3, db: -7, max: 1, gap: 0.09 });
+  // cambio por eventos (swapStart / swapMid) y toma de la granada (throwStart)
+  b.add('holster_heavy', { ...F, gen: (r) => holster(r, false), variants: 3, db: -15, max: 1, group: 'holster' });
+  b.add('holster_light', { ...F, gen: (r) => holster(r, true), variants: 3, db: -17, max: 1, group: 'holster' });
+  b.add('draw_heavy', { ...F, gen: (r) => draw(r, false), variants: 3, db: -9, max: 1, group: 'draw' });
+  b.add('draw_light', { ...F, gen: (r) => draw(r, true), variants: 3, db: -11, max: 1, group: 'draw' });
+  b.add('nade_ready', { ...F, gen: nadeReady, variants: 3, db: -13, max: 1 });
   b.add('melee_swing', { ...F, gen: meleeSwing, variants: 3, db: -9, max: 2 });
-  b.add('melee_hit', { ...F, prio: 95, gen: meleeHit, variants: 3, db: -2, max: 2, send: 0.12 });
+  b.add('melee_hit', { ...F, prio: 95, gen: meleeHit, variants: 3, db: -1, max: 2, send: 0.12 });
   // mundo: proyectiles y explosiones
   const W = { bus: 'combat', prio: 90, cat: 'explosive', order: 2, pitchVar: 0.04, dbVar: 1, max: 3, send: 0.3 };
   b.add('boom', { ...W, gen: (r) => boom(r, false), variants: 3, db: -1 });
   b.add('boom_far', { ...W, gen: (r) => boom(r, true), variants: 2, db: -4, prio: 70 });
   b.add('boom_direct', { ...W, gen: boomDirect, variants: 2, db: -4 });
+  b.add('boom_near', { ...W, gen: boomNear, variants: 2, db: -6, max: 2, send: 0 });
+  b.add('rocket_pass', { ...W, gen: rocketPass, variants: 2, db: -12, max: 2, prio: 86, send: 0.05 });
   b.add('rocket_loop', { ...W, gen: rocketLoop, variants: 1, loop: true, db: -9, send: 0.15 });
   const T = { bus: 'combat', prio: 72, cat: 'throwable', order: 2, pitchVar: 0.05, dbVar: 1.5, max: 3, gap: 0.04, send: 0.15 };
   b.add('throw', { ...T, gen: throwWhoosh, variants: 3, db: -10, prio: 90 });

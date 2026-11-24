@@ -42,7 +42,7 @@ for x in (-23.6,23.6):
  for z in (-29.2,29.2):
     cylinder('Tower masonry drum',x,3.75,z,2.35,8.5,stone,2.05)
     for y,r in ((.18,2.32),(1.15,2.30),(4.5,2.19),(7.65,2.08)):
-        cylinder('Dressed tower belt',x,y,z,r+.045,.14,trim,n=16)
+        cylinder('Dressed tower belt',x,y,z,r+.045,.158 if y==4.5 else .14,trim,n=16)
     for row in range(14):
         y=.48+row*.51;r=2.35-(y+.5)/8.5*.30
         cylinder('Recessed horizontal course',x,y,z,r+.004,.017,dark)
@@ -53,12 +53,12 @@ for x in (-23.6,23.6):
     for i in range(10):
         a=i*math.tau/10
         box('Battlement merlon',x+math.sin(a)*2,8.27,z+math.cos(a)*2,.80,.55,.95,stone,a,.045)
-        box('Merlon cap',x+math.sin(a)*2,8.49,z+math.cos(a)*2,.80,.08,.95,trim,a,.015)
+        box('Merlon cap',x+math.sin(a)*2,8.49,z+math.cos(a)*2,.816,.08,.966,trim,a,.015)
     # Arrow slits on inward-facing facets, not rectangular floating windows.
     for a in (math.atan2(-x,-z)-.48,math.atan2(-x,-z)+.48):
       for y in (3.1,5.3):
         r=2.35-(y+.5)/8.5*.30
-        box('Arrow slit recess',x+math.sin(a)*(r+.015),y,z+math.cos(a)*(r+.015),.13,.86,.025,dark,a)
+        box('Arrow slit recess',x+math.sin(a)*(r+.015),y,z+math.cos(a)*(r+.015),.13,.85,.025,dark,a)
         for dx in (-.14,.14):
             box('Arrow slit dressed jamb',x+math.sin(a)*(r+.018)+math.cos(a)*dx,y,z+math.cos(a)*(r+.018)-math.sin(a)*dx,.11,.96,.04,trim,a,.01)
 # Wall and gate-shield merlons: original placements and silhouette.
@@ -74,8 +74,10 @@ x=-3.2
 while x<=3.3:
     points.extend([(x,-20.9,0),(-x,20.9,0)]);x+=1.6
 for x,z,a in points:
-    box('Wall battlement',x,3.27,z,.8,.55,.95,stone,a,.035)
-    box('Pale battlement coping',x,3.49,z,.8,.08,.95,trim,a,.012)
+    # Dejar una junta entre las dos almenas que se encuentran en la esquina.
+    if abs(x+20.6)<.001 and abs(z)==27:x+=.105
+    box('Wall battlement',x,3.265,z,.8,.56,.95,stone,a,.035)
+    box('Pale battlement coping',x,3.49,z,.816,.08,.966,trim,a,.012)
 # Real sculpted shields replace flat banner placeholders on spawn walls.
 for sign,mat in ((-1,red),(1,blue)):
  for x in (-2.4,2.4):
@@ -136,7 +138,11 @@ bpy.ops.wm.save_as_mainfile(filepath=str(ROOT/'art/fortress-kit/fortress-kit.ble
 bpy.ops.object.select_all(action='SELECT');bpy.ops.object.convert(target='MESH')
 groups={}
 for o in list(bpy.context.scene.objects):
-    if o.type=='MESH':groups.setdefault(o.data.materials[0].name,[]).append(o)
+    if o.type=='MESH':
+        name=o.data.materials[0].name
+        # El muro macizo proyecta la sombra; la piel de 14 mm solo la recibe.
+        if o.name.startswith('Courtyard dressed ashlar'):name='Ashlar facing '+name
+        groups.setdefault(name,[]).append(o)
 for name,objects in groups.items():
     bpy.ops.object.select_all(action='DESELECT')
     for o in objects:o.select_set(True)

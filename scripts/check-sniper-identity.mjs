@@ -10,10 +10,13 @@ import { clearClip } from './lib-clip.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
 import { CHROME } from './lib-chrome.mjs';
-const PORT = '8816';
+import { freePort } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
+const PORT = FREE_PORT;
 
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
-  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT }, stdio: 'ignore',
+  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: String(PORT) }, stdio: 'ignore',
 });
 await new Promise((resolve) => setTimeout(resolve, 900));
 
@@ -141,7 +144,10 @@ try {
   // ocurrido, para no aceptar un falso positivo por un input ignorado.
   const beforeShot = await page.evaluate(() => {
     const G = window.BREACH, E = window.BREACH_EFFECTS;
-    G.weapons.state.sniper.mag = 1;
+    // PRUEBAS (corrida 6): con 1 bala el disparo vacía el cargador y arranca la recarga
+    // automática, que baja la mira (DECISIONES 17); para probar que DISPARAR no la
+    // cierra se dispara con 2
+    G.weapons.state.sniper.mag = 2;
     G.weapons.state.sniper.cd = 0;
     G.weapons.state.sniper.reload = 0;
     E.clearImpacts();
@@ -192,7 +198,7 @@ try {
     };
   });
   check('el sniper realmente dispara durante la prueba',
-    beforeShot === 1 && afterShot.mag === 0 && afterShot.reload > 0,
+    beforeShot === 2 && afterShot.mag === 1,
     `mag ${beforeShot}->${afterShot.mag}, reload=${afterShot.reload.toFixed(2)}`);
   check('el scope permanece abierto después de disparar',
     afterShot.scope && afterShot.dom && afterShot.fov < 23,
@@ -229,10 +235,12 @@ try {
     null, { timeout: 1800 }).catch(() => {});
   const returnSwapStarted = await page.evaluate(() =>
     window.BREACH.weapons.startSwap('sniper'));
-  await page.waitForFunction(() => {
+  // tope en TIEMPO DE JUEGO (3 s): cambio + subida del ocular + FOV de la mira
+  const swapT0 = await page.evaluate(() => window.BREACH.simClock);
+  await page.waitForFunction((t0) => {
     const G = window.BREACH;
-    return G.weapons.cur === 'sniper' && G.scopeActive && window.BREACH_CAM.fov < 22;
-  }, null, { timeout: 1500 }).catch(() => {});
+    return (G.weapons.cur === 'sniper' && G.scopeActive && window.BREACH_CAM.fov < 22) || G.simClock > t0 + 3;
+  }, swapT0, { timeout: 600000, polling: 'raf' });
   const scopeRecovered = await page.evaluate(() => ({
     cur: window.BREACH.weapons.cur,
     scope: window.BREACH.scopeActive,
@@ -261,31 +269,45 @@ try {
   await page.waitForTimeout(720);
 
   // El ajuste Zoomed debe afectar la cámara real y persistirse. Medimos el
-  // mismo delta de mouse con los extremos del slider dentro de un scope.
-  const sensitivity = await page.evaluate(() => {
-    const G = window.BREACH, cam = G.player.cam;
+  // mismo delta de mouse con los extremos del slider dentro de un scope REAL.
+  // PRUEBAS (corrida 6, FPS): la cámara de los ojos rederiva su sensibilidad
+  // cada cuadro (lookSensitivity con la mira puesta), así que tras mover el
+  // slider se esperan cuadros; el ajuste vive en breach.settings.v1 (sensScope).
+  const sensitivity = await page.evaluate(async () => {
+    const G = window.BREACH, I = window.BREACH_INPUT, cam = G.player.cam;
+    const frames = (n) => new Promise((r) => { const f = () => (--n <= 0 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
+    if (G.weapons.cur !== 'sniper') { G.weapons.startSwap('sniper'); for (let i = 0; i < 400 && (G.weapons.swapping || G.weapons.cur !== 'sniper'); i++) await frames(1); }
+    I._mouseAim = true;
+    for (let i = 0; i < 600 && !G.scopeActive; i++) await frames(1);
+    // la sensibilidad es ∝ FOV: medir con el FOV de la mira ya asentado (20°)
+    for (let i = 0; i < 600 && Math.abs(window.BREACH_CAM.fov - 20) > 0.3; i++) await frames(1);
+    const scoped = !!G.scopeActive;
     const slider = document.getElementById('sl-zoom');
     const original = slider.value;
-    const measure = (value) => {
+    const measure = async (value) => {
       slider.value = String(value);
       slider.dispatchEvent(new Event('input', { bubbles: true }));
-      cam.setScoped(true);
-      cam.fov = 20;
+      await frames(3);
       const before = cam.yaw;
       cam.applyMouse(100, 0, false);
-      return Math.abs(cam.yaw - before);
+      const d = Math.abs(cam.yaw - before);
+      cam.yaw = before;
+      return d;
     };
-    const slow = measure(0.35);
-    const fast = measure(1.25);
-    const persisted = localStorage.getItem('breach.sens.zoom');
+    const slow = await measure(0.35);
+    const fast = await measure(1.25);
+    let persisted = null;
+    try { persisted = JSON.parse(localStorage.getItem('breach.settings.v1') || '{}').sensScope ?? null; } catch { /* sin almacenamiento */ }
     slider.value = original;
     slider.dispatchEvent(new Event('input', { bubbles: true }));
-    return { slow, fast, ratio: fast / slow, persisted };
+    I._mouseAim = false;
+    await frames(3);
+    return { scoped, slow, fast, ratio: fast / slow, persisted };
   });
   check('Zoomed Sensitivity modifica la rotación scoped',
-    sensitivity.fast > sensitivity.slow && sensitivity.ratio > 3.3 && sensitivity.ratio < 3.8,
+    sensitivity.scoped && sensitivity.fast > sensitivity.slow && sensitivity.ratio > 3.3 && sensitivity.ratio < 3.8,
     JSON.stringify(sensitivity));
-  check('Zoomed Sensitivity persiste en preferencias', sensitivity.persisted === '1.25',
+  check('Zoomed Sensitivity persiste en preferencias', Number(sensitivity.persisted) === 1.25,
     `persisted=${sensitivity.persisted}`);
 
   // Sanity de ciclo visual: una muerte de sniper confirmada oculta cabeza y

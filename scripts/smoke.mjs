@@ -1,6 +1,7 @@
 // Smoke test headless: carga el juego, entra a práctica, simula movimiento,
 // evade y disparo, y captura screenshots. Reporta errores de consola/página.
 // Uso: node scripts/smoke.mjs  (requiere dist/ y server corriendo, o levanta el suyo)
+import { actionKeys } from './lib-test.mjs';
 import { chromium } from 'playwright-core';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -106,12 +107,13 @@ try {
   if (padCtx.padId !== 'FakePad') errors.push('PAD: adoptó el pad fantasma en vez del activo (' + padCtx.padId + ')');
   await page.evaluate(() => { window.__pad.axes[1] = 0; });
 
-  // ---- salto normal (F) y vuelta de gato contra el pilar central ----
+  const { jump, evade } = await actionKeys(page, 'jump', 'evade');
+  // ---- salto normal y vuelta de gato contra el pilar central ----
   await page.evaluate(() => {
     const P = window.BREACH.player;
     P.cover = null; P.state = 'idle'; P.pos.x = 0; P.pos.z = -6;
   });
-  await page.keyboard.press('f');
+  await page.keyboard.press(jump);
   await page.waitForTimeout(230);
   const jumpY = await page.evaluate(() => +window.BREACH.player.y.toFixed(2));
   console.log('JUMP:', JSON.stringify({ y: jumpY }));
@@ -135,9 +137,9 @@ try {
     errors.push('WALLJUMP: precondición — sin pared HIGH frente a (0,-3.6) (' + JSON.stringify(kickWall) + '); ¿cambió el mapa?');
   }
   await page.waitForTimeout(80);
-  await page.keyboard.press('f');      // salto normal
+  await page.keyboard.press(jump);      // salto normal
   await page.waitForTimeout(200);      // subiendo…
-  await page.keyboard.press('f');      // patada de pared en el aire
+  await page.keyboard.press(jump);      // patada de pared en el aire
   await page.waitForTimeout(160);
   const flip = await page.evaluate(() => ({
     st: window.BREACH.player.state,
@@ -166,10 +168,10 @@ try {
 
   // doble salto: salto + dirección + salto = vuelta hacia esa dirección
   await page.evaluate(() => { const P = window.BREACH.player; P.pos.x = 0; P.pos.z = -6; });
-  await page.keyboard.press('f');
+  await page.keyboard.press(jump);
   await page.waitForTimeout(180);
   await page.keyboard.down('d');
-  await page.keyboard.press('f');
+  await page.keyboard.press(jump);
   await page.waitForTimeout(100);
   const dj = await page.evaluate(() => ({
     st: window.BREACH.player.state,
@@ -182,7 +184,7 @@ try {
   if (dj.axis !== 'z') errors.push('DOUBLEJUMP: stick derecha debería dar giro lateral, dio ' + dj.axis);
   await page.waitForTimeout(800);
 
-  // ---- MANTLE: cubierto tras un bloque BAJO + adelante+evadir = subirse ----
+  // ---- MANTLE: cubierto tras un bloque BAJO + adelante+salto = subirse ----
   await page.evaluate(() => {
     const G = window.BREACH, W = window.BREACH_WORLD;
     // cara LOW mirando a -z (el jugador se cubre desde el sur): buscar una
@@ -198,7 +200,7 @@ try {
   // de transición del test anterior)
   let inCover = '';
   for (let i = 0; i < 3 && inCover !== 'cover'; i++) {
-    await page.keyboard.press('Space');
+    await page.keyboard.press(evade);
     await page.waitForTimeout(320);
     inCover = await page.evaluate(() => window.BREACH.player.state);
   }
@@ -206,7 +208,7 @@ try {
   await page.waitForTimeout(150);
   let midMantle = '';
   for (let i = 0; i < 3 && midMantle !== 'mantle'; i++) {
-    await page.keyboard.press('Space'); // + evadir = mantle
+    await page.keyboard.press(jump); // saltar hacia el bloque
     await page.waitForTimeout(180);
     midMantle = await page.evaluate(() => window.BREACH.player.state);
   }
@@ -236,7 +238,7 @@ try {
   await page.waitForTimeout(250);
   let edgeCover = '';
   for (let i = 0; i < 3 && edgeCover !== 'cover'; i++) {
-    await page.keyboard.press('Space');
+    await page.keyboard.press(evade);
     await page.waitForTimeout(300);
     edgeCover = await page.evaluate(() => window.BREACH.player.state);
   }
@@ -267,15 +269,15 @@ try {
   });
   await page.keyboard.down('s'); // alejándose de coberturas (dive al vacío)
   await page.waitForTimeout(80);
-  await page.keyboard.press('Space');
+  await page.keyboard.press(evade);
   await page.waitForTimeout(40);
   const firstState = await page.evaluate(() => window.BREACH.player.state);
   await page.waitForTimeout(40);
-  await page.keyboard.press('Space'); // durante el dive: no debe reiniciarlo
+  await page.keyboard.press(evade); // durante el dive: no debe reiniciarlo
   await page.waitForTimeout(80);
   const activeState = await page.evaluate(() => window.BREACH.player.state);
   await page.waitForTimeout(240); // >0.36s total: ya recuperó control
-  await page.keyboard.press('Space');
+  await page.keyboard.press(evade);
   await page.waitForTimeout(80);
   const immediateReady = await page.evaluate(() => window.BREACH.player.state);
   await page.keyboard.up('s');
@@ -397,7 +399,7 @@ try {
   await page.keyboard.down('Shift');
   await page.keyboard.down('w');
   await page.waitForTimeout(400);
-  await page.keyboard.press('f');
+  await page.keyboard.press(jump);
   await page.waitForTimeout(120);
   const rjAmmo0 = await page.evaluate(() => window.BREACH.weapons.st.mag);
   await page.mouse.down();

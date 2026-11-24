@@ -8,9 +8,17 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import { MAP_RUNTIME } from '../src/game/lobby-rules.js';
+import { freePort, launchAt } from './lib-test.mjs';
+import { withSamples } from './lib-fps-sample.mjs';
+// PRUEBAS (ronda 2 de RED): cada fire/rocket/nade/protoFire humano lleva su muestra `fs`
+// (n creciente, w = arma equipada) desde el último estado `s` de ese emisor
+const SAMPLED = withSamples((peer, m) => peer.ws.send(JSON.stringify(m)));
+
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const port = 8837;
+const port = FREE_PORT;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
   cwd: root, stdio: ['ignore', 'pipe', 'pipe'],
@@ -28,7 +36,7 @@ function peer() {
   });
   return {
     ws, msgs, open: () => new Promise((r, j) => { ws.once('open', r); ws.once('error', j); }),
-    send: (m) => ws.send(JSON.stringify(m)),
+    send(m) { SAMPLED(this, m); },
     next: (pred, ms = 3000) => new Promise((res) => {
       const prior = msgs.find(pred); if (prior) return res(prior);
       const w = { pred, res }; waiters.push(w);
@@ -38,15 +46,15 @@ function peer() {
 }
 const fails = [];
 const check = (name, ok, extra = '') => { console.log(`${ok ? 'OK ' : 'FAIL'} ${name}${extra ? ` — ${extra}` : ''}`); if (!ok) fails.push(name); };
-const state = (p, x, z, w = 'smg') => p.send({ t: 's', x, y: 0, z, yaw: 0, st: 'idle', aim: 0, p: 0, w, am: 1, ar: 2, sp: 0 });
+const state = (p, x, z, w = 'smg', yaw = 0, pitch = 0) => p.send({ t: 's', x, y: 0, z, yaw, st: 'idle', aim: 0, p: pitch, w, am: 1, ar: 2, sp: 0 });
 
 let a, b;
 try {
   for (let i = 0; i < 80 && !log.includes('BREACH server'); i++) await wait(50);
   a = peer(); b = peer(); await a.open(); await b.open();
-  a.send({ t: 'join', action: 'create', name: 'LOS-A', v: 0 });
+  a.send({ t: 'join', action: 'create', name: 'LOS-A', v: 0, hp: 2, fps: 1 });
   const aw = await a.next((m) => m.t === 'welcome');
-  b.send({ t: 'join', action: 'join', name: 'LOS-B', v: 0 });
+  b.send({ t: 'join', action: 'join', name: 'LOS-B', v: 0, hp: 2, fps: 1 });
   const bw = await b.next((m) => m.t === 'welcome');
   a.send({ t: 'lobbyStart' });
   await a.next((m) => m.t === 'start', 6000);
@@ -57,9 +65,13 @@ try {
   check('bazooka tomada', !!(await a.next((m) => m.t === 'specialTaken' && m.id === aw.id && m.wep === 'bazooka')));
 
   const shoot = async (bx, label) => {
-    state(a, -22.3, -27.5, 'bazooka'); state(b, bx, -22); await wait(150);
+    // PRUEBAS (corrida 6): la salida FPS va a la altura del ojo; se apunta un poco hacia
+    // abajo para que el cohete pase a la altura del pecho (1.1 m) junto al torso, como antes
+    const L0 = launchAt(-22.3, 0, -27.5, Math.PI);
+    const pitch = Math.atan2(1.1 - L0.o[1], Math.abs(-22 - L0.o[2]));
+    state(a, -22.3, -27.5, 'bazooka', Math.PI, pitch); state(b, bx, -22); await wait(150);
     a.msgs.length = 0;
-    a.send({ t: 'rocket', cid: label, o: [-22.3, 1.1, -27], d: [0, 0, 1] });
+    { const L = launchAt(-22.3, 0, -27.5, Math.PI, { pitch }); a.send({ t: 'rocket', cid: label, o: L.o, d: L.d }); }
     const ack = await a.next((m) => m.t === 'rocketAck' && m.cid === label);
     return ack && a.next((m) => m.t === 'rocketBoom' && m.rid === ack.rid, 6000);
   };

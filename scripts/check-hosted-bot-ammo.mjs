@@ -8,9 +8,12 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CHROME } from './lib-chrome.mjs';
+import { freePort } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const port = 8841;
+const port = FREE_PORT;
 const SECONDS = Number(process.env.BOT_AMMO_SECONDS || 180); // tope; termina antes al cumplir
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
   env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: String(port), INTRO_TIME: '0', COUNTDOWN_TIME: '0',
@@ -44,7 +47,7 @@ try {
     null, { timeout: 30000, polling: 100 });
   await page.evaluate(() => {
     const G = window.BREACH, N = G.net, M = G.onlineBots;
-    const c = window.__ammo = { sent: {}, echoed: {}, rocketRej: 0, nadeRej: 0, reloads: 0, bySent: {}, pend: [], deaths: [] };
+    const c = window.__ammo = { sent: {}, echoed: {}, rocketRej: 0, nadeRej: 0, launchRejects: [], reloads: 0, bySent: {}, pend: [], deaths: [] };
     const key = (id, p) => `${id}|${p.x.toFixed(2)}|${p.y.toFixed(2)}|${p.z.toFixed(2)}`;
     const f0 = N.botFire.bind(N);
     N.botFire = (id, o, p, w, ...rest) => {
@@ -66,7 +69,10 @@ try {
             if (i >= 0) c.pend.splice(i, 1);
           }
         }
-        else if (typeof m.cid === 'string' && /^(b|nb):/.test(m.cid)) c[key]++;
+        else if (typeof m.cid === 'string' && /^(b|nb):/.test(m.cid)) {
+          c[key]++;
+          c.launchRejects.push({ id: m.id, life: m.life, cid: m.cid, reason: m.reason });
+        }
         return h0?.(m);
       };
     }
@@ -100,7 +106,7 @@ try {
     c.pend = c.pend.filter((e) => tEnd - e.t > 1000);
     const lostToDeath = c.pend.filter((e) => !e.playing || c.deaths.some((d) => d.id === e.id && d.t >= e.t - 50 && d.t - e.t < 600)).length;
     return { sent, echoed, rejected: c.pend.length - lostToDeath, lostToDeath, perBot: ids.map((id) => [id, c.sent[id], c.echoed[id] || 0]),
-      byWeapon: c.bySent, rocketRej: c.rocketRej, nadeRej: c.nadeRej, reloads: c.reloads, phase: window.BREACH.onlinePhase };
+      byWeapon: c.bySent, rocketRej: c.rocketRej, nadeRej: c.nadeRej, launchRejects: c.launchRejects, reloads: c.reloads, phase: window.BREACH.onlinePhase };
   });
   // el servidor dice POR QUÉ rechazó: un bot ya muerto, aturdido por una patada
   // o aturdido por stun en el servidor (el host aún no lo sabía: el tiro

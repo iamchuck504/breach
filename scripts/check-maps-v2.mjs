@@ -16,6 +16,9 @@ import { CHROME } from './lib-chrome.mjs';
 import { analyze, DIMS } from './analyze-map.mjs';
 import { serverMapPhysics } from '../server/map-geometry.js';
 import { rampsFor, decksFor } from '../src/world/collision-layouts.js';
+import { freePort, waitGame } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fails = [];
@@ -49,7 +52,7 @@ check('azoteas y calle2 tienen plataforma con rampas', rampsFor('azoteas').lengt
   `azoteas ${rampsFor('azoteas').length} · calle2 ${rampsFor('calle2').length}`);
 
 // ---------- 2 y 3. en juego ----------
-const PORT = 8826;
+const PORT = FREE_PORT;
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
   cwd: root, env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: String(PORT), NODE_ENV: 'test' }, stdio: 'ignore',
 });
@@ -132,16 +135,27 @@ try {
     return W.faces.filter((f) => f.baseY === h && Math.abs(f.h - 1.1) < 0.01).length;
   }, deck.h);
   check('azoteas: las barandas dan cover bajo a quien está arriba', rails >= 16, `caras ${rails}`);
-  // pegarse a la baranda desde arriba: W + evadir hacia el este
+  // PRUEBAS (corrida 6, FPS): ya no hay "pegarse" a la baranda. La garantía es
+  // la misma con la postura nueva: arriba del deck, agachado contra la baranda
+  // (LOW a deck.h) el jugador queda oculto a su altura, apuntando se ASOMA por
+  // encima, y nunca cae del deck. Esperas en tiempo de juego.
   await page.evaluate(([d]) => { const p = window.BREACH.player; p.pos.x = d.x; p.pos.z = d.z; p.y = d.h; p.vy = 0; p.grounded = true;
-    p.yaw = -Math.PI / 2; p.cam.yaw = -Math.PI / 2; p.evadeCooldown = 0; }, [deck]);
-  await page.keyboard.down('KeyW'); await page.waitForTimeout(80);
-  await page.keyboard.press('Space'); await page.waitForTimeout(120); await page.keyboard.up('KeyW');
-  await page.waitForTimeout(1100);
-  const stuck = await page.evaluate(() => { const p = window.BREACH.player, c = window.BREACH_CAM;
-    return { state: p.state, base: p.cover?.baseY ?? null, y: +p.y.toFixed(2), x: +p.pos.x.toFixed(2), camY: +c.position.y.toFixed(2) }; });
-  check('azoteas: se toma cover en la baranda estando arriba', stuck.state === 'cover' && stuck.base === deck.h && Math.abs(stuck.y - deck.h) < 0.06
-    && stuck.camY > deck.h + 0.8, JSON.stringify(stuck));
+    p.yaw = -Math.PI / 2; p.cam.yaw = -Math.PI / 2; p.cam.pitch = 0; }, [deck]);
+  await page.keyboard.down('KeyC'); await page.keyboard.down('KeyW');
+  await waitGame(page, 2.5); // agachado a 2.3 m/s hasta la baranda
+  await page.keyboard.up('KeyW'); await waitGame(page, 0.3);
+  const hid = await page.evaluate(() => { const p = window.BREACH.player, c = window.BREACH_CAM;
+    return { state: p.state, base: p.peekFace?.baseY ?? null, y: +p.y.toFixed(2), x: +p.pos.x.toFixed(2), camY: +c.position.y.toFixed(2) }; });
+  await page.evaluate(() => { window.BREACH_INPUT._mouseAim = true; });
+  await waitGame(page, 0.6);
+  const peek = await page.evaluate(() => { const p = window.BREACH.player, c = window.BREACH_CAM;
+    return { state: p.state, peek: +p.peek.toFixed(2), base: p.peekFace?.baseY ?? null, y: +p.y.toFixed(2), camY: +c.position.y.toFixed(2) }; });
+  await page.evaluate(() => { window.BREACH_INPUT._mouseAim = false; }); await page.keyboard.up('KeyC');
+  await waitGame(page, 0.4);
+  check('azoteas: agachado contra la baranda del deck queda oculto a su altura', hid.state === 'crouch' &&
+    Math.abs(hid.y - deck.h) < 0.06 && hid.camY < deck.h + 1.0, JSON.stringify({ hid, deckH: deck.h }));
+  check('azoteas: apuntando se asoma por encima de la baranda sin caer del deck', peek.peek > 0.9 && peek.base === deck.h &&
+    Math.abs(peek.y - deck.h) < 0.06 && peek.camY > deck.h + 1.3, JSON.stringify({ peek, deckH: deck.h }));
   // la entreplanta espejo (lado azul)
   r = await walk({ x: -deck.x, z: 10.6 }, SOUTH, () => window.BREACH.player.pos.z < 1.5);
   check('azoteas: la entreplanta espejo también se sube', r.reached && Math.abs(r.y - deck.h) < 0.06 && r.maxStep < 0.45, JSON.stringify(r));

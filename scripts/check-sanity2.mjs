@@ -12,9 +12,12 @@ import { clearClip } from './lib-clip.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
 import { CHROME } from './lib-chrome.mjs';
+import { actionKeys, freePort } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
-  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: '8795' }, stdio: 'ignore',
+  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: String(FREE_PORT) }, stdio: 'ignore',
 });
 await new Promise((r) => setTimeout(r, 900));
 
@@ -30,7 +33,7 @@ const check = (name, ok, extra = '') => {
 };
 
 // ================= PRÁCTICA: sniper, HUD, ciclo =================
-await page.goto('http://localhost:8795/?nolock=1', { waitUntil: 'networkidle' });
+await page.goto(`http://localhost:${FREE_PORT}/?nolock=1`, { waitUntil: 'networkidle' });
 await page.evaluate(() => { window.BREACH.mapChoice = 'fortaleza'; });
 await page.evaluate(() => document.getElementById('btn-practice').click());
 await page.waitForTimeout(1600);
@@ -62,7 +65,8 @@ await page.evaluate(() => {
 // --- HUD por arma: icono único, nombre e ítems de munición SIN mezclarse
 const hudPerWeapon = await page.evaluate(async () => {
   const G = window.BREACH;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   const out = {};
   for (const [i, w] of ['smg', 'shotgun', 'pistol', 'grenade'].entries()) {
     G.weapons.startSwap(w);
@@ -86,15 +90,16 @@ for (const w of ['smg', 'shotgun', 'pistol', 'grenade']) {
 }
 
 // --- pedestal de práctica = sniper: tomarlo y validar HUD + ciclo
-const takeSniper = await page.evaluate(async () => {
+const takeSniper = await page.evaluate(async (pickup) => {
   const G = window.BREACH, S = window.BREACH_SPECIALS;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   if (!S.active) return { why: 'sin pedestal' };
   const a = S.active;
   window.__tp(a.x + 0.6, a.z);
-  window.BREACH_INPUT.keys.add('Space');
+  window.BREACH_INPUT.keys.add(pickup);
   await wait(1000);
-  window.BREACH_INPUT.keys.delete('Space');
+  window.BREACH_INPUT.keys.delete(pickup);
   await wait(300);
   const h = window.__hud();
   return {
@@ -102,7 +107,7 @@ const takeSniper = await page.evaluate(async () => {
     data: h.data, icon: h.icons[0], icons: h.icons.length, name: h.name,
     mag: +h.mag, res: +h.res, chip: h.chips[0].w,
   };
-});
+}, (await actionKeys(page, 'pickup')).pickup);
 check('HUD actualiza al recoger la especial',
   takeSniper.cur === 'sniper' && takeSniper.data === 'sniper' &&
   takeSniper.icon === 'sniper' && takeSniper.icons === 1 &&
@@ -111,7 +116,8 @@ check('HUD actualiza al recoger la especial',
 // --- la especial entra en el CICLO (rueda y Q la alcanzan)
 const cycle = await page.evaluate(async () => {
   const G = window.BREACH, I = window.BREACH_INPUT;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   G.weapons.startSwap('pistol');
   await wait(800);
   const seq = [];
@@ -130,7 +136,8 @@ check('d-pad/tecla del slot 0 selecciona la especial', cycle.bySlot === 'sniper'
 // --- sniper: ADS cambia FOV y vuelve al soltar (sin zoom atascado)
 const ads = await page.evaluate(async () => {
   const G = window.BREACH, I = window.BREACH_INPUT, C = window.BREACH_CAM;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   window.__tp(0, -10);
   const idle = C.fov;
   I._mouseAim = true;
@@ -158,7 +165,8 @@ check('ADS del sniper acerca y suelta limpio',
 // --- sniper: daño de cuerpo NO mata de un tiro, dos sí; auto-recarga
 const sniperDmg = await page.evaluate(async () => {
   const G = window.BREACH;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   // Práctica da munición infinita (87c67d2): apagarla aquí para medir la
   // recarga real desde la reserva.
   const wasInfinite = G.weapons.infinite;
@@ -281,7 +289,7 @@ check('audio de armas nuevas: métodos presentes y sin excepciones',
   audioMix.ok && !audioMix.threw, JSON.stringify(audioMix));
 
 // ================= VS BOTS: humo vs tiro, muerte con cohete =================
-await page.goto('http://localhost:8795/?nolock=1', { waitUntil: 'networkidle' });
+await page.goto(`http://localhost:${FREE_PORT}/?nolock=1`, { waitUntil: 'networkidle' });
 await page.evaluate(() => { window.BREACH.mapChoice = 'fortaleza'; });
 await page.evaluate(() => document.getElementById('btn-enter')?.click());
 await page.waitForSelector('#splash.off', { state: 'attached' });
@@ -298,7 +306,8 @@ await page.waitForTimeout(400);
 // imposible) y lo recupera con reacción, no al instante
 const botSmoke = await page.evaluate(async () => {
   const M = window.BREACH.botMatch, S = window.BREACH_SMOKE;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   for (let i = 0; i < 40; i++) {
     const bot = M.bots.find((b) => b.alive && b.targetId && M.visibleEnemies(b).length);
     if (bot) {
@@ -312,7 +321,10 @@ const botSmoke = await page.evaluate(async () => {
       const c = S.clouds[0];
       if (!c) return { why: 'sin nube' };
       bot.pos.x = c.x; bot.pos.z = c.z; bot.y = Math.max(0, c.y - 1.3);
-      // percepción NUEVA en la nube (la lista cacheada es de antes de moverlo)
+      // percepción NUEVA en la nube (la lista cacheada es de antes de moverlo); el ojo
+      // también: el bot percibe desde el de su último paso, y aquí se le teletransporta
+      // (PRUEBAS, corrida 6: _eyeOf lo rehace como en el paso siguiente del juego)
+      M._eyeOf?.(bot);
       bot.senseT = 0;
       const visInside = M.visibleEnemies(bot).length;
       await wait(500);
@@ -328,7 +340,8 @@ check('bot dentro del humo pierde la visión (sin tracking imposible)',
 // --- morir con un cohete EN VUELO: sin crash, el cohete se resuelve solo
 const rocketDeath = await page.evaluate(async () => {
   const G = window.BREACH, R = window.BREACH_ROCKETS;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   // la muerte solo agenda respawn con la ronda en juego y vidas en la reserva:
   // esta comprobación llega tarde en la partida y no debe depender de eso
   for (let i = 0; i < 60 && G.botMatch.phase !== 'playing'; i++) await wait(500);
@@ -365,7 +378,8 @@ check('la muerte agenda respawn (cola viva)', rocketDeath.respawnT > 0, JSON.str
 // --- inputs de arma mientras ESPECTAS: no cambian nada ni revientan
 const spectatorInputs = await page.evaluate(async () => {
   const G = window.BREACH, I = window.BREACH_INPUT;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   if (G.selfAlive) return { why: 'el jugador está vivo' };
   const before = G.weapons.cur;
   // La oleada de respawn puede llegar a mitad del bucle (respawnT ~0.3 s):
@@ -389,7 +403,8 @@ check('inputs de arma en espectador no cambian el arma',
 // --- tras respawnear: loadout de fábrica y HUD coherente
 const afterRespawn = await page.evaluate(async () => {
   const G = window.BREACH;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   const t0 = performance.now();
   while (!G.selfAlive && performance.now() - t0 < 12000) await wait(400);
   await wait(400);

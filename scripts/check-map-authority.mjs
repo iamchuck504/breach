@@ -4,14 +4,22 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { eyeAt } from "./lib-test.mjs";
 import WebSocket from 'ws';
 import { chromium } from 'playwright-core';
 import { expandedCollisionBoxes, helipadSegments } from '../src/world/collision-layouts.js';
 import { mapLineBlocked } from '../server/map-geometry.js';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const port = 8811;
+const port = await freePort(); // puerto libre (los import se elevan: freePort ya existe)
 import { CHROME as chrome } from './lib-chrome.mjs';
+import { freePort } from './lib-test.mjs';
+import { withSamples } from './lib-fps-sample.mjs';
+// PRUEBAS (ronda 2 de RED): cada fire/rocket/nade/protoFire humano lleva su muestra `fs`
+// (n creciente, w = arma equipada) desde el último estado `s` de ese emisor
+const SAMPLED = withSamples((peer, m) => peer.ws.send(JSON.stringify(m)));
+
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // Navegador y Node pueden diferir en el último bit de sin/cos; la geometría
 // compartida se compara con tolerancia, no bit a bit.
@@ -66,7 +74,7 @@ class Peer {
       this.ws.once('open', resolve); this.ws.once('error', reject);
     });
   }
-  send(msg) { this.ws.send(JSON.stringify(msg)); }
+  send(msg) { SAMPLED(this, msg); }
   next(pred, label, timeout = 3500) {
     const prior = this.history.find(pred); if (prior) return Promise.resolve(prior);
     return new Promise((resolve, reject) => {
@@ -111,9 +119,9 @@ try {
   await browser.close(); browser = null;
 
   a = new Peer(); b = new Peer(); await a.open(); await b.open();
-  a.send({ t: 'join', action: 'create', name: 'GEOMETRY-A', v: 0 });
+  a.send({ t: 'join', action: 'create', name: 'GEOMETRY-A', v: 0, hp: 2, fps: 1 });
   const aw = await a.next((m) => m.t === 'welcome', 'welcome A');
-  b.send({ t: 'join', action: 'join', name: 'GEOMETRY-B', v: 0 });
+  b.send({ t: 'join', action: 'join', name: 'GEOMETRY-B', v: 0, hp: 2, fps: 1 });
   const bw = await b.next((m) => m.t === 'welcome', 'welcome B');
   a.send({ t: 'lobbyStart' });
   await a.next((m) => m.t === 'matchStart', 'matchStart');
@@ -123,11 +131,11 @@ try {
   await wait(5100);
   // v3: el obstáculo central es el muro sur de la torre del homenaje (z -5..-4.2)
   state(b, 0, -1.5); state(a, 0, -8); await wait(100);
-  b.send({ t: 'fire', w: 'smg', o: [0, 1.1, -1.5], p: [0, 1.1, 2], d: [] });
+  state(b, 0, -1.5, 0, Math.PI); b.send({ t: "fire", w: "smg", o: eyeAt(0, 0, -1.5, Math.PI), p: [0, 1.1, 2], d: [] });
   await wait(90);
 
   const fireP = b.next((m) => m.t === 'fire' && m.id === aw.id, 'fire bloqueado');
-  a.send({ t: 'fire', w: 'smg', o: [0, 1.1, -8], p: [0, 1, -1.5],
+  state(a, 0, -8, 0, Math.PI); a.send({ t: "fire", w: "smg", o: eyeAt(0, 0, -8, Math.PI), p: [0, 1, -1.5],
     d: [[0, 1.1, -5.0], [7, 1, 7]] });
   const clipped = await fireP;
   assert.ok(Math.abs(clipped.p[2] + 5.0) < 0.03, `endpoint no fue recortado: ${clipped.p}`);
@@ -140,7 +148,7 @@ try {
 
   // Carril limpio: el mismo disparo sí debe causar los 10 puntos reales.
   state(a, 3.8, -3.8); state(b, 3.8, 3.8); await wait(120);
-  a.send({ t: 'fire', w: 'smg', o: [3.8, 1.1, -3.8], p: [3.8, 1, 3.8], d: [] });
+  state(a, 3.8, -3.8, 0, Math.PI); a.send({ t: "fire", w: "smg", o: eyeAt(3.8, 0, -3.8, Math.PI), p: [3.8, 1, 3.8], d: [] });
   a.send({ t: 'hit', target: bw.id, dmg: 999, part: 'body', p: [3.8, 1, 3.8] });
   a.history.length = 0;
   snap = await a.next((m) => m.t === 'snap' && hpOf(m, bw.id) < 100, 'snap hit limpio');
@@ -149,7 +157,7 @@ try {
   // El objetivo se mueve justo después del fire: el punto histórico reciente
   // sigue siendo válido, pero no un punto inventado lejos de cualquier pose.
   await wait(110);
-  a.send({ t: 'fire', w: 'smg', o: [3.8, 1.1, -3.8], p: [3.8, 1, 3.8], d: [] });
+  state(a, 3.8, -3.8, 0, Math.PI); a.send({ t: "fire", w: "smg", o: eyeAt(3.8, 0, -3.8, Math.PI), p: [3.8, 1, 3.8], d: [] });
   state(b, 3.8, 2.9);
   a.send({ t: 'hit', target: bw.id, dmg: 999, part: 'body', p: [3.8, 1, 3.8] });
   a.history.length = 0;
@@ -157,7 +165,7 @@ try {
   assert.equal(hpOf(snap, bw.id), 80, 'lag compensation reciente fue rechazada');
 
   await wait(110);
-  a.send({ t: 'fire', w: 'smg', o: [3.8, 1.1, -3.8], p: [0.8, 1, 2.9], d: [] });
+  state(a, 3.8, -3.8, 0, Math.PI); a.send({ t: "fire", w: "smg", o: eyeAt(3.8, 0, -3.8, Math.PI), p: [0.8, 1, 2.9], d: [] });
   a.send({ t: 'hit', target: bw.id, dmg: 999, part: 'body', p: [0.8, 1, 2.9] });
   await wait(120); a.history.length = 0;
   snap = await a.next((m) => m.t === 'snap', 'snap punto falso');
@@ -168,14 +176,14 @@ try {
   a.history.length=0;
   const elevated=await a.next(m=>m.t==='snap'&&m.ps.some(p=>p.id===aw.id&&p.y===3),'upper pose sync');
   const beforeUpper=hpOf(elevated,bw.id);
-  a.send({t:'fire',w:'smg',o:[23.2,4.6,0],p:[5.6,1.1,0],d:[]});
+  state(a, 23.2, 0, 3, Math.PI / 2); a.send({t:"fire",w:"smg",o:eyeAt(23.2, 3, 0, Math.PI / 2),p:[5.6,1.1,0],d:[]});
   a.send({t:'hit',target:bw.id,dmg:999,part:'body',p:[5.6,1.1,0]});
   a.history.length=0;
   const through=await a.next(m=>m.t==='snap'&&hpOf(m,bw.id)<beforeUpper,'gallery window hit');
   const afterUpper=hpOf(through,bw.id);
   state(a,23.2,1.5,3,Math.PI/2);state(b,5.6,1.5);await wait(130);
   b.history.length=0;
-  a.send({t:'fire',w:'smg',o:[23.2,4.6,1.5],p:[5.6,1.1,1.5],d:[]});
+  state(a, 23.2, 1.5, 3, Math.PI / 2); a.send({t:"fire",w:"smg",o:eyeAt(23.2, 3, 1.5, Math.PI / 2),p:[5.6,1.1,1.5],d:[]});
   a.send({t:'hit',target:bw.id,dmg:999,part:'body',p:[5.6,1.1,1.5]});
   const pier=await b.next(m=>m.t==='fire'&&m.id===aw.id,'gallery pier clipping');
   assert(Math.abs(pier.p[0]-21.8)<.05,'pier must clip remote tracer');

@@ -1,22 +1,36 @@
+import { stepDodge, dodgeCues, DODGE_PREP } from '../player/dodge.js';
 // Modo VS BOTS: TDM 4v4 por rondas en el mapa Arena.
 // - Rondas de 5 min; gana la ronda quien agota las vidas del rival
 //   (4 iniciales + 15 respawns = 19 por equipo). Match al mejor de 3.
 // - IA con estados que usa las mecánicas del juego:
 //     advance  → avanza por un carril táctico y ocupa posiciones útiles
 //     engage   → strafea y dispara en ráfagas manteniendo rango de su arma
-//     rush     → con escopeta en corto: cierra distancia con saltos de esquiva
+//     rush     → con escopeta en corto: cierra distancia
 //     hold     → conserva un ángulo/posición mientras aporta control de zona
-//     cover    → herido: corre a una cobertura que bloquee la línea de visión,
-//                se esconde a regenerar y se asoma a disparar por ciclos
-//   Además: cambia de arma según la distancia, salta obstáculos bajos que le
-//   estorban el camino y hace saltos de esquiva al recibir fuego.
+//     cover    → corre a una cobertura que bloquee la línea de visión, se
+//                agacha tras ella y se asoma a disparar por ciclos
+// - FPS (corrida 6): el bot juega con las reglas del jugador en primera
+//   persona. Sin rodada, voltereta ni patada de pared; velocidades de
+//   TUNING.fp (correr 4.8, sprint 7.0, agachado 2.3, ADS 2.16); tras un LOW
+//   se agacha escondido (`crouch`, ce 0) y se ASOMA apuntando (ce 0→1) como
+//   el jugador; tras MID/HIGH sale a la orilla y se inclina (`cl`). Solo
+//   emite los estados del contrato de postura (idle, run, roadie, jump,
+//   crouch, melee, dead). Ve y dispara desde su OJO real (eyeWorld de su pose)
+//   y solo dispara en los estados que la tabla compartida permite
+//   (fire-gates.js), con el retraso sprint→disparo de cada arma.
 // - Stats (kills/deaths, 100 pts por kill) para el scoreboard (Tab/VIEW).
 import * as THREE from 'three';
+import { botPoseAllowsOrigin, BOT_ORIGIN_LAG, mapPathBlocked } from '../../server/map-geometry.js';
 import { TUNING } from '../config/tuning.js';
 import { ROUND_FINISH_HOLD } from './match-flow.js';
 import { Rig, RAGDOLL_R } from '../player/rig.js';
 import { resolveShot, applySpread, applyPelletPattern } from '../combat/ballistics.js';
-import { hitFields, hitAimHeights, STAND, CROUCH, inferFlip, WALL_FLIP_DUR } from '../combat/hit-pose.js';
+import { hitFields, hitAimHeights, placeHitPose, STAND, CROUCH, eyeWorld, HEAD_R, LEAN_MAX, POSE_BLEND_MAX } from '../combat/hit-pose.js';
+import { kickWorldContact } from '../combat/kick-surface.js';
+import { meleeHitOk, meleeTargetPoint } from '../combat/melee-reach.js';
+import { canFireInState, MOVE_GATES, sprintFireDelay } from '../combat/fire-gates.js';
+import { spreadFor } from '../combat/weapons.js';
+import { trackTransition } from '../net/client.js';
 import { damageFalloff } from '../combat/damage.js';
 import {
   deathImpactPoint, isSniperHeadshotDeath, rocketDeathLevel,
@@ -106,20 +120,42 @@ const TACTICAL_ROLES = ['advance', 'flank', 'hold', 'support', 'angle'];
 // como una persona competente y falible: ve hacia donde mira, reacciona en
 // tiempo humano, apunta con un error que se corrige mientras sigue al blanco
 // y falla más con la distancia y el movimiento.
+// FPS: el humano solo ve lo que cabe en su pantalla (FOV vertical 72° ≈ 104°
+// horizontal en 16:9) y oye el resto. El bot igual: cono de ~110°, sin
+// periferia salvo para seguir al blanco que ya tiene o a quien le roza; lo
+// que pasa fuera se OYE (disparos, carrera cerca) y le hace girarse.
 const SIGHT_RANGE = 45;          // m: más lejos nadie distingue a un soldado
-const FRONT_COS = Math.cos(62 * Math.PI / 180);      // cono de atención
-const PERIPHERY_COS = Math.cos(100 * Math.PI / 180); // visión periférica
+const FRONT_COS = Math.cos(55 * Math.PI / 180);      // cono de atención (antes 62°)
+const PERIPHERY_COS = Math.cos(80 * Math.PI / 180);  // solo el blanco actual, de cerca (antes 100°, cualquiera)
 const HEAR_SHOT = 30, HEAR_STEPS = 7; // m: disparos / pasos a la carrera
 const SENSE_PERIOD = 0.1;        // s entre percepciones
 const INTEL_TTL = 8;             // s que un avistamiento orienta los planes
 const AIM = {
   start: 0.085,   // rad de error al fijar un blanco nuevo (~5°)
   known: 0.05,    // si ya lo tenía ubicado
-  floor: 0.024,   // error asentado, quieto (~1.4°)
+  floor: 0.028,   // error asentado, quieto (~1.6°; antes 0.024: con el ojo a 1.48 y la dispersión del jugador mataba a 15 m en 4.4 s)
   moving: 0.018,  // extra si el bot se mueve al disparar
   settle: 0.5,    // s de corrección (constante de tiempo)
   track: 12,      // velocidad de giro siguiendo a un blanco (lag real)
 };
+// Reacción (s) al adquirir un blanco: sorpresa / ya ubicado (lo vio hace
+// nada, lo oyó, se lo cantaron), + azar, + si entra por el borde de la vista,
+// + si está lejos. Re-adquirir a quien se agachó tras un LOW o volvió a
+// inclinarse cuenta como "ya ubicado" (mira su última posición) pero no es
+// gratis: vuelve a pagar reacción y error de puntería.
+const REACT = { surprise: 0.24, known: 0.14, jitter: 0.16, offAxis: 0.16, far: 0.08 };
+// La pose que dispara debe llevar ≥ esto quieta (st/aim/ce/cl): así ha salido
+// al menos en un botState (20 Hz) y el servidor la conoce (bots alojados).
+const POSE_SETTLE = 1.5 / TUNING.net.sendHz;
+// postura (las del jugador, TUNING.fp): ritmo de ce/cl (1/0.18 s ≈ 5.6/s, por
+// debajo del límite del servidor de 6/s)
+const POSTURE_RATE = 1 / TUNING.fp.crouchTime;
+// Cobertura: LOW ≤ lowHeight (1.4) se asoma por encima; menos de MID_STAND
+// (1.9) tapa al agachado pero no al de pie (casco 1.74–1.82): ahí se esconde
+// agachado y se asoma por la orilla; desde MID_STAND tapa de pie.
+const MID_STAND = 1.9;
+const HIDE_EYE = 0.95;  // m: casco agachado (0.91–1.04) para validar un escondite bajo
+const STAND_EYE = 1.8;  // m: casco de pie para validar un escondite alto
 const STUCK_WINDOW = 0.45;   // reacción perceptiblemente inmediata, sin ruido de un frame
 const STUCK_RATIO = 0.32;    // progreso real mínimo frente al movimiento solicitado
 const FAILED_ROUTE_TTL = 4.5;
@@ -208,14 +244,18 @@ export class Bot {
     };
     this.rig = new Rig(scene, team, name, this.variant); // soldado random
     this.rig.groundFn = (x, z, y) => world.groundHeight({ x, z }, 0.38, y);
+    // sonda de pared del rig (RIG): el arma en tercera persona no atraviesa el muro
+    this.rig.wallFn = (o, d, m) => world.raycast(o, d, m, 0);
     this.rig.collideFn = (p, y, r = RAGDOLL_R) => world.resolveCircle(p, r, y);
     this.respawn(spawn);
   }
 
   respawn(spawn) {
+    this.hostedPose = null;
     this.world.navigation?.cache?.delete(this);
+    this._eye = null; this._eyeAt = null; this.seen = []; this.seenD = []; this.senseT = 0; // nada percibido desde la posición anterior
     this.pos = { x: spawn.x, z: spawn.z };
-    this.yaw = spawn.yaw;
+    this.yaw = Number.isFinite(spawn.yaw) ? spawn.yaw : 0;
     this.y = 0; this.vy = 0; this.grounded = true;
     this.hp = TUNING.combat.hp;
     this.alive = true;
@@ -235,7 +275,7 @@ export class Bot {
     this.nades = 1;     // botes de humo por vida
     this.specialHoldT = 0; // progreso de recogida del arma especial
     this.shotCd = 0;
-    this.lastDamage = 99; this.recentHit = 99;
+    this.lastDamage = 99; this.recentHit = 99; this.dazeT = 0;
     this.wep = 'smg';
     this.specialAmmo = 0; // el arma especial NO sobrevive a la muerte
     this.rig?.setWeapon?.('smg');
@@ -282,7 +322,27 @@ export class Bot {
     this.shownWep = 'smg'; this._swapModel = null;
     this.throwPlan = null; this.throwT = 0;
     this.rigYaw = this.yaw; this.groundPitch = 0;
-    this.coverLean = 0; this.coverExposure = 0; this.coverKind = null; this.latMove = 0;
+    this.coverLean = 0; this.coverExposure = 1; this.coverKind = null; this.latMove = 0;
+    // postura FPS: ce = altura de cabeza (1 de pie, 0 agachado; asomo y
+    // transición), cl = inclinación; want* = lo que pide la conducta este paso
+    this.ce = 1; this.cl = 0; this.wantCe = 1; this.wantCl = 0;
+    this.dodge = null; this.dodgePrep = null; this.dodgeCd = 0; this.simTime = 0;
+    this.sinceSprint = 99; this.poseHeld = 0; this._poseSig = '';
+    this.special = null;       // arma especial que lleva (aunque tenga otra en mano)
+    this.lastSeen = null;      // {x, z, y, age, id}: dónde vio por última vez a su blanco
+    this.peekT = 0; this.peekOut = 0;
+  }
+
+  // Pose replicada (la de hit-pose.js): la misma que viaja en botState, la
+  // que dibuja el rig y de la que salen ojo y volumen.
+  pose() {
+    const st = this.animState();
+    // pose COMPLETA, con los mismos campos que viajan en botState (sp con su
+    // redondeo: el trote adelanta la cabeza, hit-pose.js runVol) y ae
+    return { st, aim: !!this.aim, ce: st === 'crouch' ? this.ce : 1, cl: this.coverLean || 0,
+      pitch: this.aimPitch || 0, wep: this.shownWep ?? this.wep,
+      sp: +Math.min(1, Math.hypot(this.velX || 0, this.velZ || 0) / TUNING.move.roadieSpeed).toFixed(2),
+      ae: this.aimYawErr || 0 };
   }
 
   animState() { return this.alive ? (this.netAnim || 'idle') : 'dead'; }
@@ -586,6 +646,10 @@ export class Bot {
   _lookTarget() {
     const t = this.lastThreat;
     if (t && t.age > 0.3 && t.age < 3) return t;
+    // a quien perdió de vista (se agachó, se apartó de la orilla): su última
+    // posición vista, no la real
+    const s = this.lastSeen;
+    if (s && s.age < 3) return s;
     const a = this.alert;
     if (a && a.age > 0.25 && a.age < 2.5) return a;
     return null;
@@ -697,17 +761,35 @@ export class Bot {
     this.yaw = lerpYaw(this.yaw, Math.atan2(-tx, -tz), 1 - Math.exp(-rate * dt));
   }
 
-  _trySwap(want) {
+  // Arma según la distancia, como un jugador: escopeta de cerca, SMG a media.
+  // Con la especial: el francotirador se guarda a menos de 9 m (y vuelve a
+  // sacarse pasados 14), la bazooka a menos de 8 (vuelve pasados 12; nunca
+  // un cohete a bocajarro). Histéresis para no alternar en el borde.
+  _pickWeapon(dist) {
+    const sp = this.special && this.specialAmmo > 0 ? this.special : null;
+    if (sp) {
+      const close = sp === 'sniper' ? 9 : 8, far = sp === 'sniper' ? 14 : 12;
+      if (this.wep === sp) {
+        if (dist < close) this._trySwap(dist < 7 && this._hasAmmo('shotgun') ? 'shotgun' : 'smg', true);
+        return;
+      }
+      if (dist > far) { this._trySwap(sp, true); return; }
+    }
+    if (dist < 8 || (this.aggro > 0.55 && dist < 14 && this.hp > 60)) this._trySwap('shotgun');
+    else if (dist > 15) this._trySwap('smg');
+  }
+
+  _trySwap(want, bands = false) {
     // como el jugador: durante la patada el arma está ocupada y no se cambia
     if (this.wep === want || this.swapCd > 0 || this.meleeT > 0) return;
-    // el arma ESPECIAL no se guarda por preferencia de distancia: se usa
-    // hasta agotarla (specialAmmo llega a 0 → vuelve a la primaria sola)
-    if (TUNING.weapons[this.wep]?.special && this.specialAmmo > 0) return;
+    // el arma ESPECIAL no se guarda por preferencia de distancia (sí por sus
+    // bandas, _pickWeapon): se usa hasta agotarla y entonces vuelve sola a la primaria
+    if (!bands && TUNING.weapons[this.wep]?.special && this.specialAmmo > 0) return;
     if (this.throwPlan) return; // con el bote en la mano no se cambia de arma
     if (!this._hasAmmo(want)) return; // a un arma vacía no se cambia
     this.wep = want;
     this.reloadT = 0; // cambiar de arma interrumpe la recarga
-    this.swapCd = 2.5;
+    this.swapCd = bands ? 1.2 : 2.5;
     this._beginSwap(want);
   }
 
@@ -732,20 +814,13 @@ export class Bot {
     if (this.swapAnim <= 0) this.throwPlan = null; // stow terminado
   }
 
-  _jump(acrobatic = false) {
+  // Salto simple, el del jugador (sin voltereta: retirada en FPS). Solo lo
+  // usa el paso de obstáculos bajos sin rejilla de navegación.
+  _jump() {
     if (!this.grounded || this.jumpCd > 0) return;
     this.vy = 6.2; // mismo apex que el jugador: pasa bloques LOW (1.1)
     this.grounded = false;
     this.jumpCd = 1.2;
-    // De vez en cuando, vuelta en el aire. Como la del doble salto del
-    // jugador: impulso horizontal de runSpeed·dashMul hacia donde va, y eje y
-    // sentido SALIDOS de ese recorrido con inferFlip (hit-pose.js), la misma
-    // regla con la que observadores y servidor la reconstruyen desde los
-    // snapshots (antes eran al azar: cada uno dibujaba/impactaba otra pose).
-    if (acrobatic && Math.random() < 0.4) {
-      this.flip = { t: 0, axis: 'z', dir: 1, dur: WALL_FLIP_DUR, el: 0,
-        pre: { x: this.velX || 0, z: this.velZ || 0 }, p0: null, set: false };
-    }
   }
 
   // ¿hay un obstáculo BAJO justo en el camino? → saltarlo
@@ -882,17 +957,68 @@ export class Bot {
     if (tHigh === null) this._jump(); // bajo bloqueado, alto libre → brincable
   }
 
+  _stepDodge(dt, match) {
+    if (!this.dodgePrep && !this.dodge && this.recentHit < 0.25 && this.dodgeCd <= 0 && this.grounded &&
+        MOVE_GATES.dodge.entry.includes(this.netAnim) && this.ce >= 0.995 &&
+        this.poseHeld >= 2 / TUNING.net.sendHz && !this.perch && !this.cover && !this.throwPlan && this.throwT <= 0 &&
+        this.dazeT <= 0 && this.meleeT <= 0 && Math.random() < 1 - Math.exp(-2.5 * dt)) {
+      const side = Math.random() < 0.5 ? -1 : 1;
+      this.dodgePrep = { wait: DODGE_PREP, t: 0, x: side * Math.cos(this.yaw), z: -side * Math.sin(this.yaw) };
+    }
+    if (this.dazeT > 0) this.dodgePrep = null;
+    if (this.dodgePrep) {
+      const prep = this.dodgePrep;
+      if (prep.wait > 1e-8) {
+        prep.wait -= dt;
+        const params = this._rigParams(this.netAnim, dt);
+        params.dodgeBrace = Math.min(1, 1 - prep.wait / DODGE_PREP);
+        this.rig.update(dt, params);
+        return true;
+      }
+      this.dodge = prep; this.dodgePrep = null;
+      this.dodgeCd = TUNING.dodge.duration + TUNING.dodge.cooldown;
+    }
+    this.dodgeCd = Math.max(0, this.dodgeCd - dt);
+    if (!this.dodge) return false;
+    const x = this.pos.x, z = this.pos.z;
+    const done = stepDodge(this, this.dodge, dt, 0.38);
+    this._bodyCollide(match, dt);
+    this.velX = (this.pos.x - x) / dt; this.velZ = (this.pos.z - z) / dt;
+    this.speed = Math.hypot(this.velX, this.velZ);
+    this.sinceSprint = this.poseHeld = this.burstT = this.muzzleT = 0;
+    this.aim = false; this.cl = this.coverLean = 0;
+    this.netAnim = done ? 'idle' : 'dodge';
+    if (done) this.velX = this.velZ = this.speed = 0;
+    this._lastPx = this._fx = this.pos.x; this._lastPz = this._fz = this.pos.z;
+    this.rigYaw = this.yaw;
+    this.rig.setTransform(this.pos.x, this.pos.z, this.yaw, this.y);
+    const params = this._rigParams(this.netAnim, dt);
+    const pose = match._botPose(this);
+    params.interpolated = true; params.poseTr = pose.from ? pose : null;
+    params.evadePhase = this.dodge.t / TUNING.dodge.duration;
+    this.rig.update(dt, params);
+    const d = this.dodge;
+    dodgeCues(d, d.t, this.pos.x, this.y, this.pos.z, d.x, d.z, this.team, match.cb.onDodgeCue, done);
+    if (done) this.dodge = null;
+    return true;
+  }
+
   update(dt, match) {
     if (!this.alive) {
       this.rig.update(dt, { state: 'dead', speed: 0, aim: false, aimPitch: 0 });
       return;
     }
+    this.simTime += dt;
     if(this.protoStunned){
+      this.dodgePrep = null;
+      if (this.dodge) { this.dodge = null; this.netAnim = 'idle'; }
+      if (this.meleeT > 0) { this.meleeT = this.meleeFreezeT = 0; this.netAnim = 'idle'; }
       const floor=this.world.groundHeight(this.pos,.38,this.y);
       if(this.y>floor+.01){this.vy-=TUNING.jump.gravity*dt;this.y=Math.max(floor,this.y+Math.min(0,this.vy)*dt);}else{this.y=floor;this.vy=0;this.grounded=true;}
       this.rig.stunned=true;this.muzzleT=0;this.burstT=0;this.protT=Math.max(0,this.protT-dt);
       this.rig.setTransform(this.pos.x,this.pos.z,this.rigYaw??this.yaw,this.y);
-      this.rig.update(dt,{state:this.state==='cover'?(this.cover?.low?'cover_low':'cover_high'):'idle',speed:0,aim:false});
+      // aturdido: conserva la postura que traía (agachado tras el LOW sigue agachado)
+      this.rig.update(dt,{state:this.animState()==='crouch'?'crouch':'idle',speed:0,aim:false,coverAimExposure:this.ce,coverLean:0});
       return;
     }
     this.lastDamage += dt; this.recentHit += dt;
@@ -945,6 +1071,7 @@ export class Bot {
       this.hp = Math.min(TUNING.combat.hp, this.hp + TUNING.combat.regenRate * dt);
     }
 
+    if (this._stepDodge(dt, match)) return;
     const enemy = match.nearestVisibleEnemy(this);
     // epsilon: dos entidades solapadas producían NaN en yaw/pos (bot invisible)
     const dist = enemy
@@ -962,11 +1089,18 @@ export class Bot {
         const known = this.expectBy?.get(enemy.id) ?? match._expected(this, enemy);
         const fx = -Math.sin(this.yaw), fz = -Math.cos(this.yaw);
         const off = (enemy.x - this.pos.x) * fx + (enemy.z - this.pos.z) * fz < 0.64 * dist;
-        this.reactT = (known ? 0.12 : 0.24) + Math.random() * 0.16 + (off ? 0.16 : 0) + (dist > 25 ? 0.08 : 0);
+        this.reactT = (known ? REACT.known : REACT.surprise) + Math.random() * REACT.jitter +
+          (off ? REACT.offAxis : 0) + (dist > 25 ? REACT.far : 0);
         this.aimSigma = Math.max(this.aimSigma, known ? AIM.known : AIM.start);
       }
     }
     this.reactT = Math.max(0, (this.reactT ?? 0) - dt);
+    // Última posición VISTA del blanco: si se agacha tras un LOW o se aparta
+    // de la orilla, el bot mira (y apunta) ahí, no a donde está de verdad.
+    if (enemy) {
+      const ls = this.lastSeen ??= { x: 0, z: 0, y: 0, age: 0, id: null };
+      ls.x = enemy.x; ls.z = enemy.z; ls.y = enemy.y ?? 0; ls.age = 0; ls.id = enemy.id;
+    } else if (this.lastSeen && (this.lastSeen.age += dt) > 4) this.lastSeen = null;
 
     // ---- decidir estado ----
     // La retirada considera fuego reciente y balance local, no solo una cifra
@@ -1053,9 +1187,8 @@ export class Bot {
       const reposition = !!this.tacticalGoal && this.commitMove &&
         (!enemy || dist > 5.5) && !reached;
       if (enemy && !reposition) {
-      // arma según distancia; los agresivos con vida llena se comprometen al rush
-        if (dist < 8 || (this.aggro > 0.55 && dist < 14 && this.hp > 60)) this._trySwap('shotgun');
-        else if (dist > 15) this._trySwap('smg');
+        // arma según distancia (bandas de la especial incluidas)
+        this._pickWeapon(dist);
         this.state = this.wep === 'shotgun' && dist > 4.5 ? 'rush' :
           this.role === 'hold' && reached ? 'hold' : 'engage';
       } else if (reached) {
@@ -1064,9 +1197,9 @@ export class Bot {
         this.state = 'advance';
       }
     }
-
-    // salto de esquiva bajo fuego reciente (a veces con vuelta en el aire)
-    if (this.recentHit < 0.6 && this.state !== 'cover' && this.state !== 'perch' && Math.random() < 1.2 * dt) this._jump(true);
+    // FPS: sin saltos de esquiva ni volteretas bajo fuego (retirados también
+    // para el jugador); la respuesta al fuego es la cobertura y el strafe.
+    this.wantCe = 1; this.wantCl = 0; this._sprintWish = false;
 
     // ---- comportamiento por estado ----
     let mx = 0, mz = 0, aiming = false, animOverride = null;
@@ -1110,6 +1243,7 @@ export class Bot {
     } else if (enemy && dist < TUNING.melee.range * 0.9 && this.meleeCd <= 0 && this.swapAnim <= 0 &&
                this.grounded && this.state !== 'cover' && !this.throwPlan && match.canBotMelee(this, enemy)) {
       // como el jugador (main.js): no se patea a mitad de un cambio de arma
+      match.cb.audio?.meleeSwing?.({ position: { x: this.pos.x, y: this.y + 1, z: this.pos.z } });
       this.meleeT = TUNING.melee.time;
       this.meleeCd = TUNING.melee.botCooldownMin +
         Math.random() * (TUNING.melee.botCooldownMax - TUNING.melee.botCooldownMin);
@@ -1130,35 +1264,45 @@ export class Bot {
       (this.state === 'rush' && dist < 12) ||
       (this.state === 'cover' && this.coverPhase === 'peek')
     );
+    // desde el OJO de la pose actual al pecho del blanco; sin blanco, a la
+    // altura de cabeza de donde lo vio por última vez (preapuntar la esquina)
+    const eyeY = this._eye ? this._eye[1] : this.y + 1.48;
+    const ls = !enemy && this.lastSeen && this.lastSeen.age < 3 ? this.lastSeen : null;
     const desiredAimPitch = intendsAim
-      ? Math.atan2((enemy.y ?? 0) + 1.18 - (this.y + 1.35),
+      ? Math.atan2((enemy.cy ?? (enemy.y ?? 0) + 1.1) - eyeY,
         Math.max(0.01, Math.hypot(enemy.x - this.pos.x, enemy.z - this.pos.z)))
-      : 0;
+      : ls ? Math.atan2(ls.y + 1.3 - eyeY, Math.max(1, Math.hypot(ls.x - this.pos.x, ls.z - this.pos.z))) : 0;
     this.aimPitch += (desiredAimPitch - this.aimPitch) * (1 - Math.exp(-12 * dt));
 
     if (this.meleeT > 0) {
       // el golpe manda: saltar el resto de estados este frame
     } else if (this.state === 'engage' && enemy) {
-      aiming = true;
+      // como el jugador: ADS a media/larga distancia (y siempre con la
+      // especial, que sin mira no acierta), desde la cadera de cerca
+      aiming = dist > 8 || !!TUNING.weapons[this.wep]?.special;
       const ex = (enemy.x - this.pos.x) / dist, ez = (enemy.z - this.pos.z) / dist;
       this._face(ex, ez, dt, AIM.track);
       this.strafeT -= dt;
       if (this.strafeT <= 0) { this.strafeDir *= -1; this.strafeT = 0.8 + Math.random() * 1.4; }
-      const ideal = this.wep === 'smg' ? 12 : 6;
+      // distancia de trabajo por arma: el francotirador y la bazooka la abren
+      const ideal = { smg: 12, shotgun: 6, sniper: 24, bazooka: 16 }[this.wep] ?? 12;
       const push = dist > ideal + 3 ? 0.7 : dist < ideal - 3 ? -0.7 : 0;
-      mx = -ez * this.strafeDir * 0.75 + ex * push;
-      mz = ex * this.strafeDir * 0.75 + ez * push;
+      // con la mira del francotirador se planta (moverse le abre el error)
+      const strafe = this.wep === 'sniper' ? 0 : 0.75;
+      mx = -ez * this.strafeDir * strafe + ex * push;
+      mz = ex * this.strafeDir * strafe + ez * push;
       this._fireAt(dt, match, enemy, dist);
     } else if (this.state === 'rush' && enemy) {
-      aiming = dist < 12;
+      // escopeta: cerrar distancia a la carrera (sprint mientras está lejos:
+      // sin disparar, como el jugador) y tirar desde la cadera al llegar
+      aiming = false;
       const ex = (enemy.x - this.pos.x) / dist, ez = (enemy.z - this.pos.z) / dist;
       this._face(ex, ez, dt, AIM.track);
-      // cerrar distancia con jitter lateral y saltos ocasionales
       mx = ex + -ez * this.strafeDir * 0.35;
       mz = ez + ex * this.strafeDir * 0.35;
       travel = enemy;
-      if (Math.random() < 0.5 * dt) this._jump(true);
-      if (dist < 9) this._fireAt(dt, match, enemy, dist);
+      if (dist > 12 && this.hp > 60) this._sprintWish = true;
+      else if (dist < 9) this._fireAt(dt, match, enemy, dist);
     } else if (this.state === 'perch' && this.perch) {
       const p = this.perch;
       const target = p.phase === 'approach' ? p.entry.foot
@@ -1242,12 +1386,19 @@ export class Bot {
               this.coverCd = 2; this.decisionT = 0;
             }
           }
-        } else { mx = dx / d; mz = dz / d; travel = c; this._face(mx, mz, dt); }
+        } else {
+          mx = dx / d; mz = dz / d; travel = c; this._face(mx, mz, dt);
+          // retirada herida: a la carrera (sprint, sin disparar); a una
+          // cobertura de pelea se va trotando, listo para tirar
+          if (!this.coverFight && d > 3) this._sprintWish = true;
+        }
       } else if (this.coverPhase === 'hide') {
-        // agazapado tras el bloque, regenerando
-        animOverride = c.low ? 'cover_low' : 'cover_high';
-        if (enemy) this._face((enemy.x - this.pos.x), (enemy.z - this.pos.z), dt, 5);
-        else if (look) this._face(look.x - this.pos.x, look.z - this.pos.z, dt, 5);
+        // ESCONDIDO como el jugador: tras LOW/MID agachado (la cabeza no
+        // asoma: casco 1.02–1.08 < 1.1), tras HIGH de pie; mira hacia la
+        // amenaza (no de espaldas a la pared: eso era la cobertura pegada)
+        this.wantCe = c.crouchHide ?? c.low ? 0 : 1;
+        const tgt = enemy ?? look ?? (this.lastSeen?.age < 3 ? this.lastSeen : null) ?? this.coverThreat;
+        if (tgt) this._face(tgt.x - this.pos.x, tgt.z - this.pos.z, dt, 5);
         // recargar a cubierto, no al asomarse
         this._maybeReload(0.6);
         // el escondite CADUCA si la amenaza flanquea: re-evaluar cada 0.6s y
@@ -1281,25 +1432,44 @@ export class Bot {
         this.hideFor ??= 1.0 + Math.random() * 0.7;
         if (this.state === 'cover' && this.coverPhase === 'hide' &&
             this.coverPhaseT > this.hideFor && this.hp > 35 && this.reloadT <= 0) {
-          this.coverPhase = 'peek'; this.coverPhaseT = 0;
-          // no siempre por el mismo lado: dos de cada tres veces cambia
-          this.peekDir = Math.random() < 0.65 ? -(this.peekDir || 1) : (this.peekDir || 1);
+          this.coverPhase = 'peek'; this.coverPhaseT = 0; this.peekOut = 0;
+          // orilla del lado de la amenaza (por ahí se la ve), a veces la otra
+          // para no ser previsible
+          const th = this.coverThreat;
+          const side = th ? Math.sign((th.x - c.x) * c.tx + (th.z - c.z) * c.tz) : 0;
+          this.peekDir = (side || this.peekDir || 1) * (Math.random() < 0.25 ? -1 : 1);
           this.peekFor = this.coverFight ? 1.4 + Math.random() * 0.8 : 1.1;
           this.hideFor = this.coverFight ? 0.5 + Math.random() * 0.6 : 1.0 + Math.random() * 0.7;
         }
-      } else { // peek: asomarse (de pie sobre un bloque bajo, por el costado de uno alto)
-        const lateral = c.low ? 0 : 1.4;
-        const px = c.x + c.tx * this.peekDir * lateral;
-        const pz = c.z + c.tz * this.peekDir * lateral;
-        const dx = px - this.pos.x, dz = pz - this.pos.z;
-        const d = Math.hypot(dx, dz);
-        if (d > 0.3) { mx = dx / d; mz = dz / d; }
+      } else { // peek
+        const tgt = enemy ?? look ?? (this.lastSeen?.age < 3 ? this.lastSeen : null) ?? this.coverThreat;
+        aiming = true; // apuntar ES asomarse (también preapuntando sin blanco)
+        if (c.low) {
+          // ASOMO del jugador: agachado tras el LOW + apuntar → la cabeza
+          // sube por encima del borde (ce 0→1 en ~0.18 s); sin moverse
+          this.wantCe = 1;
+        } else {
+          // MID/HIGH: a la orilla (el cuerpo aún tras la cara) e inclinarse
+          // hacia la abertura; si así no ve nada, un paso fuera, sin inclinar
+          const half = Math.max(0, (c.len ?? 0) / 2 - 0.05);
+          const u = this.peekDir * (half + this.peekOut);
+          const px = c.x + c.tx * u, pz = c.z + c.tz * u;
+          const dx = px - this.pos.x, dz = pz - this.pos.z;
+          const d = Math.hypot(dx, dz);
+          if (d > 0.25) { mx = dx / d; mz = dz / d; }
+          this.wantCe = 1;
+          if (d < 0.45 && !this.peekOut) {
+            this.peekEdgeT = (this.peekEdgeT ?? 0) + dt;
+            this.wantCl = this._leanToward(c.tx * this.peekDir, c.tz * this.peekDir);
+            // sin hueco para inclinarse, o inclinado medio segundo sin ver a nadie
+            if (!this.wantCl || (!enemy && this.peekEdgeT > 0.55)) this.peekOut = 0.55;
+          } else if (!this.peekOut) this.peekEdgeT = 0;
+        }
         if (enemy) {
-          aiming = true;
           this._face((enemy.x - this.pos.x), (enemy.z - this.pos.z), dt, AIM.track);
           this._fireAt(dt, match, enemy, dist);
-        } else if (look) this._face(look.x - this.pos.x, look.z - this.pos.z, dt, 6);
-        if (this.coverPhaseT > (this.peekFor ?? 1.1) || this.reloadT > 0) { this.coverPhase = 'hide'; this.coverPhaseT = 0; }
+        } else if (tgt) this._face(tgt.x - this.pos.x, tgt.z - this.pos.z, dt, 6);
+        if (this.coverPhaseT > (this.peekFor ?? 1.1) || this.reloadT > 0) { this.coverPhase = 'hide'; this.coverPhaseT = 0; this.peekOut = 0; this.peekEdgeT = 0; }
       }
     } else {
       // advance: waypoint elegido por rol, ocupación y valor táctico
@@ -1339,8 +1509,15 @@ export class Bot {
         this._face(enemy.x - this.pos.x, enemy.z - this.pos.z, dt, AIM.track);
         this._fireAt(dt, match, enemy, dist);
       } else if (look) this._face(look.x - this.pos.x, look.z - this.pos.z, dt, 7);
-      else if (d > 0.5) this._face(mx, mz, dt, 6);
-      else this._maybeReload(0.5);
+      else if (d > 0.5) {
+        this._face(mx, mz, dt, 6);
+        // rotar a la carrera por terreno que el equipo cree tranquilo, como
+        // un jugador (el sprint cuesta el retraso sprint→disparo si aparece alguien)
+        if (d > 6 && this.hp > 45 && !this.lastSeen && this.reloadT <= 0) {
+          const kt = match.knownThreat(this);
+          if (!kt || Math.hypot(kt.x - this.pos.x, kt.z - this.pos.z) > 20) this._sprintWish = true;
+        }
+      } else this._maybeReload(0.5);
     }
 
     // Un bypass activo manda sobre el waypoint final hasta cruzar la esquina.
@@ -1395,9 +1572,15 @@ export class Bot {
     }
 
     // ---- mover (con steering) + salto de obstáculos + física vertical ----
-    let spd = this.state === 'rush' ? 5.2 : this.state === 'engage' || aiming ? 3.2 : 4.2;
-    // vuelta en el aire: el impulso del doble salto del jugador (ver _jump)
-    if (this.flip) spd = Math.max(spd, TUNING.move.runSpeed * TUNING.jump.dashMul * 1.03);
+    // Velocidades del JUGADOR FPS (TUNING.fp): trote 4.8, ADS 2.16, agachado
+    // 2.3 (ADS agachado 1.6), sprint 7.0 solo hacia delante, sin apuntar y
+    // de pie (antes 4.2 / 3.2 / 5.2 y el impulso de la voltereta).
+    const F = TUNING.fp;
+    const low = this.wantCe < 0.5 || this.ce < 0.5;
+    let spd = low ? F.crouchSpeed * (aiming ? F.crouchAdsMul : 1) : aiming ? F.runSpeed * F.adsMul : F.runSpeed;
+    let sprinting = false;
+    const canSprint = this._sprintWish && !aiming && !low && this.ce > 0.99 && this.grounded &&
+      this.meleeT <= 0 && !this.throwPlan && animOverride == null;
     // separación de compañeros: repulsión suave bajo 3.4m — sin esto
     // atacaban en racimo, prácticamente agarrados de la mano
     let sepX = 0, sepZ = 0;
@@ -1421,6 +1604,10 @@ export class Bot {
       if(!steering.stairsRoute)this._jumpIfBlocked(steering.x, steering.z);
       // Un salto deliberado deja de ser un movimiento pegado al suelo.
       wasGrounded = this.grounded;
+      // sprint solo si el paso va claramente hacia donde mira (sprintMinForward)
+      if (canSprint && steering.x * -Math.sin(this.yaw) + steering.z * -Math.cos(this.yaw) > F.sprintMinForward + 0.2) {
+        sprinting = true; spd = F.sprintSpeed;
+      }
       const stepLen = requested = Math.min(spd * dt, steering.reach ?? Infinity);
       this.pos.x += steering.x * stepLen;
       this.pos.z += steering.z * stepLen;
@@ -1512,21 +1699,6 @@ export class Bot {
     const ceiling=this.world.ceilingHeight?.(this.pos,.38,this.y)??Infinity;
     if(this.y+1.63>ceiling){this.y=ceiling-1.63;this.vy=Math.min(0,this.vy);}
 
-    // vuelta acrobática: progresa en el aire, se limpia al aterrizar
-    if (this.flip) {
-      const f = this.flip;
-      f.el += dt;
-      if (!f.p0 && f.el >= 0.03) f.p0 = { x: this.pos.x, z: this.pos.z, el: f.el };
-      if (!f.set && f.p0 && f.el >= 0.16) {
-        const w = Math.max(1e-3, f.el - f.p0.el);
-        const info = inferFlip(f.pre, { x: (this.pos.x - f.p0.x) / w, z: (this.pos.z - f.p0.z) / w },
-          this.rigYaw + (this.aimYawErr || 0));
-        f.axis = info.axis; f.dir = info.dir; f.dur = info.dur; f.set = true;
-      }
-      f.t = Math.min(1, f.t + dt / f.dur);
-      if (this.grounded) this.flip = null;
-    }
-
     // pasos posicionales del bot: por distancia recorrida real + aterrizaje
     const stepped = Math.hypot(this.pos.x - (this._fx ?? this.pos.x), this.pos.z - (this._fz ?? this.pos.z));
     this._fx = this.pos.x; this._fz = this.pos.z;
@@ -1546,78 +1718,76 @@ export class Bot {
     this._wasAir = !this.grounded;
 
     let anim = animOverride;
-    if (!anim) anim = !this.grounded ? (this.flip ? 'flip' : 'jump') : this.speed > 0.4 ? 'run' : 'idle';
-    this.aim = aiming && !animOverride && anim !== 'flip';
-    anim = this._coverPresentation(anim, dt);
+    if (!anim) anim = !this.grounded ? 'jump' : this.speed > 0.4 ? (sprinting ? 'roadie' : 'run') : 'idle';
+    this.aim = aiming && !animOverride && anim !== 'roadie';
+    anim = this._posture(anim, dt);
+    // reloj del retraso sprint→disparo (fire-gates.js): arranca al soltar el sprint
+    this.sinceSprint = anim === 'roadie' ? 0 : this.sinceSprint + dt;
+    // ¿cuánto lleva quieta esta pose? (lo que el servidor ya recibió)
+    // (de pie, trotando o en el aire es el mismo volumen: no cuenta como cambio)
+    const fam = anim === 'run' || anim === 'jump' ? 'idle' : anim;
+    const sig = `${fam}|${this.aim ? 1 : 0}|${Math.round(this.ce * 20)}|${Math.round(this.coverLean * 20)}`;
+    if (sig !== this._poseSig) { this._poseSig = sig; this.poseHeld = 0; } else this.poseHeld += dt;
     this.netAnim = anim;
-    this._bodyYaw(anim, dt);
+    // FPS: el cuerpo sigue a la mirada (como el jugador, yawLockDeg 1440°/s);
+    // ya no hay "de espaldas a la pared"
+    this.rigYaw = this.yaw;
     this.rig.setTransform(this.pos.x, this.pos.z, this.rigYaw, this.y);
-    this.rig.update(dt, this._rigParams(anim, dt));
+    const params = this._rigParams(anim, dt);
+    if (this.dodgeCd > TUNING.dodge.cooldown - POSE_BLEND_MAX) {
+      // También al recuperar la marcha: la salida del casco usa la misma
+      // mezcla que la esfera del bot hasta que se extingue la transición.
+      const pose = match._botPose(this);
+      params.interpolated = true; params.poseTr = pose.from ? pose : null;
+    }
+    this.rig.update(dt, params);
     // el bote sale de la mano en la pose de ESTE cuadro (main.js: throwSmoke)
     if (this.throwPlan?.release) {
-      this.throwPlan.release = false; this.throwPlan.pending = false;
-      match.botReleaseSmoke(this);
+      this.throwPlan.release = false;
+      // Si aún no llegó el snapshot del asomo, queda el resto del gesto
+      // para soltar. Al terminar se guarda el bote que sigue en el inventario.
+      this.throwPlan.pending = !match.botReleaseSmoke(this) && this.throwT > 0;
     }
     // protección de spawn: highlight sutil del color del equipo
     this.rig.setProtected(this.protT > 0);
     this._lastPx = this.pos.x; this._lastPz = this.pos.z;
   }
 
-  // En cover (escondido o asomándose) el bot se dibuja como el jugador:
-  // cover bajo → agachado y, al apuntar, sube con la exposición
-  // (controller.js: coverAimExposure); cover alto → espalda a la pared, y en
-  // la orilla se asoma con lean hacia la abertura. Fuera de la cara (pasó la
-  // esquina) es un soldado de pie como cualquier otro. Solo presentación: la
-  // IA, la ruta y el origen del tiro no cambian.
-  _coverPresentation(anim, dt) {
-    const c = this.cover;
-    const C = TUNING.cover;
-    let lean = 0, expose = 0;
+  // POSTURA FPS (la del jugador, controller.js + net/client.js postureOf):
+  // ce = altura de la cabeza (1 de pie … 0 agachado) a ritmo acotado, cl =
+  // inclinación. Mientras la cabeza no está arriba del todo el estado es
+  // `crouch` (también al levantarse y en el asomo), así la cabeza replicada
+  // nunca salta. Inclinarse solo de pie/agachado y en el suelo; el sprint y el
+  // golpe se hacen de pie. Devuelve el estado que viaja (`st`).
+  _posture(anim, dt) {
+    const k = POSTURE_RATE * dt;
+    const step = (v, to) => (v < to ? Math.min(to, v + k) : Math.max(to, v - k));
+    const upright = anim === 'roadie' || anim === 'melee';
+    // sin apuntar no hay asomo: tras el LOW la cabeza vuelve abajo sola
+    const want = upright ? 1 : Math.max(0, Math.min(1, this.wantCe));
+    this.ce = step(this.ce, want);
+    let st = anim;
+    if ((anim === 'idle' || anim === 'run' || anim === 'jump') && this.ce < 0.995) st = 'crouch';
+    const leanOk = (st === 'idle' || st === 'run' || st === 'crouch') && this.grounded;
+    const wantCl = leanOk ? Math.max(-1, Math.min(1, this.wantCl || 0)) : 0;
+    this.cl = step(this.cl, wantCl);
+    if (!leanOk && Math.abs(this.cl) < 1e-3) this.cl = 0;
+    this.coverLean = this.cl;
+    this.coverExposure = st === 'crouch' ? this.ce : 1;
     this.coverKind = null; this.latMove = 0;
-    if (this.state === 'cover' && c && (this.coverPhase === 'hide' || this.coverPhase === 'peek') &&
-        this.grounded && anim !== 'melee') {
-      const half = (c.len ?? 0) / 2;
-      const ux = c.tx, uz = c.tz;
-      const u = (this.pos.x - c.x) * ux + (this.pos.z - c.z) * uz; // c = centro de la cara + n·0,7
-      const inside = Math.abs(u) <= half + 0.05;
-      if (c.low || inside) {
-        anim = c.low ? 'cover_low' : 'cover_high';
-        this.coverKind = c.kind ?? (c.low ? 'low' : 'high');
-        // en pared alta solo se apunta desde la orilla (controller.js)
-        const edge = Math.abs(u) >= half - (C.cornerLean + 0.38);
-        if (!c.low && !edge) this.aim = false;
-        if (this.aim && c.low) expose = 1;
-        if (this.aim && !c.low) {
-          const side = u >= 0 ? 1 : -1;
-          // lado de la abertura en el marco de la normal (igual que coverLeanAnim)
-          lean = (ux * side) * c.nz + (uz * side) * -c.nx >= 0 ? 1 : -1;
-        }
-        // paso lateral pegado a la cara: velocidad / coverStrafe en el marco del cuerpo
-        const rx = Math.cos(this.rigYaw), rz = -Math.sin(this.rigYaw);
-        this.latMove = Math.max(-1, Math.min(1, ((this.velX ?? 0) * rx + (this.velZ ?? 0) * rz) / TUNING.move.coverStrafe));
-      }
-    }
-    const rate = expose ? C.aimEnterRate : 40;
-    this.coverExposure += (expose - this.coverExposure) * (1 - Math.exp(-rate * dt));
-    this.coverLean = lean;
-    return anim;
+    return st;
   }
 
-  // Cuerpo dibujado: escondido en cover, de espaldas a la pared como el
-  // jugador; al apuntar gira hacia el blanco con la velocidad del jugador
-  // (bodyTurnAimDeg); fuera de cover sigue a this.yaw (que ya se suaviza).
-  _bodyYaw(anim, dt) {
-    const c = this.cover;
-    const rest = (anim === 'cover_low' || anim === 'cover_high') && !this.aim && c;
-    if (!rest && !(this.rigYaw !== this.yaw && this.state === 'cover')) { this.rigYaw = this.yaw; return; }
-    const CB = TUNING.combat;
-    const target = rest ? Math.atan2(-c.nx, -c.nz) : this.yaw;
-    const d = angDelta(this.rigYaw, target);
-    const step = rest
-      ? Math.min(CB.bodyTurnFollowDeg * Math.PI / 180 * dt, Math.abs(d) * (1 - Math.exp(-18 * dt)))
-      : CB.bodyTurnAimDeg * Math.PI / 180 * dt * 2;
-    this.rigYaw += Math.sign(d) * Math.min(Math.abs(d), step);
-    if (Math.abs(angDelta(this.rigYaw, target)) < 1e-4) this.rigYaw = target;
+  // Lado (cl ±1) hacia el que inclinarse para asomar la cabeza en la
+  // dirección (ox, oz) con el cuerpo mirando por yaw; 0 si la cabeza
+  // inclinada (esfera de 0.22 desplazada LEAN_MAX) chocaría con algo.
+  _leanToward(ox, oz) {
+    const rx = Math.cos(this.yaw), rz = -Math.sin(this.yaw);
+    const side = ox * rx + oz * rz >= 0 ? 1 : -1;
+    const eye = this._eye ? this._eye[1] : this.y + 1.48;
+    _v1.set(this.pos.x, eye, this.pos.z);
+    _v2.set(rx * side, 0, rz * side);
+    return this.world.raycast(_v1, _v2, LEAN_MAX + HEAD_R + 0.04) === null ? side : 0;
   }
 
   // Parámetros del rig: el mismo juego que animParams() + extras de main.js
@@ -1628,12 +1798,12 @@ export class Bot {
     const sp = Math.hypot(this.velX ?? 0, this.velZ ?? 0);
     const fx = -Math.sin(this.rigYaw), fz = -Math.cos(this.rigYaw);
     // pendiente del suelo (controller.js): solo de pie y apoyado
-    const pitchTarget = this.grounded && (anim === 'idle' || anim === 'run')
+    const pitchTarget = this.grounded && (anim === 'idle' || anim === 'run' || anim === 'crouch')
       ? groundPitchTarget(this.rig.groundFn, this.pos.x, this.pos.z, this.rigYaw, this.y) : 0;
     this.groundPitch += (pitchTarget - this.groundPitch) * (1 - Math.exp(-TUNING.move.groundPitchLerp * dt));
     const visualMax = CB.visualAimMaxDeg * Math.PI / 180;
     const g = TUNING.weapons.grenade;
-    o.state = anim;
+    o.state = anim; o.interpolated = false; o.poseTr = null;
     o.speed = Math.min(1, this.speed / TUNING.move.roadieSpeed);
     // dirección real del paso respecto al cuerpo: un bot que se desplaza de
     // lado mientras dispara ya no camina "hacia delante"
@@ -1660,15 +1830,14 @@ export class Bot {
     // fase = transcurrido / final previsto, como controller.js (meleeT /
     // meleeEndT): al conectar, el final se acorta a hitAt + recovery
     const el = this.meleeEl ?? 0;
+    o.meleeEnd = el + Math.max(0, this.meleeT);
     o.meleePhase = anim === 'melee'
-      ? Math.min(1, el / Math.max(0.001, el + Math.max(0, this.meleeT)))
+      ? Math.min(1, el / Math.max(0.001, o.meleeEnd))
       : undefined;
     // patada en carrera: misma regla que controller.js (_beginMelee)
     o.meleeTackle = anim === 'melee' && this.meleeEntrySpeed > TUNING.move.runSpeed * 1.15;
-    o.flipT = this.flip ? this.flip.t : 0;
-    o.flipDir = this.flip?.dir ?? 1;
-    o.flipAxis = this.flip?.axis ?? 'z';
-    o.evadePhase = 0;
+    o.flipT = 0; o.flipDir = 1; o.flipAxis = 'z'; // sin volteretas (retiradas en FPS)
+    o.dodgeBrace = 0; o.evadePhase = 0;
     o.mantlePhase = 0;
     return o;
   }
@@ -1691,7 +1860,14 @@ export class Bot {
     // manos ocupadas (cambio de arma, bote en la mano) o cuerpo todavía
     // girando desde la pared: el jugador tampoco puede disparar ahí
     if (this.swapAnim > 0 || this.throwPlan) return;
-    if (this.state === 'cover' && Math.abs(angDelta(this.rigYaw, this.yaw)) > TUNING.combat.fireAlignMaxDeg * Math.PI / 180) return;
+    // REGLAS DEL JUGADOR (fire-gates.js, la misma tabla que cliente y
+    // servidor): nada en sprint, trepando ni a mitad de golpe, y tras soltar
+    // el sprint el retraso del arma. El estado es el que ya viajó (netAnim).
+    if (!canFireInState(this.netAnim || 'idle', this.wep)) return;
+    if (this.sinceSprint < sprintFireDelay(this.wep)) return;
+    // la pose desde la que sale el tiro ya se difundió (no una recién puesta);
+    // recargar o cambiar con el cargador vacío no espera a eso
+    const settled = this.poseHeld >= POSE_SETTLE;
     let da = (Math.atan2(-(enemy.x - this.pos.x), -(enemy.z - this.pos.z)) - this.yaw) % (Math.PI * 2);
     if (da > Math.PI) da -= Math.PI * 2;
     if (da < -Math.PI) da += Math.PI * 2;
@@ -1702,25 +1878,26 @@ export class Bot {
     // compañeros cerca del punto de impacto. Un bot no debe reventar a su
     // propio equipo ni suicidarse por disparar a bocajarro.
     if (this.wep === 'bazooka') {
-      if (this.shotCd <= 0 && this.specialAmmo > 0 && dist > 8 &&
+      if (settled && this.shotCd <= 0 && this.specialAmmo > 0 && dist > 8 &&
           match.rocketPathClear(this, enemy, dist) && match.botFireRocket(this, enemy) !== false) {
         this._rearm((60 / TUNING.weapons.bazooka.rpm) * 1.3);
         this.muzzleT = 0.18;
         this.specialAmmo--;
-        if (this.specialAmmo <= 0) { this.swapCd = 0; this._trySwap(this._hasAmmo('smg') ? 'smg' : 'shotgun'); }
+        if (this.specialAmmo <= 0) { this.special = null; this.swapCd = 0; this._trySwap(this._hasAmmo('smg') ? 'smg' : 'shotgun'); }
       }
       return;
     }
     // FRANCOTIRADOR recogido del pedestal: cadencia lenta, munición contada.
     // Al agotarla vuelve solo a su primaria (no se queda con un arma vacía).
     if (this.wep === 'sniper') {
-      if (this.shotCd <= 0 && this.specialAmmo > 0) {
+      // solo con la mira (sin ella su dispersión es de 5°)
+      if (settled && this.aim && this.shotCd <= 0 && this.specialAmmo > 0) {
         this._rearm((60 / TUNING.weapons.sniper.rpm) * 1.25);
         // tiro declinado (línea tapada, humo): ni bala gastada ni fogonazo
         if (match.botShoot(this, enemy) === false) return;
         this.muzzleT = 0.15;
         this.specialAmmo--;
-        if (this.specialAmmo <= 0) { this.swapCd = 0; this._trySwap(this._hasAmmo('smg') ? 'smg' : 'shotgun'); }
+        if (this.specialAmmo <= 0) { this.special = null; this.swapCd = 0; this._trySwap(this._hasAmmo('smg') ? 'smg' : 'shotgun'); }
       }
       return;
     }
@@ -1734,6 +1911,7 @@ export class Bot {
       } else this._startReload();
       return;
     }
+    if (!settled) return;
     if (this.wep === 'shotgun') {
       if (this.shotCd <= 0 && dist < 20) {
         this._rearm((60 / TUNING.weapons.shotgun.rpm) * 1.5);
@@ -1891,23 +2069,31 @@ export class BotMatch {
     return alive + this.pool[team] + queued;
   }
 
-  // agachado real: escondido tras cover BAJO → hitbox reducida en ballistics
-  _crouched(b) {
-    return b.state === 'cover' && b.coverPhase === 'hide' && !!b.cover?.low;
+  // Pose del bot con la MEZCLA DE ESTADOS de hit-pose.js (POSE_BLEND, 0.2 s
+  // de pie↔sprint↔golpe): la misma que el servidor reconstruye de los
+  // botState (transitionOf) y que el jugador local usa para sí
+  // (net/client.js trackTransition, con el instante exacto del cambio).
+  // Antes el volumen del bot saltaba de golpe y el del servidor se mezclaba.
+  _botPose(b) {
+    const p = trackTransition(b, b.pose(), this._clock);
+    b._posed = p;
+    b._eye = eyeWorld(p, b.pos.x, b.y, b.pos.z, b.rigYaw ?? b.yaw);
+    b._eyeAt = { x: b.pos.x, z: b.pos.z, y: b.y };
+    return p;
+  }
+  // Ojo para un tiro: el de la pose del paso (la difundida); si al bot lo
+  // movieron lejos desde entonces (teletransporte, pruebas), se recalcula.
+  _eyeOf(b) {
+    const a = b._eyeAt;
+    if (!b._eye || !a || Math.hypot(a.x - b.pos.x, a.z - b.pos.z) > 0.6 || Math.abs(a.y - b.y) > 0.4) this._botPose(b);
+    return b._eye;
   }
 
-  // Volumen de impacto del bot según lo que dibuja su rig (hit-pose.js):
-  // escondido en cover bajo = agachado; asomado/corriendo = de pie; flip con
-  // su fase, eje y sentido reales.
+  // Volumen de impacto del bot = el de su pose replicada (hit-pose.js): de
+  // pie, agachado tras el LOW (casco 1.02–1.08), asomado con `ce`, inclinado
+  // con `cl`, ADS con el arma en mano. Lo dibujado es lo impactable.
   _hitFields(b) {
-    const st = b.animState();
-    if (st === 'cover_low' && !b.aim && !this._crouched(b)) return { crouch: false, hit: null, hitVol: STAND };
-    // asomado sobre cover bajo: sube con la exposición dibujada; en la orilla
-    // de uno alto, el lean; de pie, la pose de ADS del arma en mano
-    return hitFields({ st, aim: b.aim, ce: st === 'cover_low' ? b.coverExposure : undefined,
-      cl: b.coverLean || 0, pitch: b.aimPitch || 0, phase: st === 'flip' ? b.flip?.t : undefined,
-      flipDir: b.flip?.dir, flipAxis: b.flip?.axis, wep: b.shownWep ?? b.wep },
-    b.pos.x, b.y, b.pos.z, b.rigYaw ?? b.yaw);
+    return hitFields(this._botPose(b), b.pos.x, b.y, b.pos.z, b.rigYaw ?? b.yaw);
   }
 
   targets() { // enemigos del jugador local
@@ -2300,15 +2486,26 @@ export class BotMatch {
     r.eyeY = r.y + hitAimHeights(vol).eye;
   }
 
-  // Línea de visión del ojo del bot a un punto: 0 libre, 1 la tapa una
-  // pared, 2 la tapa el humo.
-  _sightTo(bot, eye, x, y, z) {
-    _v1.set(bot.pos.x, eye, bot.pos.z);
-    _v2.set(x - bot.pos.x, y - eye, z - bot.pos.z);
+  // Línea de visión del OJO del bot (punto de mundo e = [x, y, z], el de su
+  // pose) a un punto: 0 libre, 1 la tapa una pared, 2 la tapa el humo. Hasta
+  // 5 cm del punto (antes 0.5 m: un muro pegado al blanco no contaba y un
+  // agachado tras un bloque delgado se "veía").
+  _sightTo(e, x, y, z) {
+    _v1.set(e[0], e[1], e[2]);
+    _v2.set(x - e[0], y - e[1], z - e[2]);
     const len = _v2.length();
-    _v2.normalize();
-    if (this.world.raycast(_v1, _v2, len - 0.5) !== null) return 1;
-    return this.cb.smoke?.blocksSegment(bot.pos.x, eye, bot.pos.z, x, y, z) ? 2 : 0;
+    if (len < 0.1) return 0;
+    _v2.multiplyScalar(1 / len);
+    if (this.world.raycast(_v1, _v2, len - 0.05) !== null) return 1;
+    return this.cb.smoke?.blocksSegment(e[0], e[1], e[2], x, y, z) ? 2 : 0;
+  }
+  // ¿Ve el ojo e alguna parte del volumen del registro r? Centro de cabeza,
+  // tope del casco o pecho (lo que asoma por encima de un LOW o por una
+  // orilla basta; el humo tapa la línea entera).
+  _seesVolume(e, r) {
+    if (this._sightTo(e, r.hx, r.hy, r.hz) === 0) return true;
+    if (this._sightTo(e, r.hx, r.hy + r.hr * 0.7, r.hz) === 0) return true;
+    return this._sightTo(e, r.cx, r.cy, r.cz) === 0;
   }
 
   _trackMotion(dt) {
@@ -2368,7 +2565,9 @@ export class BotMatch {
     const seen = bot.seen, seenD = bot.seenD;
     seen.length = 0; seenD.length = 0;
     const fx = -Math.sin(bot.yaw), fz = -Math.cos(bot.yaw);
-    const eye = bot.y + 1.3;
+    // ojo REAL del bot (eyeWorld de su pose): agachado tras un LOW ve desde
+    // 0.65 m y no por encima del bloque (antes, siempre desde y + 1.3)
+    const eye = this._eyeOf(bot); // vivo: tras un respawn/teletransporte no ve desde donde estaba
     for (const r of this.motion.values()) {
       if (!r.alive || r.team === bot.team) continue;
       const dx = r.x - bot.pos.x, dz = r.z - bot.pos.z;
@@ -2377,17 +2576,13 @@ export class BotMatch {
       const cos = d > 0.01 ? (dx * fx + dz * fz) / d : 1;
       const loud = this._clock - r.shotAt < 0.6;
       const running = r.vx * r.vx + r.vz * r.vz > 9;
+      // en pantalla, o el blanco que ya sigue (de cerca), o pegado a él;
+      // un disparo fuera de la vista se OYE (abajo) y le hace girarse
       let look = cos >= FRONT_COS ||
-        (cos >= PERIPHERY_COS && (d < 12 || loud || r.id === bot.targetId)) || d < 2.2;
-      if (look) {
-        // ojo del BLANCO según su volumen real: un agachado tras cover bajo
-        // no se ve "a través" del bloque; una cabeza asomada (lean, sobre el
-        // bloque) sí. Si lo tapa un BLOQUE, el casco que asoma por encima
-        // también cuenta (blindfire); si lo tapa el humo, no: la nube corta
-        // la línea de visión entera, como siempre.
-        const sight = this._sightTo(bot, eye, r.hx ?? r.x, r.eyeY ?? r.y + (r.crouch ? 0.9 : 1.3), r.hz ?? r.z);
-        look = sight === 0 || (sight === 1 && r.hy != null && this._sightTo(bot, eye, r.hx, r.hy + r.hr * 0.7, r.hz) === 0);
-      }
+        (cos >= PERIPHERY_COS && r.id === bot.targetId && d < 12) || d < 2.2;
+      // a lo que se dibuja: lo agachado tras un bloque no se ve; lo que asoma
+      // por encima (asomo) o por la orilla (inclinación) sí
+      if (look) look = this._seesVolume(eye, r);
       if (look) {
         let k = seen.length;
         seen.push(r); seenD.push(d);
@@ -2470,7 +2665,9 @@ export class BotMatch {
     const t = threats[0];
     if (!t) return true;
     if (c.nx !== undefined && (t.x - c.x) * c.nx + (t.z - c.z) * c.nz > 0.2) return false;
-    const eye = c.low ? 0.8 : 1.2;
+    // desde el casco de la postura escondida real (agachado tras LOW/MID,
+    // de pie tras HIGH): si la amenaza lo ve, el escondite no sirve
+    const eye = (bot.y || 0) + ((c.crouchHide ?? c.low) ? HIDE_EYE : STAND_EYE);
     _v1.set(c.x, eye, c.z);
     _v2.set(t.x - c.x, 0.1, t.z - c.z);
     const len = _v2.length();
@@ -2524,9 +2721,12 @@ export class BotMatch {
         if (cid !== bot.id && Math.hypot(c.x - sx, c.z - sz) < 2.2) { taken = true; break; }
       }
       if (taken) continue;
-      // vista bloqueada desde la POSTURA real: agachado (0.8) tras bloques
-      // LOW — con ojo fijo a 1.2 un bloque de 1.1 jamás calificaba
-      const eye = f.h <= TUNING.cover.lowHeight ? 0.8 : 1.2;
+      // vista bloqueada desde la POSTURA escondida real: el casco agachado
+      // (0.95) tras LOW y MID (< 1.9: de pie asomaría la cabeza), el de pie
+      // (1.8) tras HIGH. Antes 0.8 / 1.2: tras un bloque de 1.5 el bot se
+      // quedaba de pie con la cabeza fuera.
+      const crouchHide = f.h - (f.baseY ?? 0) < MID_STAND;
+      const eye = crouchHide ? HIDE_EYE : STAND_EYE;
       _v1.set(sx, bot.y + eye, sz);
       _v2.set(primary.x - sx, 0.1, primary.z - sz);
       const len = _v2.length();
@@ -2546,6 +2746,18 @@ export class BotMatch {
         const blocked = this.world.raycast(_v1, _v2, Math.min(l2, 25)) !== null;
         if (!sideOk || !blocked) exposure += t2.ghost ? 1.0 : 1.6;
       }
+      // cobertura de PELEA: un LOW sirve si al asomarse (ojo de pie, 1.48)
+      // se ve a la amenaza por encima; un HIGH, si su orilla queda cerca
+      const low = f.h - (f.baseY ?? 0) <= TUNING.cover.lowHeight;
+      let fightBonus = 0;
+      if (!retreat) {
+        if (low) {
+          _v1.set(sx, bot.y + 1.48, sz);
+          _v2.set(primary.x - sx, 0, primary.z - sz);
+          const lp = _v2.length(); _v2.normalize();
+          fightBonus = this.world.raycast(_v1, _v2, Math.min(lp, 25)) === null ? 0.9 : -0.6;
+        } else fightBonus = Math.hypot(f.b.x - f.a.x, f.b.z - f.a.z) < 5 ? 0.3 : -0.3;
+      }
 
       let crowd = 0;
       for (const a of this._alliesOf(bot)) {
@@ -2554,7 +2766,7 @@ export class BotMatch {
         if (ad < 5) crowd += (5 - ad) * 0.8;
       }
       const newThreatD = Math.hypot(primary.x - sx, primary.z - sz);
-      let score = -d * 0.34 - crowd - exposure +
+      let score = fightBonus - d * 0.34 - crowd - exposure +
         (newThreatD - currentThreatD) * (retreat ? 0.18 : 0.06);
       const faceLen = Math.hypot(f.b.x - f.a.x, f.b.z - f.a.z);
       score += Math.min(1.2, faceLen * 0.12);
@@ -2579,8 +2791,9 @@ export class BotMatch {
         x: sx, z: sz,
         tx: (f.b.x - f.a.x) / tlen, tz: (f.b.z - f.a.z) / tlen,
         nx: f.n.x, nz: f.n.z,
-        low: f.h <= TUNING.cover.lowHeight,
-        len: tlen, kind: f.kind, // presentación: orillas y pose de la cara
+        low,               // asomo por encima (≤ lowHeight)
+        crouchHide,        // escondido agachado (< MID_STAND)
+        len: tlen, kind: f.kind, // orillas para asomarse por el lado
       };
       bestScore = score;
     }
@@ -2608,29 +2821,35 @@ export class BotMatch {
   // online, el servidor sigue siendo quien decide el daño definitivo.
   botMelee(bot) {
     const ml = TUNING.melee;
-    const f = { x: -Math.sin(bot.yaw), z: -Math.cos(bot.yaw) };
-    const cosHalf = Math.cos(ml.arcDeg * Math.PI / 360);
+    const eye = this._eyeOf(bot);
+    const origin = new THREE.Vector3(...eye);
+    const yaw = bot.yaw;
     let best = null;
     for (const e of this._enemiesOf(bot)) {
       if (e.alive === false) continue;
-      const dx = e.x - bot.pos.x, dz = e.z - bot.pos.z;
-      const d = Math.hypot(dx, dz);
-      if (d > ml.range || Math.abs((e.y ?? 0) - bot.y) > ml.heightTolerance) continue;
-      const dot = d > 0.001 ? (dx * f.x + dz * f.z) / d : 1;
-      if (dot < cosHalf) continue;
-      const score = d + (1 - dot) * 0.42;
-      if (!best || score < best.score) best = { e, d, dx, dz, dot, score };
+      const y = e.y ?? 0;
+      const vol = e.hit ?? placeHitPose(e.hitVol ?? (e.crouch ? CROUCH : STAND), e.x, y, e.z, 0);
+      const contact = meleeTargetPoint(eye, vol, yaw);
+      if (!contact || !meleeHitOk(eye, yaw, contact.point, [e.x, y + 0.9, e.z])) continue;
+      _v2.fromArray(contact.point).sub(origin);
+      const len = _v2.length();
+      if (len > 0.05 && this.world.raycast(origin, _v2.multiplyScalar(1 / len), len) !== null) continue;
+      const dx = e.x - bot.pos.x, dz = e.z - bot.pos.z, d = Math.hypot(dx, dz);
+      const dot = d > 0.001 ? (-dx * Math.sin(yaw) - dz * Math.cos(yaw)) / d : 1;
+      const score = contact.dist + (1 - dot) * 0.42;
+      if (!best || score < best.score) best = { e, d, dx, dz, score, point: contact.point };
     }
-    if (!best) return { connected: false, killed: false };
-    const origin = _v1.set(bot.pos.x, bot.y + 1.08, bot.pos.z).clone();
-    const point = _v3.set(best.e.x,
-      (best.e.y ?? 0) + aimHeights(best.e).body, best.e.z).clone();
-    _v2.copy(point).sub(origin);
-    const len = _v2.length();
-    if (len > 0.4 && this.world.raycast(origin, _v2.normalize(),
-      Math.max(0, len - ml.wallPadding)) !== null) {
+    if (!best) {
+      const pitch = bot.aimPitch || 0, cp = Math.cos(pitch);
+      const dir = _v2.set(-Math.sin(yaw) * cp, Math.sin(pitch), -Math.cos(yaw) * cp);
+      const wall = kickWorldContact(this.world, origin, dir);
+      if (wall) {
+        this.cb.effects?.meleeWorld?.(wall.point, wall.normal);
+        this.cb.audio?.meleeImpact?.({ position: wall.point, world: true });
+      }
       return { connected: false, killed: false };
     }
+    const point = new THREE.Vector3(...best.point);
     const ctx = { weapon: 'melee', distance: best.d, damage: ml.dmg,
       part: 'body', gib: false, attackerState: bot.state };
     let killed = false;
@@ -2648,8 +2867,11 @@ export class BotMatch {
     const team = best.e.id === 'player' ? this.playerTeam
       : (this.bots.find((b) => b.id === best.e.id)?.team || 'blue');
     const normal = _v2.set(best.dx, 0.12, best.dz).normalize();
-    this.cb.effects?.meleeImpact?.(point, TEAM_HEX[team], normal);
-    this.cb.audio?.meleeImpact?.({ position: point }, killed);
+    // En red, el host también recibe el impacto autorizado y lo reproduce allí.
+    if (!this.external) {
+      this.cb.effects?.meleeImpact?.(point, TEAM_HEX[team], normal);
+      this.cb.audio?.meleeImpact?.({ position: point }, killed);
+    }
     return { connected: true, killed };
   }
 
@@ -2662,7 +2884,8 @@ export class BotMatch {
     const smoke = this.cb.smoke;
     // ni a mitad de una patada ni de otro cambio de arma (reglas del jugador)
     if (!smoke || bot.nades <= 0 || bot.throwPlan || bot.meleeT > 0 || bot.swapAnim > 0) return false;
-    bot.nades--;
+    // lanzar es una acción de arma: la misma tabla que al jugador (no en sprint)
+    if (!canFireInState(bot.netAnim || 'idle', 'grenade')) return false;
     bot.nadeCd = 12 + Math.random() * 8;
     bot.reloadT = 0; // sacar el bote interrumpe la recarga, como al jugador
     bot.throwPlan = { phase: 'draw', tx: threat.x, tz: threat.z, pending: false, release: false };
@@ -2676,11 +2899,31 @@ export class BotMatch {
   // antes; el ángulo sale de la tabla de alcance en vez de un arco fijo.
   botReleaseSmoke(bot) {
     const smoke = this.cb.smoke, p = bot.throwPlan;
-    if (!smoke || !p) return false;
+    if (!smoke || !p || bot.nades <= 0) return false;
     const g = TUNING.weapons.grenade;
-    const hand = bot.rig.muzzleWorld(_v3);
+    // salida como la del jugador (DECISIONES §4): 0.5 m delante del OJO de
+    // la pose difundida, hacia donde lanza, con el tramo ojo→salida libre
+    // (antes, desde la mano del rig). La mano solo es visual.
     const dx = p.tx - bot.pos.x, dz = p.tz - bot.pos.z;
     const d = Math.max(0.6, Math.hypot(dx, dz));
+    this._botPose(bot); // el paso de la suelta ya movió y giró al bot
+    const eye = bot._eye;
+    _v1.set(eye[0], eye[1], eye[2]); _v2.set(dx / d, 0, dz / d);
+    const free = this.world.raycast(_v1, _v2, 0.6);
+    const out = free === null ? 0.5 : Math.max(0, free - 0.1);
+    const hand = _v3.set(eye[0] + dx / d * out, eye[1], eye[2] + dz / d * out);
+    // y el tramo pecho (y + 1.3) → salida libre, la regla del servidor para bots
+    // (botOriginLegal): agachado pegado a un LOW, la salida se acerca al pecho
+    _v1.set(bot.pos.x, bot.y + 1.3, bot.pos.z); _v2.set(hand.x - _v1.x, hand.y - _v1.y, hand.z - _v1.z);
+    const cl = _v2.length();
+    if (cl > 0.02) { _v2.multiplyScalar(1 / cl); const hit = this.world.raycast(_v1, _v2, cl);
+      if (hit !== null) hand.copy(_v1).addScaledVector(_v2, Math.max(0, hit - 0.1)); }
+    if (this.external) {
+      const pose = bot.hostedPose, origin = hand.toArray();
+      if (!pose?.alive || pose.w !== 'grenade' || performance.now() - bot.hostedPoseAt >= BOT_ORIGIN_LAG * 1000 ||
+          !botPoseAllowsOrigin(this.world.layout, pose, origin) || mapPathBlocked(this.world.layout, eye, origin)) return false;
+    }
+    bot.nades--;
     const reach = Math.min(d * 0.55, 8);
     const lx = bot.pos.x + dx / d * reach - hand.x, lz = bot.pos.z + dz / d * reach - hand.z;
     const ll = Math.max(0.01, Math.hypot(lx, lz));
@@ -2703,10 +2946,29 @@ export class BotMatch {
   // ¿Es seguro lanzar un cohete a este blanco? Exige línea limpia y que
   // ningún COMPAÑERO (ni el propio bot) quede dentro del radio de la
   // explosión estimada. Es la regla que hace usable la bazooka en la IA.
+  // Punto de lanzamiento del cohete: 0.5 m delante del OJO hacia el blanco,
+  // como el del jugador (fpCam.launchPoint); el servidor lo valida contra
+  // el cuerpo difundido (botOriginLegal).
+  _launchPoint(bot, enemy, out) {
+    const eye = this._eyeOf(bot);
+    const tx = enemy.x - eye[0], ty = (enemy.y ?? 0) + 0.9 - eye[1], tz = enemy.z - eye[2];
+    const l = Math.max(0.01, Math.hypot(tx, ty, tz));
+    return out.set(eye[0] + tx / l * 0.5, eye[1] + ty / l * 0.5, eye[2] + tz / l * 0.5);
+  }
+
   rocketPathClear(bot, enemy, dist) {
     const R = TUNING.weapons.bazooka.splashRadius;
-    _v1.set(bot.pos.x, bot.y + 1.35, bot.pos.z);
-    _v2.set(enemy.x - bot.pos.x, (enemy.y ?? 0) + 0.9 - (bot.y + 1.35), enemy.z - bot.pos.z);
+    // el tramo ojo→salida debe estar libre (la regla que el servidor barre)
+    const eye = this._eyeOf(bot);
+    this._launchPoint(bot, enemy, _v1);
+    _v2.set(_v1.x - eye[0], _v1.y - eye[1], _v1.z - eye[2]);
+    const el = _v2.length(); _v2.normalize(); _v3.set(eye[0], eye[1], eye[2]);
+    if (this.world.raycast(_v3, _v2, el + 0.05) !== null) return false;
+    // pecho → salida también libre (servidor: botOriginLegal)
+    _v3.set(bot.pos.x, bot.y + 1.3, bot.pos.z); _v2.set(_v1.x - _v3.x, _v1.y - _v3.y, _v1.z - _v3.z);
+    const cl = _v2.length(); _v2.normalize();
+    if (cl > 0.02 && this.world.raycast(_v3, _v2, cl) !== null) return false;
+    _v2.set(enemy.x - _v1.x, (enemy.y ?? 0) + 0.9 - _v1.y, enemy.z - _v1.z);
     const len = _v2.length();
     _v2.normalize();
     // la trayectoria debe estar despejada: si pega en una pared cercana, el
@@ -2743,11 +3005,12 @@ export class BotMatch {
   botFireRocket(bot, enemy) {
     const rockets = this.cb.rockets;
     if (!rockets) return false;
-    _v1.set(bot.pos.x, bot.y + 1.35, bot.pos.z);
+    this._launchPoint(bot, enemy, _v1);
     // humo comprobado AL LANZAR, como en botShoot: no se dispara a un blanco
     // que la nube acaba de tapar (devuelve false: ni cohete ni munición)
     if (this.cb.smoke?.blocksSegment(_v1.x, _v1.y, _v1.z, enemy.x, (enemy.y ?? 0) + 0.9, enemy.z)) return false;
-    _v2.set(enemy.x - bot.pos.x, (enemy.y ?? 0) + 0.9 - (bot.y + 1.35), enemy.z - bot.pos.z).normalize();
+    _v2.set(enemy.x - _v1.x, (enemy.y ?? 0) + 0.9 - _v1.y, enemy.z - _v1.z).normalize();
+    bot.rig?.fireWeaponParts?.();
     this.cb.audio?.gun?.('bazooka', { position: _v1.clone() });
     const cid = this.external ? `b:${bot.id}:${++this._rocketSeq}` : null;
     rockets.fire({ x: _v1.x, y: _v1.y, z: _v1.z }, _v2.clone(), true,
@@ -2767,7 +3030,7 @@ export class BotMatch {
     const specials = this.cb.specials;
     const wep = specials?.take?.();
     if (!wep) return;
-    bot.wep = wep;
+    bot.wep = wep; bot.special = wep;
     bot.specialAmmo = TUNING.weapons[wep].mag + TUNING.weapons[wep].reserve;
     bot.swapCd = 2.5;
     bot.throwPlan = null; bot.throwT = 0;
@@ -2781,7 +3044,7 @@ export class BotMatch {
     const bot = this.botById(id);
     if (!bot || !bot.alive || !TUNING.weapons[wep]?.special) return false;
     this.cb.specials?.clear?.();
-    bot.wep = wep;
+    bot.wep = wep; bot.special = wep;
     bot.specialAmmo = TUNING.weapons[wep].mag + TUNING.weapons[wep].reserve;
     bot.swapCd = 2.5;
     bot.throwPlan = null; bot.throwT = 0;
@@ -2799,7 +3062,10 @@ export class BotMatch {
   // blanco y crece si el bot se mueve. Devuelve false si no hubo tiro.
   botShoot(bot, enemy) {
     const def = TUNING.weapons[bot.wep];
-    _v1.set(bot.pos.x, bot.y + 1.35, bot.pos.z);
+    // FPS: el tiro sale del OJO de la pose difundida (eyeWorld), como el del
+    // jugador; antes, de y + 1.35 aunque estuviera agachado
+    const eye = this._eyeOf(bot);
+    _v1.set(eye[0], eye[1], eye[2]);
     // al pecho; si un bloque lo tapa, a la cabeza; si solo asoma el casco
     // (blindfire por encima del bloque), al casco. Puntos del volumen real;
     // con las poses de siempre, los de antes (0.72/1.1 y 0.95/1.5).
@@ -2815,7 +3081,9 @@ export class BotMatch {
       if (!Number.isFinite(q[1])) continue;
       _v2.set(q[0] - _v1.x, q[1] - _v1.y, q[2] - _v1.z);
       const len = _v2.length();
-      if (this.world.raycast(_v1, _v2.normalize(), Math.max(0, len - q[3])) === null) { aim = q; break; }
+      // del ojo al punto del volumen (hasta 5 cm de él: un bloque pegado al
+      // blanco TAPA; antes se ignoraban sus últimos 35–45 cm)
+      if (this.world.raycast(_v1, _v2.normalize(), Math.max(0, len - 0.05)) === null) { aim = q; break; }
     }
     if (!aim) return false;
     // el humo se comprueba AL DISPARAR, no solo al percibir (cada 0,1 s): un
@@ -2836,7 +3104,13 @@ export class BotMatch {
     const pitch = Math.atan2(aimY - _v1.y, flat) + bot.aimEy;
     const cp = Math.cos(pitch);
     _v3.set(-Math.sin(yaw) * cp, Math.sin(pitch), -Math.cos(yaw) * cp);
-    const baseDir = bot.wep === 'shotgun' ? applySpread(_v3, 1.2) : _v3;
+    // dispersión del JUGADOR para esa arma y ese estado (spreadFor: la misma
+    // que la retícula), además del error humano de arriba
+    const spread = spreadFor(bot.wep, { aim: !!bot.aim, moving: Math.min(1, (bot.speed ?? 0) / TUNING.fp.runSpeed),
+      crouched: bot.animState() === 'crouch' && bot.ce < 0.5, airborne: !bot.grounded, sinceSprint: bot.sinceSprint ?? 99 });
+    const pellets0 = def.pellets || 1;
+    const baseDir = pellets0 > 1 ? applySpread(_v3, 1.2) : spread > 0 ? applySpread(_v3, spread) : _v3;
+    bot.rig?.fireWeaponParts?.();
     this._shotBy(bot);
     const targets = this._enemiesOf(bot);
     const pellets = def.pellets || 1;
@@ -2846,7 +3120,7 @@ export class BotMatch {
     const impactPoints = [];
     for (let i = 0; i < pellets; i++) {
       const dir = pellets > 1
-        ? applyPelletPattern(baseDir, def.spreadHip, i, pellets)
+        ? applyPelletPattern(baseDir, spread || def.spreadHip, i, pellets)
         : baseDir;
       const hit = resolveShot(this.world, targets, _v1, dir, def.range, bot.id);
       if (!shotPoint) shotPoint = hit.point.clone();
@@ -2925,6 +3199,14 @@ export class BotMatch {
       ? (() => { const p = this.cb.player(); return p.alive ? { x: p.x, z: p.z } : null; })()
       : (() => { const ab = this.bots.find((x) => x.id === from); return ab?.alive ? { x: ab.pos.x, z: ab.pos.z } : null; })();
     if (att) {
+      // Un humano al que le pegan sabe DE DÓNDE (indicador de daño), no el
+      // punto exacto si no ve al tirador: sin línea de visión, error de
+      // hasta 4 m que crece con la distancia (antes, la posición exacta).
+      const ar = this.motion.get(from);
+      if (ar && b._eye && !this._seesVolume(b._eye, ar)) {
+        const err = Math.min(4, Math.hypot(att.x - b.pos.x, att.z - b.pos.z) * 0.12);
+        att.x += (Math.random() - 0.5) * 2 * err; att.z += (Math.random() - 0.5) * 2 * err;
+      }
       b.lastThreat = { x: att.x, z: att.z, age: 0 };
       // el equipo se entera de dónde viene el fuego; los compañeros cercanos
       // oyen el tiroteo y miran hacia allí
@@ -3044,7 +3326,8 @@ export class BotMatch {
     // el arma del bot cae junto a su cuerpo (la del jugador la suelta main)
     if (victimId !== 'player') {
       const b = this.bots.find((x) => x.id === victimId);
-      if (b) this.cb.dropWeapon?.(b.wep, b.pos.x, b.pos.z, b.team, b.y, b.rig, b.specialAmmo);
+      // si lleva la especial guardada (bandas de distancia), cae la especial
+      if (b) this.cb.dropWeapon?.(b.special && b.specialAmmo > 0 ? b.special : b.wep, b.pos.x, b.pos.z, b.team, b.y, b.rig, b.specialAmmo);
     }
     const head = hitCtx?.part === 'head';
     if (v && k) this.cb.hud.kill(k.name, k.team, v.name, v.team, { weapon: hitCtx?.weapon, head,

@@ -1,4 +1,5 @@
-import { Box3 } from 'three';
+import { trimRelief } from './trim-relief.js';
+import { Box3, FrontSide } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { DISTRICT_FACADES } from './district-facades.js';
@@ -237,6 +238,20 @@ function loadOne(id) {
     const parse = gltfLoader(needsDraco(buffer)).parseAsync(buffer, `${baseUrl()}assets/calle/`);
     const gltf = await withTimeout(parse, PARSE_MS, `parseo de ${id}`);
     if (id === 'suvMinivan') darkenSuvWindows(gltf.scene);
+    // El corte se hace una sola vez antes de compartir los vértices entre copias.
+    const facade = Object.values(DISTRICT_FACADES).includes(id);
+    if (facade) gltf.scene.traverse(o=>{
+      // Son volúmenes de Blender. Dibujar su reverso dejaba el ladrillo y
+      // el canto interior del marco disputándose el mismo píxel.
+      if (o.isMesh && /^(Brick tone [0-4]|Charcoal painted metal|Warm limestone|Recessed mortar)$/.test(o.material.name))
+        o.material.side=FrontSide;
+    });
+    if (facade || id.startsWith('prop-') ||
+        ['suvMinivan','roof-access','roof-grille','roof-cabinet','refined-roof-tank'].includes(id)) {
+      // La profundidad de la rejilla se instancia al 45 % y la del armario al 85 %.
+      const depthScale = id==='roof-grille' ? .45 : id==='roof-cabinet' ? .85 : 1;
+      trimRelief(gltf.scene, .00205/depthScale);
+    }
     markShared(gltf.scene, id);
     cache.set(id, gltf.scene);
     failed.delete(id);

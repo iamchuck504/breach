@@ -1,11 +1,17 @@
 import * as THREE from 'three';
 import { World, BLOCK } from '../src/world/world.js';
 import { Rig } from '../src/player/rig.js';
-import { Controller } from '../src/player/controller.js';
 import { TUNING } from '../src/config/tuning.js';
 import { coverAimPose, coverBlindPose, coverTopY, muzzleHasClearance,
   segmentsHaveClearance } from '../src/combat/cover-fire.js';
 
+// PRUEBAS (corrida 6, FPS): se retiraron los bloques del CONTROLADOR en
+// cobertura pegada (exposición de ADS y blindfire contextual) y la ventaja de
+// spreadBlind: el jugador ya no tiene esas mecánicas. Su garantía vive en
+// check-fps-movement (asomo ce: subida/bajada), check-fps-origin (origen
+// oculto rechazado) y check-hit-pose (casco agachado < LOW). Lo que queda aquí
+// es el rig de tercera persona y los helpers que aún usan sus poses de bots
+// (BOTS-PENDING: se retiran cuando el rig deje cover_*/blind_*).
 const failures = [];
 const check = (ok, msg) => { if (!ok) failures.push(msg); };
 
@@ -25,34 +31,6 @@ check(poseDown.aimRigY > poseFlat.aimRigY,
 check(coverBlindPose({ kind: 'railing' }, -0.3).aimRigY > 0.6,
   'blindfire descendente no eleva el arma sobre el barandal');
 
-// Transición protegida -> expuesta -> protegida: el gatillo espera la pose,
-// pero soltar ADS recupera cover sin un cooldown artificial.
-const ctrlWorld = {
-  groundHeight: () => 0, resolveCircle() {}, findCover: () => null,
-  raycast: () => null,
-};
-const ctrlCam = {
-  yaw: 0, pitch: 0, flatForward: () => ({ x: 0, z: -1 }),
-  flatRight: () => ({ x: 1, z: 0 }),
-};
-const controller = new Controller(ctrlWorld, ctrlCam);
-controller.respawn({ x: 0, z: 0.83, yaw: 0 });
-controller.cover = { kind: 'low', h: BLOCK.LOW, n: { x: 0, z: 1 },
-  a: { x: -2, z: 0.45 }, b: { x: 2, z: 0.45 } };
-controller.state = 'cover';
-const ctrlInput = {
-  aimHeld: true, sprintHeld: false, jumpPressed: false, evadePressed: false,
-  moveVec: () => ({ x: 0, z: 0 }),
-};
-controller.update(1 / 60, ctrlInput, false);
-check(!controller.fireAligned(), 'cover bajo permitió disparar antes de asomarse');
-for (let i = 1; i < 3; i++) controller.update(1 / 60, ctrlInput, false);
-check(controller.coverAimExposure >= 0.82 && controller.fireAligned(),
-  `ADS no recuperó línea de fuego a tiempo (${controller.coverAimExposure})`);
-ctrlInput.aimHeld = false;
-for (let i = 0; i < 9; i++) controller.update(1 / 60, ctrlInput, false);
-check(controller.coverAimExposure < 0.04,
-  `soltar ADS no regresó rápido a protección (${controller.coverAimExposure})`);
 
 // La locomoción descendente inclina el root de forma progresiva; así el torso
 // y los pies acompañan la pendiente en lugar de permanecer verticales.
@@ -67,45 +45,6 @@ check(controller.coverAimExposure < 0.04,
   slopeRig.dispose(slopeRig.root.parent);
 }
 
-function contextualBlind(h, x, yaw) {
-  const cam = {
-    yaw, pitch: 0,
-    flatForward() { return { x: -Math.sin(this.yaw), z: -Math.cos(this.yaw) }; },
-    flatRight() { return { x: Math.cos(this.yaw), z: -Math.sin(this.yaw) }; },
-  };
-  const c = new Controller(ctrlWorld, cam);
-  c.respawn({ x, z: 0.83, yaw: Math.PI });
-  c.cover = { kind: h < 1.5 ? 'low' : 'high', h, n: { x: 0, z: 1 },
-    a: { x: -2, z: 0.45 }, b: { x: 2, z: 0.45 }, collider: {} };
-  c.state = 'cover';
-  cam.yaw = yaw;
-  for (let i = 0; i < 20; i++) c.update(1 / 60, ctrlInput, true);
-  return c;
-}
-
-const lowCenter = contextualBlind(BLOCK.LOW, 0, 0);
-const lowLeft = contextualBlind(BLOCK.LOW, -1.73, Math.PI / 4);
-const lowRight = contextualBlind(BLOCK.LOW, 1.73, -Math.PI / 4);
-const highCenter = contextualBlind(BLOCK.MID, 0, 0);
-const highLeft = contextualBlind(BLOCK.MID, -1.73, Math.PI / 4);
-const highRight = contextualBlind(BLOCK.MID, 1.73, -Math.PI / 4);
-check(lowCenter.animState() === 'blind_over', 'centro de cover bajo no eligió blindfire superior');
-check(lowLeft.animState() === 'blind_low_left' && lowRight.animState() === 'blind_low_right',
-  `orillas bajas no se espejaron (${lowLeft.animState()}/${lowRight.animState()})`);
-check(highCenter.blindMode === null && highCenter.animState() === 'cover_high',
-  'centro de cover alto inventó una línea de fuego imposible');
-check(highLeft.animState() === 'blind_high_left' && highRight.animState() === 'blind_high_right',
-  `orillas altas no se espejaron (${highLeft.animState()}/${highRight.animState()})`);
-check(lowCenter.blindPoseExposure > 0.76 && highLeft.blindPoseExposure > 0.76,
-  'blindfire válido no terminó su transición de pose');
-for (const c of [lowCenter, lowLeft, lowRight, highLeft, highRight]) {
-  c.update(1 / 60, { ...ctrlInput, aimHeld: false }, false);
-  check(c.firingBlind === 0 && c.animState().startsWith('cover_'), 'release must immediately begin protected pose');
-  for (let i = 0; i < 8; i++) c.update(1 / 60, { ...ctrlInput, aimHeld: false }, false);
-  check(c.blindPoseExposure < 0.03, 'blindfire return exceeds 150ms');
-  c.update(1 / 60, { ...ctrlInput, aimHeld: true }, false);
-  check(c.aim, 'aim must cancel cover return without cooldown');
-}
 
 function checkRigClearance(kind, pitch, weapon, elevated = false, blind = false) {
   const testScene = new THREE.Scene();
@@ -208,9 +147,6 @@ const wallAhead = {
 check(muzzleHasClearance(wallAhead, null, root, muzzle, forward),
   'ADS libre bloqueó un impacto válido delante del muzzle');
 
-check(TUNING.weapons.smg.spreadBlind > TUNING.weapons.smg.spreadAim &&
-  TUNING.weapons.shotgun.spreadBlind > TUNING.weapons.shotgun.spreadAim,
-  'blindfire perdió su desventaja de precisión');
 
 if (failures.length) {
   console.error('COVER FIRE ERRORS:');

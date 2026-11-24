@@ -39,6 +39,7 @@ export const STANCES = {
   dive_2: { p: { state: 'dive', evadePhase: 0.2 } },
   dive_5: { p: { state: 'dive', evadePhase: 0.5 } },
   dive_8: { p: { state: 'dive', evadePhase: 0.8 } },
+  dodge: { p: { state: 'dodge', evadePhase: 0.5, moveSide: 1, moveForward: 0 } },
   slide: { p: { state: 'slide' } },
   mantle_2: { p: { state: 'mantle', mantlePhase: 0.2 } },
   mantle_4: { p: { state: 'mantle', mantlePhase: 0.4 } },
@@ -48,6 +49,40 @@ export const STANCES = {
   flip_2: { p: { state: 'flip', flipT: 0.2 } },
   flip_5: { p: { state: 'flip', flipT: 0.5 } },
   flip_8: { p: { state: 'flip', flipT: 0.8 } },
+  // FPS (corrida 6): agachado libre, con y sin ADS. Solo se miden si el rig
+  // tiene la pose propia (rig.supportsState('crouch')); si no, la tabla
+  // conserva la referencia del contrato (casco 1.08).
+  crouch_idle: { needs: 'crouch', p: { state: 'crouch', coverAimExposure: 0 } },
+  crouch_aim: { needs: 'crouch', wep: 'smg', p: { state: 'crouch', aim: true, coverAimExposure: 0 } },
+  // la subida (ce) no es lineal en el rig (sube antes): puntos intermedios
+  ...Object.fromEntries([25, 50, 75].flatMap((q) => [
+    [`crouch_idle_${q}`, { needs: 'crouch', p: { state: 'crouch', coverAimExposure: q / 100 } }],
+    [`crouch_aim_${q}`, { needs: 'crouch', wep: 'smg', p: { state: 'crouch', aim: true, coverAimExposure: q / 100 } }],
+  ])),
+  // inclinación (cl = ±1) de pie / agachado, con y sin ADS: la tabla guarda el
+  // DESPLAZAMIENTO de cabeza y hombros respecto de la postura sin inclinar
+  // (fitTable), porque el rig no es simétrico en ADS (+0.22 / −0.24)
+  ...Object.fromEntries(['r', 'l'].flatMap((sd) => {
+    const cl = sd === 'r' ? 1 : -1;
+    return [
+      [`lean_stand_${sd}`, { needs: 'crouch', p: { state: 'idle', coverLean: cl } }],
+      [`lean_stand_aim_${sd}`, { needs: 'crouch', wep: 'smg', p: { state: 'idle', aim: true, coverLean: cl } }],
+      [`lean_crouch_${sd}`, { needs: 'crouch', p: { state: 'crouch', coverLean: cl, coverAimExposure: 0 } }],
+      [`lean_crouch_aim_${sd}`, { needs: 'crouch', wep: 'smg', p: { state: 'crouch', aim: true, coverLean: cl, coverAimExposure: 0 } }],
+    ];
+  })),
+};
+// Posturas que no van a la tabla: se comparan con el volumen analítico
+// (inclinación de hit-pose.js leanVol) en check-hit-pose / check-fps-eye.
+// (pose de hit-pose.js equivalente en `pose`)
+export const VERIFY_STANCES = {
+  v_crouch_move: { needs: 'crouch', p: { state: 'crouch', speed: 0.3, coverAimExposure: 0 }, pose: { st: 'crouch', ce: 0 } },
+  v_crouch_half: { needs: 'crouch', p: { state: 'crouch', coverAimExposure: 0.5 }, pose: { st: 'crouch', ce: 0.5 } },
+  v_crouch_aim_q: { needs: 'crouch', wep: 'smg', p: { state: 'crouch', aim: true, coverAimExposure: 0.25 }, pose: { st: 'crouch', aim: true, ce: 0.25, wep: 'smg' } },
+  v_crouch_aim_half: { needs: 'crouch', wep: 'smg', p: { state: 'crouch', aim: true, coverAimExposure: 0.5 }, pose: { st: 'crouch', aim: true, ce: 0.5, wep: 'smg' } },
+  v_crouch_aim_3q: { needs: 'crouch', wep: 'smg', p: { state: 'crouch', aim: true, coverAimExposure: 0.75 }, pose: { st: 'crouch', aim: true, ce: 0.75, wep: 'smg' } },
+  v_lean_aim_half: { needs: 'crouch', wep: 'smg', p: { state: 'idle', aim: true, coverLean: 0.5 }, pose: { st: 'idle', aim: true, cl: 0.5, wep: 'smg' } },
+  v_run_lean: { needs: 'crouch', p: { state: 'run', speed: 0.6, coverLean: 1 }, pose: { st: 'run', cl: 1 } },
 };
 
 // Entra en práctica como un jugador: así el rig usa los modelos de partida.
@@ -84,13 +119,20 @@ export async function measureStances(page, stances = STANCES) {
       const p = new Controller(w, cam); p.pos = { x: c.side * 1.5, z: 0.38 }; p.state = 'cover'; p.cover = face; p.yaw = 0;
       const input = { moveVec: () => ({ x: 0, z: 0 }), aimHeld: c.aim, sprintHeld: false, meleePressed: false, evadePressed: false, jumpPressed: false };
       for (let i = 0; i < 150; i++) { p.update(1 / 60, input, c.fire); rig.setTransform(p.pos.x, p.pos.z, p.yaw, p.y); rig.update(1 / 60, { ...BASE_P, ...p.animParams() }); }
+      // el controlador FPS ya no tiene cobertura: sin estado cover_*/blind_* la
+      // medida sería la de pie y estropearía la tabla de los bots
+      if (!/^(cover_|blind_)/.test(String(p.animState()))) throw new Error('sin cobertura en el controlador');
       return { ox: p.pos.x, oz: p.pos.z, st: p.animState(), cl: p.coverLeanAnim || 0, ce: p.coverAimExposure };
     };
     const out = {};
     for (const [key, s] of Object.entries(stances)) {
+      // postura sin pose propia en el rig: no se mide (la tabla conserva la suya)
+      if (s.needs && !rig.supportsState?.(s.needs)) continue;
       rig.setWeapon(s.wep || 'smg', s.wep && s.wep !== 'smg' ? 'smg' : 'shotgun');
       let ox = 0, oz = 0, info = {};
-      if (s.cover) ({ ox, oz, ...info } = settleCover(s.cover));
+      // las coberturas se asientan con el Controller: si el controlador FPS ya
+      // no tiene ese modo, se conserva el valor calibrado (lo usan los bots)
+      if (s.cover) { try { ({ ox, oz, ...info } = settleCover(s.cover)); } catch { continue; } }
       else {
         rig.setTransform(0, 0, 0, 0);
         for (let i = 0; i < 40; i++) rig.update(1 / 60, { ...BASE_P });
@@ -159,7 +201,16 @@ export function fitTable(m) {
     table[k] = { h: r3(add(s.head, oh)), a: r3(add(s.pelvis, oa)), b: r3(add(s.chest, rotate(u0, u, ob))) };
   }
   // pivote del giro: punto medio entre la cabeza a 0° y a 180°
-  table.flip_pivot = r3(m.flip_0.head.map((v, i) => (v + m.flip_5.head[i]) / 2));
+  // inclinación: desplazamiento respecto de la postura base (la de pie = LEGACY)
+  const LEAN_BASE = { lean_stand: null, lean_stand_aim: 'ads_smg', lean_crouch: 'crouch_idle', lean_crouch_aim: 'crouch_aim' };
+  for (const k of Object.keys(table)) {
+    const mm = /^(lean_\w+?)_(r|l)$/.exec(k);
+    if (!mm || !(mm[1] in LEAN_BASE)) continue;
+    const base = LEAN_BASE[mm[1]] ? table[LEAN_BASE[mm[1]]] : LEGACY;
+    if (!base) { delete table[k]; continue; }
+    table[k] = { h: r3(sub(table[k].h, base.h)), b: r3(sub(table[k].b, base.b)) };
+  }
+  if (m.flip_0 && m.flip_5) table.flip_pivot = r3(m.flip_0.head.map((v, i) => (v + m.flip_5.head[i]) / 2));
   return table;
 }
 
@@ -169,7 +220,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     const page = await browser.newPage();
     await openPractice(page);
     const m = await measureStances(page);
-    const table = fitTable(m);
+    // lo que no se pudo medir conserva su valor actual (mismo orden de claves)
+    const { CALIBRATION } = await import('../src/combat/hit-pose.js');
+    const table = { ...CALIBRATION, ...fitTable(m) };
+    const skipped = Object.keys(CALIBRATION).filter((k) => !(k in m) && k !== 'flip_pivot');
+    if (skipped.length) console.error('sin medir (se conservan):', skipped.join(', '));
     if (process.argv.includes('--raw')) console.log(JSON.stringify(m, (k, v) => (typeof v === 'number' ? +v.toFixed(3) : v), 1));
     const body = Object.entries(table).map(([k, v]) => `  ${k}: ${JSON.stringify(v).replace(/"/g, '')},`).join('\n');
     if (process.argv.includes('--write')) {
@@ -180,5 +235,15 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       fs.writeFileSync(file, src.replace(re, `$1${body}\n$2`));
       console.log('tabla escrita en src/combat/hit-pose.js');
     } else console.log(body);
+    // comprobación: posturas intermedias contra el volumen del módulo
+    // (tras --write se reimporta la tabla nueva)
+    if (process.argv.includes('--verify')) {
+      const mv = fitTable(await measureStances(page, { idle: STANCES.idle, ...VERIFY_STANCES }));
+      const { hitPose } = await import('../src/combat/hit-pose.js?v=' + Date.now());
+      for (const [k, s] of Object.entries(VERIFY_STANCES)) if (mv[k]) {
+        const v = hitPose(s.pose), d = Math.hypot(...v.h.map((x, i) => x - mv[k].h[i]));
+        console.log(`verificar ${k}: rig ${mv[k].h} módulo ${v.h.map((x) => +x.toFixed(2))} Δ ${d.toFixed(3)} m`);
+      }
+    }
   } finally { await browser.close(); }
 }

@@ -1,7 +1,8 @@
 // APOYO DE LOS PIES con la suela DIBUJADA (vértices skinned de la bota), en
 // el modelo Blender (diez variantes) y en el avatar procedural:
 //  · posturas apoyadas (reposo, coberturas, ADS sobre cobertura, ciegos,
-//    deslizamiento, patada, aterrizaje): cada suela a ±1,5 cm del suelo;
+//    deslizamiento, patada, aterrizaje, agachado, asomo, inclinado): cada
+//    suela a ±1,5 cm del suelo;
 //  · marcha: ninguna suela bajo el suelo y cada pie lo toca en su apoyo
 //    (la carrera clásica de frente, por tiempo, solo se exige no hundirse);
 //  · piernas en el aire (salto, esquiva, patada): no atraviesan el suelo;
@@ -31,6 +32,17 @@ const SC = [
   ['atrás', { state: 'run', speed: 4.8 / 7.6, moveForward: -1 }, 'marcha', 4.8, -1, 0],
   ['trote', { state: 'run', speed: 4.8 / 7.6 }, 'clasica', 4.8, 1, 0],
   ['sprint', { state: 'roadie', speed: 1 }, 'clasica', 7.6, 1, 0],
+  // capa FPS (corrida 6): agachado, asomo `ce`, inclinación `cl`
+  ['agachado', { state: 'crouch', coverAimExposure: 0 }, 'apoyo'],
+  ['agachado ADS', { state: 'crouch', aim: true, coverAimExposure: 0 }, 'apoyo'],
+  ['asomo ce .5', { state: 'crouch', aim: true, coverAimExposure: 0.5 }, 'apoyo'],
+  ['inclinado D ADS', { state: 'idle', aim: true, coverLean: 1 }, 'apoyo'],
+  ['inclinado I', { state: 'idle', coverLean: -1 }, 'apoyo'],
+  ['agachado inclinado D', { state: 'crouch', aim: true, coverLean: 1, coverAimExposure: 0 }, 'apoyo'],
+  ['agachado inclinado I', { state: 'crouch', aim: true, coverLean: -1, coverAimExposure: 0 }, 'apoyo'],
+  ['agachado andando', { state: 'crouch', speed: 2.3 / 7.6, coverAimExposure: 0 }, 'marcha', 2.3, 1, 0],
+  ['agachado lateral', { state: 'crouch', speed: 2.3 / 7.6, moveForward: 0, moveSide: -1, coverAimExposure: 0 }, 'marcha', 2.3, 0, -1],
+  ['agachado atrás', { state: 'crouch', speed: 2.3 / 7.6, moveForward: -1, aim: true, coverAimExposure: 0 }, 'marcha', 2.3, -1, 0],
   ['salto', { state: 'jump', vy: 0 }, 'libre'],
   ['esquiva', { state: 'dive', evadePhase: 0.5 }, 'libre'],
 ];
@@ -40,7 +52,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  await page.goto('http://127.0.0.1:5200/?nolock=1');
+  await page.goto((process.env.BASE || 'http://127.0.0.1:5200') + '/?nolock=1');
   const report = await page.evaluate(async (SC) => {
     const T = await import('/node_modules/three/build/three.module.js');
     const { Rig } = await import('/src/player/rig.js');
@@ -104,7 +116,7 @@ try {
         const list = team === 'red' && v === 0 ? SC : SC.filter((s) => s[2] === 'apoyo');
         for (const sc of list) rows.push({ avatar, team, v, ...(await run(r, sc)) });
         if (team === 'red' && v === 0) {
-          for (const hz of [30, 144]) for (const sc of [SC[0], SC[1], SC[2]]) rows.push({ avatar, team, v, ...(await run(r, sc, hz)) });
+          for (const hz of [30, 144]) for (const sc of [SC[0], SC[1], SC[2], ...SC.filter((c) => c[0] === 'agachado' || c[0] === 'agachado inclinado D')]) rows.push({ avatar, team, v, ...(await run(r, sc, hz)) });
           rows.push({ avatar, team, v, ...(await run(r, ['rampa reposo', {}, 'apoyo'], 60, 0.22)) });
           rows.push({ avatar, team, v, ...(await run(r, ['rampa apuntando', { state: 'run', speed: 2.16 / 7.6, aim: true }, 'marcha', 2.16, 1, 0], 60, 0.22)) });
         }

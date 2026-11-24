@@ -8,9 +8,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import { CHROME } from './lib-chrome.mjs';
+import { freePort } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const port = 8866;
+const port = FREE_PORT;
 const SECONDS = Number(process.argv[2]) || 70;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
@@ -45,7 +48,7 @@ try {
   const relayed = {};
   obs = new WebSocket(`ws://127.0.0.1:${port}`);
   await new Promise((res, rej) => {
-    obs.on('open', () => obs.send(JSON.stringify({ t: 'join', name: 'OBS', action: 'join', v: 0 })));
+    obs.on('open', () => obs.send(JSON.stringify({ t: 'join', name: 'OBS', action: 'join', v: 0, hp: 2, fps: 1 })));
     obs.on('error', rej);
     obs.on('message', (raw) => {
       const m = JSON.parse(raw);
@@ -95,7 +98,15 @@ try {
     // el humano host, al descubierto a ~14 m de los bots: blanco para que disparen
     await page.evaluate(() => { const G = window.BREACH, M = G.onlineBots, b = M.bots.find((x) => x.alive);
       if (!G.player || !b || !G.selfAlive) return;
-      if (Math.hypot(G.player.pos.x - b.pos.x, G.player.pos.z - b.pos.z) > 22) { G.player.pos.x = b.pos.x; G.player.pos.z = b.pos.z + 14; } });
+      // PRUEBAS (corrida 6, FPS): los bots ya no ven a quien tienen detrás sin oírlo;
+      // el blanco se pone DELANTE del bot (en su vista), en un punto transitable a 10-16 m
+      // (mismo criterio que check-fps-bots-hosted). Umbrales del escenario sin cambios.
+      const fx = -Math.sin(b.yaw), fz = -Math.cos(b.yaw), N = window.BREACH_WORLD.navigation;
+      const dx = G.player.pos.x - b.pos.x, dz = G.player.pos.z - b.pos.z, d = Math.hypot(dx, dz);
+      if (d > 22 || (dx * fx + dz * fz) / Math.max(0.01, d) < 0.6) {
+        for (const r of [14, 12, 16, 10]) { const q = { x: b.pos.x + fx * r, z: b.pos.z + fz * r };
+          if (!N || N.walkable(q)) { G.player.pos.x = q.x; G.player.pos.z = q.z; break; } }
+      } });
     if (!forced && Date.now() - t0 > SECONDS * 500) {
       forced = true; // un cambio de arma a mitad de partida, seguro
       await page.evaluate(() => { const b = window.BREACH.onlineBots.bots.find((x) => x.alive); if (b) { b.swapCd = 0; b._trySwap(b.wep === 'smg' ? 'shotgun' : 'smg'); } });

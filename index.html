@@ -640,6 +640,7 @@
   }
 </style>
 <link rel="stylesheet" href="/src/ui/visual-system.css" />
+<link rel="stylesheet" href="/src/ui/fp-hud.css" />
 </head>
 <body>
 <canvas id="game"></canvas>
@@ -662,6 +663,9 @@
       </svg>
     </div>
   </div>
+  <!-- primera persona: retícula por arma (src/ui/reticle.js) y marcadores -->
+  <div id="reticle" class="ret-host" data-kind="auto"></div>
+  <div id="markers" aria-hidden="true"></div>
   <div id="barrel-dot">
     <svg width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="none" stroke="#ff8a3d" stroke-width="1.3" opacity=".9"/><circle cx="7" cy="7" r="1.2" fill="#ff8a3d"/></svg>
   </div>
@@ -673,7 +677,10 @@
     <div class="dmg-arc"><svg viewBox="-100 -100 200 200"><path class="arc" d="M-31.5 -77.9 A84 84 0 0 1 31.5 -77.9"/><path class="chev" d="M0 -98 L9 -88.5 L0 -91.5 L-9 -88.5 Z"/></svg></div>
   </div>
   <div id="hitmarker" data-k="body" aria-hidden="true"><i></i><i></i><i></i><i></i><b></b></div>
-  <div id="kill-confirm" aria-live="polite"></div>
+  <div id="hud-notices">
+    <div id="kill-confirm" aria-live="polite"></div>
+    <div id="context-hint"></div>
+  </div>
   <div id="score" class="hud-panel">
     <span class="t red-team">
       <span class="team-name"><span class="chip" style="background:var(--red);color:var(--red)"></span><span data-i18n="hud.red">RED</span></span>
@@ -697,6 +704,17 @@
   <div id="skip-cue" data-i18n="flow.skipHint">PRESS ANY KEY TO SKIP</div>
   <div id="lock-prompt" role="status"><span data-i18n="msg.clickToPlay">CLICK TO PLAY</span></div>
   <div id="spectator" aria-live="polite"></div>
+  <div id="status-dock">
+  <div id="vitals" class="hud-panel" role="status">
+    <div class="vt-top">
+      <span class="vt-label" data-i18n="hud.health">HEALTH</span>
+      <svg id="stance" class="stance" viewBox="0 0 20 30" role="img" aria-label="STANDING" data-pose="stand" data-lean="none">
+        <g class="st-body"><circle cx="10" cy="5" r="3.2"/><path d="M10 9.5V19M10 19l-4 9M10 19l4 9M10 12l-5 4M10 12l5 4"/></g>
+      </svg>
+    </div>
+    <div class="vt-value"><span id="hp-val">100</span><progress id="dodge-cooldown" max="1" value="1" hidden></progress></div>
+    <div class="vt-bar"><span id="hp-fill"></span></div>
+  </div>
   <div id="weapon" class="hud-panel" data-weapon="smg">
     <div class="weapon-head">
       <div class="weapon-icon" id="weapon-icon-current" aria-hidden="true"></div>
@@ -706,6 +724,7 @@
     <div id="wep-bar"></div>
     <div class="slots" id="wep-slots"></div>
     <div class="reload" id="wep-msg"></div>
+  </div>
   </div>
   <div id="weapon-wheel" aria-hidden="true">
     <div class="wheel-sector up" data-slot="3">
@@ -728,7 +747,6 @@
   </div>
   <div id="feed"></div>
   <div id="center-msg"></div>
-  <div id="context-hint"></div>
   <button id="btn-pause" class="hud-panel" title="Pause" data-i18n-title="common.pause">
     <svg width="13" height="14" viewBox="0 0 13 14" fill="currentColor"><rect x="1" y="1" width="4" height="12" rx="1"/><rect x="8" y="1" width="4" height="12" rx="1"/></svg>
   </button>
@@ -798,7 +816,7 @@
       </aside>
     </div>
     <div class="menu-note">
-      <span><b>WASD</b> <span data-i18n="menu.move">MOVE</span> · <b>Shift</b> <span data-i18n="menu.run">RUN</span> · <b>Space</b> <span data-i18n="menu.coverEvade">COVER / EVADE</span></span>
+      <span><b>WASD</b> <span data-i18n="menu.move">MOVE</span> · <b>Shift</b> <span data-i18n="menu.run">RUN</span> · <b>C</b> <span data-i18n="binding.crouch">CROUCH</span> · <b>Space</b> <span data-i18n="binding.jump">JUMP</span></span>
       <span><b>Esc / MENU</b> <span data-i18n="menu.pauseHint">PAUSE</span></span>
     </div>
   </div>
@@ -864,10 +882,13 @@
     <div class="menu-kicker" data-i18n="menu.optionsKicker">GAME CONFIGURATION</div>
     <h1 class="menu-title" data-i18n="menu.options">OPTIONS</h1>
     <div class="options-list">
-      <button class="btn" id="btn-opt-audio" data-nav-default><span data-i18n="menu.audio">AUDIO</span><span class="btn-num">01</span></button>
-      <button class="btn" id="btn-opt-video"><span data-i18n="menu.video">VIDEO</span><span class="btn-num">02</span></button>
-      <button class="btn" id="btn-opt-language"><span data-i18n="menu.language">LANGUAGE</span><span class="btn-num">03</span></button>
-      <button class="btn" id="btn-opt-controls"><span data-i18n="menu.controlsTitle">CONTROLS</span><span class="btn-num">04</span></button>
+      <button class="btn" id="btn-opt-controls" data-nav-default><span data-i18n="menu.controlsTitle">CONTROLS</span><span class="btn-num">01</span></button>
+      <button class="btn" id="btn-opt-aim"><span data-i18n="settings.pageAim">MOUSE &amp; AIM</span><span class="btn-num">02</span></button>
+      <button class="btn" id="btn-opt-comfort"><span data-i18n="settings.pageComfort">CAMERA &amp; COMFORT</span><span class="btn-num">03</span></button>
+      <button class="btn" id="btn-opt-hud"><span data-i18n="settings.pageHud">HUD &amp; RETICLE</span><span class="btn-num">04</span></button>
+      <button class="btn" id="btn-opt-audio"><span data-i18n="menu.audio">AUDIO</span><span class="btn-num">05</span></button>
+      <button class="btn" id="btn-opt-video"><span data-i18n="menu.video">VIDEO</span><span class="btn-num">06</span></button>
+      <button class="btn" id="btn-opt-language"><span data-i18n="menu.language">LANGUAGE</span><span class="btn-num">07</span></button>
     </div>
     <div class="control-actions">
       <button class="btn primary" id="btn-options-back" data-i18n="common.back">BACK</button>
@@ -881,6 +902,7 @@
     <div class="settings-grid">
       <div class="slider-row"><label for="sl-vol" data-i18n="menu.volumeMute">VOLUME (M TO MUTE)</label><span class="val" id="sl-vol-v"></span><input type="range" id="sl-vol" min="0" max="1" step="0.05" data-nav-default /></div>
     </div>
+    <div class="set-sections audio-extra"></div>
     <div class="control-actions">
       <button class="btn primary" id="btn-audio-back" data-i18n="common.back">BACK</button>
     </div>
@@ -924,14 +946,50 @@
     </div>
   </div>
 
+  <div class="menu-card settings-page" id="aim-card" data-nav-back="btn-aim-back" data-page="aim">
+    <div class="menu-top"><div class="logo">BRE<em>A</em>CH</div><div class="tag" data-i18n="common.localSave">LOCAL SAVE</div></div>
+    <div class="menu-kicker" data-i18n="menu.options">OPTIONS</div>
+    <h1 class="menu-title" data-i18n="settings.pageAim">MOUSE &amp; AIM</h1>
+    <div class="set-sections"></div>
+    <div class="control-actions">
+      <button class="btn" data-reset-page data-i18n="settings.resetPage">RESET PAGE</button>
+      <button class="btn primary" id="btn-aim-back" data-i18n="common.back">BACK</button>
+    </div>
+  </div>
+
+  <div class="menu-card settings-page" id="comfort-card" data-nav-back="btn-comfort-back" data-page="comfort">
+    <div class="menu-top"><div class="logo">BRE<em>A</em>CH</div><div class="tag" data-i18n="common.localSave">LOCAL SAVE</div></div>
+    <div class="menu-kicker" data-i18n="menu.options">OPTIONS</div>
+    <h1 class="menu-title" data-i18n="settings.pageComfort">CAMERA &amp; COMFORT</h1>
+    <div class="set-sections"></div>
+    <div class="control-actions">
+      <button class="btn" data-reset-page data-i18n="settings.resetPage">RESET PAGE</button>
+      <button class="btn primary" id="btn-comfort-back" data-i18n="common.back">BACK</button>
+    </div>
+  </div>
+
+  <div class="menu-card settings-page" id="hudopts-card" data-nav-back="btn-hudopts-back" data-page="hud">
+    <div class="menu-top"><div class="logo">BRE<em>A</em>CH</div><div class="tag" data-i18n="common.localSave">LOCAL SAVE</div></div>
+    <div class="menu-kicker" data-i18n="menu.options">OPTIONS</div>
+    <h1 class="menu-title" data-i18n="settings.pageHud">HUD &amp; RETICLE</h1>
+    <div class="set-hud-layout">
+      <div class="set-sections"></div>
+      <figure class="ret-preview" aria-hidden="true"><div class="ret-preview-view"><div id="reticle-preview" class="ret-host on" data-kind="auto"></div></div><figcaption data-i18n="settings.preview">PREVIEW</figcaption></figure>
+    </div>
+    <div class="control-actions">
+      <button class="btn" data-reset-page data-i18n="settings.resetPage">RESET PAGE</button>
+      <button class="btn primary" id="btn-hudopts-back" data-i18n="common.back">BACK</button>
+    </div>
+  </div>
+
   <div class="menu-card" id="controls-card">
     <div class="menu-top"><div class="logo">BRE<em>A</em>CH</div><div class="tag" data-i18n="common.localSave">LOCAL SAVE</div></div>
     <div class="menu-kicker" data-i18n="menu.inputDevices">KEYBOARD AND CONTROLLER</div>
     <h1 class="menu-title" data-i18n="menu.controlsTitle">CONTROLS</h1>
     <div class="tag" data-i18n="menu.rebindHint">SELECT A BINDING, THEN PRESS A KEY OR BUTTON</div>
     <div class="cols">
-      <div class="col"><div class="col-title" data-i18n="menu.keyboard">KEYBOARD</div><div id="kb-rows"></div></div>
-      <div class="col"><div class="col-title" data-i18n="menu.controller">CONTROLLER</div><div id="pad-rows"></div><div id="pad-status" data-i18n="menu.noController">NO CONTROLLER DETECTED</div></div>
+      <div class="col"><div class="col-title" data-i18n="settings.keyboardMouse">KEYBOARD &amp; MOUSE</div><div id="kb-rows"></div><div class="bind-note" id="kb-conflicts" role="status"></div></div>
+      <div class="col"><div class="col-title" data-i18n="menu.controller">CONTROLLER</div><div id="pad-rows"></div><div class="bind-note" id="pad-conflicts" role="status"></div><div id="pad-status" data-i18n="menu.noController">NO CONTROLLER DETECTED</div></div>
     </div>
     <div class="tag" data-i18n="menu.dpadWeapons">D-PAD: ↑ GRENADE · ↓ PISTOL · ← SHOTGUN · → SMG</div>
     <div class="settings-grid">
@@ -958,5 +1016,7 @@
 </div>
 
 <script type="module" src="/src/main.js"></script>
+<!-- páginas de ajustes FPS (se montan solas; ver run6/ganchos/hud.md) -->
+<script type="module" src="/src/ui/settings-ui.js"></script>
 </body>
 </html>

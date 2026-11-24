@@ -10,9 +10,12 @@ import { clearClip } from './lib-clip.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
 import { CHROME } from './lib-chrome.mjs';
+import { freePort } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
-  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: '8794' }, stdio: 'ignore',
+  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: String(FREE_PORT) }, stdio: 'ignore',
 });
 await new Promise((r) => setTimeout(r, 900));
 
@@ -20,7 +23,7 @@ const browser = await chromium.launch({ executablePath: CHROME, headless: true }
 const page = await browser.newPage();
 let pageErrors = 0;
 page.on('pageerror', (e) => { pageErrors++; console.log('PAGEERROR:', e.message); });
-await page.goto('http://localhost:8794/?nolock=1', { waitUntil: 'networkidle' });
+await page.goto(`http://localhost:${FREE_PORT}/?nolock=1`, { waitUntil: 'networkidle' });
 await page.evaluate(() => { window.BREACH.mapChoice = 'fortaleza'; });
 await page.evaluate(() => document.getElementById('btn-enter')?.click());
 await page.waitForSelector('#splash.off', { state: 'attached' });
@@ -52,7 +55,8 @@ check('ronda 1 con pedestal de sniper', ped.round === 1 && ped.wep === 'sniper',
 // así que esperar con la nube fija medía otra cosa).
 const smokeRes = await page.evaluate(async () => {
   const M = window.BREACH.botMatch, S = window.BREACH_SMOKE;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   S.throwNade({ x: 0, y: 1.2, z: -4 }, { x: 0, y: 0, z: 0 });
   await wait(2400); // fuse 1.5 + crecimiento
   const c = S.clouds[0];
@@ -78,7 +82,8 @@ check('dentro del humo no ve a NADIE', !!smokeRes && smokeRes.inside === 0, JSON
 // puede activar el golpe contextual.
 const meleeCover = await page.evaluate(async () => {
   const G = window.BREACH, W = window.BREACH_WORLD;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   const f = W.faces.find((c) => c.h <= 1.2 && c.n.z < -0.9 && !c.baseY);
   if (!f) return { why: 'sin cara LOW' };
   const mx = (f.a.x + f.b.x) / 2, mz = (f.a.z + f.b.z) / 2;
@@ -101,7 +106,8 @@ check('melee central permanece locked-in al cover', meleeCover.after === 'cover'
 // 4) cambio rápido de armas SPAM: sin dobles cambios ni estados rotos
 const spam = await page.evaluate(async () => {
   const G = window.BREACH, I = window.BREACH_INPUT;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   let changes = 0;
   let last = G.weapons.cur;
   for (let i = 0; i < 12; i++) {

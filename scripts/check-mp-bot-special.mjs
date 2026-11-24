@@ -7,8 +7,10 @@ import { fileURLToPath } from 'node:url';
 import { clearClip } from './lib-clip.mjs';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const port = 8800;
+const port = await freePort(); // puerto libre (los import se elevan: freePort ya existe)
 import { CHROME as chrome } from './lib-chrome.mjs';
+import { freePort } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
   env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: String(port), INTRO_TIME: '1', COUNTDOWN_TIME: '0',
     NODE_ENV: 'test', ALLOW_TEST_TELEPORTS: '1' },

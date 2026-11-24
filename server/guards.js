@@ -2,6 +2,11 @@
 // principal para poder probarlas sin levantar una partida completa.
 import { TUNING } from '../src/config/tuning.js';
 import { SWAP_TIME } from '../src/combat/weapons.js';
+import { dodgeDistance } from '../src/player/dodge.js';
+import { MOVE_GATES, sprintFireDelay } from '../src/combat/fire-gates.js';
+const NET_GATE_TOL = 0.1;      // ciclos (1.1 s): jitter de llegada
+const ENTRY_TIME_TOL = 0.01;    // sprint previo (mínimos de 60–69 ms): un cuadro
+const ENTRY_SPEED_FRAC = 0.95;  // velocidad de entrada: redondeo de posiciones (1 mm) y del paso
 
 export const MAX_WS_PAYLOAD = 32 * 1024;
 export const MESSAGE_RATE = 240;
@@ -10,6 +15,66 @@ export const MESSAGE_BURST = 360;
 const NORMAL_WEAPONS = ['smg', 'shotgun', 'pistol'];
 const SPECIAL_WEAPONS = new Set(['sniper', 'bazooka']);
 const MAX_MOVE_SPEED = 16.5;
+// Clientes FPS (DECISIONES §2): presupuesto de velocidad POR POSTURA y
+// duración (TUNING.fp), con crédito proporcional (absorbe ~0.3 s de llegadas
+// amontonadas a esa velocidad) en vez de los 7 m de siempre. Los bots alojados
+// conservan el tope anterior hasta que su etapa retire dive/flip.
+//   agachado 2.3 · de pie/corriendo 4.8 · sprint 7.0 · slide ≤ 8 solo durante
+//   slideTime (+0.2 s) · placaje ≤ 11 durante 0.45 s · en el aire, lo que se
+//   traía del suelo (salto desde sprint/slide) · al cambiar de postura se
+//   conserva unos 0.25 s la velocidad anterior (frenada 34 m/s²).
+const FP = TUNING.fp;
+export const FPS_SPEED = { crouch: FP.crouchSpeed, idle: FP.runSpeed, run: FP.runSpeed, roadie: FP.sprintSpeed,
+  slide: FP.slideMaxSpeed, melee: FP.tackleTopSpeed, mantle: FP.runSpeed, jump: FP.runSpeed };
+export const FPS_SPEED_SLACK = 1.08; // redondeo, aceleración y suelo inclinado
+export const FPS_CREDIT_TIME = 0.35, FPS_CREDIT_MIN = 0.25;
+export const MAX_FPS_MOVE_SPEED = MOVE_GATES.dodge.maxSpeed;
+const SLIDE_WINDOW = FP.slideTime + 0.2, TACKLE_WINDOW = 0.45, CARRY_TIME = 0.25;
+function fpsSpeedCap(guard, st, now) {
+  st = FPS_SPEED[st] !== undefined ? st : 'run';
+  if (st !== guard.st) {
+    // al salir de una postura su tope se arrastra un momento (inercia)
+    if (guard.st) { guard.carry = Math.max(guard.carryCap ?? 0, guard.st === 'jump' ? guard.airCap ?? 0 : guardCap(guard, guard.st, now)); guard.carryAt = now; }
+    // presupuesto rápido solo con una ENTRADA legal (auditoría): slide desde
+    // sprint (o su inercia) y pasado el enfriamiento de 0.6 s; placaje desde
+    // sprint/slide. Reentrar sin eso no renueva nada: va a su velocidad lenta.
+    // MOVE_GATES completas (fire-gates.js, ronda 2 R7): slide = sprint previo
+    // de al menos minPriorSprint y ciclo inicio→inicio ≥ minCycle (1.1 s);
+    // placaje = sprint previo suficiente o un slide LEGAL en curso, y ciclo
+    // de golpe ≥ su minCycle. Holgura de red: NET_GATE_TOL.
+    // C4: sprint previo de al menos su mínimo (sin holgura que lo anule: solo
+    // un cuadro de 10 ms) y velocidad REAL de entrada medida del último tramo
+    const G = MOVE_GATES, prevDur = now - (guard.stAt ?? now);
+    const speedOk = (min) => Number.isFinite(guard.entrySpeed) && guard.entrySpeed >= min * ENTRY_SPEED_FRAC;
+    const sprintFor = (min, minSpeed) => (guard.st === 'roadie' && prevDur >= min - ENTRY_TIME_TOL ||
+      (guard.st === 'jump' && (guard.airCap ?? 0) >= FP.sprintSpeed - 0.01 && (guard.sprintDur ?? 0) >= min - ENTRY_TIME_TOL)) && speedOk(minSpeed);
+    if (st === 'slide') {
+      const ok = sprintFor(G.slide.minPriorSprint, G.slide.minEntrySpeed) && now - (guard.slideAt ?? -Infinity) >= G.slide.minCycle - NET_GATE_TOL;
+      guard.slideAt = ok ? now : guard.slideAt; guard.slideLegal = ok;
+    }
+    if (st === 'melee') {
+      const fromSlide = guard.st === 'slide' && guard.slideLegal && now - (guard.slideAt ?? -Infinity) <= SLIDE_WINDOW;
+      const ok = (sprintFor(G.tackle.minPriorSprint, G.tackle.minEntrySpeed) || fromSlide && speedOk(G.tackle.minEntrySpeed)) && now - (guard.meleeAt ?? -Infinity) >= G.tackle.minCycle - NET_GATE_TOL;
+      guard.meleeAt = ok ? now : guard.meleeAt; guard.tackleLegal = ok;
+    }
+    // duración del sprint que se arrastra a un salto (sprint → salto → slide)
+    if (guard.st === 'roadie') guard.sprintDur = prevDur; else if (st !== 'jump') guard.sprintDur = 0;
+    guard.stAt = now;
+    if (st === 'jump') guard.airCap = Math.max(FP.runSpeed, guard.carry ?? 0);
+    guard.st = st;
+  }
+  let cap = guardCap(guard, st, now);
+  if (st === 'jump') cap = Math.max(cap, guard.airCap ?? 0);
+  const k = 1 - Math.min(1, (now - (guard.carryAt ?? -Infinity)) / CARRY_TIME);
+  if (k > 0) cap = Math.max(cap, (guard.carry ?? 0) * k + cap * (1 - k));
+  guard.carryCap = cap;
+  return cap * FPS_SPEED_SLACK + 0.2;
+}
+function guardCap(guard, st, now) {
+  if (st === 'slide') return guard.slideLegal && now - (guard.slideAt ?? -Infinity) <= SLIDE_WINDOW ? FPS_SPEED.slide : FP.crouchSpeed;
+  if (st === 'melee') return guard.tackleLegal && now - (guard.meleeAt ?? -Infinity) <= TACKLE_WINDOW ? FPS_SPEED.melee : FP.runSpeed;
+  return FPS_SPEED[st] ?? FP.runSpeed;
+}
 const MAX_MOVE_CREDIT = 7;
 const MAX_VERTICAL_SPEED = 12;
 const MAX_VERTICAL_CREDIT = 3;
@@ -120,31 +185,233 @@ export function resetMovementGuard(entity, now) {
   };
 }
 
+// Solo la distancia de la curva recibe presupuesto especial. Se descuenta
+// por intervalo de fase: quedarse contra una pared no almacena un salto.
+// dg y ct están redondeados a milisegundos. El banco del reloj limita el
+// ciclo incluso si un cliente adelanta ambos campos a la vez.
+function dodgeAllowance(entity, guard, next, tclk) {
+  const d = MOVE_GATES.dodge;
+  if (next.st !== 'dodge' && !guard.inDodge) return 0;
+  if (!Number.isFinite(next.ct)) return -1;
+  if (next.st !== 'dodge') {
+    if (next.ct < guard.dodgeStart + d.duration - 0.002 ||
+        tclk < guard.dodgeClock + d.duration - NET_GATE_TOL) return -1;
+    guard.inDodge = false;
+    return dodgeDistance(d.duration) - dodgeDistance(guard.dodgeAge);
+  }
+  const age = next.dg, start = next.ct - age;
+  if (!Number.isFinite(age) || age < 0 || age > d.duration || next.air || next.aim) return -1;
+  if (!guard.inDodge) {
+    if (!d.entry.includes(entity.st ?? 'idle') || entity.air ||
+        start < (guard.throwReleaseCt ?? -Infinity) - 0.002 ||
+        start < (guard.dodgeStart ?? -Infinity) + d.minCycle - 0.002 ||
+        tclk - age < (guard.dodgeClock ?? -Infinity) + d.minCycle - NET_GATE_TOL ||
+        (Number.isFinite(entity.motionGuard.lastCt) && start < entity.motionGuard.lastCt - 0.002)) return -1;
+    guard.dodgeStart = start; guard.dodgeClock = tclk - age;
+    guard.dodgeAge = 0; guard.dodgeExtra = 0; guard.inDodge = true;
+  }
+  if (age < guard.dodgeAge || Math.abs(start - guard.dodgeStart) > 0.002 ||
+      age > tclk - guard.dodgeClock + NET_GATE_TOL ||
+      tclk - guard.dodgeClock > d.duration + CADENCE_BANK) return -1;
+  const allowance = dodgeDistance(age) - dodgeDistance(guard.dodgeAge);
+  guard.dodgeAge = age;
+  return allowance;
+}
+
+export function dodgeFireReady(entity, weapon) {
+  if (entity.st === 'dodge') return false;
+  const g = entity.motionGuard;
+  if (!Number.isFinite(g?.dodgeStart)) return true;
+  const ready = MOVE_GATES.dodge.duration + (weapon === 'melee' ? 0 : sprintFireDelay(weapon));
+  return g.lastCt - g.dodgeStart >= ready - 0.002 &&
+    g.dodgeNow - g.dodgeClock >= ready - NET_GATE_TOL;
+}
+
 export function acceptMovement(entity, next, now, bypass = false) {
   if (!entity || !next || ![next.x, next.y, next.z].every(Number.isFinite)) return false;
   if (!entity.motionGuard) resetMovementGuard(entity, now);
-  const guard = entity.motionGuard;
+  const previous = entity.motionGuard;
+  // Una corrección rechazada no puede servir luego como entrada de sprint.
+  const guard = { ...previous };
   const dt = Math.max(0, Math.min(1, now - guard.at));
   guard.at = now;
   if (bypass) {
     guard.moveCredit = MAX_MOVE_CREDIT;
     guard.verticalCredit = MAX_VERTICAL_CREDIT;
     guard.rejected = 0;
+    entity.motionGuard = guard;
     return true;
   }
-  guard.moveCredit = Math.min(MAX_MOVE_CREDIT, guard.moveCredit + MAX_MOVE_SPEED * dt);
+  // ventanas de slide/placaje/inercia sobre el reloj de simulación acotado del
+  // cliente (C7: una pausa de pestaña a mitad de slide no agota la ventana en
+  // tiempo de servidor); el crédito se repone con tiempo de servidor (sin
+  // crédito extra de velocidad)
+  // velocidad REAL del último tramo (C4): distancia / tiempo simulado
+  // la velocidad de ENTRADA es la del tramo anterior al cambio (el del cambio
+  // ya va a la velocidad del gesto nuevo)
+  const hasClock = Number.isFinite(next.ct) && Number.isFinite(guard.lastCt);
+  const elapsed = hasClock ? next.ct - guard.lastCt : now - previous.at;
+  if (Number.isFinite(next.ct)) guard.lastCt = next.ct;
+  // El host también envía ct para sus bots. Cada bot lleva su propio banco
+  // durante las ventanas de esquiva; sus demás topes no cambian.
+  if (entity.bot && Number.isFinite(next.ct)) {
+    guard.botClock = { ...previous.botClock, fps: true };
+    advanceCadenceClock(guard.botClock, next.ct, now);
+  }
+  const boundedClock = entity.fps && Number.isFinite(entity.cclk) ? entity.cclk : guard.botClock?.cclk ?? now;
+  const paused = (entity.fps || guard.botClock) && dt >= 0.25 && hasClock && elapsed >= 0;
+  if (paused && Number.isFinite(previous.boundedClock)) {
+    // El reloj de cadencia puede saltar al mínimo impuesto por la hora real.
+    // Ese salto no consume el slide ni repone distancia que no se simuló.
+    const skipped = Math.max(0, boundedClock - previous.boundedClock - elapsed);
+    guard.pausedTime = (guard.pausedTime || 0) + skipped;
+  }
+  guard.boundedClock = boundedClock;
+  const tclk = boundedClock - (guard.pausedTime || 0);
+  const creditTime = paused ? Math.min(dt, elapsed) : dt;
+  const dashTravel = dodgeAllowance(entity, guard, next, tclk);
+  if (dashTravel < 0) { previous.rejected++; return false; }
+  guard.dodgeNow = tclk;
+  const speedCap = entity.fps ? fpsSpeedCap(guard, next.st, tclk) : MAX_MOVE_SPEED;
+  const creditCap = entity.fps ? Math.max(FPS_CREDIT_MIN, speedCap * FPS_CREDIT_TIME) : MAX_MOVE_CREDIT;
+  guard.moveCredit = Math.min(creditCap, guard.moveCredit + speedCap * creditTime);
   guard.verticalCredit = Math.min(MAX_VERTICAL_CREDIT,
-    guard.verticalCredit + MAX_VERTICAL_SPEED * dt);
+    guard.verticalCredit + MAX_VERTICAL_SPEED * creditTime);
   const horizontal = Math.hypot(next.x - (entity.x || 0), next.z - (entity.z || 0));
   const vertical = Math.abs(next.y - (entity.y || 0));
-  if (horizontal > guard.moveCredit + 0.01 || vertical > guard.verticalCredit + 0.01) {
-    guard.rejected++;
+  if (next.st === 'dodge') {
+    // El primer envío de un bot puede incluir marcha anterior al impulso.
+    const prior = previous.inDodge ? 0 : Math.min(creditCap, FP.sprintSpeed * Math.max(0, elapsed - next.dg));
+    // Los empujes de otros cuerpos se miden aparte del impulso. La holgura
+    // de cuantización es por gesto completo: repetir muestras no la renueva.
+    const pushed = (next.bodyPushRate ?? 0) * Math.max(0, next.dg - (previous.inDodge ? previous.dodgeAge : 0));
+    guard.dodgeExtra = Math.max(0, guard.dodgeExtra + horizontal - dashTravel - pushed - prior);
+    if (guard.dodgeExtra > 0.045) { previous.rejected++; return false; }
+  }
+  if (previous.inDodge && next.st !== 'dodge') {
+    const endAge = MOVE_GATES.dodge.duration, after = Math.max(0, next.ct - guard.dodgeStart - endAge);
+    const pushed = (next.bodyPushRate ?? 0) * (endAge - previous.dodgeAge + after);
+    if (horizontal > dashTravel + speedCap * after + pushed + 0.045 - guard.dodgeExtra) {
+      previous.rejected++; return false;
+    }
+  }
+  if (horizontal > guard.moveCredit + dashTravel + 0.01 || vertical > guard.verticalCredit + 0.01) {
+    previous.rejected++;
     return false;
   }
-  guard.moveCredit = Math.max(0, guard.moveCredit - horizontal);
+  if (elapsed > 0) guard.entrySpeed = horizontal / Math.max(0.001, elapsed);
+  entity.motionGuard = guard;
+  guard.moveCredit = Math.max(0, guard.moveCredit - Math.max(0, horizontal - dashTravel));
   guard.verticalCredit = Math.max(0, guard.verticalCredit - vertical);
   guard.rejected = 0;
   return true;
+}
+
+// Postura FPS (contrato §1): `ce` en `crouch` = altura de la cabeza (0
+// agachado, 1 de pie) y `cl` = inclinación −1..1. Son continuos y los gestos
+// duran ~0.2 s: ningún cliente puede teletransportar su cabeza. Cubo de
+// crédito por campo (como el de movimiento): se repone a POSTURE_RATE/s hasta
+// POSTURE_CREDIT; un cambio mayor que el crédito se recorta (no se rechaza el
+// estado entero: la posición sigue valiendo). Levantarse de golpe (idle/run
+// con la cabeza aún baja) sigue como `crouch` subiendo a ese ritmo.
+// Honesto (tuning.fp): agacharse 0.18 s (5.6/s), asomo 0.2 s subiendo y
+// 0.15 s bajando (6.7/s), inclinación 0.16 s (6.3/s): todo por debajo de 8/s,
+// más 0.5 de holgura: llegadas amontonadas con ±30 ms de jitter (medido en check-fps-origin).
+export const POSTURE_RATE = 8;
+export const POSTURE_CREDIT = 0.5;
+export const POSTURE_UPRIGHT = new Set(['idle', 'run', 'jump']);
+const LEAN_STATES = new Set(['idle', 'run', 'jump', 'crouch']);
+const LOW_STATES = new Set(['cover_low', 'blind_over', 'blind_low_left', 'blind_low_right']);
+export function resetPostureGuard(entity, now) {
+  entity.postureGuard = { at: now, h: 1, cl: 0, hCredit: POSTURE_CREDIT, clCredit: POSTURE_CREDIT };
+}
+// next: { st, aim, ce (pedido, puede faltar), cl }. Devuelve { st, ce, cl } aceptados.
+// Solo actúa sobre posturas FPS (de pie, agachado, inclinado); el resto de
+// estados (cobertura de bots, slide, mantle…) pasa tal cual y deja la cabeza
+// "de pie" como referencia de la próxima transición.
+// ct: reloj de simulación del cliente (opcional). El crédito se repone con el
+// tiempo SIMULADO entre estados (dos estados honestos que llegan juntos tras
+// 100 ms de jitter llevan 100 ms de ct entre ellos: auditoría, 5 cm de ojo),
+// acotado: ct nunca adelanta más de CT_LEAD a su mejor desfase con el reloj
+// del servidor, así que no se gana crédito inflando ct.
+export const CT_LEAD = 0.15;
+export const POSTURE_BANK = 0.3;
+export function acceptPosture(entity, next, now, ct) {
+  if (!entity.postureGuard) resetPostureGuard(entity, now);
+  const g = entity.postureGuard;
+  const srvDt = Math.max(0, Math.min(1, now - g.at));
+  let dt = srvDt;
+  // C7: tras un silencio ≥ 0.25 s (pestaña en pausa) la primera muestra
+  // re-basa la referencia del reloj: sin arrastrar desfases de antes
+  if (srvDt >= 0.25) { g.ct = undefined; g.minOff = undefined; g.bank = 0; }
+  if (Number.isFinite(ct)) {
+    // ct que retrocede mucho (cambio de reloj, primera muestra de la vida con
+    // otra base): se reinicia la referencia en vez de congelar el crédito
+    if (Number.isFinite(g.ct) && ct < g.ct - 0.5) { g.ct = undefined; g.minOff = undefined; }
+    const off = ct - now;
+    g.minOff = Number.isFinite(g.minOff) ? Math.min(g.minOff, off) : off;
+    const ce = Math.min(ct, now + g.minOff + CT_LEAD);
+    // ronda 2 (R1): el tiempo simulado se gasta contra un BANCO de tiempo de
+    // servidor acumulado (≤ POSTURE_BANK): dos estados que llegan juntos
+    // usan el hueco real que los precedió, pero una llegada nunca gasta más
+    // tiempo del que ha pasado en el servidor
+    g.bank = Math.min(POSTURE_BANK, (g.bank ?? 0) + srvDt);
+    const simDt = Number.isFinite(g.ct) ? Math.max(0, Math.min(1, ce - g.ct)) : srvDt;
+    dt = Math.min(simDt, g.bank);
+    g.bank -= dt;
+    g.ct = Math.max(g.ct ?? -Infinity, ce);
+  }
+  g.at = now;
+  // Si ambos cubos estaban llenos, parte de dt no repuso crédito a ninguno.
+  // Esa parte del intervalo real puede pagar movimiento de la muestra actual;
+  // se devuelve al banco para el siguiente ct, nunca al crédito instantáneo.
+  const room = POSTURE_CREDIT - Math.min(g.hCredit, g.clCredit);
+  const unused = Math.max(0, dt - room / POSTURE_RATE);
+  g.hCredit = Math.min(POSTURE_CREDIT, g.hCredit + POSTURE_RATE * dt);
+  g.clCredit = Math.min(POSTURE_CREDIT, g.clCredit + POSTURE_RATE * dt);
+  let moved = 0;
+  const step = (from, to, key) => {
+    const d = Math.max(-g[key], Math.min(g[key], to - from));
+    g[key] -= Math.abs(d);
+    moved = Math.max(moved, Math.abs(d));
+    return from + d;
+  };
+  let { st } = next, ce = next.ce, cl = Number.isFinite(next.cl) ? next.cl : 0;
+  // Dentro de la familia de pie/agachado (sin mezcla de estados en
+  // hit-pose.js) la altura `ce` va a ritmo acotado; levantarse de golpe sigue
+  // como crouch subiendo. Al ENTRAR desde otro estado (slide, sprint, mantle,
+  // melee) o salir hacia él, la continuidad la da la mezcla de estados que el
+  // servidor reconstruye con SUS muestras (hit-pose.js transitionOf /
+  // shotPose, pico ≤ BLEND_SPEED): no hay atajo para teletransportar la cabeza.
+  const fromFamily = g.st === undefined || g.st === 'crouch' || POSTURE_UPRIGHT.has(g.st);
+  const leaving = st !== 'crouch' && g.st === 'crouch' && g.h < 1 && POSTURE_UPRIGHT.has(st);
+  if (st === 'crouch' || leaving) {
+    const want = st === 'crouch' ? (Number.isFinite(ce) ? ce : 0) : 1;
+    const h = fromFamily ? step(g.h, Math.max(0, Math.min(1, want)), 'hCredit') : Math.max(0, Math.min(1, want));
+    g.h = h; ce = h;
+    if (st !== 'crouch' && h < 1 - 1e-6) st = 'crouch';
+  } else {
+    // fuera de la postura FPS: solo se anota la altura de cabeza de partida
+    // (cobertura baja escondida = agachado) para limitar la próxima entrada
+    g.h = LOW_STATES.has(st) ? (st === 'cover_low' && next.aim && Number.isFinite(ce) ? ce : 0) : 1;
+  }
+  // de pie la cabeza está arriba: `ce` = 1 (la interpolación crouch→idle del
+  // rebobinado queda continua)
+  if (POSTURE_UPRIGHT.has(st)) ce = 1;
+  g.st = st;
+  if (LEAN_STATES.has(st)) { cl = step(g.cl, Math.max(-1, Math.min(1, cl)), 'clCredit'); g.cl = cl; }
+  // fuera de las posturas inclinables un cliente FPS no se inclina: `cl` va a
+  // cero a su ritmo (nunca se copia sin límite); los bots en cobertura
+  // conservan su `cl` de siempre (lado de asomado)
+  else if (st === 'dodge') {
+    // La mezcla de estados conserva la cabeza inclinada de la muestra anterior
+    // y la lleva al centro. Esta pose carece de inclinación independiente.
+    cl = g.cl = 0;
+  }
+  else if (entity.fps) { cl = step(g.cl, 0, 'clCredit'); g.cl = cl; }
+  else g.cl = cl;
+  if (Number.isFinite(ct)) g.bank += Math.min(unused, srvDt, moved / POSTURE_RATE);
+  return { st, ce, cl };
 }
 
 export class MessageRateGuard {
@@ -292,7 +559,9 @@ export function fireCadenceVerdict(entity, weapon, interval, now, meta = {}) {
   const chain = entity.fireChain?.[weapon];
   const fresh = !chain || now - chain.at > interval + FIRE_CHAIN_IDLE;
   const stall = Math.max(0, (entity.stallCredit ?? 0) - (now - (entity.stallAt ?? -Infinity)));
-  const credit = Math.max(FIRE_JITTER_CREDIT, Math.min(FIRE_STALL_CREDIT, stall));
+  // cliente FPS: su reloj de cadencia ya absorbe el atasco (server.js
+  // advanceCadenceClock, banco = FIRE_STALL_CREDIT): no se suma otro crédito
+  const credit = entity.fps && !entity.bot ? FIRE_JITTER_CREDIT : Math.max(FIRE_JITTER_CREDIT, Math.min(FIRE_STALL_CREDIT, stall));
   const vt = fresh ? now : Math.max(chain.vt + interval, now - credit);
   return vt <= now + interval * FIRE_SLACK ? { vt } : why(entity, 'schedule');
 }
@@ -316,4 +585,47 @@ export function commitFireCadence(entity, weapon, interval, now, meta = {}) {
   if (meta.wInstant && meta.wWeapon === weapon) entity.wInstant = false;
   if (Number.isFinite(meta.sq)) entity.fireSq = meta.sq;
   entity.lastFireAt = now;
+}
+
+// Reloj de CADENCIA de un cliente FPS (matriz honesta): su reloj de
+// simulación (`ct` de estados y muestras) acotado por un banco de tiempo de
+// servidor (≤ FIRE_STALL_CREDIT, el mismo crédito de atasco que HEAD): las
+// ráfagas que llegan amontonadas por jitter se juzgan con los intervalos con
+// que se dispararon, pero el reloj nunca adelanta al servidor ni gana más de
+// ese crédito. Nunca se queda más de ese crédito por detrás del servidor.
+export const CADENCE_BANK = FIRE_STALL_CREDIT;
+export function advanceCadenceClock(me, ct, now) {
+  if (!me.fps || me.bot) return;
+  // el primer mensaje pudo llegar tarde (jitter): el banco arranca con el
+  // crédito de atasco entero, como el de HEAD tras un atraso
+  if (!Number.isFinite(me.cclk)) { me.cclk = now - CADENCE_BANK; me.cAt = now; me.cBank = CADENCE_BANK; me.cCt = ct; return; }
+  me.cBank = Math.min(CADENCE_BANK, (me.cBank ?? 0) + Math.max(0, now - me.cAt)); me.cAt = now;
+  let d;
+  if (Number.isFinite(ct) && Number.isFinite(me.cCt) && ct >= me.cCt - 0.5) d = Math.max(0, ct - me.cCt);
+  else d = me.cBank; // sin reloj (o reloj reiniciado): tiempo de servidor
+  d = Math.min(d, me.cBank); me.cBank -= d; me.cclk += d;
+  if (Number.isFinite(ct)) me.cCt = Number.isFinite(me.cCt) && ct >= me.cCt - 0.5 ? Math.max(me.cCt, ct) : ct;
+  me.cclk = Math.min(now, Math.max(me.cclk, now - CADENCE_BANK));
+}
+
+// C1: concentración de ráfaga en tiempo de SERVIDOR, la de HEAD: en cualquier
+// ventana de 100/200/400/1000 ms, como mucho ⌊W/(0.82·intervalo)⌋+1 tiros
+// aplicados (SMG: 2/3/6/13). El horario sobre el reloj de simulación decide
+// el ritmo; esto impide que el banco concentre más tiros simultáneos que HEAD.
+// Los tiros honestos agrupados por un atasco de red siguen exactamente esa
+// regla de HEAD (no se amplía).
+export function srvBurstAllows(entity, weapon, interval, now) {
+  const recent = entity.srvFireTimes?.[weapon] ?? [];
+  for (const w of FIRE_WINDOWS) {
+    let n = 1;
+    for (let i = recent.length - 1; i >= 0 && now - recent[i] < w; i--) n++;
+    if (n > fireWindowCap(w, interval)) return false;
+  }
+  return true;
+}
+export function commitSrvBurst(entity, weapon, now) {
+  entity.srvFireTimes ||= {};
+  const t = (entity.srvFireTimes[weapon] ||= []);
+  t.push(now);
+  while (t.length && now - t[0] >= FIRE_WINDOWS.at(-1)) t.shift();
 }

@@ -1,9 +1,11 @@
+// PRUEBAS (corrida 6, FPS): la muerte se prueba desde las posturas que hoy se
+// emiten (agachado, deslizando) en vez de cover_low/dive, ya retiradas.
 import assert from 'node:assert/strict';
 import * as T from 'three';
 import {Rig} from '../src/player/rig.js';
 const scene=new T.Scene(),results=[];
 const live={state:'run',speed:1,aim:false,aimPitch:0,moveForward:1,moveSide:0};
-for(const state of ['idle','run','cover_low','dive'])for(const hz of [30,60,144]){
+for(const state of ['idle','run','crouch','slide'])for(const hz of [30,60,144]){
  const rig=new Rig(scene,'red');rig.groundFn=()=>0;
  for(let i=0;i<hz;i++)rig.update(1/hz,{...live,state});
  const hip=rig.hips.position.y;
@@ -25,7 +27,7 @@ for(const state of ['idle','run','cover_low','dive'])for(const hz of [30,60,144]
  rig.update(1/hz,{state:'idle',speed:0,aim:false});
  assert(!rig.rag&&rig.head.visible,'Respawn did not restore living rig');rig.dispose(scene);
 }
-for(const state of ['idle','run','cover_low','dive']){
+for(const state of ['idle','run','crouch','slide']){
  const rows=results.filter(r=>r.state===state);
  assert(Math.hypot(rows[0].x-rows[2].x,rows[0].z-rows[2].z)<.02,'Frame rate changes death momentum');
 }

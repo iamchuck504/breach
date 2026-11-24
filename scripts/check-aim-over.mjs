@@ -12,10 +12,13 @@ import { clearClip } from './lib-clip.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
 import { CHROME } from './lib-chrome.mjs';
+import { freePort, waitHttp } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 
 const server = spawn(process.execPath, [path.join(root, 'node_modules', 'vite', 'bin', 'vite.js'),
-  '--host', '127.0.0.1', '--port', '8797', '--strictPort'], { stdio: 'ignore' });
-await new Promise((r) => setTimeout(r, 900));
+  '--host', '127.0.0.1', '--port', String(FREE_PORT), '--strictPort'], { stdio: 'ignore' });
+await waitHttp(`http://127.0.0.1:${FREE_PORT}/`);
 
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
@@ -28,11 +31,13 @@ const check = (name, ok, extra = '') => {
   if (!ok) fails.push(name);
 };
 
-await page.goto('http://localhost:8797/?nolock=1', { waitUntil: 'networkidle' });
+await page.goto(`http://localhost:${FREE_PORT}/?nolock=1`, { waitUntil: 'networkidle' });
 await page.evaluate(() => document.getElementById('btn-enter')?.click());
 await page.waitForSelector('#splash.off', { state: 'attached' });
 await page.evaluate(() => document.getElementById('btn-practice').click());
-await page.waitForTimeout(1800);
+await page.waitForFunction(() => window.BREACH?.player && window.BREACH_FP?.live && (window.BREACH.simClock ?? 0) > 0.5, null, { timeout: 600000, polling: 'raf' });
+// esperas dentro de la página en TIEMPO DE JUEGO (PRUEBAS, corrida 6)
+await page.evaluate(() => { window.__gwait = (ms) => new Promise((r) => { const G = window.BREACH, end = G.simClock + ms / 1000; const f = () => (G.simClock >= end ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); }); });
 // Esperar convergencia, no tiempo fijo: la carga de la escena mete frames de
 // ~250 ms que, en pleno barrido, separan la promesa de la cruz del disparo.
 await page.evaluate(() => new Promise((res) => {
@@ -72,7 +77,7 @@ const librable = await page.evaluate(async () => {
   W.colliders.push({ minx: 12.5, minz: 11.7, maxx: 15.5, maxz: 12.3, h: 1.28, surface: 'concrete' });
   G.player.cam.pitch = -0.02;
   I._mouseAim = true;
-  await new Promise((r) => setTimeout(r, 900));
+  await window.__gwait(900);
   const lift = G.aimOver.lift;
   // sin aim-over ¿la línea base del cañón estaba tapada de verdad?
   G.rig.root.updateWorldMatrix(true, true);
@@ -83,23 +88,23 @@ const librable = await page.evaluate(async () => {
   E.tracer = function (o, p2, em) { tracerPoint = p2.clone(); return oldTracer.call(this, o, p2, em); };
   const magBefore = G.weapons.st.mag;
   I._mouseFire = true; I.firePressed = true;
-  await new Promise((r) => setTimeout(r, 90));
+  await window.__gwait(90);
   I._mouseFire = false;
-  await new Promise((r) => setTimeout(r, 120));
+  await window.__gwait(120);
   E.tracer = oldTracer;
-  const cross = document.getElementById('crosshair');
+  const cross = document.getElementById('reticle');
   const style = getComputedStyle(cross);
   return {
     lift, baseMuzzleY: baseY, muzzleY: muzzle.y,
     magBefore, magAfter: G.weapons.st.mag,
     shotZ: tracerPoint?.z ?? null,
     crossBlockedClass: cross.classList.contains('blocked'),
-    crossCentered: style.left === '50%' || cross.style.left === '50%' || cross.style.left === '',
+    crossCentered: (() => { const r = cross.getBoundingClientRect(); return Math.hypot(r.left + r.width / 2 - innerWidth / 2, r.top + r.height / 2 - innerHeight / 2) < 0.75; })(),
   };
 });
-check('el borde cercano activa la alzada del arma',
-  librable.lift >= 0.08 && librable.lift <= 0.34,
-  `lift=${librable.lift?.toFixed(2)}`);
+// PRUEBAS (corrida 6, FPS): retirada "el borde cercano activa la alzada del
+// arma": la alzada existía para librar la boca del arma de tercera persona; en
+// primera persona el tiro sale del ojo y la boca es solo visual (no hay alzada).
 check('el disparo LIBRA la caja y pega lejos (donde promete el círculo)',
   librable.magAfter < librable.magBefore && librable.shotZ !== null && librable.shotZ < 10,
   `shotZ=${librable.shotZ?.toFixed(1)} (caja en z≈12)`);
@@ -114,20 +119,21 @@ check('la retícula ni se movió ni se recoloreó',
 const impaciente = await page.evaluate(async () => {
   const G = window.BREACH, I = window.BREACH_INPUT, E = window.BREACH_EFFECTS;
   I._mouseAim = false;
-  await new Promise((r) => setTimeout(r, 450));
+  await window.__gwait(450);
   G.weapons.st.mag = 50; G.weapons.st.cd = 0;
   const hits = [];
   const oldTracer = E.tracer;
   E.tracer = function (o, p2, em) { hits.push([p2.x, p2.y, p2.z]); return oldTracer.call(this, o, p2, em); };
   // aim y fire en el MISMO frame
-  const t0 = performance.now();
+  // tiempo de JUEGO hasta el primer tiro (no reloj: el CI va ~13× más lento)
+  const t0 = G.simClock;
   let firstShotMs = null;
   const prevPush = hits.push.bind(hits);
-  hits.push = (v) => { if (firstShotMs === null) firstShotMs = performance.now() - t0; return prevPush(v); };
+  hits.push = (v) => { if (firstShotMs === null) firstShotMs = (G.simClock - t0) * 1000; return prevPush(v); };
   I._mouseAim = true; I._mouseFire = true; I.firePressed = true;
-  await new Promise((r) => setTimeout(r, 700));
+  await window.__gwait(700);
   I._mouseFire = false;
-  await new Promise((r) => setTimeout(r, 150));
+  await window.__gwait(150);
   E.tracer = oldTracer;
   const onBox = hits.filter(([, y, z]) => z > 11.5 && z < 12.5 && y < 1.4).length;
   const beyond = hits.filter(([, , z]) => z < 10).length;
@@ -136,7 +142,7 @@ const impaciente = await page.evaluate(async () => {
 check('click instantáneo: NINGUNA bala se estampa en la caja',
   impaciente.onBox === 0 && impaciente.shots > 0 && impaciente.beyond === impaciente.shots,
   JSON.stringify(impaciente));
-check('el gatillo responde YA (sin negaciones ni esperas)',
+check('el gatillo responde YA (sin negaciones ni esperas, tiempo de juego)',
   impaciente.firstShotMs !== null && impaciente.firstShotMs < 250,
   `primer tiro a ${Math.round(impaciente.firstShotMs ?? 9999)}ms`);
 
@@ -148,21 +154,21 @@ const picado = await page.evaluate(async () => {
   const G = window.BREACH, I = window.BREACH_INPUT, E = window.BREACH_EFFECTS;
   G.player.cam.pitch = -0.08; // la mira cae al suelo lejano tras la caja
   G.weapons.st.mag = 50; G.weapons.st.cd = 0;
-  await new Promise((r) => setTimeout(r, 500));
+  await window.__gwait(500);
   const lift = G.aimOver.lift;
   const hits = [];
   const oldTracer = E.tracer;
   E.tracer = function (o, p2, em) { hits.push([p2.x, p2.y, p2.z]); return oldTracer.call(this, o, p2, em); };
   I._mouseFire = true; I.firePressed = true;
-  await new Promise((r) => setTimeout(r, 400));
+  await window.__gwait(400);
   I._mouseFire = false;
-  await new Promise((r) => setTimeout(r, 150));
+  await window.__gwait(150);
   E.tracer = oldTracer;
   const onBox = hits.filter(([, y, z]) => z > 11.5 && z < 12.5 && y < 1.4).length;
   return { lift, shots: hits.length, onBox };
 });
-check('apuntando hacia abajo la alzada compensa el giro del cañón',
-  picado.onBox === 0 && picado.shots > 0 && picado.lift > 0.05,
+check('apuntando hacia abajo ninguna bala pega la caja (el tiro sale del ojo)',
+  picado.onBox === 0 && picado.shots > 0,
   JSON.stringify(picado));
 
 // ---------------------------------------------------------------------------
@@ -175,14 +181,14 @@ for (const wep of ['pistol', 'shotgun']) {
     G.player.cam.pitch = -0.02;
     G.weapons.cur = wep;
     G.weapons.st.mag = G.weapons.def.mag; G.weapons.st.cd = 0; G.weapons.st.reload = 0;
-    await new Promise((r) => setTimeout(r, 550));
+    await window.__gwait(550);
     const hits = [];
     const oldTracer = E.tracer;
     E.tracer = function (o, p2, em) { hits.push([p2.x, p2.y, p2.z]); return oldTracer.call(this, o, p2, em); };
     I._mouseFire = true; I.firePressed = true;
-    await new Promise((r) => setTimeout(r, 350));
+    await window.__gwait(350);
     I._mouseFire = false;
-    await new Promise((r) => setTimeout(r, 150));
+    await window.__gwait(150);
     E.tracer = oldTracer;
     const onBox = hits.filter(([, y, z]) => z > 11.5 && z < 12.5 && y < 1.4).length;
     return { lift: G.aimOver.lift, shots: hits.length, onBox };
@@ -231,7 +237,7 @@ const tortura = await page.evaluate(async () => {
     const shotDist = p2.distanceTo(o);
     if (shotDist < 3) {
       // misma fuente que fireShot: aimRay (cámara colisionada, SIN shake)
-      const ray = G.player.cam.aimRay();
+      const ray = window.BREACH_FP.aimRay();
       const cast = (origin, d2, max) => W.raycastHit(origin, d2, max)?.t ??
         W.raycast(origin, d2, max) ?? max;
       const camCentral = cast(ray.origin, ray.dir, 60);
@@ -263,15 +269,15 @@ const tortura = await page.evaluate(async () => {
     G.player.cam.pitch = -0.03 + Math.sin(t * 2.4) * 0.09;
     G.player.cam.yaw = Math.sin(t * 1.7) * 0.14;
     I.firePressed = true; // spam de click además del fuego sostenido
-    await new Promise((r) => setTimeout(r, 100));
+    await window.__gwait(100);
   }
   I._mouseFire = false;
-  await new Promise((r) => setTimeout(r, 250));
+  await window.__gwait(250);
   E.tracer = oldTracer;
   d.alive = false;
   G.player.cam.pitch = -0.02; G.player.cam.yaw = 0;
   G.weapons.st.reserve = 150;
-  await new Promise((r) => setTimeout(r, 400));
+  await window.__gwait(400);
   return { nearSlams, atMaxLift, shots, legitClose, slams: window.__slams ?? [] };
 });
 check('TORTURA: cero balas fuera del cono o invisibles para la cámara en 4s de barrido+spam',
@@ -290,21 +296,21 @@ const muro = await page.evaluate(async () => {
   const G = window.BREACH, W = window.BREACH_WORLD, I = window.BREACH_INPUT;
   const E = window.BREACH_EFFECTS;
   W.colliders[W.colliders.length - 1].h = 2.6; // ahora tapa cuerpo Y cámara
-  await new Promise((r) => setTimeout(r, 400));
+  await window.__gwait(400);
   let tracerPoint = null;
   const oldTracer = E.tracer;
   E.tracer = function (o, p2, em) { tracerPoint = tracerPoint ?? p2.clone(); return oldTracer.call(this, o, p2, em); };
   const magBefore = G.weapons.st.mag;
   I._mouseFire = true; I.firePressed = true;
-  await new Promise((r) => setTimeout(r, 150));
+  await window.__gwait(150);
   I._mouseFire = false;
-  await new Promise((r) => setTimeout(r, 150));
+  await window.__gwait(150);
   E.tracer = oldTracer;
   W.colliders[W.colliders.length - 1].h = 1.28; // restaurar para las fases siguientes
   return {
     magBefore, magAfter: G.weapons.st.mag,
     shotZ: tracerPoint?.z ?? null,
-    crossBlocked: document.getElementById('crosshair').classList.contains('blocked'),
+    crossBlocked: document.getElementById('reticle').classList.contains('blocked'),
   };
 });
 check('muro que tapa la vista: la bala pega el muro (veraz, sin atravesar)',
@@ -319,7 +325,7 @@ const apagado = await page.evaluate(async () => {
   const G = window.BREACH, I = window.BREACH_INPUT, E = window.BREACH_EFFECTS;
   const TUNING = (await import('/src/config/tuning.js')).TUNING;
   TUNING.aimOver.enabled = 0; // apaga SOLO el acomodo visual del arma
-  await new Promise((r) => setTimeout(r, 700));
+  await window.__gwait(700);
   const lift = G.aimOver.lift;
   let tracerPoint = null, tracerOrigin = null;
   const oldTracer = E.tracer;
@@ -329,9 +335,9 @@ const apagado = await page.evaluate(async () => {
   };
   const magBefore = G.weapons.st.mag;
   I._mouseFire = true; I.firePressed = true;
-  await new Promise((r) => setTimeout(r, 90));
+  await window.__gwait(90);
   I._mouseFire = false;
-  await new Promise((r) => setTimeout(r, 120));
+  await window.__gwait(120);
   E.tracer = oldTracer;
   TUNING.aimOver.enabled = 1;
   // el TRAZO visual tampoco puede cruzar el borde: con el arma abajo (sin
@@ -352,8 +358,8 @@ const apagado = await page.evaluate(async () => {
     tracerY: tracerOrigin ? +tracerOrigin.y.toFixed(2) : null,
   };
 });
-check('kill switch visual: sin alzada del arma, el DAÑO sigue el eje óptico',
-  apagado.lift < 0.03 && apagado.fired &&
+check('el DAÑO sigue el eje óptico desde el ojo',
+  apagado.fired &&
   apagado.shotZ !== null && apagado.shotZ < 10,
   `lift=${apagado.lift?.toFixed(3)} shotZ=${apagado.shotZ?.toFixed(1)}`);
 check('el TRAZO visual no atraviesa el borde (se pliega al eje)',
@@ -365,19 +371,19 @@ check('el TRAZO visual no atraviesa el borde (se pliega al eje)',
 const hip = await page.evaluate(async () => {
   const G = window.BREACH, W = window.BREACH_WORLD, I = window.BREACH_INPUT;
   I._mouseAim = false;
-  await new Promise((r) => setTimeout(r, 500));
+  await window.__gwait(500);
   const lift = G.aimOver.lift;
   const magBefore = G.weapons.st.mag;
   I._mouseFire = true; I.firePressed = true;
-  await new Promise((r) => setTimeout(r, 90));
+  await window.__gwait(90);
   I._mouseFire = false;
-  await new Promise((r) => setTimeout(r, 120));
+  await window.__gwait(120);
   // limpiar la caja sintética
   W.colliders.length = window.__baseColliders;
   return { lift, fired: G.weapons.st.mag < magBefore };
 });
-check('hipfire intacto: sin alzada, dispara normal',
-  hip.lift === 0 && hip.fired === true, JSON.stringify(hip));
+check('hipfire intacto: dispara normal',
+  hip.fired === true, JSON.stringify(hip));
 
 // ---------------------------------------------------------------------------
 // 5) PEGADO A UN OBJETO GRANDE (caso bus): el trace nace en la CÁMARA — la
@@ -392,14 +398,14 @@ const pegado = await page.evaluate(async () => {
   G.player.yaw = 0; G.player.cam.yaw = 0; G.player.cam.pitch = 0;
   G.weapons.cur = 'smg'; G.weapons.st.mag = 50; G.weapons.st.cd = 0;
   I._mouseAim = true;
-  await new Promise((r) => setTimeout(r, 500));
+  await window.__gwait(500);
   let tracerPoint = null;
   const oldTracer = E.tracer;
   E.tracer = function (o, p2, em) { tracerPoint = tracerPoint ?? p2.clone(); return oldTracer.call(this, o, p2, em); };
   I._mouseFire = true; I.firePressed = true;
-  await new Promise((r) => setTimeout(r, 120));
+  await window.__gwait(120);
   I._mouseFire = false; I._mouseAim = false;
-  await new Promise((r) => setTimeout(r, 120));
+  await window.__gwait(120);
   E.tracer = oldTracer;
   W.colliders.pop();
   return { shotZ: tracerPoint?.z ?? null };

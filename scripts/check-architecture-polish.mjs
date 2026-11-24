@@ -5,7 +5,7 @@ const browser=await chromium.launch({executablePath:CHROME,headless:true});
 try{
   const page=await browser.newPage();const errors=[];
   page.on('pageerror',e=>errors.push(e.message));
-  await page.goto('http://127.0.0.1:5200/?nolock=1');
+  await page.goto((process.env.BASE || 'http://127.0.0.1:5200') + '/?nolock=1');
   const reports=await page.evaluate(async()=>{
     const T=await import('/node_modules/three/build/three.module.js');
     const {World}=await import('/src/world/world.js');

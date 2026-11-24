@@ -1,7 +1,10 @@
-// Gamepad API: stick izq mover, stick der cámara (curva cuadrática + deadzone),
-// gatillos analógicos, vibración. A mantenida = correr.
+// Gamepad API: stick izq mover, stick der cámara (zona muerta RADIAL interior
+// y exterior + curva de respuesta configurables), gatillos analógicos,
+// vibración (con interruptor) y la fricción de la asistencia de puntería.
 import { BINDS } from './bindings.js';
+import { SETTINGS } from './settings.js';
 
+// zona muerta del stick de MOVIMIENTO (el de cámara usa SETTINGS.padDeadzone)
 const DEADZONE = 0.16;
 const SWITCH_AXIS = 0.28;
 const SWITCH_DELTA = 0.055;
@@ -49,6 +52,70 @@ function snapshot(gp) {
 
 function axisAt(s, i) { return Number(s?.axes?.[i] || 0); }
 
+// Pura: zona muerta RADIAL (no por eje: la diagonal ya no "engancha" los
+// ejes) con borde exterior y curva de respuesta potencia. Devuelve [x, y]
+// con magnitud 0..1; la dirección se conserva intacta.
+export function shapeStick(x, y, { inner = 0.12, outer = 0.04, curve = 2 } = {}) {
+  x = Number.isFinite(x) ? x : 0; y = Number.isFinite(y) ? y : 0;
+  const mag = Math.hypot(x, y);
+  const hi = Math.max(inner + 0.05, 1 - outer);
+  if (mag <= inner || mag === 0) return [0, 0];
+  const lin = Math.min(1, (mag - inner) / (hi - inner));
+  const out = Math.pow(lin, Math.max(1, curve));
+  return [x / mag * out, y / mag * out];
+}
+
+// ---------- asistencia de puntería: SOLO fricción, SOLO mando ----------
+// DECISIONES §6: reduce la velocidad de giro del stick cuando la mira pasa
+// por el radio angular de un blanco + margen. Nunca mueve un stick quieto
+// (es un factor que multiplica el giro pedido), sin seguimiento ni imán, no
+// toca las balas. Apagada con ratón reciente, humo, oclusión o protección de
+// aparición (del blanco o propia), y con el ajuste desactivado.
+export const AIM_FRICTION = Object.freeze({
+  hip: 0.35, ads: 0.45, scope: 0.25,   // reducción máxima del giro
+  marginHipDeg: 0.6, marginAdsDeg: 0.4, // margen angular sobre el volumen real
+  maxZoneDeg: 3,                        // la zona nunca pasa de esto
+  minStick: 0.05,                       // por debajo, sin efecto
+  maxRange: 60,                         // m: más lejos no hay ayuda
+});
+const RAD = Math.PI / 180;
+// targets: [{ pos:[x,y,z] (centro del volumen), radius (m), blocked?, smoke?,
+//   protected?, ally? }] · eye/dir: [x,y,z] (dir normalizado o no) ·
+// stick: [x,y] tras la zona muerta · blocked: veto global del llamador
+// (p. ej. el tirador con protección de aparición) · mouseRecent: hubo ratón
+// en el último segundo · range: alcance útil del arma (opcional).
+// Devuelve el factor 0.55..1 que multiplica el giro del stick ESTE cuadro.
+export function aimFriction({ device, stick, targets, eye, dir, aim = false, scoped = false,
+  blocked = false, mouseRecent = false, enabled = true, range = AIM_FRICTION.maxRange } = {}) {
+  const F = AIM_FRICTION;
+  if (!enabled || device !== 'pad' || blocked || mouseRecent) return 1;
+  const sx = stick?.[0] ?? 0, sy = stick?.[1] ?? 0;
+  if (!(Math.hypot(sx, sy) >= F.minStick)) return 1;
+  if (!Array.isArray(targets) || !eye || !dir) return 1;
+  const dl = Math.hypot(dir[0], dir[1], dir[2]);
+  if (!(dl > 1e-6)) return 1;
+  const dx = dir[0] / dl, dy = dir[1] / dl, dz = dir[2] / dl;
+  const strength = scoped ? F.scope : aim ? F.ads : F.hip;
+  const margin = (aim || scoped ? F.marginAdsDeg : F.marginHipDeg) * RAD;
+  const maxRange = Math.min(F.maxRange, range > 0 ? range : F.maxRange);
+  let best = 0;
+  for (const t of targets) {
+    if (!t || t.blocked || t.smoke || t.protected || t.ally || !t.pos) continue;
+    const vx = t.pos[0] - eye[0], vy = t.pos[1] - eye[1], vz = t.pos[2] - eye[2];
+    const dist = Math.hypot(vx, vy, vz);
+    if (!(dist > 0.3) || dist > maxRange) continue;
+    const cos = Math.max(-1, Math.min(1, (vx * dx + vy * dy + vz * dz) / dist));
+    const ang = Math.acos(cos);
+    const core = Math.atan((t.radius ?? 0.3) / dist);
+    const zone = Math.min(F.maxZoneDeg * RAD, core + margin);
+    if (ang >= zone) continue;
+    // plena dentro del volumen, cae a cero en el borde de la zona
+    const k = ang <= Math.min(core, zone) ? 1 : 1 - (ang - core) / Math.max(1e-6, zone - core);
+    best = Math.max(best, strength * k);
+  }
+  return 1 - Math.min(strength, best);
+}
+
 export class PadInput {
   constructor() {
     this.connected = false;
@@ -61,6 +128,9 @@ export class PadInput {
     this.fireHeld = false;
     this.aimHeld = false;
     this.sprintHeld = false;
+    this.crouchHeld = false;
+    this.leanLeftHeld = false;
+    this.leanRightHeld = false;
     this._evadeHeldT = 0;
     this._gp = null;
     this._samples = new Map();
@@ -190,15 +260,18 @@ export class PadInput {
         .filter((i) => i >= 0),
     };
 
-    const dz = (v) => Math.abs(v) < DEADZONE ? 0 : (v - Math.sign(v) * DEADZONE) / (1 - DEADZONE);
-    const curve = (v) => v * Math.abs(v);
     // un stick sin armar no existe para el gameplay ni el menú (botones sí)
     const sticks = this._arm.get(this._idx);
     const moveOk = !!sticks?.[0]?.armed, camOk = !!sticks?.[1]?.armed;
-    this.moveX = moveOk ? dz(gp.axes[0] ?? 0) : 0;
-    this.moveZ = moveOk ? -dz(gp.axes[1] ?? 0) : 0;
-    this.camX = camOk ? curve(dz(gp.axes[2] ?? 0)) : 0;
-    this.camY = camOk ? curve(dz(gp.axes[3] ?? 0)) : 0;
+    // movimiento: radial y lineal (la velocidad la decide el controller)
+    const [mx, my] = moveOk ? shapeStick(gp.axes[0] ?? 0, gp.axes[1] ?? 0,
+      { inner: DEADZONE, outer: 0.04, curve: 1 }) : [0, 0];
+    this.moveX = mx; this.moveZ = -my;
+    // cámara: zona muerta interior/exterior y curva del jugador
+    const [cx, cy] = camOk ? shapeStick(gp.axes[2] ?? 0, gp.axes[3] ?? 0, {
+      inner: SETTINGS.padDeadzone, outer: SETTINGS.padOuterDeadzone, curve: SETTINGS.padCurve,
+    }) : [0, 0];
+    this.camX = cx; this.camY = cy;
 
     const now = new Set();
     Array.from(gp.buttons || []).forEach((b, i) => { if (buttonDown(b)) now.add(i); });
@@ -208,15 +281,20 @@ export class PadInput {
     this.fireHeld = now.has(BINDS.pad.fire);
     this.aimHeld = now.has(BINDS.pad.aim);
     this.sprintHeld = now.has(BINDS.pad.sprint); // botón dedicado (default L3)
+    this.crouchHeld = now.has(BINDS.pad.crouch);
+    this.leanLeftHeld = now.has(BINDS.pad.leanLeft);
+    this.leanRightHeld = now.has(BINDS.pad.leanRight);
   }
 
   _reset() {
     this.moveX = 0; this.moveZ = 0; this.camX = 0; this.camY = 0;
     this.pressed.clear(); this.justPressed.clear();
     this.fireHeld = false; this.aimHeld = false; this.sprintHeld = false;
+    this.crouchHeld = false; this.leanLeftHeld = false; this.leanRightHeld = false;
   }
 
   rumble(ms, weak, strong) {
+    if (!SETTINGS.vibration) return; // interruptor del jugador
     try {
       this._gp?.vibrationActuator?.playEffect('dual-rumble', {
         duration: ms, weakMagnitude: weak, strongMagnitude: strong,

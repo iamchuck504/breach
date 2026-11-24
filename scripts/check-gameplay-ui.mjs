@@ -3,9 +3,12 @@ import { chromium } from 'playwright-core';
 import { CHROME } from './lib-chrome.mjs';
 import { mkdir } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
-const server = spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', '8838'], { stdio: 'ignore' });
+import { freePort } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
+const server = spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', String(FREE_PORT)], { stdio: 'ignore' });
 for (let i = 0; i < 600; i++) { // Vite listo cuando responde (no tras una espera fija)
-  try { if ((await fetch('http://127.0.0.1:8838/')).ok) break; } catch { /* arrancando */ }
+  try { if ((await fetch(`http://127.0.0.1:${FREE_PORT}/`)).ok) break; } catch { /* arrancando */ }
   await new Promise(r => setTimeout(r, 100));
 }
 const browser = await chromium.launch({ executablePath: CHROME, headless: true,
@@ -25,7 +28,7 @@ try {
   const settle = (ms, n = 3) => Promise.all([page.waitForTimeout(ms), page.evaluate(`(${framesIn})(${n})`)]);
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
-  await page.goto('http://127.0.0.1:8838/?nolock=1', { timeout: 300000 });
+  await page.goto(`http://127.0.0.1:${FREE_PORT}/?nolock=1`, { timeout: 300000 });
   await page.evaluate(() => document.getElementById('btn-enter')?.click());
   await page.waitForSelector('#splash.off', { state: 'attached' });
   await page.evaluate(() => document.getElementById('btn-practice').click());
@@ -64,22 +67,22 @@ try {
   });
   assert.ok(!result.slots.includes('sniper'));
   assert.ok(result.prompt.includes('SNPR') && result.prompt.includes('replace'));
-  assert.ok(result.prompt.includes('[E]'), 'recoger con E por defecto en teclado');
+  assert.ok(result.prompt.includes('[F]'), 'recoger con F por defecto en teclado (bindings v4)');
   await page.screenshot({ path: 'artifacts/gameplay-tuning/prompt.png' });
   await page.evaluate(async () => {
     const { BINDS } = await import('/src/core/bindings.js');
-    BINDS.pad.evade = 3;
+    BINDS.pad.pickup = 3;
     window.BREACH_INPUT.lastDevice = 'pad';
   });
   await settle(60);
   assert.ok((await page.locator('#pickup-prompt').textContent()).includes('[Y]'));
   await page.evaluate(async () => {
     const { BINDS } = await import('/src/core/bindings.js');
-    BINDS.kb.pickup = 'KeyG'; // recoger tiene tecla propia (E por defecto) y se puede reasignar
+    BINDS.kb.pickup = 'KeyH'; // recoger tiene tecla propia (F por defecto; G es la granada) y se puede reasignar
     window.BREACH_INPUT.lastDevice = 'keyboard';
   });
   await settle(60);
-  assert.ok((await page.locator('#pickup-prompt').textContent()).includes('[G]'));
+  assert.ok((await page.locator('#pickup-prompt').textContent()).includes('[H]'));
   await page.evaluate(() => { window.BREACH_INPUT.pickupPressed = true; });
   await settle(150);
   assert.equal(await page.evaluate(() => window.BREACH.weapons.slots.includes('sniper')), true);

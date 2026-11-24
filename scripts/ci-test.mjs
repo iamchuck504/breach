@@ -26,7 +26,10 @@ const suites = scripts.test.split('&&').map((part) => {
 if (!runNpm('pretest')) process.exit(1); // build + chequeos estáticos: sin reintento
 
 const flaky = [], failed = [];
-for (const name of [...suites, 'test:dev']) {
+// test:online (PRUEBAS, corrida 6): dos navegadores + servidor real; aparte de
+// test:dev para que `npm test` siga acotado, pero CI también lo corre
+const groups = ['test:dev', ...(scripts['test:online'] ? ['test:online'] : [])];
+for (const name of [...suites, ...groups]) {
   if (runNpm(name)) continue;
   console.log(`\n::warning::${name} falló; reintentando una vez`);
   if (runNpm(name)) flaky.push(name);
@@ -34,7 +37,7 @@ for (const name of [...suites, 'test:dev']) {
 }
 
 console.log('\n==== CI TEST ====');
-console.log(`suites: ${suites.length + 1} · inestables: ${flaky.length} · fallidas: ${failed.length}`);
+console.log(`suites: ${suites.length + groups.length} · inestables: ${flaky.length} · fallidas: ${failed.length}`);
 if (flaky.length) console.log(`::warning::inestables (pasaron al reintento): ${flaky.join(', ')}`);
 if (failed.length) {
   console.log(`::error::fallaron dos veces: ${failed.join(', ')}`);

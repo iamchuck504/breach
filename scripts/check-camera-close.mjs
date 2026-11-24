@@ -16,13 +16,16 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CHROME } from './lib-chrome.mjs';
+import { freePort, waitGame, waitHttp } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
-const PORT = '8823';
+const PORT = FREE_PORT;
 const server = spawn(process.execPath, [path.join(root, 'node_modules', 'vite', 'bin', 'vite.js'),
-  '--host', '127.0.0.1', '--port', PORT, '--strictPort'], { stdio: 'ignore' });
-await new Promise((r) => setTimeout(r, 900));
+  '--host', '127.0.0.1', '--port', String(PORT), '--strictPort'], { stdio: 'ignore' });
+await waitHttp(`http://127.0.0.1:${PORT}/`);
 
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
 const fails = [];
@@ -43,7 +46,7 @@ try {
   await page.evaluate(() => document.getElementById('btn-practice').click());
   await page.waitForFunction(() => window.BREACH?.player && window.BREACH?.rig && window.BREACH_WORLD?.layout === 'fortaleza',
     null, { timeout: 60000 });
-  await page.waitForTimeout(1500);
+  await waitGame(page, 1.5);
 
   // claro sintético: fuera todos los colliders a menos de 12 m del punto
   await page.evaluate(() => {
@@ -110,6 +113,9 @@ try {
       { minx: -4, maxx: 4, minz: -11.55, maxz: -10.9, h: 4 }, { minx: 0.5, maxx: 1.2, minz: -16, maxz: -10.9, h: 4 }] },
     { name: 'callejón (0.6 m a la derecha, 1 m a la izquierda)', boxes: [
       { minx: 0.6, maxx: 1.3, minz: -20, maxz: -4, h: 4 }, { minx: -1.7, maxx: -1.0, minz: -20, maxz: -4, h: 4 }] },
+    // FPS: muro DELANTE pegado (el ojo va 10 cm por delante de los pies) y una esquina delante
+    { name: 'muro delante a 0.42 m', boxes: [{ minx: -4, maxx: 4, minz: -13, maxz: -12.42, h: 4 }] },
+    { name: 'esquina delante a la derecha', boxes: [{ minx: 0.2, maxx: 4, minz: -13, maxz: -12.45, h: 4 }, { minx: 0.42, maxx: 1.2, minz: -12.45, maxz: -10, h: 4 }] },
     { name: 'techo bajo y pared detrás', boxes: [
       { minx: -4, maxx: 4, minz: -11.55, maxz: -10.9, h: 4 }, { minx: -4, maxx: 4, minz: -14, maxz: -10.9, h: 2.7, minY: 2.35 }] },
   ];
@@ -118,7 +124,8 @@ try {
     for (const [mode, w, pitch] of [['hip', 'smg', -0.05], ['ADS', 'smg', -0.05], ['ADS', 'shotgun', 0.4], ['ADS', 'smg', -0.5], ['scope', 'sniper', -0.05]]) {
       const r = await page.evaluate(async ([s, mode, w, pitch]) => {
         const G = window.BREACH, W = window.BREACH_WORLD, I = window.BREACH_INPUT, P = G.player;
-        const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+        // espera en tiempo de juego (PRUEBAS: nunca reloj de pared)
+        const sleep = (ms) => new Promise((res) => { const end = G.simClock + ms / 1000; const f = () => (G.simClock >= end ? res() : requestAnimationFrame(f)); requestAnimationFrame(f); });
         I._mouseAim = false; I._mouseFire = false;
         await sleep(100);
         W.colliders.length = window.__base;
@@ -132,35 +139,32 @@ try {
         await sleep(1100);
         P.cam.pitch = pitch; P.cam.clearPitchRecoil();
         await sleep(250);
-        // sin obstáculos la cámara debe estar EXACTAMENTE donde siempre
-        const c = P.cam, cy = Math.cos(c.yaw), sy = Math.sin(c.yaw), cp = Math.cos(c.pitch), sp = Math.sin(c.pitch);
-        const sh = c._rig.shoulder * c._side, d = c._rig.dist;
-        const want = [c.pivot.x + sy * cp * d + cy * sh, c.pivot.y - sp * d + 0.12, c.pivot.z + cy * cp * d - sy * sh];
-        const drift = Math.hypot(c.pos.x - want[0], c.pos.y - want[1], c.pos.z - want[2]);
-        return { ...window.__measure(), drift, pos: [P.pos.x, P.pos.z] };
+        // cámara de los ojos: dónde está respecto a cada caja (distancia punto-caja 3D)
+        const cam = window.BREACH_CAM.position, fp = window.BREACH_FP;
+        let wallDist = Infinity;
+        for (const b of W.colliders) {
+          const dx = Math.max(b.minx - cam.x, 0, cam.x - b.maxx), dz = Math.max(b.minz - cam.z, 0, cam.z - b.maxz);
+          const dy = Math.max((b.minY ?? 0) - cam.y, 0, cam.y - b.h);
+          wallDist = Math.min(wallDist, Math.hypot(dx, dy, dz));
+        }
+        return { ...window.__measure(), live: !!fp?.live, eyeGap: fp?.eye ? fp.eye.distanceTo(cam) : null, wallDist, pos: [P.pos.x, P.pos.z] };
       }, [s, mode, w, pitch]);
       const label = `${s.name} · ${mode} ${w} pitch ${pitch}`;
       cases.push(label);
-      if (s.boxes.length === 0) {
-        check(`${label}: cámara intacta (desvío ${r.drift.toFixed(4)} m)`, r.drift < 1e-3);
-        // y el soldado se ve entero fuera del scope (≈9-18% de la pantalla)
-        if (mode !== 'scope') {
-          check(`${label}: soldado visible (${(r.all * 100).toFixed(0)}% ≥ 5%)`, r.all >= 0.05);
-          check(`${label}: idéntico a sin fundido (${(r.changed * 100).toFixed(2)}% de píxeles cambiados)`, r.changed === 0);
-        }
-      }
-      if (mode === 'scope') {
-        check(`${label}: scope activo y la lente sin soldado (${(r.lens * 100).toFixed(2)}%)`, r.scope && r.lens === 0);
-      } else {
-        check(`${label}: centro tapado (efectivo) ${(r.c20 * 100).toFixed(1)}% ≤ 25% (silueta ${(r.raw20 * 100).toFixed(0)}%, pantalla ${(r.all * 100).toFixed(0)}%, casco a ${r.head.toFixed(2)} m)`,
-          r.c20 <= 0.25 && r.all <= 0.25);
-        // sin agujero en pantalla: el centro se aclara en la misma proporción
-        // que el resto del soldado (±0.2), nunca se vacía solo él
-        if (r.raw20 > 0.5 && r.raw > 0.05) {
-          const kc = r.c20 / r.raw20, ka = r.all / r.raw;
-          check(`${label}: fundido uniforme, sin círculo (centro ${kc.toFixed(2)} · resto ${ka.toFixed(2)})`, Math.abs(kc - ka) <= 0.2);
-        }
-      }
+      // PRUEBAS (corrida 6, FPS): jugando, la cámara es la de los ojos. Se retiraron
+      // "cámara de hombro en su órbita", "soldado visible ≥5 %" y "fundido uniforme
+      // del soldado propio": esa vista (hombro sobre el soldado vivo) ya no existe
+      // jugando (solo muerte/espectador/presentación). Su garantía pasa a la cámara
+      // de los ojos en los mismos rincones: nunca dentro ni pegada a la geometría,
+      // en el ojo, y el cuerpo propio no tapa nada (oculto; queda su sombra).
+      check(`${label}: cámara de los ojos activa en el ojo`, r.live && r.eyeGap != null && r.eyeGap < 1e-3, JSON.stringify({ live: r.live, eyeGap: r.eyeGap }));
+      check(`${label}: cámara fuera de la geometría (${(r.wallDist * 100).toFixed(1)} cm ≥ 4.5 cm)`, r.wallDist >= 0.045);
+      check(`${label}: el cuerpo propio no tapa la vista (${(r.all * 100).toFixed(2)}% de píxeles)`, r.all === 0);
+      // con un muro DELANTE pegado el rifle se retrae y la mira no llega a entrar
+      // (observación enviada a VISTA en ganchos/pruebas.md): ahí solo se exige la lente limpia si entra
+      const frontWall = s.name.startsWith('muro delante') || s.name.startsWith('esquina delante');
+      if (mode === 'scope' && !frontWall) check(`${label}: scope activo y la lente sin soldado (${(r.lens * 100).toFixed(2)}%)`, r.scope && r.lens === 0);
+      if (mode === 'scope' && frontWall) { console.log(`NOTA ${label}: scope ${r.scope ? 'activo' : 'NO entra (arma retraída)'}`); if (r.scope) check(`${label}: lente sin soldado`, r.lens === 0); }
     }
   }
   check('sin errores de página', pageErrors === 0, `${pageErrors}`);

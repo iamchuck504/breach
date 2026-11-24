@@ -1,17 +1,21 @@
-// Máquina de estados del jugador local. Prioridad absoluta: responsividad.
-// Estados: idle / run / roadie / dive / slide / cover / dead.
-// El wallbounce es cancelar un slide (o salir de cover en la ventana de bounce)
-// hacia otra cobertura: cada rebote encadenado da un pequeño bonus de velocidad.
+// Máquina de estados del jugador local en PRIMERA PERSONA (DECISIONES §1-2).
+// Prioridad absoluta: responsividad y lectura.
+// Estados: idle / run / roadie (sprint) / crouch / slide / mantle / melee.
+// El cuerpo está bloqueado a la vista: el movimiento es relativo a la mira
+// (strafe y retroceso de FPS); no es un modo, es EL comportamiento.
+// Retirado para el jugador: cobertura pegada (snap, slide a cobertura, swat
+// turn, lean de esquina), blindfire, rodada/dive, doble salto con voltereta,
+// patada de pared y wallbounce. Los bots tienen su propia clase (botmatch.js).
+// Queda un único gesto contextual: el ASOMO — agachado junto a una cara LOW,
+// apuntar te levanta por encima del borde (`ce` 0→1) y soltar te baja.
 import * as THREE from 'three';
 import { TUNING } from '../config/tuning.js';
+import { stepDodge } from './dodge.js';
+import { SETTINGS } from '../core/settings.js';
+import { hitPose, placeHitPose, eyeWorld } from '../combat/hit-pose.js';
+import { wirePose, localPose, resetTransition } from '../net/client.js';
+import { canFireInState, MOVE_GATES, sprintFireDelay } from '../combat/fire-gates.js';
 
-const yawFromDir = (x, z) => Math.atan2(-x, -z);
-const lerpAngle = (a, b, k) => {
-  let d = b - a;
-  while (d > Math.PI) d -= Math.PI * 2;
-  while (d < -Math.PI) d += Math.PI * 2;
-  return a + d * k;
-};
 const angleDelta = (a, b) => {
   let d = (b - a) % (Math.PI * 2);
   if (d > Math.PI) d -= Math.PI * 2;
@@ -22,36 +26,52 @@ const approachAngle = (a, b, maxStep) => {
   const d = angleDelta(a, b);
   return a + Math.max(-maxStep, Math.min(maxStep, d));
 };
+const approach = (v, target, step) => v < target ? Math.min(target, v + step) : Math.max(target, v - step);
 
 export const PLAYER_R = 0.38;
 
 const TMP_O = new THREE.Vector3(), TMP_D = new THREE.Vector3();
 
+// Estados de suelo en los que se puede inclinar
+const LEAN_STATES = new Set(['idle', 'run', 'crouch']);
+// Misma regla que net/client.js postureOf: estados que pasan a `crouch` en
+// el cable mientras la cabeza no está de pie del todo.
+const CROUCHABLE = new Set(['idle', 'run', 'jump', 'roadie', 'crouch']);
+// Holgura de la esfera de cabeza contra la geometría
+const HEAD_MARGIN = 0.02;
+// Muestras de la superficie de la esfera (ejes + diagonales), unitarias
+const SPHERE_DIRS = [[0, 0, 0], [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1],
+  ...[[1, 1, 1], [1, 1, -1], [1, -1, 1], [1, -1, -1], [-1, 1, 1], [-1, 1, -1], [-1, -1, 1], [-1, -1, -1]]
+    .map((d) => d.map((x) => x / Math.sqrt(3))),
+  ...[[1, 1, 0], [1, -1, 0], [-1, 1, 0], [-1, -1, 0], [1, 0, 1], [1, 0, -1], [-1, 0, 1], [-1, 0, -1]]
+    .map((d) => d.map((x) => x / Math.SQRT2))];
+
 export class Controller {
   constructor(world, camera, events = {}) {
     this.world = world;
     this.cam = camera;
-    this.ev = events; // {onSlideStart, onCoverEnter, onBounce, onDive, onDetach}
+    this.ev = events; // {onSlideStart, onJump, onLand, onMantle, onMeleeStart, meleeTarget, meleeTargetPos}
     this.pos = { x: 0, z: -16 };
     this.vel = { x: 0, z: 0 };
     this.y = 0;             // altura de los pies
     this.vy = 0;
     this.grounded = true;
-    this.flip = null;       // { t, dur } — vuelta de gato del salto de pared
     this.yaw = 0;
     this.state = 'idle';
     this.stateT = 0;
-    this.cover = null;      // face actual
-    this.coverEntry = null; // absorción corta de posición/momentum al engancharse
-    this.slide = null;      // {target, face, dir}
-    this.dive = null;       // {dir}
-    this.chain = 0;         // rebotes encadenados
-    this.bounceWindow = 0;
-    this.evadeCooldown = 0;
-    this.runT = 0;          // carrera continua (momentum ganado)
-    this.runDist = 0;
-    this.evadeMom = 0;      // impulso ganado aplicado a la evasión en curso
-    this.mantle = null;     // vault sobre cover bajo en progreso
+    // postura FPS (CONTRATO §1)
+    this.crouched = false;  // intención lógica efectiva (incluye techo bajo)
+    this.crouch01 = 0;      // 0 de pie … 1 agachado, continuo (altura de cámara)
+    this.lean = 0;          // `cl` −1..1, ya limitado por colisión
+    this.peek = 0;          // `ce` 0..1: asomo sobre cara LOW
+    this.peekFace = null;
+    this.leanRoom = { l: 1, r: 1 }; // inclinación máxima libre por lado (diagnóstico/tests)
+    this.slide = null;      // { t, dir:{x,z}, v0 } deslizamiento desde sprint
+    this.slideCd = 0;
+    this.dodge = null; this.dodgeCd = 0; this.queuedDodge = null; this.offlineDodgePose = false;
+    this.sinceSprint = Infinity; // s desde que se dejó el sprint (retraso de disparo y dispersión)
+    this.weaponKey = 'smg';      // arma en mano para el retraso sprint→disparo
+    this.mantle = null;     // trepada sobre cover bajo en progreso
     this.meleeT = 0;        // progreso del golpe melee en curso
     this.meleeCd = 0;
     this.meleeEndT = 0;
@@ -62,16 +82,29 @@ export class Controller {
     this.meleeEntryState = 'idle';
     this.meleeFromCover = false;
     this.meleeTravel = 0;
-    this.detachT = 0;
     this.aim = false;
-    this.firingBlind = 0;   // timer para mantener pose de blindfire
-    this.coverAimExposure = 0; // 0 protegido, 1 asomado con muzzle libre
-    this.blindMode = null;  // 'over' | 'left' | 'right' según cover/cámara
-    this._blindModePrev = null;
-    this.blindPoseExposure = 0;
     this.groundPitch = 0;  // inclinación del suelo en la dirección del cuerpo
     this.dead = false;
+    // --- heredados: main.js y otros módulos aún los leen/escriben. El
+    // jugador ya no los usa; quedan neutros. TODO integración: retirar.
+    this.cover = null;
+    this.coverEntry = null;
+    this.dive = null;
+    this.flip = null;
+    this.firingBlind = 0;
+    this.blindMode = null;
+    this.blindPoseExposure = 0;
+    this.chain = 0;
+    this.fpYawLock = 0;    // main lo fija; el bloqueo a la vista ya es permanente
   }
+
+  // Alias de CONTRATO §1 para quien todavía lee los nombres de cobertura
+  // (net/client.js → `cl`/`ce`, view/first-person.js → hitPose). Escribirlos no
+  // hace nada. TODO integración: leer `lean`/`peek` directamente.
+  get coverLeanAnim() { return this.lean; }
+  set coverLeanAnim(_v) { /* solo lectura */ }
+  get coverAimExposure() { return this.peek; }
+  set coverAimExposure(_v) { /* solo lectura */ }
 
   get speed() { return Math.hypot(this.vel.x, this.vel.z); }
 
@@ -79,65 +112,62 @@ export class Controller {
 
   cameraYawError() { return angleDelta(this.yaw, this.cam.yaw); }
 
+  // Arma en mano (para el retraso sprint→disparo por arma). TODO integración:
+  // main.js debe llamarlo al cambiar de arma (o en cada paso).
+  setWeapon(key) { if (key) this.weaponKey = key; }
+
+  // Enlaza las armas: el arma en mano sigue sola y el sprint espera a soltar
+  // un lanzamiento comprometido (DECISIONES 18).
+  bindWeapons(weapons) { this._weapons = weapons || null; if (weapons?.cur) this.weaponKey = weapons.cur; }
+
+  // Tiempo que falta para que el arma pueda disparar tras salir del sprint.
+  fireReadyIn(weaponKey = this.weaponKey) {
+    if (this.state === 'roadie') return Infinity;
+    if (this.dodge) return TUNING.dodge.duration - this.dodge.t + sprintFireDelay(weaponKey);
+    return Math.max(0, sprintFireDelay(weaponKey) - this.sinceSprint);
+  }
+
+  // Puerta de disparo del cuerpo: alineado con la vista (en FPS siempre),
+  // fuera de trepar, y pasado el retraso de sprint del arma. main.js la llama
+  // en canFire, así que el retraso entra sin tocar main.
   fireAligned(maxDeg = TUNING.combat.fireAlignMaxDeg) {
-    const lowAim = this.state === 'cover' && this.aim && this.cover &&
-      this.cover.h <= TUNING.cover.lowHeight;
-    // Protected side blindfire has much less exposed body to compensate for
-    // an unfinished turn. Buffer the shot until the barrel pose reaches the
-    // opening; the old 50-degree allowance could fire from inside the wall.
-    if(this.state==='cover'&&!this.aim&&(this.blindMode==='left'||this.blindMode==='right')){
-      maxDeg=Math.min(maxDeg,10);
-    }
-    return Math.abs(this.cameraYawError()) <= maxDeg * Math.PI / 180 &&
-      (!lowAim || this.coverAimExposure >= 0.82);
+    // misma tabla que el servidor (combat/fire-gates.js)
+    if (this.dead || !canFireInState(this.animState(), this.weaponKey)) return false;
+    if (this.fireReadyIn() > 0) return false;
+    return Math.abs(this.cameraYawError()) <= maxDeg * Math.PI / 180;
   }
 
-  _turnToCamera(dt, blindfire = false) {
-    const degPerSec = blindfire
-      ? TUNING.combat.bodyTurnBlindDeg
-      : TUNING.combat.bodyTurnAimDeg;
-    this.yaw = approachAngle(this.yaw, this.cam.yaw, degPerSec * Math.PI / 180 * dt);
-  }
-
-  _turnLocomotion(target, dt, response, maxDeg = 240) {
-    // Exponential easing alone makes large heading changes jump on the first
-    // frame. Bound angular speed as well, including return to backpedal.
-    const delta = angleDelta(this.yaw, target);
-    const easedStep = Math.abs(delta) * (1 - Math.exp(-response * dt));
-    this.yaw = approachAngle(this.yaw, target, Math.min(easedStep, maxDeg * Math.PI / 180 * dt));
+  // Entrada de spreadFor() (weapons.js): lo que el cuerpo aporta a la
+  // dispersión de ESTE instante.
+  spreadState() {
+    return {
+      aim: this.aim,
+      moving: Math.min(1, this.speed / TUNING.fp.runSpeed),
+      crouched: this.crouched && this.state !== 'slide',
+      sliding: this.state === 'slide',
+      airborne: !this.grounded,
+      sinceSprint: this.state === 'roadie' ? 0 : this.sinceSprint,
+    };
   }
 
   camState() {
     if (this.dead) return { mode: 'normal' };
-    if (this.aim) {
-      // asomándose por la orilla izquierda: la cámara cambia de hombro
-      // shoulder swap automático para no ver solo la pared
-      const side = this.state === 'cover' ? (this.coverLeanAnim || 0) : 1;
-      return { mode: 'aim', side };
-    }
+    if (this.aim) return { mode: 'aim', side: 1 };
     if (this.state === 'roadie') return { mode: 'roadie' };
-    if (this.state === 'cover') return { mode: 'cover', side: this.coverLeanAnim || 0 };
     return { mode: 'normal' };
   }
 
+  // Postura replicada: SOLO estados del CONTRATO §1 (nunca cover_*, blind_*,
+  // dive ni flip desde el jugador).
   animState() {
     if (this.dead) return 'dead';
     switch (this.state) {
-      case 'cover': {
-        const low = this.cover && this.cover.h <= TUNING.cover.lowHeight;
-        if (this.firingBlind > 0 && !this.aim) {
-          if (this.blindMode === 'over' && low) return 'blind_over';
-          if (this.blindMode === 'left') return low ? 'blind_low_left' : 'blind_high_left';
-          if (this.blindMode === 'right') return low ? 'blind_low_right' : 'blind_high_right';
-        }
-        return low ? 'cover_low' : 'cover_high';
-      }
-      case 'flip': return 'flip';
       case 'mantle': return 'mantle';
-      case 'roadie': return this.grounded ? 'roadie' : 'jump';
       case 'melee': return 'melee';
-      case 'dive': return 'dive';
+      case 'dodge': return 'dodge';
       case 'slide': return 'slide';
+      case 'roadie': return this.grounded ? 'roadie' : 'jump';
+      case 'crouch': return this.grounded ? 'crouch' : 'jump';
       default:
         if (!this.grounded) return 'jump';
         return this.speed > 0.4 ? 'run' : 'idle';
@@ -146,81 +176,70 @@ export class Controller {
 
   animParams() {
     const st = this.animState();
-    // twist de torso hacia la cámara (upper-body aim al correr lateral)
-    let twist = 0;
-    if (!this.aim && (st === 'idle' || st === 'run')) {
-      let d = this.cam.yaw - this.yaw;
-      while (d > Math.PI) d -= Math.PI * 2;
-      while (d < -Math.PI) d += Math.PI * 2;
-      twist = Math.max(-0.9, Math.min(0.9, d));
-    }
-    // error de yaw cuerpo-cámara: el ARMA lo compensa al disparar para que
-    // el cañón visual apunte a la línea de tiro real aunque el cuerpo gire
-    let yawErr = this.cameraYawError();
-    const visualMax = TUNING.combat.visualAimMaxDeg * Math.PI / 180;
-    yawErr = Math.max(-visualMax, Math.min(visualMax, yawErr));
     return {
       state: st,
+      // postura FPS (CONTRATO §1)
+      crouch: this.crouch01,
+      cl: this.lean,
+      ce: this.peek,
       speed: Math.min(1, this.speed / TUNING.move.roadieSpeed),
       moveForward: this.speed > 0.05 ? (this.vel.x * -Math.sin(this.yaw) + this.vel.z * -Math.cos(this.yaw)) / this.speed : 1,
       moveSide: this.speed > 0.05 ? (this.vel.x * Math.cos(this.yaw) - this.vel.z * Math.sin(this.yaw)) / this.speed : 0,
       aim: this.aim,
       aimPitch: this.cam.pitch,
-      aimYawErr: yawErr,
-      twist,
-      firing: this.firingBlind > 0 &&
-        (this.state !== 'cover' || !!this.blindMode),
-      flipT: this.flip ? Math.min(1, this.flip.t / this.flip.dur) : 0,
-      flipDir: this.flip?.dir ?? 1,
-      flipAxis: this.flip?.axis ?? 'z',
-      coverLean: this.coverLeanAnim ?? 0,
-      coverAimExposure: this.coverAimExposure,
-      blindPoseExposure: this.blindPoseExposure,
-      blindMode: this.blindMode,
-      coverKind: this.cover?.kind,
-      latMove: this._latMove(),
+      aimYawErr: Math.max(-1, Math.min(1, this.cameraYawError())),
+      twist: 0,               // cuerpo bloqueado a la vista: sin torsión
+      firing: false,
+      vy: this.vy,            // fases del salto
       groundPitch: this.groundPitch,
-      vy: this.vy,                                   // fases del salto
       mantlePhase: this.mantle ? Math.min(1, this.mantle.t / this.mantle.dur) : 0,
-      evadePhase: this.state === 'dive' ? Math.min(1, this.stateT / TUNING.evade.diveTime) : 0,
+      slidePhase: this.slide ? Math.min(1, this.slide.t / TUNING.fp.slideTime) : 0,
       meleePhase: this.state === 'melee'
         ? Math.min(1, this.meleeT / Math.max(0.001, this.meleeEndT || TUNING.melee.time))
         : 0,
+      meleeEnd: this.meleeEndT,
       meleeConnected: this.meleeConnected,
-      meleeFromCover: this.meleeFromCover,
+      meleeFromCover: false,
       meleeEntrySpeed: this.meleeEntrySpeed,
       meleeTackle: this.state === 'melee' && !!this.meleeTackle,
       meleeLunge: this.state === 'melee' && !!this.meleeLunge,
+      // heredados (neutros) para el rig hasta que RIG retire las ramas viejas
+      coverLean: this.lean,
+      coverAimExposure: this.peek,
+      blindPoseExposure: 0,
+      blindMode: null,
+      coverKind: this.peek > 0 ? 'low' : undefined,
+      latMove: 0,
+      flipT: 0, flipDir: 1, flipAxis: 'z',
+      evadePhase: this.dodge ? this.dodge.t / TUNING.dodge.duration : 0,
     };
   }
 
-  // velocidad lateral en el frame del personaje (-1..1), para el paso lateral
-  _latMove() {
-    if (this.state !== 'cover') return 0;
-    const rx = Math.cos(this.yaw), rz = -Math.sin(this.yaw);
-    const v = (this.vel.x * rx + this.vel.z * rz) / TUNING.move.coverStrafe;
-    return Math.max(-1, Math.min(1, v));
+  // Altura de la postura 0 (de pie) … 1 (agachado) que ve la cámara: el
+  // asomo devuelve la altura de pie aunque la intención siga agachada.
+  get stanceLow() { return this.crouch01 * (1 - this.peek); }
+
+  // Altura del ojo sobre los pies según la postura (referencia de CONTRATO
+  // §2; la cámara debe usar eyeFromPose() de hit-pose.js).
+  eyeHeight() {
+    const F = TUNING.fp;
+    return F.eyeStand + (F.eyeCrouch - F.eyeStand) * this.stanceLow;
   }
 
   // limpia TODO el estado transitorio (flags pegados = poses/gameplay rotos)
   _clearTransient() {
-    this.firingBlind = 0;
-    this.coverAimExposure = 0;
-    this.blindMode = null;
-    this._blindModePrev = null;
-    this.blindPoseExposure = 0;
-    this.coverLeanAnim = 0;
-    this.detachT = 0;
-    this.evadeCooldown = 0;
-    this.runT = 0;
-    this.runDist = 0;
-    this.evadeMom = 0;
+    if (this.offlineDodgePose) resetTransition(this);
     this.mantle = null;
-    this.coverEntry = null;
-    this.edgePushT = 0;
-    this.bounceWindow = 0;
-    this.chain = 0;
-    this.usedDouble = false;
+    this.slide = null;
+    this.slideCd = 0;
+    this.dodge = null; this.dodgeCd = 0; this.queuedDodge = null; this.offlineDodgePose = false;
+    this.sinceSprint = Infinity;
+    this.crouched = false;
+    this.crouch01 = 0;
+    this.lean = 0;
+    this.peek = 0;
+    this.peekFace = null;
+    this.leanRoom = { l: 1, r: 1 };
     this.meleeT = 0;
     this.meleeCd = 0;
     this.meleeEndT = 0;
@@ -231,14 +250,17 @@ export class Controller {
     this.meleeEntryState = 'idle';
     this.meleeFromCover = false;
     this.meleeTravel = 0;
+    this.jumpBuf = 0;
+    this.coyoteT = 0;
+    this.firingBlind = 0;
+    this.blindPoseExposure = 0;
   }
 
   respawn(spawn) {
     this.pos = { x: spawn.x, z: spawn.z };
     this.vel = { x: 0, z: 0 };
-    this.y = 0; this.vy = 0; this.grounded = true; this.flip = null;
-    // La pendiente pertenece al suelo de la vida anterior. Conservarla hacía
-    // que el rig reapareciera inclinado durante los primeros frames.
+    this.y = 0; this.vy = 0; this.grounded = true;
+    // La pendiente pertenece al suelo de la vida anterior.
     this.groundPitch = 0;
     this._clearTransient();
     this.yaw = spawn.yaw;
@@ -246,30 +268,29 @@ export class Controller {
     this.cam.pitch = -0.12;
     this.cam.clearPitchRecoil?.();
     this.state = 'idle'; this.stateT = 0;
-    this.cover = null; this.coverEntry = null; this.slide = null; this.dive = null;
-    this.chain = 0; this.dead = false;
+    this.cover = null; this.coverEntry = null; this.dive = null; this.flip = null;
+    this.dead = false;
   }
 
   kill() {
     this.dead = true;
-    this._setState('idle'); // resetea stateT (directo dejaba el valor pre-muerte)
-    this.cover = null; this.coverEntry = null; this.slide = null; this.dive = null; this.flip = null;
-    this.mantle = null;
+    this._setState('idle');
+    this.cover = null; this.coverEntry = null; this.dive = null; this.flip = null;
     this.aim = false;
     this.vel = { x: 0, z: 0 };
     this._clearTransient();
   }
 
-  // dir del input en mundo (relativo a cámara)
+  // dir del input en mundo (relativo a la vista)
   _moveWorld(input) {
     const mv = input.moveVec();
     const f = this.cam.flatForward(), r = this.cam.flatRight();
-    return { x: f.x * mv.z + r.x * mv.x, z: f.z * mv.z + r.z * mv.x, mag: Math.hypot(mv.x, mv.z) };
+    return { x: f.x * mv.z + r.x * mv.x, z: f.z * mv.z + r.z * mv.x, mag: Math.hypot(mv.x, mv.z), mv };
   }
 
   _setState(s) { this.state = s; this.stateT = 0; }
 
-  _beginMelee(fromCover = false) {
+  _beginMelee() {
     const ml = TUNING.melee;
     if (!this.grounded || this.meleeCd > 0 || this.state === 'melee' || this.dazed) return false;
     const previousState = this.state;
@@ -278,32 +299,23 @@ export class Controller {
     this.meleeFreezeT = 0;
     this.meleeConnected = false;
     this.meleeKilled = false;
-    this.meleeEntrySpeed = Math.min(TUNING.move.roadieSpeed, this.speed);
+    this.meleeEntrySpeed = Math.min(TUNING.fp.sprintSpeed, this.speed);
     this.meleeEntryState = previousState;
-    this.meleeFromCover = fromCover;
+    this.meleeFromCover = false;
     this.meleeTravel = 0;
     // placaje si entra en sprint; embestida si hay un rival enganchable
-    this.meleeTackle = this.speed > TUNING.move.runSpeed * 1.15; // por velocidad real: vale aunque se suelte el sprint en ese cuadro
+    this.meleeTackle = this.speed > TUNING.fp.runSpeed * 1.15; // por velocidad real
     const hooked = this.ev.meleeTarget?.(this.meleeTackle ? ml.tackleAcquire : ml.lungeAcquire, ml.lungeArcDeg);
     this.meleeLunge = hooked ? { id: hooked.id, max: this.meleeTackle ? ml.tackleMax : ml.lungeMax } : null;
     this.aim = false;
-    this.firingBlind = 0;
-    if (fromCover) {
-      this.cover = null;
-      this.coverEntry = null;
-      this.coverLeanAnim = 0;
-      this.detachT = 0;
-      this.vel.x = 0;
-      this.vel.z = 0;
-    }
+    this.slide = null;
     this._setState('melee');
     this.ev.onMeleeStart?.();
     return true;
   }
 
   // El resultado llega exactamente en la ventana de contacto. Un acierto
-  // recupera antes que un fallo y congela solo el gesto unas milésimas para
-  // vender peso, sin detener la simulación ni el networking.
+  // recupera antes que un fallo y congela solo el gesto unas milésimas.
   confirmMelee(connected, killed = false) {
     if (this.state !== 'melee' || !connected) return;
     const ml = TUNING.melee;
@@ -314,167 +326,265 @@ export class Controller {
     this.meleeEndT = Math.max(this.meleeT + recovery, ml.hitAt + recovery);
   }
 
-  // Busca cobertura y entra en slide, o hace dive. Devuelve 'slide' | 'dive'
-  // | false — SOLO 'slide' cuenta como rebote (chain/SFX/bonus); el fallback
-  // de dive devolvía true y un rebote al vacío sumaba cadena igual.
-  _tryEvade(dir, range, allowDive = true) {
-    const T = TUNING.evade;
-    if (this.evadeCooldown > 0) return false;
-    // normalizar SIEMPRE: con el stick a medio recorrido la búsqueda de
-    // cobertura y la velocidad del dive salían escaladas por la magnitud
-    const m = Math.hypot(dir.x, dir.z);
-    if (m < 0.001) return false;
-    dir = { x: dir.x / m, z: dir.z / m };
-    this.coverLeanAnim = 0; // no arrastrar el lean al salir de cover
-    const exclude = this.cover;
-    const found = this.world.findCover(this.pos, dir, range, PLAYER_R, 0.4, this.y);
-    let reachable = !!found;
-    if (found) {
-      const steps = Math.max(1, Math.ceil(found.dist / (PLAYER_R * 0.5)));
-      for (let i = 1; i <= steps && reachable; i++) {
-        const x = this.pos.x + (found.target.x - this.pos.x) * i / steps;
-        const z = this.pos.z + (found.target.z - this.pos.z) * i / steps;
-        const probe = { x, z };
-        this.world.resolveCircle(probe, PLAYER_R, this.y);
-        reachable = Math.hypot(probe.x - x, probe.z - z) < 0.06 &&
-          Math.abs(this.world.groundHeight(probe, PLAYER_R, this.y) - this.y) <= TUNING.move.maxStepUp;
+  // Volumen de impacto (hit-pose.js) de la pose que VIAJA y que usa la
+  // cámara, con altura `low` (0 de pie … 1 agachado) e inclinación `cl`.
+  // Es la MISMA pose de localPose (net/client.js): regla de cable (wirePose),
+  // velocidad `sp`, fase de trepar y la mezcla de transición de estados
+  // (contexto del cuadro, ver _poseCtx).
+  _trialPose(low = this.stanceLow, cl = this.lean) {
+    const st = this.animState();
+    const ps = wirePose({ animState: () => st, lean: cl, stanceLow: low, aim: this.aim });
+    const pose = { st: ps.st, aim: !!this.aim, ce: ps.ce, cl: ps.cl, pitch: this.cam?.pitch ?? 0, wep: this.weaponKey,
+      sp: +Math.min(1, this.speed / TUNING.move.roadieSpeed).toFixed(2) };
+    if (ps.st === 'mantle') pose.phase = this.mantle ? Math.min(1, this.mantle.t / this.mantle.dur) : 0;
+    const ctx = this._ctx;
+    return ctx?.from ? { ...pose, from: ctx.from, fromTo: ctx.fromTo, since: ctx.since } : pose;
+  }
+  _headVolume(low = this.stanceLow, cl = this.lean) { return hitPose(this._trialPose(low, cl)); }
+  // Contexto de mezcla de transición de ESTE cuadro (avanza con el reloj de
+  // simulación del controller, igual que localPose con el de main).
+  // La transición la define lo ENVIADO (net/client.js noteSentPose, por
+  // `ct`): se lee con localPose en el reloj de main (`poseClock`, que fija
+  // INTEGRACIÓN: () => G.simClock); sin él, reloj propio (sin envíos no hay
+  // mezcla, igual que en localPose).
+  _poseCtx() {
+    this._ctx = null;
+    const now = typeof this.poseClock === 'function' ? this.poseClock() : (this._simT ?? 0);
+    const lp = localPose(this, this.weaponKey, now);
+    this._ctx = lp.from ? { from: lp.from, fromTo: lp.fromTo, since: lp.since } : null;
+  }
+
+  // Ojo RESUELTO en mundo (origen del tiro y cámara): el de la pose que
+  // viaja, ya con la cabeza fuera de la geometría. La cámara no necesita
+  // recorte propio.
+  eyeWorld() {
+    const pose = { ...this._trialPose(), ae: Math.max(-1, Math.min(1, this.cameraYawError())) };
+    return eyeWorld(pose, this.pos.x, this.y, this.pos.z, this.yaw);
+  }
+
+  // Si la cabeza (sin inclinación) quedó dentro de la geometría (agacharse
+  // de cara a un muro, sprint de frente, un empujón externo), retrasa el
+  // cuerpo lo justo en sentido contrario a la cabeza: frena el avance contra
+  // la cara igual que la inclinación se recoge.
+  _pushHeadOut(cl = 0) {
+    if (this.state === 'mantle' || this.state === 'melee' || this.dead) return false;
+    if (this.headClear(this.stanceLow, cl)) return true;
+    const v = placeHitPose(this._headVolume(this.stanceLow, cl), this.pos.x, this.y, this.pos.z, this.yaw);
+    // solo hacia atrás/adelante del cuerpo (nunca aparta de lado: eso es
+    // la inclinación, que se recoge sola)
+    const f = this.facing();
+    const ahead = (v.hx - this.pos.x) * f.x + (v.hz - this.pos.z) * f.z;
+    const sgnF = ahead >= 0 ? -1 : 1;
+    const dx = f.x * sgnF, dz = f.z * sgnF;
+    const x0 = this.pos.x, z0 = this.pos.z;
+    for (let k = 0.02; k <= 0.3 + 1e-9; k += 0.02) {
+      const cand = { x: x0 + dx * k, z: z0 + dz * k };
+      // la posición donde el cuerpo se QUEDA (colisión + holgura de fachada,
+      // como el movimiento del siguiente paso); si no, el cuerpo vuelve y la
+      // cabeza con él
+      this.world.resolveCircle(cand, PLAYER_R, this.y);
+      if (this.world.resolveFacadeBody) {
+        this.world.resolveFacadeBody(cand, PLAYER_R, this.y, null);
+        this.world.resolveCircle(cand, PLAYER_R, this.y);
+      }
+      if (Math.abs(this.world.groundHeight(cand, PLAYER_R, this.y) - this.y) > TUNING.move.maxStepUp) continue;
+      this.pos.x = cand.x; this.pos.z = cand.z;
+      if (this.headClear(this.stanceLow, cl)) {
+        // la velocidad hacia la pared se anula (no se acumula contra ella)
+        const into = -(this.vel.x * dx + this.vel.z * dz);
+        if (into > 0) { this.vel.x += dx * into; this.vel.z += dz * into; }
+        return true;
       }
     }
-    if (found && reachable && found.face !== exclude && found.dist > 0.5) {
-      this.slide = { target: found.target, face: found.face, dir };
-      this.dive = null;
-      this.cover = null;
-      this._setState('slide');
-      this.evadeCooldown = T.bounceCooldown;
-      this.ev.onSlideStart?.(this.chain);
-      return 'slide';
+    this.pos.x = x0; this.pos.z = z0;
+    return false;
+  }
+
+  // Tras un desplazamiento externo (empujón entre cuerpos en main.js):
+  // saca la cabeza y recoge la inclinación en la posición final.
+  settle() {
+    this._pushHeadOut();
+    if (this.lean) {
+      const sgn = Math.sign(this.lean);
+      this.lean = sgn * this._limit(0, Math.abs(this.lean), (m) => this.headClear(this.stanceLow, sgn * m));
     }
-    // Un cancel de dive solo puede convertirse en un wallbounce real. Si no
-    // hay cover, conservar el dive actual evita reiniciarlo infinitamente.
-    if (!allowDive) return false;
-    // sin cobertura: dive en la dirección pedida
-    this.dive = { dir };
-    this.slide = null;
-    this.cover = null;
-    this._setState('dive');
-    this.evadeCooldown = T.bounceCooldown;
-    this.ev.onDive?.();
-    return 'dive';
+  }
+
+  // ¿La esfera de cabeza CALIBRADA de esa pose está libre de geometría en la
+  // posición actual? Rayos desde el eje del cuerpo (a media altura, dentro
+  // del círculo ya resuelto) hasta el centro y la superficie de la esfera,
+  // más el techo. Es el mismo volumen que ve el servidor.
+  headClear(low = this.stanceLow, cl = this.lean) {
+    const v = placeHitPose(this._headVolume(low, cl), this.pos.x, this.y, this.pos.z, this.yaw);
+    const r = v.hr + HEAD_MARGIN;
+    const ceiling = this.world.ceilingHeight?.(this.pos, PLAYER_R, this.y) ?? Infinity;
+    if (v.hy + r > ceiling) return false;
+    if (!this.world.raycast) return true;
+    const oy = this.y + 0.5;
+    for (const d of SPHERE_DIRS) {
+      const px = v.hx + d[0] * r, py = v.hy + d[1] * r, pz = v.hz + d[2] * r;
+      TMP_O.set(this.pos.x, oy, this.pos.z);
+      TMP_D.set(px - this.pos.x, py - oy, pz - this.pos.z);
+      const len = TMP_D.length();
+      if (len < 1e-6) continue;
+      TMP_D.multiplyScalar(1 / len);
+      const t = this.world.raycast(TMP_O, TMP_D, len);
+      if (t !== null && t !== undefined && t < len) return false;
+    }
+    return true;
+  }
+
+  // Mayor valor entre `from` (libre o no) y `to` cuyo test pasa, por
+  // bisección (monótono en la práctica: inclinar/levantar más nunca libra).
+  _limit(from, to, ok) {
+    if (ok(to)) return to;
+    let lo = from, hi = to;
+    if (!ok(lo)) lo = 0;
+    if (!ok(lo)) return lo;
+    for (let i = 0; i < 7; i++) { const m = (lo + hi) / 2; if (ok(m)) lo = m; else hi = m; }
+    return lo;
+  }
+
+  // ¿Cabe de pie aquí? La esfera de cabeza de pie (con la inclinación y el
+  // ADS actuales) no puede tocar techo ni paredes.
+  canStand() { return this.headClear(0, this.lean); }
+
+  // Cara LOW delante (según la VISTA) a distancia de asomo; histéresis con
+  // la cara actual para no parpadear en el borde del rango.
+  _findPeekFace() {
+    const F = TUNING.fp;
+    if (!this.world.findCover) return null;
+    const f = this.cam.flatForward();
+    const range = (this.peekFace ? F.peekKeepRange : F.peekRange) + PLAYER_R;
+    const found = this.world.findCover(this.pos, f, range, PLAYER_R, 0.5, this.y);
+    const face = found?.face;
+    if (!face || face.kind === 'high') return null;
+    const top = (face.topY ?? face.h) - this.y;
+    if (!(top >= 0.5 && top <= TUNING.cover.lowHeight)) return null;
+    return face;
+  }
+
+  _beginSlide(mw) {
+    const F = TUNING.fp;
+    const sp = this.speed;
+    const dir = sp > 0.1 ? { x: this.vel.x / sp, z: this.vel.z / sp }
+      : (mw.mag > 0.1 ? { x: mw.x / mw.mag, z: mw.z / mw.mag } : this.facing());
+    this.slide = { t: 0, dir, v0: Math.min(F.slideMaxSpeed, sp + F.slideBoost) };
+    this.vel.x = dir.x * this.slide.v0; this.vel.z = dir.z * this.slide.v0;
+    this.crouched = true;
+    this.sinceSprint = 0;
+    this._setState('slide');
+    this.ev.onSlideStart?.(0);
+  }
+
+  // Salir del sprint por la causa que sea: el retraso de disparo arranca aquí
+  _leaveSprint(input, next) {
+    this.sinceSprint = 0;
+    input?.releaseToggle?.('sprint');
+    this._setState(next);
   }
 
   update(dt, input, firing) {
-    if (this.state !== 'cover') { this._coverTurnFace = null; this._coverRestYaw = null; }
-    const M = TUNING.move, E = TUNING.evade, C = TUNING.cover;
+    const F = TUNING.fp, M = TUNING.move;
     this.stateT += dt;
-    this.evadeCooldown = Math.max(0, this.evadeCooldown - dt);
-    this.bounceWindow = Math.max(0, this.bounceWindow - dt);
-    this.firingBlind = Math.max(0, this.firingBlind - dt);
     this.meleeCd = Math.max(0, this.meleeCd - dt);
+    this.slideCd = Math.max(0, this.slideCd - dt);
     this._roadieExitT = Math.max(0, (this._roadieExitT ?? 0) - dt);
-    // MEMORIA DE PULSACIÓN: esquivar o saltar justo antes de recuperar el
-    // control (final de una esquiva, aterrizaje) ya no se pierde.
-    this.evadeBuf = input.evadePressed ? E.inputBuffer : Math.max(0, (this.evadeBuf ?? 0) - dt);
+    if (this.state !== 'roadie') this.sinceSprint += dt;
+    // MEMORIA DE PULSACIÓN: saltar justo antes de aterrizar no se pierde.
     this.jumpBuf = input.jumpPressed ? TUNING.jump.inputBuffer : Math.max(0, (this.jumpBuf ?? 0) - dt);
 
-    if (this.dead) { this.aim = false; this.evadeBuf = 0; this.jumpBuf = 0; return; }
+    if (this._weapons?.cur) this.weaponKey = this._weapons.cur;
+    if (this.dead) { this.aim = false; this.jumpBuf = 0; return; }
 
     const mw = this._moveWorld(input);
+    const mv = mw.mv;
     const hasInput = mw.mag > 0.1;
-    const aimAllowed = this.state !== 'dive' && this.state !== 'slide' &&
-      this.state !== 'roadie' && this.state !== 'flip' && this.state !== 'mantle' &&
-      this.state !== 'melee' && !this.dazed;
-    this.aim = input.aimHeld && aimAllowed;
-    const lowCoverAim = this.state === 'cover' && this.aim && this.cover &&
-      this.cover.h <= C.lowHeight;
-    const exposeTarget = lowCoverAim ? 1 : 0;
-    const exposeRate = exposeTarget ? C.aimEnterRate : 40;
-    this.coverAimExposure += (exposeTarget - this.coverAimExposure) *
-      (1 - Math.exp(-exposeRate * dt));
-    // Evaluar contra el input de ESTE frame, no contra this.aim anterior.
-    // Así mantener fuego al soltar ADS entra a blindfire sin un frame ambiguo.
-    if (firing && !this.aim) this.firingBlind = 0.7;
-    if (this.state === 'cover' && !firing) this.firingBlind = 0;
-
-    // momentum GANADO corriendo: tiempo continuo + distancia reciente en el
-    // suelo. Se pierde al instante al dejar de correr — un toque de carrera
-    // seguido de evade no genera impulso falso.
-    if (this.grounded && (this.state === 'run' || this.state === 'roadie') &&
-        this.speed > TUNING.move.runSpeed * 0.55) {
-      this.runT += dt;
-      this.runDist = Math.min(E.momentumRunDist * 2, this.runDist + this.speed * dt);
-    } else if (this.state !== 'slide' && this.state !== 'dive') {
-      this.runT = 0;
-      this.runDist = 0;
+    const crouchWant = !!input.crouchHeld;
+    // de pie ya está garantizado por los límites de postura; solo se comprueba agachado
+    const standOk = this.crouched || this.crouch01 > 0 ? this.canStand() : true;
+    const dodgeReady = this.grounded && !this.dazed && MOVE_GATES.dodge.entry.includes(this.state) &&
+      this.crouch01 <= 0.005 && !crouchWant && !this._weapons?.throwCommitted;
+    // Conservar el rumbo de la pulsación en la última ventana del enfriamiento.
+    if (!dodgeReady) this.queuedDodge = null;
+    else if (input.evadePressed && this.dodgeCd <= TUNING.evade.inputBuffer) {
+      const fwd = this.cam.flatForward();
+      this.queuedDodge = { t: 0, x: hasInput ? mw.x / mw.mag : -fwd.x,
+        z: hasInput ? mw.z / mw.mag : -fwd.z };
     }
+    if (this.queuedDodge && this.dodgeCd <= 1e-8) {
+      this.dodge = this.queuedDodge; this.queuedDodge = null;
+      this.dodgeCd = TUNING.dodge.duration + TUNING.dodge.cooldown;
+      this.lean = 0; this.peek = 0; this.jumpBuf = 0;
+      input.releaseToggle?.('sprint');
+      this._setState('dodge');
+      this.ev.onDodgeStart?.();
+    }
+    this.dodgeCd = Math.max(0, this.dodgeCd - dt);
+    const aimAllowed = this.state !== 'dodge' && this.state !== 'roadie' && this.state !== 'mantle' &&
+      this.state !== 'melee' && !this.dazed;
+    this.aim = !!input.aimHeld && aimAllowed;
 
     switch (this.state) {
-      case 'idle': case 'run': case 'roadie': {
-        const roadie = this.state === 'roadie';
-        // Estados lógicos y visuales deben coincidir: momentum, pasos, red y
-        // animación consumen este estado. Antes se podía correr a 4.8 m/s
-        // permaneciendo lógicamente en idle.
-        if (roadie && (!input.sprintHeld || !hasInput || input.aimHeld || firing)) {
-          this._setState(hasInput || this.speed > 0.4 ? 'run' : 'idle');
-          this._roadieExitT = 0.05; // antirrebote: solo tras SALIR del sprint
-        } else if (!roadie && input.sprintHeld && hasInput && !input.aimHeld && !firing &&
-                   this._roadieExitT <= 0) {
-          // antes exigía 50 ms en el estado actual: desde parado eran dos
-          // transiciones y el sprint arrancaba tarde
-          this._setState('roadie');
-        } else if (this.state === 'idle' && hasInput) {
-          this._setState('run');
-        } else if (this.state === 'run' && !hasInput && this.speed <= 0.4) {
-          this._setState('idle');
+      case 'idle': case 'run': case 'roadie': case 'crouch': {
+        // --- sprint: solo hacia delante, sin apuntar, sin disparar
+        const forward = mw.mag > 0.1 && mv.z >= F.sprintMinForward * mw.mag;
+        // lanzamiento comprometido: el sprint espera a la suelta (el estado
+        // replicado al soltar es legal según fire-gates.js)
+        const throwHold = !!this._weapons?.throwCommitted;
+        const sprintWant = input.sprintHeld && forward && !input.aimHeld && !firing &&
+          !this.dazed && this.grounded && !throwHold;
+        if (this.state === 'roadie' && !sprintWant) {
+          // en el aire el sprint se mantiene hasta aterrizar (sin cambio de velocidad)
+          if (this.grounded || !input.sprintHeld || firing || input.aimHeld) {
+            this._leaveSprint(input, hasInput || this.speed > 0.4 ? 'run' : 'idle');
+            this._roadieExitT = 0.05; // antirrebote: solo tras SALIR del sprint
+          }
         }
-        // apuntar se evaluó con el estado ANTERIOR: al soltar el sprint para
-        // apuntar se perdía un cuadro
+        // --- deslizamiento: agacharse yendo en sprint
+        if (this.state === 'roadie' && input.crouchPressed && this.grounded &&
+            this.speed >= F.slideMinSpeed && this.slideCd <= 0) {
+          input.releaseToggle?.('sprint');
+          this._beginSlide(mw);
+          break;
+        }
+        // --- agacharse: intención o techo bajo; sprintar levanta
+        if (sprintWant && this.state !== 'roadie' && this._roadieExitT <= 0 && standOk) {
+          if (this.crouched) input.releaseToggle?.('crouch');
+          this.crouched = false;
+          this._setState('roadie');
+        } else if (this.state !== 'roadie') {
+          // en el aire no se cambia de postura: se aplica al aterrizar
+          if (this.grounded) this.crouched = crouchWant || (this.crouched && !standOk);
+          const next = this.crouched ? 'crouch' : (hasInput || this.speed > 0.4 ? 'run' : 'idle');
+          if (next !== this.state) {
+            if (next === 'crouch' || this.state === 'crouch') this._setState(next);
+            else if (this.state === 'idle' && next === 'run') this._setState('run');
+            else if (this.state === 'run' && next === 'idle' && !hasInput && this.speed <= 0.4) this._setState('idle');
+          }
+        }
         if (input.aimHeld && !this.aim && this.state !== 'roadie' && !this.dazed) this.aim = true;
 
-        const targetSpeed = (this.state === 'roadie' ? M.roadieSpeed : M.runSpeed) * (this.aim ? 0.45 : 1) * (this.dazed ? TUNING.melee.dazeSpeed : 1);
-        let dx = mw.x, dz = mw.z;
-        const cameraForward = this.cam.flatForward(), cameraRight = this.cam.flatRight();
-        const forwardInput = dx * cameraForward.x + dz * cameraForward.z;
-        const sideInput = Math.abs(dx * cameraRight.x + dz * cameraRight.z);
-        // Small stick drift must not toggle a 180-degree turn. Diagonals use
-        // the original heading-following run; only straight back backpedals.
-        this._straightBack = forwardInput < -0.1 &&
-          sideInput < -forwardInput * (this._straightBack ? 0.22 : 0.12);
+        // --- el cuerpo sigue a la vista
+        const lockDeg = this.fpYawLock > 0 ? this.fpYawLock : F.yawLockDeg;
+        this.yaw = approachAngle(this.yaw, this.cam.yaw, lockDeg * Math.PI / 180 * dt);
 
-        if (this.state === 'roadie') {
-          if (this._straightBack) this._turnLocomotion(this.cam.yaw, dt, M.roadieTurnLerp, M.roadieTurnMaxDeg);
-          else {
-            this._turnLocomotion(yawFromDir(dx, dz), dt, M.roadieTurnLerp, M.roadieTurnMaxDeg);
-            const f = this.facing();
-            dx = f.x * mw.mag; dz = f.z * mw.mag;
-          }
-        } else if (this.fpYawLock > 0) {
-          // [FP] primera persona: el cuerpo sigue a la vista (strafe y
-          // retroceso como en un FPS); las piernas ya strafean con moveSide
-          this.yaw = approachAngle(this.yaw, this.cam.yaw, this.fpYawLock * Math.PI / 180 * dt);
-        } else if (this.aim || firing) {
-          // DISPARAR MANDA sobre correr: el cuerpo encara a la cámara aunque
-          // te muevas hacia atrás o de lado (las piernas strafean). El límite
-          // angular evita que un delta grande se convierta en un snap de 180°.
-          this._turnToCamera(dt);
-        } else if (hasInput) {
-          this._turnLocomotion(this._straightBack ? this.cam.yaw : yawFromDir(dx, dz), dt, M.turnLerp, M.turnMaxDeg);
-        } else {
-          // En reposo el cuerpo y la mira siguen a la cámara.
-          this.yaw = approachAngle(this.yaw, this.cam.yaw,
-            TUNING.combat.bodyTurnFollowDeg * Math.PI / 180 * dt);
-        }
-
-        const want = hasInput || this.state === 'roadie';
-        const tx = want ? dx * targetSpeed : 0;
-        const tz = want ? dz * targetSpeed : 0;
+        // --- velocidad
+        const roadie = this.state === 'roadie';
+        let targetSpeed = roadie ? F.sprintSpeed
+          : this.crouched ? F.crouchSpeed * (this.aim ? F.crouchAdsMul : 1)
+            : F.runSpeed * (this.aim ? F.adsMul : 1);
+        if (this.dazed) targetSpeed *= TUNING.melee.dazeSpeed;
+        const want = hasInput;
+        const tx = want ? mw.x * targetSpeed : 0;
+        const tz = want ? mw.z * targetSpeed : 0;
         // en el aire el momentum se respeta: sin input casi no frena
         const acc = (want ? M.accel : M.decel * (this.grounded ? 1 : 0.06)) *
           (this.grounded ? 1 : TUNING.jump.airControl);
         const k = 1 - Math.exp(-(acc / Math.max(targetSpeed, 1)) * dt);
         this.vel.x += (tx - this.vel.x) * k;
         this.vel.z += (tz - this.vel.z) * k;
-        // FRENADA: el frenado exponencial deja una cola larga (el personaje
-        // "flota" hasta pararse). Una frenada lineal encima la corta.
+        // FRENADA lineal encima de la exponencial: sin cola de "flotar"
         if (!want && this.grounded) {
           const sp = Math.hypot(this.vel.x, this.vel.z);
           if (sp > 1e-4) {
@@ -483,54 +593,60 @@ export class Controller {
           }
         }
 
-        // saltar: en el suelo salto normal; en el aire: wall kick si hay
-        // pared, si no doble salto = vuelta hacia la dirección presionada.
-        // Con memoria: pulsar 0,1 s antes de aterrizar salta al tocar suelo, y
-        // pulsar 0,1 s después de salir de un borde aún cuenta como salto.
+        // --- saltar / trepar (misma acción). Trepar solo sobre LOW, con la
+        // vista hacia la cara; si no, salto simple. Agachado: se levanta y salta.
         if (input.jumpPressed || this.jumpBuf > 0) {
-          if (this.grounded) { this.jumpBuf = 0; this._tryJump(); }
-          else if (input.jumpPressed) {
-            if ((this.coyoteT ?? 0) > 0 && this.vy <= 0) { this.jumpBuf = 0; this._tryJump(); }
-            else if (this._tryWallKick()) this.jumpBuf = 0;
-            else if (!this.usedDouble && hasInput) { this._airRoll(mw, input.moveVec()); this.jumpBuf = 0; }
+          const canJump = this.grounded || ((this.coyoteT ?? 0) > 0 && this.vy <= 0);
+          if (canJump) {
+            this.jumpBuf = 0;
+            if (!this._tryMantleAhead(mw)) {
+              if (this.crouched) {
+                if (standOk) { this.crouched = false; input.releaseToggle?.('crouch'); this._setState(hasInput ? 'run' : 'idle'); this._tryJump(); }
+              } else this._tryJump();
+            }
           }
         }
 
-        // Nueva pulsación válida en el suelo: si el estado anterior ya terminó,
-        // evade vuelve a estar disponible sin una espera artificial adicional.
-        if ((input.evadePressed || this.evadeBuf > 0) && this.grounded) {
-          this.evadeBuf = 0;
-          this.chain = 0;
-          const dir = hasInput ? { x: mw.x, z: mw.z } : this.facing();
-          // impulso ganado: solo si venía corriendo un tramo REAL y la
-          // evasión va en la dirección que ya traía (proporcional, con tope)
-          let mom = 0;
-          if (this.runT > 0.15 && this.speed > 1) {
-            const align = (this.vel.x * dir.x + this.vel.z * dir.z) /
-              (this.speed * Math.max(0.001, Math.hypot(dir.x, dir.z)));
-            mom = Math.min(1, this.runT / E.momentumRunTime) *
-              Math.min(1, this.runDist / E.momentumRunDist) *
-              Math.max(0, align);
-          }
-          this.evadeMom = mom;
-          this.runT = 0;
-          this.runDist = 0;
-          // Entrar a roadie y evadir en el mismo frame no regala su alcance:
-          // se obtiene solo si ya había velocidad real de carrera.
-          const earnedRoadie = roadie && this.speed > M.runSpeed * 0.55;
-          const range = earnedRoadie ? E.roadieSlideDist : E.slideMaxDist;
-          // primero intento snap directo si el cover está pegado
-          const snap = this.world.findCover(this.pos, dir, C.snapRange, PLAYER_R, 0.3, this.y);
-          if (snap && snap.dist <= C.directAttachRange) this._enterCover(snap.face, snap.target);
-          else this._tryEvade(dir, range);
+        // --- golpe
+        if (this.state !== 'mantle' && input.meleePressed && this.grounded && this.meleeCd <= 0) {
+          this._beginMelee();
         }
+        break;
+      }
 
-        // El ataque conserva la lectura del movimiento previo, pero no su
-        // velocidad completa: correr aporta peso, nunca un dash gratuito.
-        // Una evasión resuelta este mismo frame sigue teniendo prioridad.
-        if (input.meleePressed && this.grounded && this.meleeCd <= 0 &&
-            (this.state === 'idle' || this.state === 'run' || this.state === 'roadie')) {
-          this._beginMelee(false);
+      case 'dodge':
+        this.yaw = this.cam.yaw;
+        this.sinceSprint = 0; this.jumpBuf = 0;
+        break;
+
+      case 'slide': {
+        const s = this.slide;
+        s.t += dt;
+        const k = Math.min(1, s.t / F.slideTime);
+        const spd = s.v0 * (1 - (1 - F.slideEndFrac) * k);
+        // pequeña corrección de rumbo con el stick (no un giro libre)
+        if (hasInput) {
+          const cross = s.dir.x * mw.z - s.dir.z * mw.x;
+          const ang = Math.max(-F.slideSteer * dt, Math.min(F.slideSteer * dt, Math.atan2(cross, s.dir.x * mw.x + s.dir.z * mw.z)));
+          const c = Math.cos(ang), sn = Math.sin(ang);
+          s.dir = { x: s.dir.x * c - s.dir.z * sn, z: s.dir.x * sn + s.dir.z * c };
+        }
+        this.vel.x = s.dir.x * spd;
+        this.vel.z = s.dir.z * spd;
+        const lockDeg = this.fpYawLock > 0 ? this.fpYawLock : F.yawLockDeg;
+        this.yaw = approachAngle(this.yaw, this.cam.yaw, lockDeg * Math.PI / 180 * dt);
+        this.crouched = true;
+        // saltar corta el deslizamiento conservando velocidad (con tope de sprint)
+        const jump = (input.jumpPressed || this.jumpBuf > 0) && standOk;
+        if (k >= 1 || jump) {
+          this.slide = null;
+          this.slideCd = F.slideCooldown;
+          this.crouched = jump ? false : (crouchWant || !standOk);
+          if (!this.crouched) input.releaseToggle?.('crouch');
+          const sp = this.speed, cap = jump ? F.sprintSpeed : (this.crouched ? F.crouchSpeed : F.runSpeed) * 1.2;
+          if (sp > cap) { this.vel.x *= cap / sp; this.vel.z *= cap / sp; }
+          this._setState(this.crouched ? 'crouch' : (hasInput ? 'run' : 'idle'));
+          if (jump) { this.jumpBuf = 0; this._tryJump(); }
         }
         break;
       }
@@ -544,46 +660,45 @@ export class Controller {
           break;
         }
         this.meleeT += dt;
-        // Impulso corto hasta el contacto. El bonus depende de velocidad REAL
-        // de entrada y el recorrido total queda limitado a 30 cm.
+        // Impulso corto hasta el contacto: depende de la velocidad REAL de
+        // entrada y el recorrido total queda limitado.
         const wind = Math.max(0, 1 - this.meleeT / Math.max(0.001, ml.hitAt));
-        const runFactor = Math.min(1, this.meleeEntrySpeed / TUNING.move.roadieSpeed);
+        const runFactor = Math.min(1, this.meleeEntrySpeed / F.sprintSpeed);
         let push = (ml.lungeSpeed + runFactor * ml.runLungeBonus) * wind;
         const remaining = Math.max(0, ml.maxLunge - this.meleeTravel);
         push = Math.min(push, remaining / Math.max(dt, 1e-4));
         let f = this.facing();
         const hook = this.meleeLunge && this.meleeT <= ml.hitAt ? this.ev.meleeTargetPos?.(this.meleeLunge.id) : null;
         if (hook) {
-          // EMBESTIDA: cubre la distancia al rival justo para el contacto
+          // EMBESTIDA/PLACAJE: cubre la distancia al rival para el contacto.
+          // En primera persona el placaje se limita a 11 m/s (antes 17).
           const dx = hook.x - this.pos.x, dz = hook.z - this.pos.z, d = Math.hypot(dx, dz);
           if (d > 0.01) {
             this.yaw = approachAngle(this.yaw, Math.atan2(-dx, -dz), ml.lungeTurnDeg * Math.PI / 180 * dt);
             f = { x: dx / d, z: dz / d };
             const left = Math.max(dt, ml.hitAt - this.meleeT);
-            push = Math.min(this.meleeTackle ? ml.tackleTopSpeed : ml.lungeTopSpeed, Math.max(0, d - ml.lungeStop) / left,
+            const top = this.meleeTackle ? Math.min(ml.tackleTopSpeed, F.tackleTopSpeed) : ml.lungeTopSpeed;
+            push = Math.min(top, Math.max(0, d - ml.lungeStop) / left,
               Math.max(0, this.meleeLunge.max - this.meleeTravel) / Math.max(dt, 1e-4));
           }
         } else if (this.meleeLunge && this.meleeT <= ml.hitAt) this.meleeLunge = null;
         this.meleeTravel += push * dt;
         this.vel.x = f.x * push;
         this.vel.z = f.z * push;
-        // Asistencia pequeña: solo dentro de un cono frontal razonable y con
-        // tope angular. Un giro de cámara de 90/180° nunca arrastra el golpe.
-        const camDelta = angleDelta(this.yaw, this.cam.yaw);
-        const assist = ml.assistDeg * Math.PI / 180;
-        if (!hook && this.meleeT <= ml.hitAt && Math.abs(camDelta) <= assist) {
-          this.yaw = approachAngle(this.yaw, this.cam.yaw,
-            ml.assistTurnDeg * Math.PI / 180 * dt);
-        }
+        // sin embestida el cuerpo vuelve a la vista (la cámara manda)
+        if (!hook) this.yaw = approachAngle(this.yaw, this.cam.yaw, F.yawLockDeg * Math.PI / 180 * dt);
+        // La muestra transmite hasta visualAimMaxDeg de giro del torso.
+        // Al girar la vista durante la embestida, el cuerpo acompaña el exceso.
+        this.yaw = approachAngle(this.cam.yaw, this.yaw, TUNING.combat.visualAimMaxDeg * Math.PI / 180);
         if (this.meleeT >= this.meleeEndT) {
-          this._setState(hasInput ? 'run' : 'idle');
+          this._setState(this.crouched ? 'crouch' : (hasInput ? 'run' : 'idle'));
           this.meleeCd = ml.inputGuard;
         }
         break;
       }
 
       case 'mantle': {
-        // vault corto sobre cover bajo: sube primero, avanza después.
+        // trepada corta sobre cover bajo: sube primero, avanza después.
         // Movimiento guiado — sin gravedad, sin input, sin cancelaciones.
         const m = this.mantle;
         m.t += dt;
@@ -595,453 +710,59 @@ export class Controller {
         this.pos.x = m.fx + (m.tx2 - m.fx) * eFwd;
         this.pos.z = m.fz + (m.tz2 - m.fz) * eFwd;
         this.vel.x = 0; this.vel.z = 0;
-        this.yaw = lerpAngle(this.yaw, yawFromDir(-m.n.x, -m.n.z), 1 - Math.exp(-12 * dt));
+        // la vista manda también al trepar (la cámara no gira sola)
+        this.yaw = approachAngle(this.yaw, this.cam.yaw, F.yawLockDeg * Math.PI / 180 * dt);
         if (k >= 1) {
           this.mantle = null;
           this.grounded = true;
           this.vy = 0;
           this._setState(hasInput ? 'run' : 'idle');
           // continuidad: sale caminando encima, no clavado en seco
-          const fd = this.facing();
-          this.vel.x = fd.x * M.runSpeed * TUNING.mantle.exitSpeed;
-          this.vel.z = fd.z * M.runSpeed * TUNING.mantle.exitSpeed;
+          const fd = { x: -m.n.x, z: -m.n.z };
+          this.vel.x = fd.x * F.runSpeed * TUNING.mantle.exitSpeed;
+          this.vel.z = fd.z * F.runSpeed * TUNING.mantle.exitSpeed;
         }
         break;
       }
 
-      case 'flip': {
-        // vuelta en el aire: el impulso manda; el yaw sigue a la cámara
-        // para poder disparar (el giro es del modelo, no del control)
-        this.flip.t += dt;
-        this.yaw = lerpAngle(this.yaw, this.cam.yaw, 1 - Math.exp(-9 * dt));
-        if (this.flip.t >= this.flip.dur) {
-          // la vuelta terminó en el aire: recuperar control aéreo normal
-          this.flip = null;
-          this._setState('run');
-        }
+      default:
+        // Estado heredado escrito desde fuera (p. ej. 'cover' de un parche
+        // viejo): volver a suelo sin conservar nada.
+        this._setState('idle');
         break;
-      }
-
-      case 'slide': {
-        const s = this.slide;
-        const spd = E.slideSpeed *
-          (1 + E.chainSpeedBonus * this.chain + E.momentumBoost * this.evadeMom);
-        const dx = s.target.x - this.pos.x, dz = s.target.z - this.pos.z;
-        const d = Math.hypot(dx, dz);
-        this.yaw = lerpAngle(this.yaw, yawFromDir(dx, dz), 1 - Math.exp(-18 * dt));
-        if (this.stateT > 0.9) {
-          // target inalcanzable (colisión lo empuja fuera): NUNCA deslizarse
-          // para siempre — rescate a run, frenando a velocidad de carrera
-          this.slide = null;
-          this._setState('run');
-          this.chain = 0;
-          this.evadeMom = 0;
-          this.evadeCooldown = 0;
-          const sp = Math.hypot(this.vel.x, this.vel.z);
-          if (sp > M.runSpeed) {
-            const k = M.runSpeed / sp;
-            this.vel.x *= k; this.vel.z *= k;
-          }
-        } else if (d < Math.max(0.16, spd * dt)) {
-          this._enterCover(s.face, s.target);
-        } else {
-          this.vel.x = (dx / d) * spd; this.vel.z = (dz / d) * spd;
-          // WALLBOUNCE: cancelar el slide hacia otra dirección
-          if (input.evadePressed && this.stateT > 0.05 && this.chain < E.chainMax) {
-            const ndir = mw.mag > 0.1 ? { x: mw.x, z: mw.z } : null;
-            if (ndir) {
-              this.chain++;
-              this.evadeMom *= 0.45; // el impulso ganado se disipa por rebote
-              if (this._tryEvade(ndir, E.bounceRange) === 'slide') this.ev.onBounce?.(this.chain);
-              else this.chain--; // dive al vacío o nada: sin bonus ni SFX
-            }
-          }
-        }
-        break;
-      }
-
-      case 'dive': {
-        const t = this.stateT / E.diveTime;
-        const ease = 1 - t * t; // desacelera
-        const spd = E.diveSpeed * Math.max(0.15, ease) *
-          (1 + E.chainSpeedBonus * this.chain + E.momentumBoost * this.evadeMom);
-        this.vel.x = this.dive.dir.x * spd;
-        this.vel.z = this.dive.dir.z * spd;
-        this.yaw = lerpAngle(this.yaw, yawFromDir(this.dive.dir.x, this.dive.dir.z), 1 - Math.exp(-14 * dt));
-        // El final de la esquiva va PRIMERO: una pulsación en su último cuadro
-        // se comía y además alargaba la esquiva un cuadro. Ahora termina y la
-        // pulsación queda en memoria para el cuadro siguiente.
-        if (t >= 1) {
-          this._setState(hasInput ? 'run' : 'idle');
-          this.chain = 0;
-          this.evadeMom = 0;
-          this.evadeCooldown = 0;
-        } else if (input.evadePressed && t > E.diveCancelPct && this.chain < E.chainMax) {
-          const ndir = mw.mag > 0.1 ? { x: mw.x, z: mw.z } : this.dive.dir;
-          this.chain++;
-          this.evadeMom *= 0.45;
-          if (this._tryEvade(ndir, E.bounceRange, false) === 'slide') { this.ev.onBounce?.(this.chain); this.evadeBuf = 0; }
-          else this.chain--;
-        }
-        break;
-      }
-
-      case 'cover': {
-        const f = this.cover;
-        const n = f.n;
-        const tx = f.b.x - f.a.x, tz = f.b.z - f.a.z;
-        const len = Math.hypot(tx, tz);
-        const ux = tx / len, uz = tz / len;
-        const low = f.h <= TUNING.cover.lowHeight;
-
-        // posición a lo largo de la cara + orillas
-        let u = ((this.pos.x - f.a.x) * ux + (this.pos.z - f.a.z) * uz);
-        const edgeDist = C.cornerLean + PLAYER_R;
-        const nearA = u < edgeDist, nearB = (len - u) < edgeDist;
-
-        // en pared alta solo se puede apuntar asomándose en una orilla
-        if (!low && this.aim && !nearA && !nearB) this.aim = false;
-        // La restricción contextual pudo convertir ADS en blindfire este frame.
-        if (firing && !this.aim) this.firingBlind = 0.7;
-        const edgeSide = nearA && (!nearB || u < len - u) ? -1 : nearB ? 1 : 0;
-        const camF = this.cam.flatForward();
-        const aroundEdge = edgeSide
-          ? camF.x * ux * edgeSide + camF.z * uz * edgeSide
-          : -1;
-        let aimLeanSide = 0;
-        if (this.aim) aimLeanSide = edgeSide;
-
-        // Melee contextual desde una orilla: abandonar cover requiere una
-        // pulsación explícita y solo se permite donde el arma/brazos pueden
-        // salir lateralmente. La resolución física decidirá después si hay
-        // pared o box entre el atacante y la víctima.
-        if (input.meleePressed && edgeSide !== 0 && this.meleeCd <= 0) {
-          this._beginMelee(true);
-          break;
-        }
-
-        // Blindfire contextual. En cover alto la POSICIÓN en la orilla elige
-        // automáticamente el lado: la cámara guía el tiro, pero ya no hay que
-        // encontrar un ángulo estrecho para activar la pose. En cover bajo se
-        // conserva la distinción entre disparar por arriba y rodear una esquina.
-        let blindEdgeSide = 0;
-        if (!this.aim && this.firingBlind > 0) {
-          if (edgeSide) blindEdgeSide = edgeSide;
-          else if (low) this.blindMode = 'over';
-          else this.blindMode = null;
-        } else this.blindMode = null;
-
-        // Movimiento lateral confinado al cover. La velocidad se deriva del
-        // desplazamiento REAL ya limitado, de modo que empujar hacia fuera en
-        // el extremo detiene naturalmente al personaje en vez de animar pasos
-        // o acumular una salida automática.
-        const lat = hasInput ? (mw.x * ux + mw.z * uz) : 0;
-        const previousU = u;
-        const entryCarry = this.coverEntry
-          ? this.coverEntry.tangentSpeed * Math.exp(-C.enterMomentumDamp * this.coverEntry.t)
-          : 0;
-        const firingEdge = aimLeanSide || blindEdgeSide;
-        u += (lat * M.coverStrafe + entryCarry) * dt + firingEdge * 2.6 * dt;
-        const blindInset = .12;
-        const leanOut = firingEdge !== 0 ? (this.aim ? 0.30 : blindInset) + (f.peekMargin??0) : 0;
-        u = Math.max(PLAYER_R * 0.7 - (firingEdge < 0 ? leanOut : 0),
-          Math.min(len - PLAYER_R * 0.7 + (firingEdge > 0 ? leanOut : 0), u));
-        // ADS -> protected blindfire retracts quickly, not a root snap.
-        // Keep the barrel outside while the two-handed pose folds into place.
-        if(blindEdgeSide && (previousU-u)*blindEdgeSide>0){
-          u=previousU+Math.max(-6*dt,Math.min(6*dt,u-previousU));
-        }
-        // Soltar el apuntado en una orilla recogía el cuerpo 0,3 m en UN cuadro.
-        // Cualquier desplazamiento a lo largo del cover respeta un tope: lo que
-        // pide el stick, la inercia de entrada y 6 m/s de recogida.
-        {
-          const maxStep=(Math.abs(lat)*M.coverStrafe+Math.abs(entryCarry)+6)*dt;
-          u=previousU+Math.max(-maxStep,Math.min(maxStep,u-previousU));
-        }
-        // At an exposed ADS edge, the bladed stance needs less wall-normal
-        // clearance than the back-to-wall resting pose. Keep the larger
-        // envelope for rest/blindfire and never remove collision checks.
-        const edgeSupport = this.aim && firingEdge && f.peekMargin ? .12 : 0;
-        const standOffTarget=Math.max(PLAYER_R,(f.standOff??0)-edgeSupport);
-        // la separación del muro cambiaba 12 cm de golpe al apuntar en la orilla
-        if(this._standOffFace!==f){this._standOffFace=f;this._standOff=standOffTarget;}
-        this._standOff+=(standOffTarget-this._standOff)*(1-Math.exp(-22*dt));
-        const standOff=Math.max(PLAYER_R,this._standOff);
-        if(f.standOff){
-          const probe={x:f.a.x+ux*u+n.x*standOff,z:f.a.z+uz*u+n.z*standOff};
-          const px=probe.x,pz=probe.z;
-          this.world.resolveCircle(probe,PLAYER_R,this.y,f.collider);
-          // Stop at furniture instead of letting its circular push bury the
-          // body back inside the shop when strafing along the facade.
-          if(Math.hypot(probe.x-px,probe.z-pz)>.01)u=previousU;
-        }
-        const desiredX = f.a.x + ux * u + n.x * standOff;
-        const desiredZ = f.a.z + uz * u + n.z * standOff;
-        if (this.coverEntry) {
-          const entry = this.coverEntry;
-          entry.t += dt;
-          const ex = desiredX - this.pos.x, ez = desiredZ - this.pos.z;
-          const ed = Math.hypot(ex, ez);
-          const smooth = 1 - Math.exp(-C.enterLerp * dt);
-          const maxStep = C.enterPullSpeed * dt;
-          const k = ed > 1e-6 ? Math.min(1, smooth, maxStep / ed) : 1;
-          this.pos.x += ex * k;
-          this.pos.z += ez * k;
-          if (ed < 0.012 || (entry.t >= entry.dur && ed < 0.05) ||
-              entry.t >= C.enterMaxTime + 0.05) {
-            this.pos.x = desiredX;
-            this.pos.z = desiredZ;
-            this.coverEntry = null;
-            this.bounceWindow = TUNING.evade.bounceWindow;
-            this.ev.onCoverEnter?.(this.chain);
-          }
-        } else {
-          this.pos.x = desiredX;
-          this.pos.z = desiredZ;
-        }
-        const coverSpeed = dt > 0 ? (u - previousU) / dt : 0;
-        this.vel.x = coverSpeed * ux; this.vel.z = coverSpeed * uz;
-
-        // orientación: DE ESPALDAS a la pared; al apuntar/disparar → cámara.
-        // Blindfire gira más pesado para conservar la lectura del cover y no
-        // invertir cuerpo/cañón de un frame al siguiente.
-        if (this._coverTurnFace !== f) {
-          this._coverTurnFace = f;
-          this._coverRestYaw = null;
-        }
-        if (this.aim || (this.firingBlind > 0 && (this.blindMode || blindEdgeSide))) {
-          // Keep the same unwrapped rest orientation through a firing cycle.
-          // Recomputing shortest-path return at +/-PI can complete a circle
-          // instead of undoing the opening turn.
-          if (this._coverRestYaw == null) {
-            this._coverRestYaw = this.yaw + angleDelta(this.yaw, yawFromDir(n.x, n.z));
-          }
-          const exitSide = aimLeanSide || blindEdgeSide;
-          let delta = angleDelta(this.yaw,this.cam.yaw);
-          // Back-to-wall -> firing is nearly a half turn. The shortest-angle
-          // tie must be resolved through the physical opening, not by the
-          // sign of +/-PI (which depends on the wall's world orientation).
-          if(exitSide && Math.abs(delta)>Math.PI/2){
-            const turnSign=Math.sign(n.z*ux*exitSide-n.x*uz*exitSide);
-            if(turnSign && Math.sign(delta)!==turnSign)delta+=turnSign*Math.PI*2;
-          }
-          const rate=this.aim?TUNING.combat.bodyTurnAimDeg:TUNING.combat.bodyTurnBlindDeg;
-          const step=rate*Math.PI/180*dt*2;
-          this.yaw+=Math.max(-step,Math.min(step,delta));
-        } else {
-          let target = this._coverRestYaw ?? (this.yaw + angleDelta(this.yaw, yawFromDir(n.x, n.z)));
-          // A deliberate full camera orbit while firing must not accumulate
-          // revolutions for the return animation to unwind.
-          if (Math.abs(target-this.yaw)>Math.PI*1.5) target=this.yaw+angleDelta(this.yaw,target);
-          this._coverRestYaw=target;
-          const delta=target-this.yaw;
-          const step=Math.min(TUNING.combat.bodyTurnFollowDeg*Math.PI/180*dt,
-            Math.abs(delta)*(1-Math.exp(-18*dt)));
-          this.yaw+=Math.sign(delta)*step;
-          if(Math.abs(target-this.yaw)<1e-4){this.yaw=target;this._coverRestYaw=null;}
-        }
-
-        // The wall's outward normal fixes the opening's left/right frame.
-        // Neither camera orbit nor the turning body may switch that opening.
-        const poseEdgeSide = aimLeanSide || blindEdgeSide;
-        if (poseEdgeSide !== 0) {
-          // Left/right belongs to the opening, not the orbiting camera. A
-          // camera crossing the wall tangent must not swap hands/exits.
-          const rx = n.z, rz = -n.x;
-          this.coverLeanAnim = (ux * poseEdgeSide) * rx + (uz * poseEdgeSide) * rz >= 0 ? 1 : -1;
-          if (blindEdgeSide) this.blindMode = this.coverLeanAnim > 0 ? 'right' : 'left';
-        } else this.coverLeanAnim = 0;
-
-        const away = hasInput ? (mw.x * n.x + mw.z * n.z) : 0;
-        // Zona para acciones explícitas en el extremo. El stick lateral por sí
-        // solo nunca usa esta zona para abandonar la cobertura.
-        const exitZone = C.cornerLean * 1.7 + PLAYER_R;
-        const eSign = (len - u) < exitZone ? 1 : u < exitZone ? -1 : 0;
-        const latOut = eSign !== 0 && hasInput ? (mw.x * ux + mw.z * uz) * eSign : 0;
-
-        // Salto/mantle hacia delante sobre cover bajo. Es una intención
-        // distinta del salto lateral en una esquina y se resuelve primero.
-        if (input.jumpPressed && low && hasInput) {
-          const im = Math.max(0.001, Math.hypot(mw.x, mw.z));
-          const into = -(mw.x * n.x + mw.z * n.z) / im;
-          const latIn = Math.abs((mw.x * ux + mw.z * uz) / im);
-          if (into >= 0.72 && latIn <= into * 0.75 && this._tryMantle(f, n)) break;
-        }
-
-        // Salto lateral explícito desde una orilla.
-        if (input.jumpPressed && eSign !== 0) {
-          const ox = ux * eSign, oz = uz * eSign;
-          const wantOut = hasInput ? (mw.x * ox + mw.z * oz) : 1;
-          if (wantOut > 0.35) {
-            TMP_O.set(this.pos.x, this.y + 0.9, this.pos.z);
-            TMP_D.set(ox, 0, oz);
-            if (this.world.raycast(TMP_O, TMP_D, PLAYER_R + 1.3) === null) {
-              this.cover = null;
-              this.chain = 0;
-              this._setState('run');
-              this.vy = TUNING.jump.vel * 0.85;
-              this.grounded = false;
-              this.vel.x = ox * M.runSpeed * 0.95 + n.x * 1.4;
-              this.vel.z = oz * M.runSpeed * 0.95 + n.z * 1.4;
-              this.ev.onJump?.();
-              break;
-            }
-          }
-        }
-
-        // WALLBOUNCE / EVADE / MANTLE: una diagonal en el extremo es una
-        // evasión lateral, no un mantle ni un input perdido. Frente a cover
-        // alto se conserva la cobertura porque no existe mantle posible.
-        if (input.evadePressed) {
-          const dir = hasInput ? { x: mw.x, z: mw.z } : { x: n.x, z: n.z };
-          const im3 = Math.max(0.001, Math.hypot(dir.x, dir.z));
-          const into = -(dir.x * n.x + dir.z * n.z) / im3;
-          const latIn = Math.abs((dir.x * ux + dir.z * uz) / im3);
-          const centered = len < edgeDist * 2 + 0.5 || (!nearA && !nearB);
-          const wantsMantle = low && into >= 0.8 && latIn <= into * 0.6 && centered;
-          const wantsEvade = into < 0.5 || (eSign !== 0 && latIn > 0.35);
-
-          if (wantsMantle) {
-            if (this._tryMantle(f, n)) break;
-          } else if (wantsEvade) {
-            const chained = this.bounceWindow > 0 && this.chain < E.chainMax;
-            if (chained) this.chain++; else this.chain = 0;
-            this.evadeMom *= 0.45;
-            const result = this._tryEvade(dir, E.bounceRange);
-            if (result === 'slide' && chained) this.ev.onBounce?.(this.chain);
-            else if (result !== 'slide' && chained) this.chain--;
-            if (this.state !== 'cover') break;
-          }
-        }
-
-        // Correr + dirección clara es una salida explícita. A mitad de pared,
-        // solo acepta alejarse del cover; en la orilla también acepta continuar
-        // lateralmente hacia fuera. Un diagonal pequeño sin sprint no expulsa.
-        const runExit = input.sprintHeld && hasInput &&
-          (away > 0.28 || (eSign !== 0 && latOut > 0.35));
-        if (runExit) {
-          const im0 = Math.max(0.001, mw.mag);
-          const sx = mw.x / im0, sz = mw.z / im0;
-          // SWAT TURN: correr alejándose de la pared CON otra cobertura justo
-          // enfrente cruza el hueco de un tirón en vez de salir a campo
-          // abierto. Exige intención clara (away alto), estar a mitad de cara
-          // —la orilla es del edge-exit— y que exista cover real en línea.
-          // Intención de CRUZAR: perpendicular clara al muro y sin componente
-          // lateral de orilla (esa es del edge-exit). No se exige estar a
-          // mitad de cara: las coberturas cortas son casi todas orilla.
-          const awayN = away / Math.max(0.001, mw.mag);
-          if (awayN > 0.62 && latOut < 0.35 && this.evadeCooldown <= 0) {
-            const prevCover = this.cover, prevState = this.state;
-            // sondear POR DELANTE: desde la posición pegada, findCover
-            // devuelve la propia cara (dist 0). El punto adelantado y el
-            // filtro por collider garantizan que sea otra cobertura.
-            TMP_O.set(this.pos.x + sx * 1.4, this.y, this.pos.z + sz * 1.4);
-            const ahead = this.world.findCover(TMP_O, { x: sx, z: sz },
-              E.bounceRange - 1.4, PLAYER_R, 0.5, this.y);
-            if (ahead && ahead.face?.collider !== prevCover?.collider) {
-              this.cover = null;
-              const res = this._tryEvade({ x: sx, z: sz }, E.bounceRange);
-              if (res === 'slide') {
-                this.chain = 0;
-                this.evadeMom = 0;
-                this.ev.onDetach?.();
-                break;
-              }
-              // sin slide real: deshacer y salir corriendo como siempre
-              this.cover = prevCover;
-              this.state = prevState;
-              this.dive = null;
-              this.slide = null;
-            }
-          }
-          this.cover = null;
-          this.chain = 0;
-          const im = Math.max(0.001, mw.mag);
-          const dx2 = mw.x / im, dz2 = mw.z / im;
-          // conservar continuidad corporal; el estado nuevo completa el giro
-          // en los frames siguientes en vez de saltar 90° instantáneamente.
-          this.yaw = lerpAngle(this.yaw, yawFromDir(dx2, dz2),
-            1 - Math.exp(-M.turnLerp * dt));
-          this._setState('roadie');
-          const spd = M.roadieSpeed * 0.78;
-          this.vel.x = dx2 * spd;
-          this.vel.z = dz2 * spd;
-          this.ev.onDetach?.();
-          break;
-        }
-
-        // Stick claramente hacia atrás: detach deliberado desde cualquier
-        // punto de la cara. El breve filtro temporal absorbe diagonales/ruido,
-        // pero también funciona si ADS estaba activo porque la intención manda.
-        if (away > C.detachPush) {
-          this.detachT += dt;
-          if (this.detachT > C.detachTime) {
-            this.cover = null;
-            this._setState('run');
-            this.chain = 0;
-            this.aim = false;
-            const im = Math.max(0.001, mw.mag);
-            const dx2 = mw.x / im, dz2 = mw.z / im;
-            this.vel.x = dx2 * M.runSpeed * C.edgeExitBoost;
-            this.vel.z = dz2 * M.runSpeed * C.edgeExitBoost;
-            this.ev.onDetach?.();
-            break;
-          }
-        } else this.detachT = 0;
-
-        break;
-      }
     }
 
-    if (this.state !== 'cover') {
-      this.blindMode = null;
-      this.coverEntry = null;
-    }
-    if (this.blindMode !== this._blindModePrev) {
-      this.blindPoseExposure = 0;
-      this._blindModePrev = this.blindMode;
-    }
-    const blindTarget = this.state === 'cover' && !this.aim && this.blindMode &&
-      this.firingBlind > 0 ? 1 : 0;
-    this.blindPoseExposure += ((blindTarget ? 1 : 0) - this.blindPoseExposure) *
-      (1 - Math.exp(-(blindTarget ? C.blindEnterRate : C.blindExitRate) * dt));
-
-    // integrar + colisión (cover se pega manualmente, pero el resolve no estorba;
-    // en mantle el movimiento es guiado y CRUZA el borde: el resolve pelearía)
+    // --- integrar + colisión (en mantle el movimiento es guiado y CRUZA el borde)
     const moveStartX = this.pos.x, moveStartZ = this.pos.z;
     const wasGrounded = this.grounded;
-    if (this.state !== 'cover' && this.state !== 'mantle') {
+    if (this.state === 'dodge') {
+      const done = stepDodge(this, this.dodge, dt, PLAYER_R);
+      this.vel.x = dt > 0 ? (this.pos.x - moveStartX) / dt : 0;
+      this.vel.z = dt > 0 ? (this.pos.z - moveStartZ) / dt : 0;
+      if (done) {
+        this.dodge = null;
+        this.vel.x = this.vel.z = 0;
+        this._setState('idle');
+        this.ev.onDodgeEnd?.();
+      }
+    } else if (this.state !== 'mantle') {
       this.pos.x += this.vel.x * dt;
       this.pos.z += this.vel.z * dt;
-    }
-    if (this.state !== 'mantle') {
-      // En cover la posición ya fue resuelta analíticamente contra ESA cara.
-      // Volver a empujar el círculo contra el mismo collider en el extremo
-      // pelea con el lean (sobre todo en bus/camión/Jersey) y produce jitter.
-      // Los demás obstáculos siguen resolviéndose con normalidad.
-      this.world.resolveCircle(this.pos, PLAYER_R, this.y,
-        this.state === 'cover' ? this.cover?.collider : null);
-      // The accepted slide target uses cover's own stand-off. Keep the body
-      // envelope for every OTHER facade; solid collision is still enforced.
-      if(this.state!=='cover'){
-        // La holgura corporal de un muro alto no es sólida: es margen para el
-        // cuerpo. Al doblar su esquina muy pegado empujaba hasta 0,44 m en UN
-        // paso; ahora cede y aparta al personaje a 3,5 m/s como mucho.
-        const bx=this.pos.x,bz=this.pos.z;
-        this.world.resolveFacadeBody?.(this.pos,PLAYER_R,this.y,
-          this.state==='slide'?this.slide?.face:null);
-        const ox=this.pos.x-bx,oz=this.pos.z-bz,od=Math.hypot(ox,oz),cap=3.5*dt;
-        if(od>cap){
-          this.pos.x=bx+ox*cap/od;this.pos.z=bz+oz*cap/od;
-          this.world.resolveCircle(this.pos,PLAYER_R,this.y);
-        }
+      this.world.resolveCircle(this.pos, PLAYER_R, this.y, null);
+      // La holgura corporal de un muro alto no es sólida: es margen para el
+      // cuerpo. Cede como mucho a 3,5 m/s (sin tirones al doblar esquinas).
+      const bx = this.pos.x, bz = this.pos.z;
+      this.world.resolveFacadeBody?.(this.pos, PLAYER_R, this.y, null);
+      const ox = this.pos.x - bx, oz = this.pos.z - bz, od = Math.hypot(ox, oz), cap = 3.5 * dt;
+      if (od > cap) {
+        this.pos.x = bx + ox * cap / od; this.pos.z = bz + oz * cap / od;
+        this.world.resolveCircle(this.pos, PLAYER_R, this.y);
       }
     }
 
     // Nunca subir un desnivel grande solo porque groundHeight cambió bajo el
-    // círculo (caso típico: entrar de lado en una rampa). Si el movimiento
-    // completo es inválido, probar cada eje permite deslizarse por el borde.
-    if (wasGrounded && this.state !== 'cover' && this.state !== 'mantle') {
+    // círculo. Si el movimiento completo es inválido, probar cada eje.
+    if (wasGrounded && this.state !== 'mantle') {
       const fullGround = this.world.groundHeight(this.pos, PLAYER_R, this.y);
       if (fullGround > this.y + M.maxStepUp) {
         const candidate = (x, z) => {
@@ -1068,22 +789,18 @@ export class Controller {
       }
     }
 
-    // vertical: gravedad + suelo (permite pararse sobre coberturas)
+    // --- vertical: gravedad + suelo (permite pararse sobre coberturas)
     const airStates = this.state === 'idle' || this.state === 'run' ||
-      this.state === 'roadie' || this.state === 'flip';
+      this.state === 'roadie' || this.state === 'crouch';
     if (airStates) {
       const J = TUNING.jump;
       const ground = this.world.groundHeight(this.pos, PLAYER_R, this.y);
-      // Si estaba apoyado, adherirse a pendientes suaves tanto al subir como
-      // al bajar. Una caída mayor conserva gravedad y animación aérea.
       const followsGround = wasGrounded && this.vy <= 0 &&
         ground <= this.y + M.maxStepUp && this.y - ground <= M.groundStickDown;
       if (followsGround) {
         this.y = ground; this.vy = 0; this.grounded = true;
-        this.usedDouble = false;
       } else {
-        // integración trapezoidal: la altura del salto ya no depende de los
-        // cuadros por segundo (con Euler, a 30 fps se saltaba 10 cm menos)
+        // integración trapezoidal: la altura del salto no depende de los fps
         const vy0 = this.vy;
         this.vy -= J.gravity * dt;
         this.y += (vy0 + this.vy) * 0.5 * dt;
@@ -1092,31 +809,75 @@ export class Controller {
         const wasAir = !this.grounded;
         const fallSpeed = -this.vy;
         this.y = ground; this.vy = 0; this.grounded = true;
-        this.usedDouble = false;
-        if (this.state === 'flip') {
-          this.flip = null;
-          this._setState(hasInput ? 'run' : 'idle');
-        }
-        if (wasAir && fallSpeed > 3) this.ev.onLand?.();
+        if (wasAir && fallSpeed > 3) this.ev.onLand?.(fallSpeed); // AUDIO elige la variante por velocidad
       } else {
         this.grounded = this.y <= ground + 0.02;
       }
       // margen para saltar justo después de salir de un borde
       this.coyoteT = this.grounded ? J.coyote : Math.max(0, (this.coyoteT ?? 0) - dt);
     } else if (this.state !== 'mantle') {
-      // estados pegados al suelo: la Y sigue al terreno real (un slide que
-      // sale de una caja no debe conservar una altura fantasma).
-      // (mantle administra su propia Y guiada)
+      // estados pegados al suelo (slide, melee): la Y sigue al terreno real
       this.y = this.world.groundHeight(this.pos, PLAYER_R, this.y);
       this.vy = 0;
       this.grounded = true;
     }
 
-    const ceiling=this.world.ceilingHeight?.(this.pos,PLAYER_R,this.y)??Infinity;
-    if(this.y+1.63>ceiling){this.y=ceiling-1.63;this.vy=Math.min(0,this.vy);}
+    // techo: la altura del cuerpo depende de la postura
+    const ceiling = this.world.ceilingHeight?.(this.pos, PLAYER_R, this.y) ?? Infinity;
+    const bodyH = this.crouched ? F.crouchClear : 1.63;
+    if (this.y + bodyH > ceiling) { this.y = ceiling - bodyH; this.vy = Math.min(0, this.vy); }
 
-    // Pendiente longitudinal para el rig. Dos muestras pequeñas producen un
-    // pitch estable en la rampa, pero ignoran paredes/desniveles laterales.
+    // --- postura continua: agachado, asomo e inclinación. Va DESPUÉS de
+    // mover el cuerpo: la inclinación se barre contra la posición final de
+    // este paso (si no, acercarse a una pared metía la cabeza un cuadro).
+    {
+      // Todo cambio de postura que SUBE o APARTA la cabeza se limita con la
+      // esfera calibrada de hit-pose.js en la posición final de este paso.
+      this._simT = (this._simT ?? 0) + dt;
+      const crouchTarget = this.crouched ? 1 : 0;
+      const c0 = this.crouch01, c1 = approach(c0, crouchTarget, dt / F.crouchTime);
+      this._poseCtx();
+      if (c1 > c0) {
+        // bajar adelanta la cabeza: primero se intenta retrasar el cuerpo; si
+        // no cabe (pasillo estrecho de cara a un pilar), se agacha solo hasta
+        // donde la esfera queda libre (sin saltos: nunca vuelve hacia arriba)
+        this.crouch01 = c1;
+        if (!this._pushHeadOut()) {
+          const ok = (cc) => this.headClear(cc * (1 - this.peek), 0);
+          // si ya estaba dentro (techo bajo al aparecer), agacharse sigue
+          if (ok(c0)) this.crouch01 = this._limit(c0, c1, ok);
+        }
+      } else this._pushHeadOut();
+      // levantarse: crouch01 baja; buscar el más bajo (más de pie) libre
+      if (c1 < c0) this.crouch01 = 1 - this._limit(1 - c0, 1 - c1, (u) => this.headClear((1 - u) * (1 - this.peek), this.lean));
+      // ASOMO: agachado + apuntando + cara LOW delante (ajuste autoPeek)
+      let peekTarget = 0;
+      if (SETTINGS.autoPeek && this.state === 'crouch' && this.grounded && this.aim && standOk) {
+        this.peekFace = this._findPeekFace();
+        if (this.peekFace) peekTarget = 1;
+      } else this.peekFace = null;
+      const p0 = this.peek, p1 = approach(p0, peekTarget, dt / (peekTarget > p0 ? F.peekRise : F.peekFall));
+      this.peek = p1 <= p0 ? p1 : this._limit(p0, p1, (q) => this.headClear(this.crouch01 * (1 - q), this.lean));
+      // INCLINACIÓN: de pie o agachado, quieto o andando, en el suelo
+      const want = LEAN_STATES.has(this.state) && this.grounded ? Math.sign(input.leanAxis || 0) : 0;
+      const l1 = approach(this.lean, want, dt / F.leanTime);
+      // si la inclinación pedida solo choca por DELANTE (cabeza agachada
+      // contra la cara), el cuerpo cede un poco hacia atrás en vez de no inclinar
+      // (como mucho 0.15 m por inclinación: en una esquina no se retrocede sin fin)
+      if (l1 === 0) this._leanPush = 0;
+      if (l1 !== 0 && Math.abs(l1) > Math.abs(this.lean) && (this._leanPush ?? 0) < 0.15) {
+        const bx = this.pos.x, bz = this.pos.z;
+        this._pushHeadOut(l1);
+        this._leanPush = (this._leanPush ?? 0) + Math.hypot(this.pos.x - bx, this.pos.z - bz);
+      }
+      // magnitud permitida en el lado de l1 (0 siempre vale: el cuerpo ya está resuelto)
+      const sgn = Math.sign(l1) || 1;
+      const mag = l1 === 0 ? 0 : this._limit(Math.min(Math.abs(this.lean), Math.abs(l1)), Math.abs(l1), (m) => this.headClear(this.stanceLow, sgn * m));
+      this.lean = sgn * mag;
+      this.leanRoom = sgn > 0 ? { l: this.leanRoom.l, r: Math.abs(l1) > mag ? mag : 1 } : { l: Math.abs(l1) > mag ? mag : 1, r: this.leanRoom.r };
+    }
+
+    // Pendiente longitudinal para el rig.
     let pitchTarget = 0;
     if (this.grounded && airStates) {
       const fd = this.facing();
@@ -1131,18 +892,37 @@ export class Controller {
       (1 - Math.exp(-M.groundPitchLerp * dt));
   }
 
-  // Mantle/vault corto sobre cover BAJO (cubierto + stick hacia el bloque).
-  // Verifica ANTES de comprometer la animación: espacio libre sobre el
-  // borde (nada más alto detrás), y superficie de aterrizaje al nivel del
-  // tope del bloque (no un hueco ni otro nivel).
+  // Trepar con la acción de salto: cara LOW delante según la VISTA, a
+  // alcance, sin alejarse con el stick. Mismas comprobaciones que antes.
+  _tryMantleAhead(mw) {
+    const F = TUNING.fp;
+    if (!this.world.findCover || !this.grounded) return false;
+    const f = this.cam.flatForward();
+    const found = this.world.findCover(this.pos, f, F.mantleReach + PLAYER_R, PLAYER_R, 0.6, this.y);
+    const face = found?.face;
+    if (!face || face.kind === 'high') return false;
+    const top = (face.topY ?? face.h) - this.y;
+    if (!(top >= F.mantleMinH && top <= F.mantleMaxH)) return false;
+    const n = face.n;
+    // el stick no puede pedir lo contrario (alejarse de la cara)
+    if (mw.mag > 0.1 && (mw.x * n.x + mw.z * n.z) / mw.mag > 0.3) return false;
+    return this._tryMantle(face, n);
+  }
+
+  // Mantle/vault corto sobre cover BAJO. Verifica ANTES de comprometer la
+  // animación: espacio libre sobre el borde (nada más alto detrás), y
+  // superficie de aterrizaje al nivel del tope del bloque.
   _tryMantle(f, n) {
     if (this.mantle) return false;
+    if (!(f.h <= TUNING.cover.lowHeight || (f.topY != null && f.topY - this.y <= TUNING.fp.mantleMaxH))) return false;
     const h = f.topY ?? f.h;
-    const landX = this.pos.x - n.x * (PLAYER_R + 0.5);
-    const landZ = this.pos.z - n.z * (PLAYER_R + 0.5);
+    // aterrizaje a 0,5 m pasado el plano de la cara, desde donde se esté
+    const side = (this.pos.x - f.a.x) * n.x + (this.pos.z - f.a.z) * n.z;
+    const landX = this.pos.x - n.x * (side + 0.5);
+    const landZ = this.pos.z - n.z * (side + 0.5);
     TMP_O.set(this.pos.x, h + 0.55, this.pos.z);
     TMP_D.set(-n.x, 0, -n.z);
-    if (this.world.raycast(TMP_O, TMP_D, PLAYER_R + 0.9) !== null) return false;
+    if (this.world.raycast(TMP_O, TMP_D, side + 0.9) !== null) return false;
     const gh = this.world.groundHeight({ x: landX, z: landZ }, PLAYER_R, h + 0.2);
     if (Math.abs(gh - h) > 0.25) return false;
     this.mantle = {
@@ -1151,8 +931,10 @@ export class Controller {
       tx2: landX, tz2: landZ, ty: h,
       n,
     };
-    this.cover = null;
+    this.crouched = false;
+    this.slide = null;
     this.vel = { x: 0, z: 0 };
+    this.aim = false;
     this._setState('mantle');
     this.ev.onMantle?.();
     return true;
@@ -1163,86 +945,5 @@ export class Controller {
     this.grounded = false;
     this.coyoteT = 0;
     this.ev.onJump?.();
-  }
-
-  // En el aire, cerca de una pared (hacia el movimiento o el facing):
-  // pies a la pared y patada de regreso. Llegando de lado → giro lateral
-  // (Matrix); llegando de frente → backflip. Devuelve true si pateó.
-  _tryWallKick() {
-    if (this.flip) return false;
-    const J = TUNING.jump;
-    const dirs = [];
-    if (this.speed > 1) dirs.push({ x: this.vel.x / this.speed, z: this.vel.z / this.speed });
-    dirs.push(this.facing());
-    for (const d of dirs) {
-      const wall = this.world.findCover(this.pos, d, 0.95, PLAYER_R, 0.3, this.y);
-      if (!wall || wall.face.h < J.wallMinH || wall.face.h < this.y + 0.8 || wall.t > 0.85) continue;
-      const n = wall.face.n;
-      const tx = -n.z, tz = n.x;
-      const lat = this.vel.x * tx + this.vel.z * tz; // velocidad a lo largo de la pared
-      this.vy = J.wallVel;
-      this.vel.x = n.x * J.wallPush + tx * lat * 0.4;
-      this.vel.z = n.z * J.wallPush + tz * lat * 0.4;
-      const lateral = Math.abs(lat) >= J.backflipLat;
-      this.flip = {
-        t: 0,
-        dur: Math.max(0.4, (2 * J.wallVel / J.gravity) * 0.92),
-        axis: lateral ? 'z' : 'x',
-        dir: lateral ? (lat >= 0 ? 1 : -1) : 1, // frontal → backflip (atrás)
-      };
-      this.cover = null;
-      this._setState('flip');
-      this.ev.onWallJump?.();
-      return true;
-    }
-    return false;
-  }
-
-  // Doble salto: vuelta hacia la dirección presionada (sin ganar altura).
-  // mv es el stick CRUDO (x = derecha en pantalla, z = adelante): el eje del
-  // giro respeta lo que el jugador presiona, no la orientación del cuerpo.
-  _airRoll(mw, mv) {
-    const J = TUNING.jump;
-    const mag = Math.max(0.001, Math.hypot(mw.x, mw.z));
-    const d = { x: mw.x / mag, z: mw.z / mag };
-    const spd = Math.max(this.speed, TUNING.move.runSpeed) * J.dashMul;
-    this.vel.x = d.x * spd;
-    this.vel.z = d.z * spd;
-    this.vy = Math.max(this.vy, J.doubleVy);
-    this.usedDouble = true;
-    let axis, dir;
-    if (Math.abs(mv.z) >= Math.abs(mv.x)) {
-      axis = 'x';
-      dir = mv.z >= 0 ? -1 : 1;   // adelante = front flip, atrás = backflip
-    } else {
-      axis = 'z';
-      dir = mv.x >= 0 ? 1 : -1;   // stick derecha = giro a la derecha
-    }
-    this.flip = { t: 0, dur: J.rollDur, axis, dir };
-    this._setState('flip');
-    this.ev.onDoubleJump?.();
-  }
-
-  _enterCover(face, target) {
-    const C = TUNING.cover;
-    const tx = face.b.x - face.a.x, tz = face.b.z - face.a.z;
-    const len = Math.max(0.001, Math.hypot(tx, tz));
-    const ux = tx / len, uz = tz / len;
-    const incomingSpeed = this.speed;
-    const tangentSpeed = Math.max(-TUNING.move.coverStrafe * 1.2,
-      Math.min(TUNING.move.coverStrafe * 1.2, this.vel.x * ux + this.vel.z * uz));
-    const distance = Math.hypot(target.x - this.pos.x, target.z - this.pos.z);
-    const duration = Math.max(C.enterMinTime, Math.min(C.enterMaxTime,
-      distance / Math.max(C.enterPullSpeed, incomingSpeed) + 0.08));
-    this.coverEntry = { target: { ...target }, t: 0, dur: duration, tangentSpeed };
-    this.vel = { x: ux * tangentSpeed, z: uz * tangentSpeed };
-    this.evadeMom = 0; // el impulso ganado se gasta al llegar
-    this.cover = face;
-    this.slide = null;
-    this._setState('cover');
-    // Llegar al cover termina el slide: una NUEVA pulsación ya es válida.
-    // evadeCooldown solo protege la acción mientras está activa.
-    this.evadeCooldown = 0;
-    this.detachT = 0;
   }
 }

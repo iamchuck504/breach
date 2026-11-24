@@ -90,7 +90,10 @@ export class SkyEnvironment {
       if (active && world.skyStops) this._enable(world);
       else this._disable(world);
     }
-    if (this.dome.parent) this.dome.position.copy(camera.position);
+    if (this.dome.parent) {
+      camera.getWorldPosition(this.dome.position);
+      if (this.body) this.body.getWorldPosition(this.material.uniforms.uSunDir.value).sub(this.dome.position).normalize();
+    }
   }
 
   _enable(world) {

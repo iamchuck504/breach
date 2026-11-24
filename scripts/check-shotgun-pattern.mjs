@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { applyPelletPattern } from '../src/combat/ballistics.js';
 import { TUNING } from '../src/config/tuning.js';
+import { spreadFor } from '../src/combat/weapons.js';
 
 const failures = [];
 const check = (ok, msg) => { if (!ok) failures.push(msg); };
@@ -51,11 +52,21 @@ const radii = first.map((p) => Math.hypot(p.x, p.y)).sort((a, b) => a - b);
 check(radii.slice(0, 4).every((r) => near(r, 0.38, 1e-6)), 'anillo interior irregular');
 check(radii.slice(4).every((r) => near(r, 1, 1e-6)), 'anillo exterior perdió el radio de spread');
 
-// Hip, ADS y blindfire conservan exactamente sus conos existentes.
-for (const key of ['spreadAim', 'spreadHip', 'spreadBlind']) {
-  const pts = localOffsets(forward, def[key]);
+// Cada cono que el juego usa (spreadFor: cadera, ADS y los modificadores FPS de
+// moverse/agachado/deslizando/en el aire) sale exacto en el patrón. PRUEBAS
+// (corrida 6): antes se recorría spreadBlind, que ya no usa nadie (sin blindfire).
+const cones = {
+  spreadAim: def.spreadAim, spreadHip: def.spreadHip,
+  moving: spreadFor('shotgun', { moving: 1 }), crouched: spreadFor('shotgun', { crouched: true }),
+  sliding: spreadFor('shotgun', { sliding: true }), airborne: spreadFor('shotgun', { airborne: true }),
+  adsMoving: spreadFor('shotgun', { aim: true, moving: 1 }),
+};
+check(near(cones.spreadHip, spreadFor('shotgun', {})) && near(cones.spreadAim, spreadFor('shotgun', { aim: true })),
+  'spreadFor base no coincide con el perfil del arma');
+for (const [key, cone] of Object.entries(cones)) {
+  const pts = localOffsets(forward, cone);
   const maxAngle = Math.max(...pts.map((p) => forward.angleTo(p.dir))) * 180 / Math.PI;
-  check(near(maxAngle, def[key], 1e-6), `${key}: ${maxAngle}° != ${def[key]}°`);
+  check(near(maxAngle, cone, 1e-6), `${key}: ${maxAngle}° != ${cone}°`);
 }
 
 // Yaw/pitch diferentes producen los mismos offsets LOCALES, incluso cerca de

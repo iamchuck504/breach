@@ -4,8 +4,7 @@
 // se rellena en cajas. Incluye el sistema de cohetes de la bazooka.
 import * as THREE from 'three';
 import { TUNING } from '../config/tuning.js';
-import { WEAPON_BUILDERS, WEAPON_SCALES } from '../player/rig.js';
-import { attachBlenderPickup } from '../player/blender-soldier.js';
+import { createWorldWeapon } from './world-weapon.js';
 
 export const SPECIAL_HOLD_TIME = 0.6;
 const TMP_V = new THREE.Vector3();
@@ -44,10 +43,7 @@ export class SpecialPickup {
   spawn(wep, x, z, y = 0) {
     this.clear();
     const group = new THREE.Group();
-    const model = WEAPON_BUILDERS[wep](0xffb057);
-    const s = WEAPON_SCALES[wep] ?? [1.3, 1.3, 1.3];
-    model.scale.set(s[0], s[1], s[2]);
-    attachBlenderPickup(model,wep);
+    const model = createWorldWeapon(wep);
     model.position.y = 0.9;
     model.rotation.z = 0.14;
     group.add(model);

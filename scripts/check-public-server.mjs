@@ -10,9 +10,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { clearClip } from './lib-clip.mjs';
 import { CHROME } from './lib-chrome.mjs';
+import { freePort } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const PORT = 8796;
+const PORT = FREE_PORT;
 const fails = [];
 const check = (name, ok, extra = '') => {
   console.log(`${ok ? 'OK ' : 'FAIL'} ${name}${extra ? ' — ' + extra : ''}`);
@@ -60,7 +63,7 @@ try {
     const ws = new WebSocket(u);
     const done = (v) => { try { ws.close(); } catch { /* ya cerrado */ } res(v); };
     ws.onerror = () => done({ error: 'socket' });
-    ws.onopen = () => ws.send(JSON.stringify({ t: 'join', action: 'create', name: 'PROBE', v: 0 }));
+    ws.onopen = () => ws.send(JSON.stringify({ t: 'join', action: 'create', name: 'PROBE', v: 0, hp: 2, fps: 1 }));
     ws.onmessage = (ev) => { try { done(JSON.parse(ev.data)); } catch { done({ error: 'json' }); } };
     setTimeout(() => done({ error: 'timeout' }), 4000);
   }), url);

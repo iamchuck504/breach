@@ -6,9 +6,17 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import { MAX_WS_PAYLOAD } from '../server/guards.js';
+import { freePort } from './lib-test.mjs';
+import { withSamples } from './lib-fps-sample.mjs';
+// PRUEBAS (ronda 2 de RED): cada fire/rocket/nade/protoFire humano lleva su muestra `fs`
+// (n creciente, w = arma equipada) desde el último estado `s` de ese emisor
+const SAMPLED = withSamples((peer, m) => peer.ws.send(JSON.stringify(m)));
+
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const port = 8810;
+const port = FREE_PORT;
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
   cwd: root,
@@ -48,7 +56,7 @@ class Peer {
       this.ws.once('open', resolve); this.ws.once('error', reject);
     });
   }
-  send(msg) { this.ws.send(JSON.stringify(msg)); }
+  send(msg) { SAMPLED(this, msg); }
   next(pred, timeout = 3000, label = 'mensaje') {
     const prior = this.history.find(pred);
     if (prior) return Promise.resolve(prior);
@@ -96,7 +104,7 @@ try {
   if (rateCode !== 1008) throw new Error(`spam cerró con ${rateCode}, no 1008`);
 
   player = new Peer(); await player.open();
-  player.send({ t: 'join', action: 'create', name: 'HARDENING-QA', v: 0 });
+  player.send({ t: 'join', action: 'create', name: 'HARDENING-QA', v: 0, hp: 2, fps: 1 });
   const welcome = await player.next((m) => m.t === 'welcome', 3000, 'welcome');
   player.send({ t: 'lobbyBotAdd', team: 'blue' });
   await player.next((m) => m.t === 'lobby' && m.bots?.length === 1, 3000, 'lobby con bot');

@@ -1,6 +1,8 @@
 import * as T from 'three';
 import {cloneUrbanAsset} from './urban-assets.js';
-import {collisionBoxesFor} from './collision-layouts.js';
+import {masonryBox, masonrySupports, masonryBuffers} from './fortaleza-masonry.js';
+import {FORT_GALLERY as G} from './fortaleza-galleries.js';
+import {collisionBoxesFor, decksFor} from './collision-layouts.js';
 
 // Surface dressing only. No new walkable volumes, cover faces or occluders.
 // Every placement derives from the same box manifest used by the server.
@@ -12,6 +14,13 @@ export function polishArchitecture(world, layout) {
   const stone=new T.MeshStandardMaterial({color:0xa89b80,roughness:.88});
   const trim=new T.MeshStandardMaterial({color:roof?0x738692:0x645b4d,roughness:.67,metalness:roof?.5:.08});
   const seam=new T.MeshStandardMaterial({color:roof?0x273943:0x746a56,roughness:.92});
+  if (!roof) {
+    // A igual profundidad en una esquina, manda la moldura sobre el sillar del kit.
+    for (const [material, units] of [[seam,-3],[trim,-5],[stone,-6]]) {
+      material.polygonOffset = true;
+      material.polygonOffsetUnits = units;
+    }
+  }
   const skin=new T.MeshStandardMaterial({color:0x4e626c,metalness:.42,roughness:.6});
   const glow=new T.MeshBasicMaterial({color:roof?0xffdfa8:0xffbe6f});
   const matrix=new T.Matrix4(), q=new T.Quaternion(), v=new T.Vector3(), s=new T.Vector3();
@@ -41,33 +50,48 @@ export function polishArchitecture(world, layout) {
     if(b.mirror!==false&&(b.x||b.z))specs.push({...b,x:-b.x,z:-b.z});
   }
   for(const b of specs){
-    const {x,z,w,d,h,style}=b;
+    const {x,z,style}=b;
+    const base = roof ? b.minY ?? 0 : 0, h = b.h-base;
+    // Los travesaños llegan entre los largueros, sin forrar dos veces las esquinas.
+    const lap = roof && b.rail && b.w>b.d ? b.d : 0;
+    const w = b.w-lap, d = b.d;
+    const cx = lap ? x - Math.sign(x - Math.sign(x)*Math.abs(decksFor(layout)[0].x))*lap/2 : x;
     if(style==='glass')continue;
     const perimeter=style==='wall';
-    const faces=[pose(x,0,z+d/2),pose(x,0,z-d/2,Math.PI),pose(x+w/2,0,z,Math.PI/2),pose(x-w/2,0,z,-Math.PI/2)];
+    const faces=[pose(cx,base,z+d/2),pose(cx,base,z-d/2,Math.PI),pose(cx+w/2,base,z,Math.PI/2),pose(cx-w/2,base,z,-Math.PI/2)];
     faces.forEach((p,i)=>{
       const width=i<2?w:d;
       if(roof){
+        // Una testa contra otro bloque queda oculta incluso con el forro.
+        const normal = new T.Vector3(0,0,1).transformDirection(p);
+        const probe = new T.Vector3().setFromMatrixPosition(p).addScaledVector(normal,.025);
+        if (specs.some(other => other !== b && (other.minY??0)<=base && other.h>=b.h &&
+          Math.abs(probe.x-other.x) <= other.w/2-(i<2 ? width/2 : 0)+.00001 &&
+          Math.abs(probe.z-other.z) <= other.d/2-(i>=2 ? width/2 : 0)+.00001)) return;
+        const rise = i<2 ? .006 : 0;
         if(perimeter){
-          box(p,0,2.78,.009,width,.13,.018,trim);
+          box(p,0,2.78+rise,.009,width,.13,.018,trim);
           return;
         }
         // Sheet-metal casing overlays replace the concrete-grid reading.
         box(p,0,h/2,.006,Math.max(.1,width-.06),h-.04,.012,skin);
-        box(p,0,.10,.016,width-.03,.12,.02,seam);
-        box(p,0,h-.07,.015,width-.03,.08,.018,trim);
-        for(let a=-width/2+.09;a<width/2;a+=1.4)
-          box(p,a,h/2,.015,.018,h-.15,.012,trim);
-        if(style==='ac'||style==='vent'){
-          const count=Math.max(1,Math.floor(width/1.35));
+        box(p,0,.10+rise,.016,width-.03,.12,.02,seam);
+        box(p,0,h-.07+rise,.015,width-.03,.08,.018,trim);
+        const grille = (style==='ac'||style==='vent') && width>.35 && !b.rail;
+        const count = Math.max(1,Math.floor(width/1.35));
+        // Los montantes quedan entre las rejillas y terminan antes del remate horizontal.
+        const step = grille ? width/count : 1.4;
+        for(let a=-width/2+(grille?.045:.09);a<width/2-.035;a+=step)
+          box(p,a,h/2+.03,.019,.018,h-.29,.012,trim);
+        if(grille){
           for(let j=0;j<count;j++){
             const local=pose((j-(count-1)/2)*(width/count),.20,.022,0,Math.min(1,width-.18),.90,.45);
             asset('roof-grille',new T.Matrix4().multiplyMatrices(p,local));
           }
         }else if(style==='hut'&&width>2.4&&h>=1.9){
           const spawn= Math.abs(z)===31.35&&i<2;
-          if(spawn)asset('roof-access',new T.Matrix4().multiplyMatrices(p,pose(0,0,.024,0,1,1,.45)));
-          else if(i<2)asset('roof-cabinet',new T.Matrix4().multiplyMatrices(p,pose(0,.18,.025,0,1,h<2?.82:1,.45)));
+          if(spawn)asset('roof-access',new T.Matrix4().multiplyMatrices(p,pose(0,0,.026,0,1,1,1)));
+          else if(i<2)asset('roof-cabinet',new T.Matrix4().multiplyMatrices(p,pose(0,.18,.025,0,1,h<2?.82:1,.85)));
         }
       }else{
         // Caps stay below the defined cover height. Quoins never grow the
@@ -83,7 +107,7 @@ export function polishArchitecture(world, layout) {
         if(!perimeter&&width>2&&h>1.6&&Math.abs(z)!==20.9){
           for(let a=-width/2+.65;a<width/2-.4;a+=1.2){
             box(p,a,1.20,.010,.10,.58,.020,seam);
-            box(p,a,1.48,.014,.24,.06,.016,stone);
+            box(p,a,1.48,.019,.24,.06,.016,stone);
           }
         }
       }
@@ -95,7 +119,7 @@ export function polishArchitecture(world, layout) {
       if(old)old.visible=false;
     }
     for(const sign of [-1,1]){
-      const p=pose(0,0,sign*(20.9-.516),sign<0?0:Math.PI);
+      const p=pose(0,.004,sign*(20.9-.527),sign<0?0:Math.PI);
       asset('fort-gate',p);
     }
     // Masonry bands articulate the existing round towers, outside play.
@@ -115,6 +139,10 @@ export function polishArchitecture(world, layout) {
       }
     }
   }else{
+    // Los montantes del invernadero prolongan las cuatro esquinas bajo la cubierta.
+    for (const x of [-17.5, 17.5]) for (const dx of [-4, 4]) for (const z of [-5, 5]) {
+      box(pose(x, 0, z), dx, 3.3, 0, .14, .6, .14, trim);
+    }
     // Labels sit above the cabinet/louvres, on their supporting faces.
     for(const [text,x,z,w,h] of [['AIR HANDLING',-12.2,-21.507,2.45,.30],['POWER / 02',26,-30.157,2.10,.28],['WATER RESERVE',-20.25,-14.307,2.25,.32]]){
       for(const sign of [1,-1])world._addMapSign(text,sign*x,h===.32?2.62:1.62,sign*z,sign===1?0:Math.PI,{w,h,parent:root,bg:'#263a46',fg:'#d9e3df',border:'#ab9370',style:'industrial',subtitle:text==='WATER RESERVE'?'SERVICE ACCESS':'AUTHORIZED MAINTENANCE'});
@@ -123,16 +151,49 @@ export function polishArchitecture(world, layout) {
   // Two mounted task lights per map, with no shadow maps or flicker.
   for(const sign of [-1,1]){
     const z=sign*(roof?31.35:20.9),faceZ=z-sign*(roof?.638:.532),ry=sign<0?0:Math.PI;
-    const x=roof?1.9:1.5,y=roof?2.38:2.25;
+    const x=roof?3.1:1.5,y=roof?2.38:2.25;
     const p=pose(x,y,faceZ,ry);
     box(p,0,0,0,.22,.28,.038,trim);box(p,0,0,.023,.15,.19,.012,glow);
     const lamp=new T.SpotLight(roof?0xffe1ac:0xffc487,roof?18:8,6,Math.PI*.34,.85,2);
     lamp.position.set(x,y,faceZ-sign*.07);lamp.target.position.set(x,.15,faceZ-sign*2.5);
     root.add(lamp,lamp.target);
   }
+  // Una sola piel exterior para las molduras contiguas, también alrededor
+  // del paso de guardia. Los apoyos se usan solo como volúmenes de recorte.
+  const dressed = [];
+  const unitBox = new T.Box3(new T.Vector3(-.5,-.5,-.5),new T.Vector3(.5,.5,.5));
+  if (!roof) for (const {geo,mat,matrices} of batches.values()) {
+    if (geo !== boxGeometry) continue;
+    for (const matrix of matrices) {
+      const bound = unitBox.clone().applyMatrix4(matrix);
+      dressed.push(masonryBox(bound.min.toArray(),bound.max.toArray(),mat));
+    }
+  }
+  if (!roof) {
+    dressed.push(...masonrySupports());
+    if (world.mapGroup.getObjectByName('fortaleza-galleries')?.userData.blender) {
+      // El remate termina a 4 mm del marco tallado de cada entrada del patio.
+      for (const side of [-1,1]) for (const end of [-1,1]) for (const z of [G.start+.01,G.end-.02]) {
+        const x = side*21.4, cz = end*z;
+        dressed.push(masonryBox([x-.429,-.004,cz-.0415],[x+.429,2.984,cz+.0415]));
+      }
+    }
+  }
+  const buffers = roof ? new Map() : masonryBuffers(dressed);
   for(const {geo,mat,matrices} of batches.values()){
-    const mesh=new T.InstancedMesh(geo,mat,matrices.length);
-    matrices.forEach((m,i)=>mesh.setMatrixAt(i,m));mesh.instanceMatrix.needsUpdate=true;
+    let mesh;
+    if (!roof && geo === boxGeometry) {
+      const b = buffers.get(mat);
+      if (!b) continue;
+      const g = new T.BufferGeometry();
+      g.setAttribute('position',new T.Float32BufferAttribute(b.position,3));
+      g.setAttribute('normal',new T.Float32BufferAttribute(b.normal,3));
+      g.setIndex(b.index);
+      mesh = new T.Mesh(g,mat);
+    } else {
+      mesh=new T.InstancedMesh(geo,mat,matrices.length);
+      matrices.forEach((m,i)=>mesh.setMatrixAt(i,m));mesh.instanceMatrix.needsUpdate=true;
+    }
     // Millimetre relief does not need a shadow-map pass; this avoids acne
     // against its supporting wall and preserves existing silhouette shadows.
     mesh.name=`${layout}-polish-batch`;mesh.castShadow=false;mesh.receiveShadow=true;

@@ -14,7 +14,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  await page.goto('http://127.0.0.1:5200/?nolock=1');
+  await page.goto((process.env.BASE || 'http://127.0.0.1:5200') + '/?nolock=1');
   const report = await page.evaluate(async () => {
     const T = await import('/node_modules/three/build/three.module.js');
     const { Rig } = await import('/src/player/rig.js');
@@ -83,7 +83,12 @@ try {
     const STATES = [
       ['reposo', { state: 'idle' }], ['carrera', { state: 'run', speed: 0.62 }], ['sprint', { state: 'roadie', speed: 1 }],
       ['cover bajo', { state: 'cover_low' }], ['cover alto', { state: 'cover_high' }], ['mantle', { state: 'mantle', mantlePhase: 0.5 }],
-      ['patada', { state: 'melee', meleePhase: 0.5 }], ['esquiva', { state: 'dive', evadePhase: 0.4 }], ['caída', { state: 'dead' }, 8],
+      ['patada', { state: 'melee', meleePhase: 0.5 }], ['esquiva', { state: 'dive', evadePhase: 0.4 }],
+      // capa FPS (corrida 6); antes de la caída, que reinicia la zancada (la
+      // carrera de la siguiente arma se mide en la misma fase que antes)
+      ['agachado', { state: 'crouch', coverAimExposure: 0 }], ['agachado ADS inclinado', { state: 'crouch', aim: true, coverLean: 1, coverAimExposure: 0 }],
+      ['inclinado I', { state: 'idle', aim: true, coverLean: -1 }], ['deslizamiento', { state: 'slide' }],
+      ['caída', { state: 'dead' }, 8],
     ];
     const rows = [];
     const random = Math.random; Math.random = () => 0.5;
@@ -143,5 +148,5 @@ try {
   if (bad.length || errors.length) {
     console.error(`✗ ARMAS GUARDADAS: ${bad.length} fallos en ${report.length} casos\n - ` + bad.slice(0, 30).join('\n - '));
     process.exitCode = 1;
-  } else console.log(`✓ ARMAS GUARDADAS OK: ${report.length} casos (2 avatares, 10 variantes, 4 armas, 9 posturas y recién creado) sin atravesar cuerpo ni casco`);
+  } else console.log(`✓ ARMAS GUARDADAS OK: ${report.length} casos (2 avatares, 10 variantes, 4 armas, 13 posturas y recién creado) sin atravesar cuerpo ni casco`);
 } finally { await browser.close(); }

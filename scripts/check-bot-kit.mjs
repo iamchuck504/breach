@@ -10,9 +10,12 @@ import { clearClip } from './lib-clip.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
 import { CHROME } from './lib-chrome.mjs';
+import { freePort } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
-  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: '8789' }, stdio: 'ignore',
+  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: String(FREE_PORT) }, stdio: 'ignore',
 });
 await new Promise((r) => setTimeout(r, 900));
 
@@ -27,7 +30,7 @@ const check = (name, ok, extra = '') => {
   if (!ok) fails.push(name);
 };
 
-await page.goto('http://localhost:8789/?nolock=1', { waitUntil: 'networkidle' });
+await page.goto(`http://localhost:${FREE_PORT}/?nolock=1`, { waitUntil: 'networkidle' });
 await page.evaluate(() => { window.BREACH.mapChoice = 'fortaleza'; });
 await page.evaluate(() => document.getElementById('btn-enter')?.click());
 await page.waitForSelector('#splash.off', { state: 'attached' });
@@ -58,7 +61,8 @@ await page.evaluate(() => {
 // 1) MELEE de bot contra bot: pegados, uno debe golpear y hacer daño
 const melee = await page.evaluate(async () => {
   const M = window.BREACH.botMatch;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   const a = M.bots.find((b) => b.alive && b.team === 'red');
   const d = M.bots.find((b) => b.alive && b.team === 'blue');
   if (!a || !d) return { why: 'sin pareja' };
@@ -87,7 +91,8 @@ check('el melee del bot hace daño real', melee.minHp < melee.hp0, JSON.stringif
 // ahora se cuentan los golpes que CONECTAN, no la vida)
 const wallMelee = await page.evaluate(async () => {
   const M = window.BREACH.botMatch, W = window.BREACH_WORLD;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   const a = M.bots.find((b) => b.alive && b.team === 'red');
   const d = M.bots.find((b) => b.alive && b.team === 'blue');
   if (!a || !d) return { why: 'sin pareja' };
@@ -117,7 +122,8 @@ check('melee de bot bloqueado por muro MID', wallMelee.hits === 0 && !wallMelee.
 // 3) HUMO defensivo: bot herido con amenaza a media distancia lo lanza
 const smoke = await page.evaluate(async () => {
   const M = window.BREACH.botMatch, S = window.BREACH_SMOKE;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   S.clear();
   const b = M.bots.find((x) => x.alive && x.team === 'red');
   const e = M.bots.find((x) => x.alive && x.team === 'blue');
@@ -139,7 +145,8 @@ check('bot herido lanza humo defensivo', smoke.thrown > 0 && smoke.nades === 0,
 // 4) ESPECIAL: el bot va al pedestal de sniper, lo toma y lo gasta
 const special = await page.evaluate(async () => {
   const M = window.BREACH.botMatch, S = window.BREACH_SPECIALS;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   const a = S.active;
   // un bot pudo recogerlo ya jugando durante las fases anteriores (mismo
   // camino real de recogida): entonces se mide con ese dueño
@@ -181,6 +188,10 @@ const special = await page.evaluate(async () => {
     if (e) {
       e.pos.x = owner.pos.x; e.pos.z = owner.pos.z + 14;
       owner.yaw = Math.atan2(-(e.pos.x - owner.pos.x), -(e.pos.z - owner.pos.z));
+      // PRUEBAS (corrida 6): el tiro se llama a mano, así que se ponen las condiciones
+      // que hoy exige un bot honesto (ganchos/bots.md): francotirador con mira, pose
+      // ya difundida (asentada) y estado que la tabla de compuertas deja disparar.
+      owner.rigYaw = owner.yaw; owner.aim = true; owner.poseHeld = 1e9; owner.netAnim = 'idle'; owner.sinceSprint = 99;
       // el tiro debe SALIR (un tiro declinado por línea tapada ya no gasta
       // munición): lo que se prueba es la vuelta a la primaria tras el último
       const shooting = Object.assign(Object.create(M), { botShoot: () => true });
@@ -199,7 +210,8 @@ check('al agotar la munición vuelve a su primaria', special.after === 'smg',
 // 5) el arma especial NO sobrevive a la muerte del bot
 const afterDeath = await page.evaluate(async () => {
   const M = window.BREACH.botMatch;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   window.__ensure('red', 1);
   const b = M.bots.find((x) => x.team === 'red' && x.alive);
   if (!b) return { why: 'sin bots rojos' };
@@ -219,7 +231,8 @@ check('la especial no sobrevive al respawn del bot',
 // con el camino limpio, y el splash respeta bandos
 const rocket = await page.evaluate(async () => {
   const M = window.BREACH.botMatch, R = window.BREACH_ROCKETS;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   R.clear();
   window.__ensure('red', 2);
   window.__ensure('blue', 1);

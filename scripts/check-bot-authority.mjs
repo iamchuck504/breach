@@ -9,6 +9,7 @@
 // 2. Bots alojados: botState malformado, origen del disparo anclado a poses
 //    DIFUNDIDAS del bot y sin atravesar cobertura.
 //   node scripts/check-bot-authority.mjs
+import { withSamples, nextN } from './lib-fps-sample.mjs';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -16,9 +17,12 @@ import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import { mapLineBlocked } from '../server/map-geometry.js';
 import { MAP_RUNTIME, DEFAULT_LOBBY_SETTINGS } from '../src/game/lobby-rules.js';
+import { freePort } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const port = 8862;
+const port = FREE_PORT;
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
   cwd: root,
@@ -40,7 +44,14 @@ class Peer {
     await new Promise((resolve, reject) => { this.ws.once('open', resolve); this.ws.once('error', reject); });
     return this;
   }
-  send(m) { this.ws.send(typeof m === 'string' ? m : JSON.stringify(m)); }
+  // muestra `fs` obligatoria (ronda 2): desde el último estado de ESTE peer
+  send(m) {
+    // los mensajes codificados (plantillas y fuzz) también pasan por la muestra
+    if (typeof m === 'string') { let o = null; try { o = JSON.parse(m); } catch { /* no es JSON */ }
+      if (!o || typeof o !== 'object' || Array.isArray(o) || !['s', 'fire', 'rocket', 'nade', 'protoFire'].includes(o.t)) { this.ws.send(m); return; }
+      m = o; }
+    (this._ss ||= withSamples((_p, x) => this.ws.send(JSON.stringify(x))))(this, m);
+  }
   mark() { return this.history.length; }
   // espera un mensaje recibido DESPUÉS de `from`
   next(pred, timeout = 4000, from = 0, label = '') {
@@ -101,7 +112,11 @@ async function check(peer, t, tpl, accepted, { order = 'last', gap = 0, before =
     await accepted(from);
     stats.accepted.add(t);
   };
-  const proved = () => proveAccepted().catch((e) => { throw new Error(`${label}: la plantilla válida no se aceptó — ${e.message}`); });
+  const proved = () => proveAccepted().catch(async (e) => {
+    // rechazos del servidor por motivo (NODE_ENV=test): dicen qué regla cortó
+    const why = await fetch(`http://127.0.0.1:${port}/test/refusals`).then((r) => r.json()).catch(() => null);
+    throw new Error(`${label}: la plantilla válida no se aceptó (rechazos ${JSON.stringify(why)}) — ${e.message.slice(0, 200)}`);
+  });
   if (order === 'first') await proved();
   await pump(peer, mutations(t, tpl, short), gap, before);
   if (order === 'last') await proved();
@@ -112,16 +127,16 @@ const host = await (async () => { await wait(700); return new Peer().open(); })(
 let v = null, k = null;
 try {
   // ---------- lobby ----------
-  host.send({ t: 'join', action: 'create', name: 'HOST', v: 0, hp: 2 });
+  host.send({ t: 'join', action: 'create', name: 'HOST', v: 0, hp: 2, fps: 1 });
   const welcome = await host.next((m) => m.t === 'welcome', 4000, 0, 'welcome');
   const mine = welcome.team, other = mine === 'red' ? 'blue' : 'red';
   v = await new Peer().open();
-  v.send({ t: 'join', action: 'join', name: 'VICTIM', v: 1, hp: 2 });
+  v.send({ t: 'join', action: 'join', name: 'VICTIM', v: 1, hp: 2, fps: 1 });
   const welcomeV = await v.next((m) => m.t === 'welcome', 4000, 0, 'welcome víctima');
   if (welcomeV.team !== mine) { v.send({ t: 'lobbyTeam', team: mine }); await wait(150); }
   // tercer humano: recoge el arma del bot que mata (cada tirador gasta su munición)
   k = await new Peer().open();
-  k.send({ t: 'join', action: 'join', name: 'KILLER', v: 2, hp: 2 });
+  k.send({ t: 'join', action: 'join', name: 'KILLER', v: 2, hp: 2, fps: 1 });
   const welcomeK = await k.next((m) => m.t === 'welcome', 4000, 0, 'welcome tirador');
   if (welcomeK.team !== mine) { k.send({ t: 'lobbyTeam', team: mine }); await wait(150); }
   const lastLobby = () => host.history.filter((m) => m.t === 'lobby').at(-1);
@@ -147,10 +162,10 @@ try {
   stats.types.add('join');
   {
     const probe = await new Peer().open();
-    probe.send({ t: 'join', action: 'join', name: 'FUZZ', v: 1, hp: 2 });
+    probe.send({ t: 'join', action: 'join', name: 'FUZZ', v: 1, hp: 2, fps: 1 });
     await probe.next((m) => m.t === 'welcome', 3000, 0, 'welcome de la plantilla join');
     stats.accepted.add('join'); probe.close();
-    for (const m of mutations('join', { action: 'join', name: 'FUZZ', v: 1, hp: 2 })) {
+    for (const m of mutations('join', { action: 'join', name: 'FUZZ', v: 1, hp: 2, fps: 1 })) {
       const extra = await new Peer().open().catch(() => null);
       if (extra) { extra.send(m); stats.messages++; await wait(30); extra.close(); }
       alive(`join ${m.slice(0, 120)}`);
@@ -217,9 +232,13 @@ try {
   });
   place(); await wait(120);
   // fire / botFire: un disparo al aire (sin blanco), cadencia respetada
+  // clientes FPS: el tiro humano sale del ojo EXACTO de su estado (idle,
+  // yaw 0, sin apuntar: server.js fpsOriginLegal, tolerancia 0.02 m)
+  const { eyeWorld } = await import('../src/combat/hit-pose.js');
+  const eyeAt = (x, z) => eyeWorld({ st: 'idle' }, x, 0, z, 0).map((v) => +v.toFixed(3));
   const shot = (o, p) => ({ o, p, w: 'smg', d: [], fp: { st: 'idle', a: 1, p: 0, ae: 0, cl: 0, ce: 0 } });
   const up = (x, z) => [x, 30, z];
-  await check(host, 'fire', shot([base.x, 1.1, base.z], up(base.x, base.z + 8)),
+  await check(host, 'fire', shot(eyeAt(base.x, base.z), up(base.x, base.z + 8)),
     (from) => host.next((m) => m.t === 'fire' && m.id === welcome.id, 2000, from), { gap: 120 });
   const b0 = base.pts[0];
   await check(host, 'botFire', { id: bots[0].id, ...shot([b0[0], 1.35, b0[1]], up(b0[0], b0[1] - 8)) },
@@ -231,7 +250,7 @@ try {
   const nextAlive = () => { for (let k = 0; k < 3; k++) { const i = 1 + ((target - 1 + k) % 3); if (snap.ps.find((p) => p.id === bots[i].id)?.alive) return i; } return 1; };
   const aimAt = (i, part) => { const [x, z] = base.pts[i]; return [x, part === 'head' ? 1.52 : 1.0, z]; };
   // cada tirador gasta su propia munición: el host ya disparó en el fuzz de fire
-  const fireFrom = (peer, x) => (i, part) => peer.send({ t: 'fire', ...shot([x, 1.1, base.z], aimAt(i, part)) });
+  const fireFrom = (peer, x) => (i, part) => peer.send({ t: 'fire', ...shot(eyeAt(x, base.z), aimAt(i, part)) });
   const fireAt = fireFrom(v, base.x + 1.5);
   const hitTpl = (i) => ({ target: bots[i].id, dmg: 10, part: 'body', p: aimAt(i, 'body'), pellets: 1, gib: 0 });
   await check(v, 'hit', hitTpl(1), (from) => v.next((m) => m.t === 'snap' && m.ps.find((p) => p.id === bots[1].id).hp < hpBefore[bots[1].id], 2000, from),
@@ -263,7 +282,9 @@ try {
   // nade: humo (dos en total): plantilla primero
   // la granada tiene que estar EN MANO (arma replicada) y pasado el gesto de cambio
   host.send({ t: 's', ...hostS({ w: 'grenade', am: 2, ar: 0 }) }); await wait(700);
-  await check(host, 'nade', { o: [base.x, 1.1, base.z], v: [0, 6, -3], cid: 'n1' },
+  const { launchWorld } = await import('../src/combat/hit-pose.js');
+  const L = (x, z, y = 0, pitch = 0) => launchWorld({ st: 'idle', pitch }, x, y, z, 0).launch.map((v) => +v.toFixed(3));
+  await check(host, 'nade', { o: L(base.x, base.z), v: [0, 6, -3], cid: 'n1' },
     (from) => host.next((m) => m.t === 'nadeAck', 2000, from), { order: 'first', gap: 30 });
   // crate: junto a la caja 0
   const crate = RT.crates?.[0];
@@ -274,8 +295,10 @@ try {
   const sp = RT.special;
   host.send({ t: 's', ...hostS({ x: sp.x, z: sp.z, y: sp.y ?? 0, w: 'grenade', am: 0, ar: 0 }) }); await wait(80);
   await check(host, 'takeSpecial', {}, (from) => host.next((m) => m.t === 'specialTaken' && m.id === welcome.id, 2000, from));
-  host.send({ t: 's', ...hostS({ x: sp.x, z: sp.z, y: sp.y ?? 0, w: 'bazooka', am: 1, ar: 2 }) }); await wait(700);
-  await check(host, 'rocket', { o: [sp.x, (sp.y ?? 0) + 1.1, sp.z], d: [0, 1, 0], cid: 'r1' },
+  // cohete al cielo: mirando hacia arriba (p 1.4), salida y eje de ESA mirada
+  host.send({ t: 's', ...hostS({ x: sp.x, z: sp.z, y: sp.y ?? 0, w: 'bazooka', am: 1, ar: 2, p: 1.4 }) }); await wait(700);
+  const sky = launchWorld({ st: 'idle', pitch: 1.4 }, sp.x, sp.y ?? 0, sp.z, 0);
+  await check(host, 'rocket', { o: sky.launch.map((v) => +v.toFixed(3)), d: sky.fwd.map((v) => +v.toFixed(4)), cid: 'r1' },
     (from) => host.next((m) => m.t === 'rocketAck', 2000, from), { order: 'first', gap: 30 });
   // protoClaim / protoFire: granada de fragmentación del suelo
   const ps = host.history.filter((m) => m.t === 'protoState').at(-1);
@@ -285,7 +308,7 @@ try {
   await check(host, 'protoClaim', { id: pick.id, manual: true },
     (from) => host.next((m) => m.t === 'protoInventory' && m.id === welcome.id, 2000, from), { order: 'first' });
   host.send({ t: 's', ...hostS({ x: pick.x + 0.3, z: pick.z, y: pick.y ?? 0, w: 'frag', am: 1, ar: 0 }) }); await wait(700);
-  await check(host, 'protoFire', { kind: 'frag', o: [pick.x + 0.3, (pick.y ?? 0) + 1.0, pick.z], d: [0, 6, -2] },
+  await check(host, 'protoFire', { kind: 'frag', o: L(pick.x + 0.3, pick.z, pick.y ?? 0), d: [0, 6, -2] },
     (from) => host.next((m) => (m.t === 'protoInventory' && m.id === welcome.id) || (m.t === 'protoState' && m.projectiles?.length > 0), 2000, from), { order: 'first', gap: 30 });
   // textos sueltos que no son mensajes
   for (const raw of ['null', '5', '"x"', '[]', '{"t":null}', '{"t":{}}', '{"t":["s"]}']) host.send(raw);

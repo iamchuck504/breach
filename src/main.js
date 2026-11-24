@@ -3,11 +3,13 @@ import * as THREE from 'three';
 import GUI from 'lil-gui';
 import {initMenuPresentation,updateMapPreview} from './ui/presentation.js';
 import { TUNING, TUNING_DEFAULTS } from './config/tuning.js';
-import { BINDS, KB_LABELS, PAD_LABELS, keyLabel, padBtnName, loadBinds, saveBinds, resetBinds } from './core/bindings.js';
+import { BINDS, KB_LABELS, PAD_LABELS, keyLabel, padBtnName, loadBinds, saveBinds, resetBinds, assignBind } from './core/bindings.js';
 import { LANGUAGES, t, getLanguage, setLanguage, applyTranslations, onLanguageChange } from './core/i18n.js';
 import { Input } from './core/input.js';
-import { ShoulderCamera } from './core/camera.js';
-import { FirstPerson, FP_TURN_DEG } from './view/first-person.js'; // [FP] prototipo local
+import { SETTINGS, motionScale, setSetting, bindTuning, lookSensitivity, onSettingChange } from './core/settings.js';
+import { aimFriction } from './core/gamepad.js';
+import { ShoulderCamera, FirstPersonCamera } from './core/camera.js';
+import { FirstPerson } from './view/first-person.js'; // viewmodel del prototipo (hasta src/view/fp de VISTA)
 import { World } from './world/world.js';
 import { preloadUrbanAssets, ensureMapAssets, ensurePlayableMapAssets, playableMapAssetsReady, mapAssetsReady, prefetchOtherMapAssets, onUrbanAssetArrived, urbanAssetState } from './world/urban-assets.js';
 import { Rig, RAGDOLL_R } from './player/rig.js';
@@ -15,9 +17,9 @@ import { syncLocalSoldierView } from './player/soldier-bake.js';
 import { Controller, PLAYER_R } from './player/controller.js';
 import { RemotePlayer } from './player/remote.js';
 import { Dummies } from './player/practice.js';
-import { Weapons } from './combat/weapons.js';
+import { Weapons, spreadFor } from './combat/weapons.js';
 import { resolveShot, applySpread, applyPelletPattern } from './combat/ballistics.js';
-import { hitFields, hitAimHeights, STAND, CROUCH, setHitModel } from './combat/hit-pose.js';
+import { hitFields, hitAimHeights, placeHitPose, rocketAimDir, STAND, CROUCH, setHitModel } from './combat/hit-pose.js';
 import { damageFalloff } from './combat/damage.js';
 import { adsSetback, planeBaseAlong, shooterPlaneDistance } from './combat/shooter-plane.js';
 import {evaluateBlast} from './combat/blast.js';
@@ -28,13 +30,16 @@ import {
   deathImpactPoint, isSniperHeadshotDeath, rocketDeathLevel,
 } from './combat/death-reactions.js';
 import { requiredFireBuffer } from './combat/fire-control.js';
+import { canFireInState, sprintFireDelay } from './combat/fire-gates.js';
+import { meleeTargetPoint, meleeHitOk } from './combat/melee-reach.js';
+import { kickWorldContact } from './combat/kick-surface.js';
 import { Effects } from './fx/effects.js';
 import { Audio, selectAudioListener } from './fx/audio.js';
 import { HUD } from './ui/hud.js';
 import { ImagePipeline, QUALITY } from './render/pipeline.js';
 import { AutoQuality, initialQuality } from './render/auto-quality.js';
 import { SkyEnvironment } from './render/sky.js';
-import { NetClient } from './net/client.js';
+import { NetClient, localPose, noteLocalPose, resetTransition } from './net/client.js';
 import { BotMatch, INTRO_TIME as BOT_INTRO_TIME } from './game/botmatch.js';
 import { SmokeSystem } from './game/smoke.js';
 import {
@@ -150,6 +155,9 @@ const hud = new HUD();
 initMenuPresentation();
 const input = new Input(canvas);
 const shoulderCam = new ShoulderCamera(camera, world);
+// La cámara con la que se juega. Comparte la mirada (yaw/pitch/retroceso)
+// con la de hombro, que queda para muerte, espectador y presentación.
+const fpCam = new FirstPersonCamera(camera, world, shoulderCam);
 const MENU_CAM_POS = new THREE.Vector3(18, 7.2, -25.5);
 const MENU_CAM_TARGET = new THREE.Vector3(3, 2.3, -1.5);
 const menuCamTarget = new THREE.Vector3();
@@ -189,6 +197,8 @@ resize();
 // ---------- estado de juego ----------
 const G = {
   scopeActive: false,    // estado derivado expuesto para HUD/diagnósticos
+  simClock: 0,         // reloj de SIMULACIÓN (s): mezcla de postura (cámara, red, blancos) y muestras de tiro
+  pendingThrowShots: [], // muestra de cada suelta (evento throwRelease)
   fireBuffer: 0,       // click de disparo pendiente mientras el cuerpo gira
   pendingShots: 0,     // tiros aprobados que esperan la pose/muzzle de este frame
   pendingRays: [],     // promesa de la cruz capturada al aprobar cada tiro
@@ -240,14 +250,114 @@ const G = {
   footAcc: 0,
   presentationAudioKey: '',
 };
-// [FP] primera persona (apagada por defecto: ?fp=1 o la tecla P en partida)
+// Arma en primera persona: por ahora el viewmodel del prototipo (sin su
+// tecla de cambio ni su cámara: la primera persona es la única vista al
+// jugar). Se sustituye por src/view/fp/viewmodel.js cuando VISTA lo entregue.
 const firstPerson = new FirstPerson({
   scene, camera, world, G,
-  hint: (text, ms) => hud.hint(text, ms),
-  canToggle: () => !!G.mode && G.mode !== 'editor' && !!G.player && !menuIsOpen() && !input.rebinding,
+  hint: () => {},
+  canToggle: () => false,
 });
-shoulderCam.fp = firstPerson;
-window.BREACH_FP = firstPerson; // capturas y diagnóstico
+firstPerson._told = true;
+window.BREACH_FP = fpCam; // capturas y diagnóstico: la cámara de los ojos
+window.BREACH_VM = firstPerson;
+
+// Sonidos de manejo del arma: por los EVENTOS del arma (una vez por suceso,
+// aunque se salten cuadros), no deduciéndolos del estado cuadro a cuadro.
+// (AUDIO: el módulo se engancha al emisor y suena cada reloadStep, cambio,
+// gatillo en seco y lanzamiento UNA vez, en el instante de la lógica)
+audio.attachWeapons(G.weapons);
+G.weapons.on('meleeHit', ({ connected, world: surface }) => {
+  if (connected || surface) fpCam.meleeImpact(connected ? 0.5 : 0.22);
+});
+// Eventos de acción para los observadores, una sola vez (RED §7: viajan en `s.ev`)
+for (const ev of ['swapStart', 'swapEnd', 'reloadStart', 'reloadEnd', 'reloadCancel', 'throwStart', 'throwRelease', 'throwCancel']) {
+  G.weapons.on(ev, (d = {}) => G.net?.noteEvent?.(ev, d.weapon ?? d.to ?? G.weapons.cur));
+}
+// ajustes de mezcla propios (claves de settings.js; ausentes = por defecto)
+function applyAudioSettings() {
+  audio.setOwnWeaponVolume?.(SETTINGS.ownWeaponVolume ?? 1);
+  audio.setHitSounds?.(SETTINGS.hitSounds ?? true);
+}
+applyAudioSettings();
+onSettingChange((k) => { if (k === 'ownWeaponVolume' || k === 'hitSounds') applyAudioSettings(); });
+// el bote sale en la suelta que publica el arma, no con un segundo reloj
+// gesto cortado antes de soltar (aturdido, muerte, cambio forzado): no hay
+// bote, ni suelta, ni coste; el gesto local se apaga
+G.weapons.on('throwCancel', () => { G.throwPending = false; G.throwT = 0; });
+G.weapons.on('throwRelease', ({ weapon, id } = {}) => {
+  if (!G.throwPending || !G.player || G.player.dead) return;
+  G.throwPending = false;
+  // registro del instante de la suelta (pose, ojo, mira, arrojadizo) y el
+  // bote sale en este mismo subpaso
+  const shot = captureShot();
+  if (weapon) shot.weapon = weapon;
+  shot.throwId = id; // id de la suelta (weapons): viaja en el cid del lanzamiento
+  throwSmoke(shot);
+});
+
+// Ajustes de cámara (src/core/settings.js, vivos: el menú los cambia).
+function fpSettings() { return SETTINGS; }
+// Sensibilidad de mira de este cuadro (°/px y °/s), con ADS y mira.
+function fpSens(scoped) {
+  const aim = !!G.player?.aim;
+  const m = lookSensitivity('mouse', { aim, scoped }), pad = lookSensitivity('pad', { aim, scoped });
+  return { mouse: m.x, padX: pad.x, padY: pad.y };
+}
+// ¿Juega en primera persona este cuadro? Vivo, en una partida y con su
+// propia cámara (ni presentación ni espectador: esas siguen en hombro).
+function playingMode() { return G.mode === 'practice' || G.mode === 'bots' || G.mode === 'online'; }
+// Rayo de la mira: el de los ojos al jugar; el de hombro fuera de ella.
+function viewRay() { return fpCam.live ? fpCam.aimRay() : shoulderCam.aimRay(); }
+// Asistencia de mando: SOLO fricción (gamepad.js aimFriction, pura). Los
+// blancos son la cabeza y el torso de los enemigos vivos; se descartan los
+// tapados por el mapa o el humo y los protegidos. Con ratón reciente,
+// protección de aparición propia o el ajuste apagado devuelve 1.
+const _afEye = [0, 0, 0], _afDir = [0, 0, 0];
+// Protección de aparición de un blanco, la que respeta el daño en cada modo
+// (los blancos de botmatch no la llevan en el objeto: se mira el bot).
+function targetProtected(tg) {
+  if (tg.protected) return true;
+  if (G.mode === 'bots') return (G.botMatch?.bots.find((b) => b.id === tg.id)?.protT ?? 0) > 0;
+  if (G.mode === 'online') return !!G.remotes.get(tg.id)?.inv || (G.onlineBots?.botById(tg.id)?.protT ?? 0) > 0;
+  return false;
+}
+function padAimFriction() {
+  const p = G.player;
+  if (!p || p.dead || input.lastDevice !== 'pad' || !SETTINGS.aimAssist) return 1;
+  if (Math.hypot(input.pad.camX, input.pad.camY) < 0.05) return 1; // stick quieto: nada
+  const ray = fpCam.aimRay();
+  _afEye[0] = ray.origin.x; _afEye[1] = ray.origin.y; _afEye[2] = ray.origin.z;
+  _afDir[0] = ray.dir.x; _afDir[1] = ray.dir.y; _afDir[2] = ray.dir.z;
+  const targets = [];
+  for (const tg of currentTargets()) {
+    if (tg.alive === false) continue;
+    // el mismo volumen que usa la balística (resolveShot): `hit` si la pose
+    // difiere, si no el de siempre (los dummies de práctica: de pie/agachado)
+    const v = tg.hit ?? placeHitPose(tg.hitVol ?? (tg.crouch ? CROUCH : STAND), tg.x, tg.y ?? 0, tg.z, 0);
+    for (const [x, y, z, r] of [[v.hx, v.hy, v.hz, v.hr], [(v.ax + v.bx) / 2, (v.ay + v.by) / 2, (v.az + v.bz) / 2, v.br]]) {
+      _v3.set(x - ray.origin.x, y - ray.origin.y, z - ray.origin.z);
+      const len = _v3.length();
+      const blocked = len > 0.3 && world.raycast(ray.origin, _v3.multiplyScalar(1 / len), len - 0.2, 0) !== null;
+      const smoked = !!smoke.blocksSegment?.(ray.origin.x, ray.origin.y, ray.origin.z, x, y, z);
+      targets.push({ pos: [x, y, z], radius: r, blocked, smoke: smoked, protected: targetProtected(tg) });
+    }
+  }
+  return aimFriction({ device: input.lastDevice, stick: [input.pad.camX, input.pad.camY], targets,
+    eye: _afEye, dir: _afDir, aim: !!p.aim, scoped: G.scopeActive, blocked: G.spawnProt > 0,
+    mouseRecent: input.mouseRecent(1000), enabled: SETTINGS.aimAssist, range: G.weapons.def.range });
+}
+// Boca del arma visible (traza y fogonazo); sin viewmodel, delante del ojo.
+function viewModelMuzzle(out) {
+  if (firstPerson.vm?.root.visible) return firstPerson.muzzleWorld(out);
+  return fpCam.launchPoint(out);
+}
+// Agachado: el estado nuevo `crouch` o, con el controlador de antes, el
+// cover bajo.
+function isCrouched(p) {
+  const st = p.animState?.();
+  return st === 'crouch' || st === 'cover_low' || !!p.crouched;
+}
 
 // los mapas del editor traen su propio nombre; los del juego pasan por i18n
 const mapLabel = (map) => (isCustomLayout(map)
@@ -450,7 +560,7 @@ function remoteMuzzle(r, fallback) {
 // reset de partida lo descartan: online la muerte congelaba el gesto en
 // espectador y, al reaparecer, el bote salía del cañón de la SMG inicial.
 function clearPendingHandling() {
-  G.throwT = 0; G.throwPending = false; G.pendingThrows = 0;
+  G.throwT = 0; G.throwPending = false; G.pendingThrows = 0; G.pendingThrowShots.length = 0;
   G.pendingShots = 0; G.pendingRays.length = 0; G.fireBuffer = 0;
 }
 
@@ -564,6 +674,12 @@ audio.setSpatialContext(
         team: G.team,
       }, null);
     }
+    // jugando con los ojos: el oído ES el ojo (feetY = suelo de mis pasos);
+    // en la cámara de muerte/presentación, el pecho como antes
+    if (fpCam.live) return selectAudioListener(false, null, {
+      x: camera.position.x, y: camera.position.y, z: camera.position.z,
+      feetY: G.player.y ?? 0, right: shoulderCam.flatRight(), team: G.team,
+    });
     return selectAudioListener(false, null, {
       x: G.player.pos.x,
       y: (G.player.y ?? 0) + 1.15,
@@ -663,30 +779,16 @@ function updateAudioFrame(dt) {
 
 // ---------- eventos del controller (feel: sonido + polvo + shake) ----------
 const ctrlEvents = {
+  onDodgeStart: () => {
+    const k = motionScale('shake');
+    audio.dodgeStart(k); input.pad.rumble(75, 0.55 * k, 0.25 * k);
+  },
+  onDodgeEnd: () => {
+    const k = motionScale('shake');
+    audio.dodgeEnd(k); input.pad.rumble(45, 0.20 * k, 0.65 * k);
+  },
   onSlideStart: () => { audio.slide(); if (G.player) effects.dust(G.player.pos, 'slide', G.player.y); },
-  onCoverEnter: () => {
-    audio.thump();
-    shoulderCam.addShake(0.35);
-    input.pad.rumble(60, 0.15, 0.4);
-    if (G.player) effects.dust(G.player.pos, 'cover', G.player.y);
-  },
-  onBounce: (chain) => {
-    audio.whoosh();
-    if (G.player) effects.dust(G.player.pos, 'bounce', G.player.y);
-    if (chain >= 2) hud.hint(t('msg.bounce', { count: chain }), 700);
-  },
-  onDive: () => { audio.dive(); },
   onJump: () => { audio.jump(); },
-  onDoubleJump: () => {
-    audio.whoosh();
-    input.pad.rumble(50, 0.2, 0.35);
-  },
-  onWallJump: () => {
-    audio.whoosh();
-    audio.jump();
-    input.pad.rumble(70, 0.25, 0.45);
-    if (G.player) effects.dust(G.player.pos, 'wall', G.player.y);
-  },
   onLand: () => {
     audio.land();
     if (G.player) effects.dust(G.player.pos, 'land', G.player.y);
@@ -717,21 +819,18 @@ const ctrlEvents = {
     // conserva cargador/reserva exactamente donde estaban.
     G.weapons?.interruptReload?.(); audio.cancelHandling();
     G.fireBuffer = 0;
+    G.meleeHitDone = false;
+    input.pad.rumble(40, 0.3, 0.2);
+    G.weapons?.noteMelee?.('start'); // evento del emisor: viewmodel y audio
   },
 };
 
 // ---------- menú ----------
 loadBinds();
-{
-  // clamp a los rangos de los sliders: un valor corrupto guardado no puede
-  // dejar la sensibilidad microscópica/gigante
-  const sm = parseFloat(localStorage.getItem('breach.sens.mouse'));
-  if (sm > 0) TUNING.cam.sens = Math.min(0.12, Math.max(0.01, sm));
-  const sp = parseFloat(localStorage.getItem('breach.sens.pad'));
-  if (sp > 0) TUNING.cam.padSens = Math.min(320, Math.max(60, sp));
-  const sz = parseFloat(localStorage.getItem('breach.sens.zoom'));
-  if (sz > 0) TUNING.cam.zoomSens = Math.min(1.25, Math.max(0.35, sz));
-}
+// Sensibilidades: las guarda src/core/settings.js (importa las claves
+// sueltas de antes una vez, valida y acota); TUNING.cam las refleja para la
+// cámara de hombro.
+bindTuning(TUNING);
 
 const inName = document.getElementById('in-name');
 const inServer = document.getElementById('in-server');
@@ -1269,7 +1368,9 @@ const optionsCard = document.getElementById('options-card');
 const audioCard = document.getElementById('audio-card');
 const videoCard = document.getElementById('video-card');
 const languageCard = document.getElementById('language-card');
-const optionSubCards = [audioCard, videoCard, languageCard];
+// + las páginas de ajustes que genera src/ui/settings-ui.js (HUD)
+const optionSubCards = [audioCard, videoCard, languageCard,
+  ...['aim-card', 'comfort-card', 'hudopts-card'].map((id) => document.getElementById(id)).filter(Boolean)];
 
 const onlineCard = document.getElementById('online-card');
 
@@ -1561,7 +1662,7 @@ function buildCharUI() {
         if (G.rig && G.player && G.mode) {
           G.rig.dispose(scene);
           G.rig = new Rig(scene, G.team, null, v);
-          G.rig.groundFn = (x, z, y) => world.groundHeight({ x, z }, PLAYER_R, y);
+          G.rig.groundFn = (x, z, y) => world.groundHeight({ x, z }, PLAYER_R, y); G.rig.wallFn = (o, d, m) => world.raycast(o, d, m, 0); // arma recogida contra pared
           G.rig.collideFn = (p, y, r = RAGDOLL_R) => world.resolveCircle(p, r, y);
           G.rig.setWeapon(G.weapons.cur, backWeapon());
         }
@@ -1750,18 +1851,16 @@ function updateSliderLabels() {
   slVolV.textContent = Math.round(audio.volume * 100) + '%';
 }
 slMouse.addEventListener('input', () => {
-  TUNING.cam.sens = parseFloat(slMouse.value);
-  localStorage.setItem('breach.sens.mouse', slMouse.value);
+  slMouse.value = setSetting('sens', parseFloat(slMouse.value));
   updateSliderLabels();
 });
 slPad.addEventListener('input', () => {
-  TUNING.cam.padSens = parseFloat(slPad.value);
-  localStorage.setItem('breach.sens.pad', slPad.value);
+  setSetting('padSensY', parseFloat(slPad.value));
+  slPad.value = setSetting('padSensX', parseFloat(slPad.value));
   updateSliderLabels();
 });
 slZoom.addEventListener('input', () => {
-  TUNING.cam.zoomSens = parseFloat(slZoom.value);
-  localStorage.setItem('breach.sens.zoom', slZoom.value);
+  slZoom.value = setSetting('sensScope', parseFloat(slZoom.value));
   updateSliderLabels();
 });
 slVol.addEventListener('input', () => {
@@ -1771,12 +1870,10 @@ slVol.addEventListener('input', () => {
   audio.hit(); // bip de referencia para calibrar al oído
 });
 chkInvert.addEventListener('change', () => {
-  input.invertY = chkInvert.checked;
-  localStorage.setItem('breach.invertY', String(input.invertY));
+  input.invertY = setSetting('invertY', chkInvert.checked);
 });
 chkInvertPad.addEventListener('change', () => {
-  input.invertYPad = chkInvertPad.checked;
-  localStorage.setItem('breach.invertYPad', String(input.invertYPad));
+  input.invertYPad = setSetting('invertYPad', chkInvertPad.checked);
 });
 // (la opción de raw input se eliminó: era el camino con el bug de ClipCursor)
 localStorage.removeItem('breach.rawInput');
@@ -1848,7 +1945,8 @@ function startRebindKb(action, btn) {
     window.removeEventListener('keydown', h, true);
     rebinding = null;
     input.rebinding = false;
-    if (e.code !== 'Escape') { BINDS.kb[action] = e.code; saveBinds(); }
+    // assignBind intercambia con la acción que tuviera la tecla: nunca dos
+    if (e.code !== 'Escape') assignBind('kb', action, e.code);
     renderBinds();
   };
   window.addEventListener('keydown', h, true);
@@ -1868,8 +1966,7 @@ function startRebindPad(action, btn) {
         clearInterval(iv);
         rebinding = null;
         input.rebinding = false;
-        BINDS.pad[action] = b;
-        saveBinds();
+        assignBind('pad', action, b);
         renderBinds();
         return;
       }
@@ -1957,13 +2054,25 @@ function teardown({ keepNet = false, keepLobby = true } = {}) {
   if (!keepLobby) { G.lobby = null; G.lobbyKind = null; }
 }
 
-function spawnLocal(team, spawn) {
+// Vida nueva (reaparición, ronda nueva, entrada tardía): la red empieza sin
+// postura previa ni mezcla heredada (resetLife conserva el contador `n`).
+// Directo aquí, no a través de la cámara.
+function newLife(serverLife) {
+  G.net?.resetLife?.(G.player, serverLife);
+  G.lifeId = (G.lifeId ?? 0) + 1;
+  // vida nueva en el arma: las sueltas de la vida anterior ya no se reembolsan
+  G.weapons.newLife(serverLife);
+}
+
+function spawnLocal(team, spawn, serverLife) {
   G.team = team;
   G.rig = new Rig(scene, team, null, G.charVariant);
-  G.rig.groundFn = (x, z, y) => world.groundHeight({ x, z }, PLAYER_R, y);
+  G.rig.groundFn = (x, z, y) => world.groundHeight({ x, z }, PLAYER_R, y); G.rig.wallFn = (o, d, m) => world.raycast(o, d, m, 0); // arma recogida contra pared
   G.rig.collideFn = (p, y, r = RAGDOLL_R) => world.resolveCircle(p, r, y);
   G.player = new Controller(world, shoulderCam, ctrlEvents);
-  G.player.respawn(spawn);
+  G.player.bindWeapons?.(G.weapons); // arma en mano + lanzamiento comprometido (decisión 18)
+  G.player.poseClock = () => G.simClock; // la mezcla de postura con el MISMO reloj que main y la red
+  G.player.respawn(spawn); newLife(serverLife);
   G.weapons.reset(); audio.cancelHandling(); clearPendingHandling();
   G.rig.setWeapon('smg');
 }
@@ -2049,7 +2158,7 @@ function damagePlayerLocal(dmg, fromName, shooter, hitCtx = null) {
       : null;
     G.weapons.cancelActions(); audio.cancelHandling();
     // morir a mitad del lanzamiento: el bote NO sale de una mano muerta
-    G.throwT = 0; G.throwPending = false; G.pendingThrows = 0;
+    G.throwT = 0; G.throwPending = false; G.pendingThrows = 0; G.pendingThrowShots.length = 0;
     // contexto físico de la muerte ANTES de matar (kill() borra la velocidad):
     // dirección del tiro, potencia del golpe final, momentum y estado
     G.rig.setDeathContext({
@@ -2160,6 +2269,7 @@ function startBots(lobby = G.lobby || defaultLocalLobby(), { assetsWaited = fals
   world.setLayout(config.map);
   audio.setAmbience(config.map);
   G.mode = 'bots';
+  G.weapons.online = G.mode === 'online';
   G.weapons.infinite = false; // la munición infinita es SOLO de práctica
   const localSlot = lobby.players.find((p) => p.id === 'player') || lobby.players[0];
   spawnLocal(localSlot.team, world.spawns[localSlot.team][0]);
@@ -2173,7 +2283,7 @@ function startBots(lobby = G.lobby || defaultLocalLobby(), { assetsWaited = fals
     effects, audio, hud,
     playerName: G.name,
     playerVariant: G.charVariant,
-    stepSound,
+    stepSound, onDodgeCue,
     dropWeapon: (wep, x, z, team, y = 0, deathRig = null, specialAmmo = 0) => {
       // los bots no llevan contador de balas: sueltan un remanente plausible.
       // Aparece exactamente al soltar el arma y sigue el pequeño arrastre del
@@ -2205,7 +2315,7 @@ function startBots(lobby = G.lobby || defaultLocalLobby(), { assetsWaited = fals
       G.selfAlive = true;
       G.selfHp = TUNING.combat.hp;
       G.respawnT = 0;
-      G.player.respawn(spawn);
+      G.player.respawn(spawn); newLife();
       G.weapons.reset(); audio.cancelHandling();
       exitSpectator();
       if (protect) grantSpawnProtection();
@@ -2424,6 +2534,7 @@ function startPractice({ fullscreen = true, assetsWaited = false, onBuilt = null
   G.mode = 'practice';
   // campo de tiro: munición infinita para TODO el arsenal (reserva eterna,
   // granadas que se reponen, sniper/bazooka recargables sin fin)
+  G.weapons.online = G.mode === 'online';
   G.weapons.infinite = true;
   spawnLocal('red', world.spawns.red[1]);
   G.dummies = new Dummies(scene, world);
@@ -2475,6 +2586,9 @@ async function connectOnlineLobby(action) {
     // si durante el await el usuario arrancó OTRA partida (vs bots, práctica),
     // este welcome tardío no debe secuestrarla
     if (startSeq !== mySeq) { net.close(); return; }
+    // DECISIÓN 16: cliente FPS + servidor sin `fps` = no se entra. Se avisa
+    // y se queda en el menú (la conexión se cierra sin tocar la partida).
+    if (welcome?.fps !== 1 || net.fps === false) { net.close(); showServerOutdated(); return; }
     teardown({ keepLobby: false });
     G.net = net;
     // un servidor anterior no anuncia `hp`: se valida con la regla antigua y
@@ -2490,8 +2604,19 @@ async function connectOnlineLobby(action) {
     audio.lobbyEnter();
     netStatus.textContent = '';
   } catch (e) {
+    if (e?.code === 'server-outdated' || /server-outdated/.test(e?.message ?? '')) { showServerOutdated(); return; }
     netStatus.textContent = t('msg.error', { message: e.message });
   }
+}
+// "El servidor aún no está actualizado" (HUD: net.serverOutdated) y de
+// vuelta al menú principal; también si llega como evento en plena sesión.
+function showServerOutdated() {
+  if (G.net) { try { G.net.close(); } catch { /* ya cerrada */ } }
+  if (G.mode || G.lobbyKind) teardown({ keepLobby: false });
+  G.mode = null;
+  hud.show(false); hud.showMenu(true); input.releaseLock();
+  netStatus.textContent = t('net.serverOutdated');
+  hud.hint?.(t('net.serverOutdated'), 4000);
 }
 
 function onlineHumanTargets() {
@@ -2506,25 +2631,35 @@ function onlineHumanTargets() {
 function setupOnlineBots(roster) {
   if (G.lobby?.hostId !== G.net?.id) return;
   const slots = roster.filter((p) => p.bot);
+  // El primer tiro tras frenar puede caer entre dos envíos a 20 Hz. Durante
+  // la recuperación, adjuntar el estado exacto antes de cualquier acción.
+  const noteDodgeShot = (bot, weapon) => {
+    const recovery = sprintFireDelay(weapon) + 2 / TUNING.net.sendHz;
+    if (bot.dodgeCd >= TUNING.dodge.cooldown - recovery) G.net?.botState([bot]);
+  };
   G.botMatch = new BotMatch(scene, world, {
     smoke, specials, rockets,
     effects, audio, hud, humans: onlineHumanTargets,
     playing: () => G.onlinePhase === 'playing',
-    stepSound,
-    botFire: (bot, origin, point, wep, impacts) =>
-      G.net?.botFire(bot.id, origin, point, wep, impacts, bot),
+    stepSound, onDodgeCue,
+    botFire: (bot, origin, point, wep, impacts) => {
+      noteDodgeShot(bot, wep);
+      return G.net?.botFire(bot.id, origin, point, wep, impacts, bot);
+    },
     botHit: (bot, targetId, dmg, part, gib, point, meta) => {
       // bot alojado que me pega: su posición orienta el arco de daño del snapshot
       if (targetId === G.net?.id) noteHurtSource(true, bot.pos.x, bot.pos.z, bot.id);
       return G.net?.botHit(bot.id, targetId, dmg, part, gib, point, meta);
     },
-    botNade: (bot, origin, velocity, cid) => G.net?.send({
-      t: 'nade', bot: bot.id,
-      o: [origin.x, origin.y, origin.z], v: [velocity.x, velocity.y, velocity.z],
-      ...(cid ? { cid } : {}),
-    }),
-    botRocket: (bot, origin, dir, cid) =>
-      G.net?.rocket(origin, dir, cid, bot, bot.id),
+    botNade: (bot, origin, velocity, cid) => {
+      noteDodgeShot(bot, 'grenade');
+      return G.net?.send({ t: 'nade', bot: bot.id, o: [origin.x, origin.y, origin.z],
+        v: [velocity.x, velocity.y, velocity.z], ...(cid ? { cid } : {}) });
+    },
+    botRocket: (bot, origin, dir, cid) => {
+      noteDodgeShot(bot, 'bazooka');
+      return G.net?.rocket(origin, dir, cid, bot, bot.id);
+    },
     claimBotSpecial: (bot) => G.net?.send({ t: 'takeSpecial', bot: bot.id }),
   }, {
     external: true, playerTeam: G.team, rounds: G.onlineSettings.rounds, lives: G.onlineSettings.lives,
@@ -2542,6 +2677,7 @@ function setupOnlineMatch(m) {
   const net = G.net; if (!net) return;
   teardown({ keepNet: true, keepLobby: true });
   G.mode = 'online';
+  G.weapons.online = G.mode === 'online';
   G.weapons.infinite = false; // la munición infinita es SOLO de práctica
   G.onlineSettings = m.settings || G.lobby.settings;
   G.onlinePhase = m.phase || 'intro';
@@ -2552,7 +2688,7 @@ function setupOnlineMatch(m) {
   const roster = m.players || [];
   const mine = roster.find((p) => p.id === net.id);
   if (!mine) return;
-  spawnLocal(mine.team, { x: mine.x, z: mine.z, yaw: mine.team === 'red' ? Math.PI : 0 });
+  spawnLocal(mine.team, { x: mine.x, z: mine.z, yaw: mine.team === 'red' ? Math.PI : 0 }, mine.life);
   G.crates = new AmmoCrates(scene, true, world.cratePos ?? undefined);
   G.drops = new WeaponDrops(scene);
   spawnOnlineSpecial(m.special);
@@ -2578,8 +2714,10 @@ function addRemote(p) {
   const prev = G.remotes.get(p.id);
   if (prev) prev.dispose(scene); // id repetido: no dejar rigs huérfanos
   const r = new RemotePlayer(scene, p.id, p.name, p.team, p.v | 0);
+  r.onDodgeCue = onDodgeCue;
+  r.world = world;
   r.rig.setNameTagThroughWalls(p.team === G.team); // solo compañeros a través de muros
-  r.rig.groundFn = (x, z, y) => world.groundHeight({ x, z }, PLAYER_R, y);
+  r.rig.groundFn = (x, z, y) => world.groundHeight({ x, z }, PLAYER_R, y); r.rig.wallFn = (o, d, m) => world.raycast(o, d, m, 0); // arma recogida contra pared
   r.rig.collideFn = (pt, y, radius = RAGDOLL_R) => world.resolveCircle(pt, radius, y);
   r.alive = p.alive !== false;
   r.bot = !!p.bot;
@@ -2613,7 +2751,7 @@ function reconcileLocalOnlineSnapshot(snapshot) {
     // WebSocket mantiene orden y normalmente `respawn` llega primero. Este
     // camino reconcilia el estado si la UI se montó tarde o cambió de host.
     G.selfAlive = true;
-    G.player.respawn({ x: snapshot.x, z: snapshot.z, yaw: snapshot.yaw || 0 });
+    G.player.respawn({ x: snapshot.x, z: snapshot.z, yaw: snapshot.yaw || 0 }); newLife(snapshot.life);
     G.weapons.reset(); audio.cancelHandling();
     G.rig?.setWeapon?.('smg');
     exitSpectator();
@@ -2764,7 +2902,12 @@ function bindNet(net) {
         continue;
       }
       const hosted = G.onlineBots?.botById(p.id);
-      if (hosted) { hosted.hp = p.hp; hosted.protT = p.inv ? Math.max(hosted.protT, .12) : 0; continue; }
+      if (hosted) {
+        hosted.hostedPose = p;
+        hosted.hostedPoseAt = performance.now();
+        hosted.hp = p.hp; hosted.protT = p.inv ? Math.max(hosted.protT, .12) : 0;
+        continue;
+      }
       const r = G.remotes.get(p.id);
       if (r) { r.push(p); r.alive = !!p.alive; r.hp = p.hp; }
     }
@@ -2968,8 +3111,10 @@ function bindNet(net) {
     if (G.mode !== 'online' || m.id === net.id) return;
     const okVec = (v) => Array.isArray(v) && v.length === 3 && v.every((n) => typeof n === 'number' && isFinite(n));
     if (!okVec(m.o) || !okVec(m.v) || typeof m.nid !== 'string') return;
-    // el lanzador (jugador o bot alojado) muestra el gesto de suelta
-    G.remotes.get(m.id)?.applyThrow?.();
+    // gesto de suelta: un jugador lo recibe por su evento `throwRelease`
+    // (s.ev); solo un bot (sin eventos) lo toma de aquí → una suelta por gesto
+    const thrower = G.remotes.get(m.id);
+    if (thrower?.bot) thrower.applyThrow?.();
     // El vuelo remoto es visual; solo smokeStart puede crear la nube real.
     smoke.throwNade(
       { x: m.o[0], y: m.o[1], z: m.o[2] },
@@ -2978,6 +3123,7 @@ function bindNet(net) {
     );
   });
   net.on('nadeAck', (m) => {
+    if (m.id === net.id && typeof m.cid === 'string') G.weapons.confirmThrow(m.cid);
     const okVec = (v) => Array.isArray(v) && v.length === 3 &&
       v.every((n) => typeof n === 'number' && isFinite(n));
     if (typeof m.nid !== 'string') return;
@@ -2991,7 +3137,13 @@ function bindNet(net) {
   });
   net.on('nadeReject', (m) => {
     if (typeof m.cid === 'string') smoke.remove(m.cid);
+    // reembolso UNA vez y solo de una suelta PROPIA pendiente: weapons
+    // reconoce el id (`p:<yo>:<id>`); un bot, otro jugador, un id repetido o
+    // ya confirmado no acredita nada (decisión 18)
+    if (m.bot || (m.id != null && m.id !== net.id)) return;
+    if (typeof m.cid === 'string') G.weapons.refundThrow(m.cid, { life: m.life });
   });
+  net.on('server-outdated', () => showServerOutdated());
   net.on('smokeStart', (m) => {
     const okVec = (v) => Array.isArray(v) && v.length === 3 &&
       v.every((n) => typeof n === 'number' && isFinite(n));
@@ -3165,7 +3317,7 @@ function bindNet(net) {
       G.selfHp = TUNING.combat.hp;
       G.respawnT = 0;
       G.selfRespawnPending = false;
-      G.player.respawn(m.spawn);
+      G.player.respawn(m.spawn); newLife(m.life);
       G.weapons.reset(); audio.cancelHandling();
       G.rig.setWeapon('smg');
       exitSpectator();
@@ -3225,7 +3377,7 @@ function bindNet(net) {
         if (p.id === net.id) {
           G.selfAlive = true; G.selfHp = TUNING.combat.hp; G.respawnT = 0;
           G.selfRespawnPending = false;
-          G.player.respawn(spawn); G.weapons.reset(); audio.cancelHandling(); exitSpectator();
+          G.player.respawn(spawn); newLife(p.life); G.weapons.reset(); audio.cancelHandling(); exitSpectator();
         } else if (G.onlineBots?.botById(p.id)) G.onlineBots.respawnExternal(p.id, spawn);
         else {
           const r = G.remotes.get(p.id);
@@ -3258,6 +3410,11 @@ function bindNet(net) {
 // ---------- pasos posicionales (bots / remotos) ----------
 // Todos los pasos ajenos usan la misma curva 3D que disparos e impactos.
 // `team` separa pasos aliados (atenuados) de enemigos (presentes y nítidos).
+function onDodgeCue(kind, x, y, z, dx, dz, team) {
+  effects.dodgeCue(kind, x, y, z, dx, dz);
+  if (kind === 'start') stepSound(x, z, 'dodge', y, team);
+}
+
 function stepSound(x, z, kind, y = 0, team = null) {
   if (!G.player) return;
   audio.footstep(kind, { position: { x, y: y + 0.22, z }, team });
@@ -3268,11 +3425,20 @@ const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vect
 // Volumen de impacto = pose dibujada (hit-pose.js), no solo el nombre del
 // estado: apuntando sobre cover bajo el estado sigue siendo cover_low pero
 // el rig está de pie.
+// Postura del jugador local con los campos de la red (contrato §1): la
+// misma entrada para su volumen de impacto, su ojo (cámara) y el origen
+// del tiro que valida el servidor.
+function localPoseInput() {
+  const p = G.player, ap = p.animParams();
+  const pose = localPose(p, G.weapons?.cur, G.simClock);
+  pose.p = pose.pitch;
+  pose.ae = p.cameraYawError();
+  if (ap.state === 'mantle') pose.phase = ap.mantlePhase;
+  return pose;
+}
 function localHitFields() {
-  const p = G.player, st = p.animState(), ap = p.animParams();
-  return hitFields({ st, aim: p.aim, ce: p.coverAimExposure, cl: p.coverLeanAnim || 0, pitch: p.cam?.pitch ?? 0,
-    phase: st === 'dive' ? ap.evadePhase : st === 'mantle' ? ap.mantlePhase : st === 'flip' ? ap.flipT : undefined,
-    flipDir: ap.flipDir, flipAxis: ap.flipAxis, wep: G.weapons?.cur }, p.pos.x, p.y, p.pos.z, p.yaw);
+  const p = G.player;
+  return hitFields(localPoseInput(), p.pos.x, p.y, p.pos.z, p.yaw);
 }
 const remoteHitFields = (r) => hitFields(r.hitPoseInput(), r.x, r.y ?? 0, r.z, r.yaw);
 
@@ -3347,172 +3513,6 @@ function staticHitDistance(origin, dir, maxDist) {
   // simplificado usado por locomoción. La retícula debe seguir balística.
   return world.raycastHit?.(origin, dir, maxDist)?.t ??
     world.raycast(origin, dir, maxDist) ?? maxDist;
-}
-
-function barrelDirection(out = new THREE.Vector3()) {
-  G.rig.root.updateWorldMatrix(true, true);
-  return G.rig.gunForward(out).normalize();
-}
-
-function currentFireDirection(muzzle, maxRange = 80) {
-  if (!G.player.aim) return barrelDirection(new THREE.Vector3());
-  const ray = shoulderCam.aimRay();
-  const guide = resolveShot(world, currentTargets(), ray.origin, ray.dir, maxRange, null);
-  return _v3.copy(guide.point).sub(muzzle).normalize();
-}
-
-// Hip fire y blindfire no comparten la intención óptica de ADS: proyectamos el
-// primer contacto del rayo que sale físicamente del cañón. No hay offsets fijos
-// y la marca se adapta a arma, pose, cover, ángulo y distancia.
-function barrelReticleXY() {
-  const p = G.player, def = G.weapons?.def;
-  if (!p || p.aim || !def) return null;
-  G.rig.root.updateWorldMatrix(true, true);
-  const muzzle = G.rig.muzzleWorld(_v1);
-  const dir = barrelDirection(_v2);
-  const range = def.range > 0 ? def.range : 60;
-  const hit = resolveShot(world, currentTargets(), muzzle, dir, range, null);
-  camera.updateMatrixWorld(true);
-  const viewPoint = _v3.copy(hit.point).applyMatrix4(camera.matrixWorldInverse);
-  if (!Number.isFinite(viewPoint.z) || viewPoint.z >= -0.001) return null;
-  const ndc = _v2.copy(hit.point).project(camera);
-  if (!Number.isFinite(ndc.x) || !Number.isFinite(ndc.y)) return null;
-  return {
-    x: (ndc.x * 0.5 + 0.5) * innerWidth,
-    y: (-ndc.y * 0.5 + 0.5) * innerHeight,
-  };
-}
-
-// ---------- aim-over (ADS): librar bordes cercanos que tapan el cañón ----------
-// La cámara va ~0.3m por encima del muzzle en ADS (medido: SMG ~1.22 vs
-// cámara ~1.51): un borde a la altura del pecho entre jugador y objetivo
-// corta la línea del arma aunque el círculo (centro de pantalla) vea libre —
-// el tiro se estampa en tu propio parapeto a un metro. Vetado mover o
-// recolorear la retícula y vetado disparar "desde los ojos" (se siente
-// trampa): el PERSONAJE levanta el conjunto arma+brazos lo justo para librar
-// el borde (la bala sigue naciendo del cañón real). Si ni el tope del gesto
-// libra, el arma se inclina hacia abajo y el gatillo queda inerte: mejor no
-// disparar que desperdiciar la bala. TUNING.aimOver (F10) apaga todo en vivo.
-const _ao1 = new THREE.Vector3(), _ao2 = new THREE.Vector3();
-const _ao3 = new THREE.Vector3(), _ao4 = new THREE.Vector3();
-// alturas discretas (histéresis natural: sin oscilar en bordes milimétricos)
-const AIM_OVER_LIFTS = [0, 0.12, 0.2, 0.27, 0.34];
-// Alturas naturales del muzzle por arma (medidas en ADS, pitch 0, de pie) y
-// alcance hacia delante del cañón: el fallback analítico las usa cuando el
-// muzzle real está contaminado por el dip de bloqueo (medido: el dip bajaba
-// el muzzle 1.22→0.84 y el detector, midiendo desde el arma caída, veía un
-// bloqueo eterno — realimentación).
-const AIM_OVER_MUZZLE_Y = { smg: 1.24, shotgun: 1.3, pistol: 1.34, sniper: 1.32, bazooka: 1.35 };
-// FWD remedido con la pose ADS de run 3 (cañón 0.16-0.40 m más adelante):
-// ajuste y = Y + FWD·sin(pitch) del muzzle real entre ±0.6 rad, residuo <2 cm.
-const AIM_OVER_MUZZLE_FWD = { smg: 1.18, shotgun: 1.52, pistol: 0.76, sniper: 1.8, bazooka: 0.85 };
-
-function aimOverEligible(p) {
-  const w = G.weapons;
-  if (!TUNING.aimOver.enabled || !p || !p.aim || p.dead || !w || w.swapping ||
-      w.def.thrown || !G.selfAlive) return false;
-  // cover y blindfire ya gestionan su propia exposición (coverAimPose/lean);
-  // los estados acrobáticos no sostienen una intención óptica estable
-  const s = p.state || '';
-  return s !== 'dead' && s !== 'dive' && s !== 'slide' && s !== 'roadie' &&
-    s !== 'melee' && s !== 'mantle' && s !== 'flip' &&
-    !s.startsWith('cover') && !s.startsWith('blind_');
-}
-
-// ¿Desde este origen, el rayo central Y el borde BAJO del cono (rotado como
-// el spread real: diverge con la distancia) libran el tramo cercano hacia
-// guide? Solo lo vertical veta: un desvío lateral que roza una pared al
-// costado es dispersión legítima (exigirlo cancelaba la corrección entera
-// junto a paredes laterales irrelevantes — medido en fortaleza). El
-// descuento 0.25 solo evita chocar contra la superficie del propio guide.
-function aimOverOriginClear(from, guide, spreadPerMeter) {
-  const d = _ao4.copy(guide).sub(from);
-  const len = d.length();
-  if (len < 0.6) return false;
-  d.multiplyScalar(1 / len);
-  const near = Math.min(TUNING.aimOver.nearDist, len - 0.25);
-  if (near <= 0.1) return false;
-  if (staticHitDistance(from, d, near) < near - 1e-3) return false;
-  _ao4.set(d.x, d.y - spreadPerMeter, d.z).normalize();
-  return staticHitDistance(from, _ao4, near) >= near - 1e-3;
-}
-
-// ¿El cono COMPLETO (central, bajo y ambos lados) libra desde este origen?
-// Solo lo usa el ajuste del disparo para decidir un ARRIMADO opcional: un
-// cono que muerde lateralmente jamás veta el tiro (fallback = disparar).
-function aimOverConeClear(from, guide, spreadPerMeter) {
-  if (!aimOverOriginClear(from, guide, spreadPerMeter)) return false;
-  const d = _ao4.copy(guide).sub(from);
-  const len = d.length();
-  d.multiplyScalar(1 / len);
-  const near = Math.min(TUNING.aimOver.nearDist, len - 0.25);
-  const cx = d.x, cy = d.y, cz = d.z;
-  const rl = Math.hypot(-cz, cx) || 1;
-  const rx = -cz / rl, rz = cx / rl;
-  for (const side of [spreadPerMeter, -spreadPerMeter]) {
-    _ao4.set(cx + rx * side, cy, cz + rz * side).normalize();
-    if (staticHitDistance(from, _ao4, near) < near - 1e-3) return false;
-  }
-  return true;
-}
-
-// Escalera de alzada: menor h que deja el cono libre desde (origin + h).
-// Devuelve null si ni el tope libra (geometría que alzar no resuelve).
-function aimOverClearance(origin, guide, spreadDownRad, maxLift) {
-  const spreadPerMeter = Math.tan(spreadDownRad) + 0.025; // + colchón fijo
-  for (const h of AIM_OVER_LIFTS) {
-    if (h > maxLift + 1e-6) break;
-    const from = _ao3.set(origin.x, origin.y + h, origin.z);
-    if (aimOverOriginClear(from, guide, spreadPerMeter)) return h;
-  }
-  return null;
-}
-
-// Alzada PREVENTIVA (suave, por frame): acerca el arma a la altura que libra
-// para que el disparo casi nunca necesite el ajuste instantáneo de fireShot.
-// Sin estados de bloqueo ni retención: el gatillo SIEMPRE responde — si nada
-// libra, el arma se queda en su pose y el tiro pega lo que físicamente hay.
-function updateAimOver(dt) {
-  const st = G.aimOver, cfg = TUNING.aimOver;
-  const p = G.player;
-  let targetLift = 0;
-  if (p && G.rig && aimOverEligible(p)) {
-    const def = G.weapons.def;
-    const range = def.range > 0 ? def.range : 60;
-    const ray = shoulderCam.aimRay();
-    // punto que promete el círculo, CON personajes: el tiro real apunta al
-    // enemigo/dummy si lo hay, y esa línea pasa por otro sitio que la del
-    // mundo desnudo
-    const guideHit = resolveShot(world, currentTargets(), ray.origin, ray.dir, range, null);
-    const guide = _ao1.copy(guideHit.point);
-    G.rig.root.updateWorldMatrix(true, true);
-    // Base 100% ANALÍTICA (tabla por arma + giro por pitch), XZ del muzzle
-    // real. Jamás se deriva la altura del muzzle del rig: el lift que
-    // nosotros aplicamos más el lag del damp realimentaban el sensor.
-    const muzzle = G.rig.muzzleWorld(_ao2);
-    // el pitch es el de la cámara (el que el rig recibe como aimPitch): el
-    // Controller no tiene `aimPitch` y el giro se quedaba siempre en 0
-    muzzle.y = (p.y ?? 0) + (AIM_OVER_MUZZLE_Y[G.weapons.cur] ?? 1.28) +
-      Math.sin(p.cam?.pitch ?? 0) * (AIM_OVER_MUZZLE_FWD[G.weapons.cur] ?? 1);
-    if (_ao3.copy(guide).sub(muzzle).length() > 1.2) {
-      targetLift = aimOverClearance(muzzle, guide, aimOverSpreadDown(def), cfg.maxLift) ?? 0;
-    }
-  }
-  const speed = targetLift > st.lift ? cfg.rise : cfg.fall;
-  st.lift += (targetLift - st.lift) * (1 - Math.exp(-speed * dt));
-  if (Math.abs(st.lift - targetLift) < 0.004) st.lift = targetLift;
-}
-
-function coverPoseReady(wantsAim, wantsFire) {
-  const p = G.player;
-  if (!p || p.state !== 'cover' || !p.cover) return true;
-  // El primer click del mismo frame que inicia ADS/blindfire debe entrar al
-  // buffer, no consumirse ni perderse antes de que el rig adopte la pose.
-  const low = p.cover.h <= TUNING.cover.lowHeight;
-  if (wantsAim && low && p.coverAimExposure < 0.82) return false;
-  if (wantsFire && !wantsAim &&
-      (!p.blindMode || p.blindPoseExposure < TUNING.cover.blindFireReady)) return false;
-  return true;
 }
 
 // Online: el arma de la ronda la decide el SERVIDOR (llega en matchStart/
@@ -3603,7 +3603,7 @@ function prototypeActors(){
   const out=p?[{id:localId,x:p.pos.x,y:p.y,z:p.pos.z,team:G.team,alive:G.selfAlive&&!p.dead,protected:G.spawnProt>0,st:p.animState(),blastH:hitAimHeights(localHitFields().hitVol).blast}]:[];
   const bots=G.mode==='online'?G.onlineBots?.bots:G.botMatch?.bots;
   const bm=G.mode==='online'?G.onlineBots:G.botMatch;
-  for(const b of bots??[])out.push({id:b.id,x:b.pos.x,y:b.y,z:b.pos.z,team:b.team,alive:b.alive,protected:b.protT>0,st:b.state==='cover'?(b.cover?.low?'cover_low':'cover_high'):b.state,
+  for(const b of bots??[])out.push({id:b.id,x:b.pos.x,y:b.y,z:b.pos.z,team:b.team,alive:b.alive,protected:b.protT>0,st:b.animState(),
     ...(bm?._hitFields&&b.alive?{blastH:hitAimHeights(bm._hitFields(b).hitVol).blast}:{})});
   if(G.mode==='practice')for(const a of G.dummies?.targets()??[])out.push({...a,y:a.y??0,team:'blue',alive:a.alive!==false});
   if(G.mode==='online')for(const r of G.remotes.values())out.push({...r,protected:!!r.inv});
@@ -3628,8 +3628,14 @@ function prototypeEvent(e){
   }else if(e.kind==='stun'){audio.electric({position:e.p});}
   else if(e.kind==='fuse')audio.grenadeTick({position:e.p});
   else if(e.kind==='launch'){
-    if(e.weapon==='stun')audio.electric({position:e.p});else audio.throwNade({position:e.p});
-    const remote=G.remotes.get(e.owner);remote?.applyFirePose(null,e.weapon);
+    // la suelta PROPIA ya suena por el evento throwRelease (audio.attachWeapons): una sola vez
+    const mine=e.owner===(G.net?.id??'player');
+    // frag/aturdidora propia aceptada por el servidor: ya no es reembolsable
+    if(mine&&typeof e.cid==='string')G.weapons.confirmThrow?.(e.cid);
+    if(!mine){if(e.weapon==='stun')audio.electric({position:e.p});else audio.throwNade({position:e.p});}
+    // la frag de un jugador anima por sus eventos de lanzamiento (no es un
+    // disparo: sin `firing`); la aturdidora sí es un tiro
+    const remote=G.remotes.get(e.owner);if(e.weapon==='stun'||remote?.bot)remote?.applyFirePose(null,e.weapon);
     if(remote&&e.weapon==='stun'){effects.muzzleFlash(new THREE.Vector3(e.p.x,e.p.y,e.p.z));remote.rig.kick(.2);}
   }
 }
@@ -3671,17 +3677,16 @@ function updatePrototypes(dt){
 function prototypePickup(){
  if(!G.protoSnapshot?.active||!G.selfAlive||G.protoStun>0)return false;
  const p=G.player;
- if(G.weapons.swapping||G.weapons.reloading||G.throwT>0||['melee','dive','slide','mantle'].includes(p.state))return false;
+ if(G.weapons.swapping||G.weapons.reloading||G.throwT>0||['melee','dodge','dive','slide','mantle'].includes(p.state))return false;
  const item=G.protoSnapshot.pickups.find(a=>a.count>0&&Math.hypot(a.x-p.pos.x,a.z-p.pos.z)<1.15&&Math.abs(a.y-p.y)<.7);
  if(!item)return false;
  const w=G.weapons,slot=item.kind==='frag'?3:2;
  if(item.kind==='frag'&&w.slots[3]==='frag'&&w.state.frag.mag>=2)return false;
  if(item.kind==='stun'&&w.slots[2]==='stun'&&w.state.stun.mag>0)return false;
  const manual=w.slots[slot]!==item.kind||item.kind==='stun';
- const button=input.lastDevice==='pad'?padBtnName(BINDS.pad.evade):keyLabel(BINDS.kb.pickup);
+ const button=input.lastDevice==='pad'?padBtnName(BINDS.pad.pickup):keyLabel(BINDS.kb.pickup);
  hud.pickupPrompt(manual?`[${button}] ${t('weapon.'+w.slots[slot])} → ${item.count} × ${t('weapon.'+item.kind)}`:`+ ${item.count} × ${t('weapon.'+item.kind)}`);
  if(!manual||input.pickupPressed){
-  if(input.pickupPressed&&(input.lastDevice==='pad'||BINDS.kb.pickup===BINDS.kb.evade))input.evadePressed=false;
   input.pickupPressed=false;
   if(G.mode==='online'){
    if((G.protoClaimAt??0)<performance.now()){G.net.send({t:'protoClaim',id:item.id,manual});G.protoClaimAt=performance.now()+350;}
@@ -3689,44 +3694,30 @@ function prototypePickup(){
  }
  return true;
 }
-function prototypeFire(kind,o,d){
- if(G.mode==='online')G.net.send({t:'protoFire',kind,o:[o.x,o.y,o.z],d:[d.x,d.y,d.z]});
+// frag / aturdidora: en línea viajan con la muestra del tiro (`fs`)
+function prototypeFire(kind,o,d,shot=null){
+ // cid del lanzamiento (frag: el id de la suelta) para conciliar un rechazo
+ const cid=G.mode==='online'?`p:${G.net?.id||'local'}:${shot?.throwId??`s${++G.smokeSeq}`}`:null;
+ if(G.mode==='online')G.net.send({t:'protoFire',kind,cid,o:[o.x,o.y,o.z],d:[d.x,d.y,d.z],
+  ...(G.net.shotSample?{fs:G.net.shotSample(G.player,kind,shot)}:{})});
  else G.protoEngine?.fire('player',kind,o,d);
 }
-function throwSmoke() {
+function throwSmoke(shot) {
   const p = G.player;
   const d = TUNING.weapons.grenade;
   G.rig.setTransform(p.pos.x, p.pos.z, p.yaw, p.y);
-  const muzzle = G.rig.muzzleWorld(_v1);
-  // [FP] el bote sale delante de la cámara; en cover, de la mano del rig
-  // (por encima del parapeto, como en 3P): desde el ojo chocaría con él
-  if (firstPerson.live && p.state !== 'cover') firstPerson.launchPoint(muzzle);
-  // La intención es SIEMPRE la de la cámara (hip igual que ADS): de la mano
-  // hacia el punto del centro de pantalla. En hip se usaba el eje del bote
-  // en la mano, que gira con el latigazo: su ángulo en el cuadro de suelta
-  // dependía de los fps (medido: +0.18 a 30, −0.24 a 60, −0.28 a 144) y el
-  // pitch no lo movía. La mano solo pone el punto de salida.
-  // La suelta nunca queda al otro lado del cover: barrido pecho → mano y,
-  // si algo lo corta, el bote sale justo antes del contacto (lado propio).
-  const chest = _v2.set(p.pos.x, p.y + 1.3, p.pos.z);
-  const reachV = _v3.copy(muzzle).sub(chest);
-  const reachLen = reachV.length();
-  if (reachLen > 0.02) {
-    reachV.multiplyScalar(1 / reachLen);
-    const cut = world.raycast(chest, reachV, reachLen);
-    if (cut !== null) muzzle.copy(chest).addScaledVector(reachV, Math.max(0, cut - 0.12));
-  }
-  const throwRay = shoulderCam.aimRay();
-  const throwGuide = resolveShot(world, currentTargets(), throwRay.origin, throwRay.dir, 60, null);
+  // El bote sale delante del OJO de la muestra de la suelta (nunca al otro
+  // lado de la geometría: ojo→salida libre, lo que exige el servidor) hacia
+  // el punto que promete el centro de pantalla en ese instante.
+  const muzzle = fpCam.launchPoint(_v1, shot);
+  const throwGuide = resolveShot(world, currentTargets(), shot.origin, shot.dir, 60, null);
   const dir = new THREE.Vector3().copy(throwGuide.point).sub(muzzle);
-  // Guía detrás del plano frontal de la mano o demasiado cerca (pared a
-  // la espalda de la cámara, muro a medio metro): mano→guía apuntaría hacia
-  // el propio jugador. Ahí manda la dirección de la cámara.
-  if (dir.dot(throwRay.dir) < 1.2) dir.copy(throwRay.dir);
+  // guía detrás de la mano o demasiado cerca: manda la dirección de la mira
+  if (dir.dot(shot.dir) < 1.2) dir.copy(shot.dir);
   else dir.normalize();
   if(G.weapons.cur==='frag'){
-    prototypeFire('frag',muzzle,dir);input.pad.rumble(45,.25,.35);G.rig.kick(.5);
-    if(G.weapons.st.mag<=0)G.weapons.startSwap(G.weapons.primary);return;
+    prototypeFire('frag',muzzle,dir,shot);input.pad.rumble(45,.25,.35);G.rig.kick(.5);
+    return; // la selección tras el último bote la decide Weapons (vuelta prevista)
   }
   const o = { x: muzzle.x, y: muzzle.y, z: muzzle.z };
   const v = {
@@ -3734,7 +3725,7 @@ function throwSmoke() {
     y: dir.y * d.throwSpeed + d.throwUp,
     z: dir.z * d.throwSpeed,
   };
-  const cid = G.mode === 'online' ? `p:${G.net?.id || 'local'}:${++G.smokeSeq}` : null;
+  const cid = G.mode === 'online' ? `p:${G.net?.id || 'local'}:${shot.throwId ?? `s${++G.smokeSeq}`}` : null;
   smoke.throwNade(o, v, cid ? { id: cid, authoritative: true } : undefined);
   audio.throwNade();
   input.pad.rumble(45, 0.25, 0.35);
@@ -3742,10 +3733,10 @@ function throwSmoke() {
   G.net?.send({
     t: 'nade', o: [o.x, o.y, o.z], v: [v.x, v.y, v.z],
     ...(cid ? { cid } : {}),
+    ...(G.net.shotSample ? { fs: G.net.shotSample(p, 'grenade', shot) } : {}),
   });
-  // sin botes restantes: cambiar solo a la primaria (nunca quedarse
-  // apuntando con la mano vacía)
-  if (G.weapons.st.mag <= 0) G.weapons.startSwap(G.weapons.primary);
+  // sin botes restantes: la selección siguiente (vuelta de la granada
+  // rápida o arma anterior) la decide Weapons, no main
 }
 
 // Golpe melee: arco frontal corto. Pega al enemigo MÁS CERCANO dentro del
@@ -3755,32 +3746,39 @@ G.kickPushes = [];
 function resolveMelee() {
   const ml = TUNING.melee;
   const p = G.player;
-  const f = p.facing();
-  const cosHalf = Math.cos(ml.arcDeg * Math.PI / 360);
+  // R6: selección, alcance y barrido desde el OJO de la muestra del golpe,
+  // con las MISMAS funciones que el servidor (combat/melee-reach.js): un
+  // marcador contra un rival agachado o más bajo es daño de verdad.
+  const shot = captureShot(); // fs.w conserva el arma equipada incluso en el primer golpe de la vida
+  const eye = [shot.origin.x, shot.origin.y, shot.origin.z];
+  const aimYaw = Math.atan2(-shot.dir.x, -shot.dir.z);
   let best = null;
   for (const tg of currentTargets()) {
     if (tg.alive === false || tg.protected) continue;
-    const dx = tg.x - p.pos.x, dz = tg.z - p.pos.z;
-    const dist = Math.hypot(dx, dz);
-    if (dist > ml.range) continue;
-    if (Math.abs((tg.y ?? 0) - p.y) > ml.heightTolerance) continue;
-    const dot = dist < 0.001 ? 1 : (dx * f.x + dz * f.z) / dist;
-    if (dot < cosHalf) continue;
-    // Lo más centrado gana sobre una diferencia mínima de distancia. Evita
-    // que un hombro lateral robe el golpe al objetivo claramente frontal.
-    const score = dist + (1 - dot) * 0.42;
-    if (!best || score < best.score) best = { tg, dist, dx, dz, dot, score };
+    const vol = tg.hit ?? placeHitPose(tg.hitVol ?? (tg.crouch ? CROUCH : STAND), tg.x, tg.y ?? 0, tg.z, 0);
+    const pt = meleeTargetPoint(eye, vol, aimYaw);
+    // criterio ÚNICO con el servidor: centro del blanco (0.9 m sobre los pies)
+    // a ≤ 58° de la MIRADA y contacto a alcance desde el ojo
+    if (!pt || !meleeHitOk(eye, aimYaw, pt.point, [tg.x, (tg.y ?? 0) + 0.9, tg.z])) continue;
+    // barrido ojo → punto contra el mapa
+    _v2.set(pt.point[0] - eye[0], pt.point[1] - eye[1], pt.point[2] - eye[2]);
+    const len = _v2.length();
+    if (len > 0.05 && world.raycast(shot.origin, _v2.multiplyScalar(1 / len), len, 0) !== null) continue;
+    const dx = tg.x - p.pos.x, dz = tg.z - p.pos.z, dist = Math.hypot(dx, dz);
+    const lh = Math.hypot(pt.point[0] - eye[0], pt.point[2] - eye[2]) || 1;
+    const dot = ((pt.point[0] - eye[0]) * -Math.sin(aimYaw) + (pt.point[2] - eye[2]) * -Math.cos(aimYaw)) / lh;
+    // lo más centrado gana sobre una diferencia mínima de distancia
+    const score = pt.dist + (1 - dot) * 0.42;
+    if (!best || score < best.score) best = { tg, dist, dx, dz, dot, score, point: pt.point };
   }
-  if (!best) return { connected: false, killed: false };
+  if (!best) {
+    const surface = kickWorldContact(world, shot.origin, shot.dir);
+    if (surface) effects.meleeWorld(surface.point, surface.normal);
+    return { connected: false, killed: false, world: !!surface };
+  }
   const { tg, dist } = best;
-  _v1.set(p.pos.x, p.y + 1.08, p.pos.z);
-  const targetPoint = _v3.set(tg.x, (tg.y ?? 0) + hitAimHeights(tg.hitVol ?? (tg.crouch ? CROUCH : STAND)).body, tg.z);
-  _v2.copy(targetPoint).sub(_v1);
-  const strikeLen = _v2.length();
-  if (strikeLen > 0.4 && world.raycast(_v1, _v2.normalize(),
-      Math.max(0, strikeLen - ml.wallPadding)) !== null) {
-    return { connected: false, killed: false };
-  }
+  _v1.copy(shot.origin);
+  const targetPoint = _v3.set(best.point[0], best.point[1], best.point[2]);
   // POR LA ESPALDA (letal) > PLACAJE en sprint > golpe normal
   const tyaw = G.mode === 'practice' ? G.dummies?.list?.find((d) => d.id === tg.id)?.yaw
     : G.mode === 'bots' ? G.botMatch?.bots.find((b) => b.id === tg.id)?.yaw
@@ -3844,16 +3842,15 @@ function resolveMelee() {
       victimTeam = r?.team || b.team;
       (r?.rig || b?.rig)?.hitReact?.(best.dot < 0.75 ? Math.sign(best.dx) : 0, tackle ? 1.2 : 1, 'kick', backstab);
       // el golpe viaja como disparo validable de corto alcance + su claim
-      G.net.fire(_v1, point, 'melee', [], G.player);
+      // origen = ojo de la muestra del golpe (RED §3: el servidor lo rehace desde ahí)
+      G.net.fire(shot.origin, point, 'melee', [], G.player, shot);
       G.net.hit(tg.id, dmg, 'body', false, point);
     }
   }
   if (connected) {
     effects.meleeImpact(point, TEAM_HEX[victimTeam], impactDir);
     hud.hitmarker(killed ? 'kill' : 'body');
-    audio.meleeImpact(null, killed);
     input.pad.rumble(killed ? 115 : 85, 0.58, killed ? 0.95 : 0.78);
-    shoulderCam.addShake((killed ? 0.48 : 0.34) + (tackle || backstab ? 0.3 : 0));
   }
   return { connected, killed };
 }
@@ -3868,191 +3865,179 @@ function backWeapon() {
 // Única fuente de verdad del scope. Es derivado, no un toggle: cualquier
 // acción incompatible lo apaga en ese mismo frame y nunca puede quedar
 // pegado después de cambiar arma, morir, golpear o entrar a spectator.
+// Relevo del scope (ARMAS-2): el scope entra cuando el arma termina de
+// subir a la cara (scopeIn01 del viewmodel ≥ 0.98); entretanto se ve el arma
+// subiendo y el tiro lleva la dispersión de cadera.
+function scopeEngaged() {
+  if (!sniperScopeActive()) return false;
+  // exige un valor de alineación DISPONIBLE: sin viewmodel activo (o sin
+  // medida) la mira no entra — tampoco pegado a un muro (decisión 17)
+  const vm = firstPerson.fp2?.active ? firstPerson.fp2.vm : null;
+  if (!vm || vm.scopeAvailable?.() === false) return false;
+  const k = vm.scopeIn01?.();
+  return Number.isFinite(k) && k >= 0.98;
+}
 function sniperScopeActive() {
   const p = G.player, w = G.weapons;
   return !!(G.mode && p && w && G.selfAlive && !p.dead && p.aim &&
-    w.cur === 'sniper' && !w.swapping && p.state !== 'melee' &&
+    w.cur === 'sniper' && !w.swapping && !w.reloading && p.state !== 'melee' &&
     !G.spectator.active && !matchControlsLocked() && !menuIsOpen());
 }
 
-// Peor desviación vertical del cono del arma: el spread completo para un
-// proyectil, y el pellet diagonal-bajo del patrón para la escopeta.
-function aimOverSpreadDown(def) {
-  const deg = (def.spreadAim ?? 0) * (def.pellets > 1 ? 0.85 : 1);
-  return deg * Math.PI / 180;
+// Dispersión del arma en este instante (semiángulo, grados): la MISMA que
+// dibuja la retícula (spreadFor + spreadState del controlador).
+function shotSpreadState() {
+  const st = G.player.spreadState();
+  // sniper subiendo al scope: aún no es el tiro exacto de la mira
+  if (G.weapons.cur === 'sniper' && st.aim && !scopeEngaged()) return { ...st, aim: false };
+  return st;
+}
+function shotSpread() {
+  return spreadFor(G.weapons.cur, shotSpreadState());
 }
 
-// RED FINAL anti-estampado (ADS): se resuelve DENTRO del disparo, en el
-// mismo frame — el gatillo SIEMPRE responde. Si la línea de ESTE tiro va a
-// estamparse en el mundo a quemarropa mientras el círculo promete un punto
-// mucho más lejano, el ORIGEN del disparo se ajusta ahí mismo: primero
-// ALZADA (el caso común: borde horizontal delante) y si no basta, ARRIMADO
-// lateral hacia el eje de la cámara (rozando una pared alta al costado, la
-// cámara pasa por un lado y el cañón cruza la esquina — alzar no resuelve
-// una pared de 3m; pegar el arma al pecho sí es un gesto físico del
-// personaje y jamás cruza el eje de la vista). El rig converge a la pose en
-// un par de frames; tracer y flash salen del punto ajustado, mezclados con
-// el recoil ni se nota. Si NADA libra —geometría exótica—, el tiro sale
-// igual desde donde está y pega lo que físicamente hay: nunca se niega,
-// nunca atraviesa, nunca miente la retícula. El kill switch lo apaga.
-const AIM_OVER_SIDES = [0.1, 0.18, 0.26];
-
-function adsAdjustFireOrigin(targets, cameraOrigin, baseDir, muzzle, range, def) {
-  if (!TUNING.aimOver.enabled) return;
-  const promised = resolveShot(world, targets, cameraOrigin, baseDir, range, null);
-  const guide = _ao1.copy(promised.point);
-  if (_ao2.copy(guide).sub(muzzle).length() < 1.2) return; // mirando algo pegado
-  const spreadPerMeter = Math.tan(aimOverSpreadDown(def)) + 0.025;
-  // 1) alzada vertical (margen extra sobre maxLift: el ajuste es puntual)
-  const h = aimOverClearance(muzzle, guide, aimOverSpreadDown(def),
-    TUNING.aimOver.maxLift + 0.08);
-  if (h !== null && h > 0) {
-    muzzle.y += h;
-    // acercar la pose del rig al punto real del tiro (converge con su damp)
-    G.aimOver.lift = Math.min(TUNING.aimOver.maxLift, G.aimOver.lift + h);
-    return;
-  }
-  // Con el eje vertical limpio, el CONO puede seguir mordiendo de costado
-  // (dispersión contra una pared lateral): si es el caso, intentar arrimado.
-  if (h === 0 && aimOverConeClear(muzzle, guide, spreadPerMeter)) return;
-  // 2) arrimado lateral hacia el eje de la cámara (con alzada combinada); el
-  //    tope de alzada respeta el knob (max(0, maxLift))
-  const latX = cameraOrigin.x - muzzle.x, latZ = cameraOrigin.z - muzzle.z;
-  const latLen = Math.hypot(latX, latZ);
-  if (latLen < 0.05) return;
-  const lx = latX / latLen, lz = latZ / latLen;
-  const lim = Math.max(0, TUNING.aimOver.maxLift);
-  const dys = [...new Set([0, Math.min(0.2, lim), lim])];
-  for (const s of AIM_OVER_SIDES) {
-    if (s > latLen) break; // jamás cruzar el eje de la cámara
-    for (const dy of dys) {
-      const from = _ao2.set(muzzle.x + lx * s, muzzle.y + dy, muzzle.z + lz * s);
-      const ok = h === 0
-        ? aimOverConeClear(from, guide, spreadPerMeter)   // busca librar el CONO
-        : aimOverOriginClear(from, guide, spreadPerMeter); // busca librar el eje
-      if (!ok) continue;
-      muzzle.copy(from);
-      if (dy > 0) G.aimOver.lift = Math.min(lim, G.aimOver.lift + dy);
-      return;
-    }
-  }
-  // nada libra: geometría exótica — el tiro sale igual (física honesta)
+// Retroceso MECÁNICO (mueve la mira): el patrón del arma (weapons.lastKick);
+// el golpe cosmético va aparte (fpCam.kick, × ajuste `shake`).
+function applyMechanicalRecoil(k, def) {
+  shoulderCam.addPitchRecoil(Number.isFinite(k?.pitch) ? k.pitch : def.recoil * 0.006);
+  if (Number.isFinite(k?.yaw)) shoulderCam.addYawRecoil(k.yaw);
 }
 
-function fireShot() {
-  const w = G.weapons, def = w.def;
+// ¿Puede disparar YA? La MISMA tabla que el servidor (fire-gates.js) sobre
+// el estado del controlador Y el que viaja (en una transición pueden
+// diferir: manda el más estricto); el retraso sprint→disparo va en
+// p.fireAligned() (controller, con sprintFireDelay de la misma tabla).
+function fireGateOpen(p) {
+  const w = G.weapons.cur;
+  return canFireInState(p.animState(), w) && canFireInState(localPose(p, w, G.simClock).st, w);
+}
+
+// MUESTRA DE TIRO: pose, ojo, dirección, arma y dispersión de UN instante,
+// el subpaso en que el arma aprueba el tiro (tras mover al jugador). La usan
+// el daño local, la traza y la red (`G.net.fire(..., sample)`): el servidor
+// valida el origen contra ESA pose. El
+// ojo es eyeWorld(pose) exacto (= la cámara, que no tiene desplazamiento
+// cosmético); la dirección, la mira de ese instante (= la cruz).
+function captureShot() {
+  const p = G.player, look = shoulderCam;
+  const pose = localPoseInput();
+  const cp = Math.cos(look.pitch);
+  const dir = new THREE.Vector3(-Math.sin(look.yaw) * cp, Math.sin(look.pitch), -Math.cos(look.yaw) * cp).normalize();
+  // ojo = eyeWorld de la MISMA pose que viaja en `fs` (mismo reloj de
+  // simulación): el servidor lo reconstruye exactamente igual. (p.eyeWorld()
+  // del controlador evalúa la mezcla de transición con su propio reloj y en
+  // la salida de sprint / slide se separaba > 2 cm: rechazo `fire-origin`.)
+  const origin = fpCam.shotEye(pose, p, new THREE.Vector3());
+  // x/y/z/yaw/ae/pose: los campos que client.js manda como `fs` (RED)
+  const lk = G.weapons.lastKick;
+  // `spreadAim`: el aim con el que se calculó la dispersión de ESTE tiro
+  // (viaja como fs.sa; el servidor rehace el mismo cono)
+  const sst = shotSpreadState();
+  return { origin, dir, pose, weapon: G.weapons.cur, spread: spreadFor(G.weapons.cur, sst), spreadAim: sst.aim, scoped: scopeEngaged(),
+    kick: lk ? { pitch: lk.pitch, yaw: lk.yaw } : null,
+    aim: !!p.aim, pos: { x: p.pos.x, y: p.y ?? 0, z: p.pos.z }, x: p.pos.x, y: p.y ?? 0, z: p.pos.z,
+    // `t` = reloj de SIMULACIÓN en segundos (el mismo de `s.ct`): viaja como fs.ct
+    yaw: p.yaw, ae: pose.ae, t: G.simClock,
+    // diagnóstico: el ojo del render anterior (lo que se usaba antes)
+    prevEye: fpCam.eye.clone() };
+}
+
+// Boca VISUAL del arma (traza, fogonazo, casquillo): la del viewmodel, sin
+// cruzar la pared que el ojo tiene delante. La bala no sale de aquí.
+function visualMuzzle(out, eye) {
+  viewModelMuzzle(out);
+  const d = _v3.copy(out).sub(eye), len = d.length();
+  if (len > 1e-3) {
+    d.multiplyScalar(1 / len);
+    const hit = world.raycast(eye, d, len + 0.04, 0);
+    if (hit !== null && hit < len + 0.04) out.copy(eye).addScaledVector(d, Math.max(0, hit - 0.06));
+  }
+  return out;
+}
+
+// TODO disparo del jugador (cadera y ADS): hitscan desde el OJO por el rayo
+// central con la dispersión del arma (DECISIONES §4). El origen que va al
+// servidor es ese mismo ojo (dentro de la esfera de cabeza replicada). La
+// boca del viewmodel solo pone el origen de los efectos. Cohete y stun salen
+// delante del ojo hacia el punto que promete el centro de pantalla.
+function fireShot(ray) {
+  const w = G.weapons;
+  // arma del REGISTRO (la del subpaso aprobado), no la que haya ahora
+  const wep = ray.weapon, def = TUNING.weapons[wep];
   // los bots oyen los disparos del jugador (percepción: shotAt)
   G.botMatch?.noteShot?.(G.mode === 'online' ? G.net?.id : 'player');
-  const aiming = G.player.aim;
-  const scoped = sniperScopeActive();
-  const inCover = G.player.state === 'cover';
-  const spread = aiming ? def.spreadAim : (inCover ? def.spreadBlind : def.spreadHip);
-
-  // El controller ya pudo girar este frame; sincronizar el root antes de leer
-  // el muzzle evita lanzar el tracer desde la pose espacial anterior.
   G.rig.setTransform(G.player.pos.x, G.player.pos.z, G.player.yaw, G.player.y);
-  const muzzle = G.rig.muzzleWorld(_v1).clone();
-  const origin = muzzle.clone();
-  // el rayo encolado al aprobar el tiro conserva la cámara del click (con el
-  // scope aún activo); recalcular aquí usaría la cámara post-salto
-  const ray = G.pendingRays.shift() ?? shoulderCam.aimRay();
-  const cameraOrigin = ray.origin.clone();
-  // [FP] primera persona: TODO tiro va por el rayo central de la cámara (ojos)
-  // con la dispersión de siempre (hip/ADS/blind). Blindfire: la bala sale del
-  // arma del rig (por encima/al costado del cover, como en 3P) paralela al
-  // rayo central; el ojo queda protegido. Los efectos salen del arma en
-  // primera persona. Con el modo apagado `fp` es false y nada cambia.
-  const fp = firstPerson.live;
-  const fpBlind = fp && !aiming && inCover;
-  if (fp) firstPerson.muzzleWorld(muzzle);
-  // ADS usa la intención óptica central; hip/blindfire conservan el eje físico.
-  // En ambos casos el origen balístico sigue siendo el muzzle.
-  const baseDir = aiming || fp ? ray.dir.clone() : barrelDirection(new THREE.Vector3());
-  if (fp && (w.cur === 'stun' || def.projectile)) {
-    // proyectiles: delante de la cámara (o el arma del rig en blindfire)
-    if (fpBlind) muzzle.copy(origin); else firstPerson.launchPoint(muzzle);
-  }
-  if(w.cur==='stun'){
-    const dir=applySpread(fp?baseDir:aiming?currentFireDirection(muzzle,def.range).clone():baseDir,spread);
-    prototypeFire('stun',muzzle,dir);effects.muzzleFlash(muzzle);G.rig.kick(.2);return;
-  }
+  // la muestra del subpaso en que se aprobó el tiro (pose, ojo, rayo,
+  // dispersión y mira de ESE instante); recalcular aquí mezclaría instantes
+  G.lastShot = ray; // diagnóstico (pruebas)
+  const aiming = ray.aim;
+  const scoped = ray.scoped;
+  const spread = ray.spread;
+  const eye = ray.origin.clone();
+  const baseDir = ray.dir.clone();
+  const muzzle = visualMuzzle(_v1, eye).clone();
 
-  // bazooka: proyectil REAL, sin hitscan — el cohete hace el daño al explotar
-  if (def.projectile) {
-    let projectileDir = baseDir;
-    if (fp) {
-      // [FP] hacia el punto del centro de pantalla desde la salida
-      const guide = resolveShot(world, currentTargets(), cameraOrigin, ray.dir, def.range, null);
-      const to = _v3.copy(guide.point).sub(muzzle);
-      projectileDir = to.length() > 1.2 ? to.normalize().clone() : ray.dir.clone();
-    } else if (aiming) {
-      const targets = currentTargets();
-      // elevar/arrimar el origen si un borde cercano taparía el cohete (solo
-      // si el círculo promete más lejos); la dirección apunta al guide
-      adsAdjustFireOrigin(targets, cameraOrigin, ray.dir, muzzle, def.range, def);
-      const guide = resolveShot(world, targets, cameraOrigin, ray.dir,
-        def.range, null);
-      projectileDir = _v3.copy(guide.point).sub(muzzle).normalize().clone();
+  if (wep === 'stun' || def.projectile) {
+    const launch = fpCam.launchPoint(new THREE.Vector3(), ray);
+    const guide = resolveShot(world, currentTargets(), eye, baseDir, def.range || 60, null);
+    // R6: convergencia COMPARTIDA con el servidor (rocketAimDir: hacia el
+    // punto del rayo central, como mínimo a 2 m)
+    const cd = rocketAimDir([launch.x, launch.y, launch.z], [eye.x, eye.y, eye.z], [baseDir.x, baseDir.y, baseDir.z], guide.t);
+    const dir = new THREE.Vector3(cd[0], cd[1], cd[2]);
+    if (wep === 'stun') {
+      prototypeFire('stun', launch, applySpread(dir, spread), ray);
+      effects.muzzleFlash(muzzle); G.rig.kick(.2); fpCam.kick(0.2);
+      return;
     }
+    // bazooka: proyectil REAL, sin hitscan — el cohete hace el daño al explotar
     const cid = G.mode === 'online' ? `p:${++G.rocketSeq}` : null;
     // owner null = cohete propio (hitmarker/feed); la espoleta recibe aparte
     // la identidad y el bando del tirador para no fusar sobre él ni aliados
-    rockets.fire({ x: muzzle.x, y: muzzle.y, z: muzzle.z }, projectileDir,
+    rockets.fire({ x: launch.x, y: launch.y, z: launch.z }, dir,
       true, null, cid, G.mode === 'online', { id: G.net?.id ?? 'player', team: G.team });
+    // El cohete se SIMULA desde la salida junto al ojo (lo que valida el
+    // servidor), pero el propio jugador no debe ver un proyectil en la cara:
+    // su malla se oculta hasta que se aleja OWN_ROCKET_HIDE m (el fogonazo
+    // del tubo cubre esos primeros cuadros).
+    const own = rockets.list[rockets.list.length - 1];
+    if (own?.mesh) { own.mesh.visible = false; ownRocketsHidden.push({ r: own, x: launch.x, y: launch.y, z: launch.z }); }
     // replicar el proyectil: los demás clientes lo ven volar y explotar
-    G.net?.rocket(muzzle, projectileDir, cid, G.player);
-    effects.muzzleFlash(muzzle, true, { weapon: 'bazooka', dir: projectileDir });
-    audio.gun(w.cur);
+    G.net?.rocket(launch, dir, cid, G.player, null, ray);
+    effects.muzzleFlash(muzzle, true, { weapon: 'bazooka', dir });
+    audio.gun(wep);
     input.pad.rumble(110, 0.6, 1.0);
     G.rig.kick(def.recoil * 0.5);
-    shoulderCam.addShake(def.recoil * TUNING.cam.shakeFire);
-    shoulderCam.addPitchRecoil(def.recoil * 0.006);
+    fpCam.kick(def.recoil);
+    applyMechanicalRecoil(ray.kick, def);
     return;
   }
 
   const targets = currentTargets();
-  // MODELO GEARS (pedido explícito de Chuck): en ADS el DAÑO viaja por el
-  // EJE ÓPTICO — la retícula es la verdad absoluta y el cañón solo emite
-  // los efectos (tracer/flash), igual que en Gears of War. El trace parte
-  // de la CÁMARA (que colisiona: nunca está dentro de geometría) — partir
-  // del plano del pecho parecía más "justo" pero pegado a un bus el origen
-  // caía DENTRO del collider y la bala salía por la cara trasera (decals
-  // detrás del objeto). El alcance y el falloff se miden desde el plano
-  // del jugador para no regalar ni robar ~2m (la escopeta lo notaba).
-  // El aim-over queda como acomodo VISUAL del arma.
-  let damageOrigin = origin;
-  let falloffBase = 0;
-  let planeVec = null; // pecho − cámara (solo ADS)
-  if (aiming) {
-    if (!fp) adsAdjustFireOrigin(targets, cameraOrigin, baseDir, muzzle, def.range, def);
-    damageOrigin = cameraOrigin.clone();
-    // misma pose que el servidor ve en el estado: yaw del cuerpo y pitch de cámara
-    const c = adsSetback({ x: G.player.pos.x, y: G.player.y ?? 0, z: G.player.pos.z,
-      yaw: G.player.yaw, p: shoulderCam.pitch, aim: 1 }, cameraOrigin.toArray());
-    // sin cámara plausible (colisión extrema) el servidor no descuenta nada
-    planeVec = c;
-    falloffBase = planeBaseAlong(planeVec, ray.dir.toArray());
-  } else if (fp && !fpBlind) damageOrigin = cameraOrigin.clone(); // [FP] hip: desde los ojos
+  const damageOrigin = eye;
+  const planeVec = null; // el ojo ya está en el plano del tirador
   const dmgByTarget = new Map();
   let anyPoint = null;
   const worldImpacts = [];
 
+  // Punto del EJE CENTRAL del cartucho (rayo óptico del subpaso): es lo que
+  // viaja como dirección del disparo; cada perdigón se valida contra él (con
+  // la escopeta, el último perdigón llegaba a 32.8° de los otros)
+  const axisPoint = resolveShot(world, targets, damageOrigin, baseDir, def.range, null).point;
   for (let i = 0; i < def.pellets; i++) {
     let dir = def.pellets > 1
       ? applyPelletPattern(baseDir, spread, i, def.pellets)
       // El scope promete exactamente su punto. Fuera del scope (incluido
-      // hip/blindfire del sniper) se conserva la dispersión configurada.
+      // el sniper en cadera) se conserva la dispersión del arma.
       : scoped ? baseDir.clone() : applySpread(baseDir, spread);
     // alcance de ESTE perdigón con su propia proyección (convenio compartido)
     const hit = resolveShot(world, targets, damageOrigin, dir,
       def.range + planeBaseAlong(planeVec, dir.toArray()), null);
     anyPoint = hit.point;
-    // TRACER estilo Gears: sale del cañón — pero si ese segmento visual
-    // cruzaría el borde que la bala real (eje óptico) libró, el trazo se
-    // pliega al punto del eje a la altura del arma. La "impresión de que la
-    // bala atraviesa la esquina" era exactamente esta línea cosmética.
+    // TRAZA: sale de la boca visual — pero si ese segmento cruzaría un borde
+    // que la bala real (desde el ojo) libró, se pliega al eje del tiro para
+    // no dar la impresión de atravesar la esquina.
     let tracerFrom = fxAboveGround(_fxO.copy(muzzle), G.player.y ?? 0); // solo efecto
-    if (aiming || fp) {
+    {
       const segLen = _v2.copy(hit.point).sub(muzzle).length();
       if (segLen > 0.4) {
         _v2.multiplyScalar(1 / segLen);
@@ -4062,11 +4047,11 @@ function fireShot() {
         }
       }
     }
-    effects.tracer(tracerFrom, hit.point, scoped && w.cur === 'sniper', { team: G.team, weapon: w.cur });
+    effects.tracer(tracerFrom, hit.point, scoped && wep === 'sniper', { team: G.team, weapon: wep });
     if (hit.kind === 'world') {
       effects.impact(hit.point, hit.normal, hit.surface, {
         origin: damageOrigin,
-        emphasized: scoped && w.cur === 'sniper',
+        emphasized: scoped && wep === 'sniper',
       });
       audio.impact(hit.point, hit.surface);
       worldImpacts.push(hit.point);
@@ -4087,14 +4072,18 @@ function fireShot() {
     }
   }
   // feedback de disparo (flash grande + rumble fuerte para armas pesadas)
-  effects.muzzleFlash(fxAboveGround(_fxO.copy(muzzle), G.player.y ?? 0), w.cur === 'shotgun' || !!def.special, { weapon: w.cur, dir: baseDir, team: G.team });
-  audio.gun(w.cur);
+  // casquillo, boca y rebufo del viewmodel: effects los toma de la fuente
+  // local que registra el adaptador (setLocalEjectSource) cuando no se pasa `eject`
+  effects.muzzleFlash(fxAboveGround(_fxO.copy(muzzle), G.player.y ?? 0), wep === 'shotgun' || !!def.special,
+    { weapon: wep, dir: baseDir, team: G.team });
+  audio.gun(wep);
   if (def.recoil >= 1.5) input.pad.rumble(90, 0.5, 0.9);
   else if (def.recoil >= 0.5) input.pad.rumble(55, 0.28, 0.5);
   else input.pad.rumble(45, 0.2, 0.4);
   G.rig.kick(def.recoil * 0.5);
-  shoulderCam.addShake(def.recoil * TUNING.cam.shakeFire);
-  shoulderCam.addPitchRecoil(def.recoil * 0.006);
+  // retroceso: el MECÁNICO (mueve la mira) y aparte el golpe cosmético
+  fpCam.kick(def.recoil);
+  applyMechanicalRecoil(ray.kick, def);
 
   // aplicar daño
   let hitSomeone = false, hitHead = false, hitKill = false; // rango del marcador
@@ -4106,14 +4095,14 @@ function fireShot() {
       hitSomeone = true;
       effects.blood(e.point, TEAM_HEX.blue);
       const killed = G.dummies.damage(id, e.dmg, (d) => {
-        const sniperHeadshot = isSniperHeadshotDeath(w.cur, e.part);
+        const sniperHeadshot = isSniperHeadshotDeath(wep, e.part);
         const impact = { x: d.x - G.player.pos.x, z: d.z - G.player.pos.z };
         d.rig.setDeathContext({
           impact,
           power: Math.min(1, e.dmg / 55),
           vel: { x: 0, z: 0 },
           state: 'run',
-          weapon: w.cur,
+          weapon: wep,
           distance: e.dist,
           damage: e.dmg,
           part: e.part,
@@ -4123,8 +4112,8 @@ function fireShot() {
         });
         G.scores.red++;
         hud.score(G.scores.red, G.scores.blue);
-        hud.kill(G.name, 'red', d.name, 'blue', { weapon: w.cur, head: e.part === 'head', local: 'killer' });
-        hud.killConfirm(d.name, w.cur, e.part === 'head');
+        hud.kill(G.name, 'red', d.name, 'blue', { weapon: wep, head: e.part === 'head', local: 'killer' });
+        hud.killConfirm(d.name, wep, e.part === 'head');
         audio.kill(e.part === 'head');
         if (sniperHeadshot) effects.sniperHeadshot(e.point, TEAM_HEX.blue, impact);
         else if (gib) effects.gib(new THREE.Vector3(d.x, 0, d.z), TEAM_HEX.blue);
@@ -4133,7 +4122,7 @@ function fireShot() {
       if (killed) hitKill = true;
     } else if (G.mode === 'bots' && G.botMatch) {
       const killed = G.botMatch.damageBot(id, e.dmg, 'player', gib, false, {
-        weapon: w.cur, distance: e.dist, damage: e.dmg, part: e.part,
+        weapon: wep, distance: e.dist, damage: e.dmg, part: e.part,
         point: e.point, gib,
       });
       if (killed === null) continue; // protegido o inválido: sin feedback falso
@@ -4160,9 +4149,12 @@ function fireShot() {
   if (G.net && anyPoint) {
     // WebSocket conserva orden: registrar primero el disparo validable y luego
     // sus claims de daño. Antes los hits llegaban al server sin disparo asociado.
-    // el origen reportado es el del DAÑO (eje óptico en ADS): el server
-    // valida LOS/decals/endpoint con exactamente la misma línea del tiro
-    G.net.fire(damageOrigin, anyPoint, w.cur, worldImpacts, G.player);
+    // el origen reportado es el del DAÑO (el ojo): el server valida LOS,
+    // marcas y punto final con exactamente la misma línea del tiro
+    // escopeta: el eje central del cartucho; una bala: su dirección EFECTIVA
+    // (la del impacto local, con su dispersión) — así el servidor acredita lo
+    // que se marcó (un sniper sin mira acertando por dispersión, cabeza incluida)
+    G.net.fire(damageOrigin, def.pellets > 1 ? axisPoint : anyPoint, wep, worldImpacts, G.player, ray);
     for (const c of onlineClaims) {
       G.net.hit(c.id, c.dmg, c.part, c.gib, c.point, { pellets: c.pellets });
     }
@@ -4172,49 +4164,76 @@ function fireShot() {
 // ---------- retícula estable de intención de cámara ----------
 function updateReticle() {
   const p = G.player;
-  const scoped = sniperScopeActive();
+  const scoped = scopeEngaged();
   const canShow = p && !p.dead && G.mode && !menuIsOpen() &&
-    p.state !== 'roadie' && p.state !== 'dive' && p.state !== 'slide' &&
-    p.state !== 'melee';
-  if (!canShow) { hud.reticle(false, null); hud.sniperScope(false); return; }
-
-  if (p.aim) {
-    // ADS permanece ópticamente centrado y visualmente estable. La colisión
-    // física se resuelve al disparar, sin mover o recolorear la retícula.
-    const def = G.weapons.def;
-    const ringPx = Math.tan(def.spreadAim * Math.PI / 180) /
-      Math.tan(camera.fov * Math.PI / 360) * (innerHeight / 2);
-    const ray = shoulderCam.aimRay();
-    if (scoped) {
-      hud.reticle(false, null);
-      hud.sniperScope(true);
-      return;
-    }
-    // Primer contacto real (actor o mundo), no solo la geometría: con un
-    // enemigo cerca delante de una pared lejana el anillo leía la pared. La
-    // distancia es la de daño (plano del tirador, como fireShot) y el límite
-    // es donde el arma deja de hacer daño (escopeta: fin del falloff, 19 m).
-    const guide = resolveShot(world, currentTargets(), ray.origin, ray.dir, 200, null);
-    const planeBase = Math.max(0, _v2.set(p.pos.x, (p.y ?? 0) + 1.3, p.pos.z)
-      .sub(ray.origin).dot(ray.dir));
-    const reach = Number.isFinite(def.falloffEnd) && !(def.falloffMin > 0)
-      ? Math.min(def.range, def.falloffEnd) : def.range;
-    hud.sniperScope(false);
-    hud.reticle(true, null, {
-      r: Math.min(190, ringPx),
-      inRange: guide.t - planeBase <= reach,
-    });
-    return;
-  }
-
-  // Sin ADS, la marca representa la trayectoria física actual del barrel.
-  // Un arrojadizo no tiene cañón: su lanzamiento sigue al centro de cámara.
-  hud.sniperScope(false);
-  // [FP] en primera persona todo tiro va por el rayo central: marca al centro
-  hud.reticle(false, G.weapons.def.thrown || firstPerson.live
-    ? { x: innerWidth / 2, y: innerHeight / 2 } : barrelReticleXY());
+    p.state !== 'roadie' && p.state !== 'mantle' && p.state !== 'melee';
+  if (!canShow) { hud.reticle(null); hud.sniperScope(false); return; }
+  if (scoped) { hud.reticle(null); hud.sniperScope(true, { ocular: firstPerson.vm?.ocular.matte.visible }); return; }
+  // relevo: lente que aparece mientras el arma sube (HUD acepta opacidad)
+  const scopeIn = sniperScopeActive() ? firstPerson.fp2?.vm?.scopeIn01?.() : null;
+  if (Number.isFinite(scopeIn) && scopeIn > 0.02) hud.sniperScope(true, { in01: scopeIn });
+  else hud.sniperScope(false);
+  // Retícula de primera persona: el MISMO semiángulo que usa el disparo
+  // (spreadFor) proyectado con el FOV de juego de este cuadro.
+  hud.reticle({ weapon: G.weapons.cur, spreadDeg: shotSpread(), aim: fpCam.aim01, dodging: !!p.dodge,
+    aligned: fpCam.aim01 >= 0.55 && !!firstPerson.fp2?.active && firstPerson.fp2.vm.key === G.weapons.cur &&
+      firstPerson.fp2.vm.sightsAligned(innerHeight), fovDeg: camera.fov });
 }
 
+// Marcadores (HUD): compañeros siempre (atenuados sin línea de vista);
+// enemigos SOLO el que está bajo la retícula y a la vista, nunca a través
+// de paredes.
+function markerCharacters() {
+  const out = [];
+  if (G.mode === 'bots' && G.botMatch) {
+    for (const b of G.botMatch.bots) out.push({ id: b.id, x: b.pos.x, y: b.y ?? 0, z: b.pos.z, team: b.team, name: b.name, alive: b.alive, rig: b.rig });
+  } else if (G.mode === 'online') {
+    for (const r of G.remotes.values()) out.push({ id: r.id, x: r.x, y: r.y ?? 0, z: r.z, team: r.team, name: r.name, alive: r.alive, rig: r.rig });
+    for (const b of G.onlineBots?.bots ?? []) out.push({ id: b.id, x: b.pos.x, y: b.y ?? 0, z: b.pos.z, team: b.team, name: b.name, alive: b.alive, rig: b.rig });
+  } else if (G.mode === 'practice' && G.dummies) {
+    for (const d of G.dummies.targets()) out.push({ id: d.id, x: d.x, y: d.y ?? 0, z: d.z, team: 'blue', name: d.name, alive: d.alive !== false, rig: d.rig });
+  }
+  return out;
+}
+// Enemigo IDENTIFICADO este cuadro: el que el rayo central toca primero
+// (resolveShot: el mapa tapa) con la línea ojo→impacto libre de humo. Solo
+// él muestra nombre (etiqueta 3D del rig) y marca; un agachado tras LOW no
+// asoma su nombre por encima del borde. Fuera de la vista de los ojos
+// (muerte, espectador, presentación) ningún enemigo se identifica.
+function identifiedEnemy() {
+  if (!fpCam.live) return null;
+  const ray = fpCam.aimRay();
+  const targets = currentTargets();
+  const hit = resolveShot(world, targets, ray.origin, ray.dir, 200, null);
+  if (hit.kind !== 'player') return null;
+  if (smoke.blocksSegment?.(ray.origin.x, ray.origin.y, ray.origin.z, hit.point.x, hit.point.y, hit.point.z)) return null;
+  // altura REAL del tope de su cabeza (agachado tras LOW, la marca no flota)
+  const tg = targets.find((t) => t.id === hit.id);
+  const vol = tg?.hit ? { y: tg.hit.hy, r: tg.hit.hr } : tg ? { y: (tg.y ?? 0) + (tg.hitVol ?? (tg.crouch ? CROUCH : STAND)).h[2], r: (tg.hitVol ?? STAND).hr } : null;
+  return { id: hit.id, top: vol ? vol.y + vol.r : undefined };
+}
+function updateMarkers() {
+  const aimed = identifiedEnemy(), aimedId = aimed?.id ?? null;
+  const ray = fpCam.live ? fpCam.aimRay() : null;
+  const list = [];
+  for (const c of markerCharacters()) {
+    const ally = c.team === G.team;
+    // etiqueta 3D: compañeros como siempre; enemigos solo el identificado
+    if (!ally && c.rig) {
+      const on = c.alive && c.id === aimedId;
+      if (c.rig.showNameTag) c.rig.showNameTag(on); else if (c.rig.nameTag) c.rig.nameTag.visible = on;
+    }
+    if (!ray || !c.alive || (!ally && c.id !== aimedId)) continue;
+    _v3.set(c.x - ray.origin.x, c.y + 1.5 - ray.origin.y, c.z - ray.origin.z);
+    const dist = _v3.length();
+    const occluded = ally && dist > 0.5 && world.raycast(ray.origin, _v3.multiplyScalar(1 / dist), dist - 0.3, 0) !== null;
+    const tag = c.rig?.nameTag;
+    const label = tag?.visible ? tag.getWorldPosition(_v3) : null;
+    list.push({ x: label?.x ?? c.x, y: c.y, z: label?.z ?? c.z, labelY: label?.y, team: c.team, name: c.name, ally, occluded, aimed: !ally, dist,
+      ...(!ally && Number.isFinite(aimed?.top) ? { top: aimed.top } : {}) });
+  }
+  hud.markers(ray ? list : null, camera);
+}
 // ---------- loop principal ----------
 let last = performance.now();
 
@@ -4250,6 +4269,7 @@ function stepOrdnance(dt) {
 }
 
 function simStep(dt) {
+  G.simClock += dt;
   hud.pickupPrompt('');
   const p = G.player;
   if (!p) return;
@@ -4261,18 +4281,18 @@ function simStep(dt) {
   p.dazed = dazed;
   if (dazed) { input.firePressed = false; input.meleePressed = false; G.fireBuffer = 0; hud.hint('ATURDIDO', 100); }
   if(G.protoStun>0&&!p.dead){
-    G.weapons.cancelActions(); audio.cancelHandling();G.fireBuffer=0;G.pendingShots=0;G.pendingRays.length=0;G.pendingThrows=0;G.throwT=0;G.throwPending=false;
+    G.weapons.cancelActions(); audio.cancelHandling();G.fireBuffer=0;G.pendingShots=0;G.pendingRays.length=0;G.pendingThrows=0;G.pendingThrowShots.length=0;G.throwT=0;G.throwPending=false;
     p.aim=false;p.vel.x=0;p.vel.z=0;p.firingBlind=0;
     // Keep the exact cover anchor; cancel transient evade/melee gestures.
     if(p.state!=='cover')p.state='idle';
-    p.dive=null;p.slide=null;p.mantle=null;p.flip=null;p.coverEntry=null;
+    p.dodge=null;p.dive=null;p.slide=null;p.mantle=null;p.flip=null;p.coverEntry=null;
     const stunFloor=world.groundHeight(p.pos,PLAYER_R,p.y);
     if(!p.grounded||p.y>stunFloor+.01){p.vy=Math.min(0,p.vy)-TUNING.jump.gravity*dt;p.y+=p.vy*dt;}
     if(p.y<=stunFloor+.001){p.y=stunFloor;p.vy=0;p.grounded=true;}
     shoulderCam.setScoped(false);G.scopeActive=false;hud.sniperScope(false);
     hud.hint(`⚡ STUN ${G.protoStun.toFixed(1)}s`,100);
     G.botMatch?.update(dt);
-    if(G.net){G.net.tickState(dt,p,G.weapons);G.net.tickBotState(dt,G.onlineBots?.bots);}
+    if(G.net){G.net.tickState(dt,p,G.weapons,G.simClock);G.net.tickBotState(dt,G.onlineBots?.bots);}
     input.consumeEdges();return;
   }
 
@@ -4283,11 +4303,11 @@ function simStep(dt) {
     G.fireBuffer = 0;
     G.pendingShots = 0;
     G.pendingRays.length = 0;
-    G.pendingThrows = 0;
+    G.pendingThrows = 0; G.pendingThrowShots.length = 0;
     G.aimOver.lift = 0;
     p.update(dt, input, false);
     if (G.botMatch) G.botMatch.update(dt);
-    if (G.net) { G.net.tickState(dt, p, G.weapons); G.net.tickBotState(dt, G.onlineBots?.bots); }
+    if (G.net) { G.net.tickState(dt, p, G.weapons, G.simClock); G.net.tickBotState(dt, G.onlineBots?.bots); }
     input.consumeEdges();
     return;
   }
@@ -4304,20 +4324,17 @@ function simStep(dt) {
     G.drops?.update(dt, p.pos.x, p.pos.z, p.y, false, () => {});
     G.crates?.update(dt, p.pos.x, p.pos.z, p.y, false, () => {});
     if (G.botMatch) G.botMatch.update(dt);
-    if (G.net) { G.net.tickState(dt, p, G.weapons); G.net.tickBotState(dt, G.onlineBots?.bots); }
+    if (G.net) { G.net.tickState(dt, p, G.weapons, G.simClock); G.net.tickBotState(dt, G.onlineBots?.bots); }
     input.consumeEdges();
     return;
   }
 
-  // (el flip Matrix SÍ permite disparar en el aire)
-  const stateOk = !p.dead && p.state !== 'dive' && p.state !== 'slide' &&
-    p.state !== 'roadie' && p.state !== 'mantle' && p.state !== 'melee' && input.anyDevice;
-  // Un giro grande se resuelve como rotación progresiva y buffer de disparo.
-  // La espera de giro solo evita disparar mientras el cuerpo sigue rotando.
-  // No redefine la trayectoria: ADS usa cámara; hip/blindfire usan cañón.
-  const aligned = p.fireAligned();
-  const wantsFire = input.fireHeld || input.firePressed || G.fireBuffer > 0;
-  let canFire = stateOk && aligned && coverPoseReady(input.aimHeld, wantsFire);
+  // Se dispara en el aire y deslizando (con más dispersión: spreadFor); no
+  // en sprint, trepando ni golpeando. fireAligned() ya incluye el retraso
+  // sprint→disparo del arma en mano.
+  if (!p.bindWeapons) p.setWeapon(G.weapons.cur); // (con bindWeapons lo sigue el controller)
+  const stateOk = !p.dead && fireGateOpen(p) && input.anyDevice;
+  let canFire = stateOk && p.fireAligned();
   // cualquier click que no pueda salir YA (roadie, cuerpo girando, cooldown,
   // dive/slide o recarga) queda bufereado — y el buffer dura AL MENOS
   // lo que falta de cooldown/recarga, para que el tiro encolado nunca se pierda
@@ -4330,7 +4347,6 @@ function simStep(dt) {
     G.fireBuffer = requiredFireBuffer(p, wst, relRemain, G.weapons.swapping ? G.weapons.swapT : 0);
   }
   G.fireBuffer = Math.max(0, G.fireBuffer - dt);
-  const wasReloading = G.weapons.reloading;
 
   // Sin munición físicamente disponible, el gatillo no debe forzar pose de
   // tiro: evita que una recarga vacía deje al jugador expuesto sobre el cover.
@@ -4350,11 +4366,10 @@ function simStep(dt) {
     const [id, d] = nearbyDrop;
     const slot = replacementSlot(G.weapons.slots, G.weapons.cur);
     const old = G.weapons.slots[slot];
-    const button = input.lastDevice === 'pad' ? padBtnName(BINDS.pad.evade) : keyLabel(BINDS.kb.pickup);
+    const button = input.lastDevice === 'pad' ? padBtnName(BINDS.pad.pickup) : keyLabel(BINDS.kb.pickup);
     hud.pickupPrompt(t('pickup.replace', { button, old: t('weapon.' + old + 'Short'), weapon: t('weapon.' + d.wep + 'Short') }));
     if (input.pickupPressed) {
-      // recoger consume la pulsación: en el control comparte botón con evadir
-      input.pickupPressed = false; if (input.lastDevice === 'pad' || BINDS.kb.pickup === BINDS.kb.evade) input.evadePressed = false;
+      input.pickupPressed = false; // recoger consume la pulsación
       if (G.mode === 'online') {
         d.claimed = true; d.claimT = 1;
         G.net?.send({ t: 'takeDrop', id, replace: true, slot, expected: old });
@@ -4370,8 +4385,7 @@ function simStep(dt) {
   // "tomar" (se consume el edge para no rodar encima) y hay que MANTENERLO
   if (!prototypeNearby && !nearbyDrop && specials.active && G.selfAlive && !p.dead && p.grounded &&
       specials.near(p.pos.x, p.pos.z, p.y)) {
-    const holding = input.keys.has(BINDS.kb.evade) || input.pad.pressed.has(BINDS.pad.evade);
-    input.evadePressed = false;
+    const holding = input.keys.has(BINDS.kb.pickup) || input.pad.pressed.has(BINDS.pad.pickup);
     if (holding) {
       specials.holdT += dt;
       if (specials.holdT >= SPECIAL_HOLD_TIME) {
@@ -4405,6 +4419,7 @@ function simStep(dt) {
       specials.holdT = 0;
       hud.hint(t('msg.specialNear', {
         weapon: t(TUNING.weapons[specials.active.wep].nameKey),
+        button: input.lastDevice === 'pad' ? padBtnName(BINDS.pad.pickup) : keyLabel(BINDS.kb.pickup),
       }), 700);
     }
   } else if (specials.active) {
@@ -4422,7 +4437,18 @@ function simStep(dt) {
   // la intención de disparo SIEMPRE llega al controller: cancela el roadie
   // (en tierra o en el aire) y gira el cuerpo para disparar
   // A buffered shot must not keep a released cover peek exposed.
-  p.update(dt, input, (input.fireHeld || (p.state !== 'cover' && G.fireBuffer > 0)) && !p.dead && hasAmmo && !dazed);
+  // En práctica no llegan snapshots. Durante esta maniobra se registra el
+  // mismo cambio de pose por subpaso para que la bajada del ojo sea continua.
+  if (!G.net && (input.evadePressed || p.queuedDodge) && p.dodgeCd <= 1e-8) {
+    noteLocalPose(p, p.weaponKey, G.simClock - dt);
+    p.offlineDodgePose = true;
+  }
+  p.update(dt, input, (input.fireHeld || G.fireBuffer > 0) && !p.dead && hasAmmo && !dazed);
+
+  if (!G.net && p.offlineDodgePose) {
+    noteLocalPose(p, p.weaponKey, G.simClock);
+    if (!p.dodge && !p.dodgeCd) { resetTransition(p); p.offlineDodgePose = false; }
+  }
 
   // colisión de cuerpos del jugador: suave y sin atrapamiento (mitad del
   // solape por paso, con tope). Cover y mantle gestionan su propia posición:
@@ -4440,21 +4466,22 @@ function simStep(dt) {
       world.resolveCircle(p.pos, PLAYER_R, p.y);
     }
   }
+  // tras el empujón: la cabeza (pose final, con su mezcla) fuera de la geometría
+  p.settle?.();
   // El controller puede haber recuperado control o terminado de alinearse en
   // este mismo paso. Revalidar evita añadir un frame artificial de latencia.
-  const stateOkAfter = !p.dead && p.state !== 'dive' && p.state !== 'slide' &&
-    p.state !== 'roadie' && p.state !== 'mantle' && p.state !== 'melee' && input.anyDevice;
-  // aim-over: con el estado ya asentado, acercar el arma a la altura que
-  // libra (preventivo; el ajuste definitivo ocurre dentro del disparo)
-  updateAimOver(dt);
-  canFire = stateOkAfter && p.fireAligned() && coverPoseReady(p.aim, wantsFire);
+  const stateOkAfter = !p.dead && fireGateOpen(p) && input.anyDevice;
+  canFire = stateOkAfter && p.fireAligned();
+  // Un clic y una esquiva pueden comenzar en el mismo paso de simulación.
+  if (input.firePressed && p.state === 'dodge') {
+    G.fireBuffer = Math.max(G.fireBuffer, requiredFireBuffer(p, wst, relRemain, G.weapons.swapT || 0));
+  }
   if (input.fireReleased) G.weapons.dropCadenceCredit();
+  G.weapons.aimHint = p.aim; // menos retroceso lateral apuntando
   const fired = p.dead ? false
     : G.weapons.update(dt, input.fireHeld && !dazed, input.firePressed || G.fireBuffer > 0, canFire && !dazed,
       p.state !== 'melee');
-  // gatillo en seco: pulsación nueva sin balas en el cargador ni recarga posible
-  if (!fired && !p.dead && input.firePressed && canFire && !dazed && G.weapons.st.mag <= 0 &&
-      !G.weapons.reloading && !G.weapons.swapping && !G.weapons.def.thrown) audio.dry();
+  // (gatillo en seco, recarga y cambio suenan por los eventos del arma)
   // Tras la primera inserción desde 0, conservar margen para que cover/arma
   // alcancen una pose válida antes de consumir el click que estaba esperando.
   if (G.weapons.reloadInserted > 0 && G.fireBuffer > 0) G.fireBuffer = Math.max(G.fireBuffer, 0.3);
@@ -4469,37 +4496,22 @@ function simStep(dt) {
       G.throwT = TUNING.weapons.grenade.throwTime;
       G.throwPending = true;
     } else {
-      G.pendingShots++;
-      // Capturar la PROMESA de la cruz AHORA: el scope del sniper se apaga
-      // en cuanto el cooldown arranca (este mismo paso) y la cámara salta
-      // ANTES de que el disparo diferido lea su rayo — la bala debe viajar
-      // por el eje que la cruz prometía en el instante del click (medido:
-      // 0.44m de desvío a cualquier distancia si se recalcula tras el salto).
-      const promise = shoulderCam.aimRay();
-      G.pendingRays.push({ origin: promise.origin.clone(), dir: promise.dir.clone() });
+      // REGISTRO DEL TIRO: arma, pose, ojo, eje y dispersión de ESTE
+      // subpaso, y se resuelve YA (daño, traza, red): ningún movimiento
+      // posterior sale por la red antes que el tiro y ningún cambio de arma
+      // posterior (recoger una especial) lo reinterpreta.
+      fireShot(captureShot());
     }
   }
-  if (G.throwT > 0) {
-    G.throwT = Math.max(0, G.throwT - dt);
-    const released = TUNING.weapons.grenade.throwTime - TUNING.weapons.grenade.throwRelease;
-    if (G.throwPending && G.throwT <= released) {
-      G.throwPending = false;
-      G.pendingThrows++;
-    }
-  }
+  // el gesto (G.throwT) solo anima; el bote sale con el evento
+  // `throwRelease` del arma (un solo reloj: el de weapons.js)
+  if (G.throwT > 0) G.throwT = Math.max(0, G.throwT - dt);
 
   // Recarga normal: pulsar otra vez mientras ya está en curso no modifica la
   // duración, no completa el cargador y no aplica bonus/penalizaciones.
   if (input.reloadPressed && p.state !== 'melee' && !G.weapons.reloading) {
     G.weapons.startReload();
   }
-  // incluye auto-recarga; la secuencia se programa sobre la duración real
-  if (!wasReloading && G.weapons.reloading) audio.reload(G.weapons.cur, G.weapons.def.reloadTime);
-  // Cada cartucho suena al entrar. Una recarga interrumpida corta la
-  // secuencia y no reproduce la pieza que comunica cargador completo.
-  if (G.weapons.reloadInserted > 0) audio.shellIn();
-  if (G.weapons.reloadInterrupted) audio.reloadCancel();
-  else if (wasReloading && !G.weapons.reloading) audio.reloadDone(G.weapons.cur);
 
   // práctica = munición de reserva infinita (nunca te quedas sin disparar)
   if (G.mode === 'practice') {
@@ -4525,11 +4537,13 @@ function simStep(dt) {
     } else if (input.swapPressed) {
       swapTarget = G.weapons.cycleTarget(1);
       swapped = G.weapons.startSwap(swapTarget);
+    } else if (input.swapPrevPressed) {
+      swapTarget = G.weapons.cycleTarget(-1);
+      swapped = G.weapons.startSwap(swapTarget);
     }
-    if (swapped) {
-      audio.swap(swapTarget);
-      hud.weaponWheel(G.weapons, swapTarget);
-    }
+    if (swapped) hud.weaponWheel(G.weapons, swapTarget);
+    // granada rápida: cambia al arrojadizo, lo lanza y vuelve al arma de antes
+    else if (input.grenadePressed && p.state !== 'dodge' && G.weapons.quickThrow()) hud.weaponWheel(G.weapons, G.weapons.selectionTarget);
   }
 
   // empujones de patada pendientes sobre bots
@@ -4539,21 +4553,12 @@ function simStep(dt) {
     k.b.pos.x += mx; k.b.pos.z += mz; k.x -= mx; k.z -= mz;
     world.resolveCircle(k.b.pos, 0.42, k.b.y ?? 0);
   }
-  // melee: whoosh al armar el golpe y UNA sola ventana de impacto por gesto
-  if (p.state === 'melee') {
-    if (!G.meleeSwung) {
-      G.meleeSwung = true;
-      audio.meleeSwing();
-      input.pad.rumble(40, 0.3, 0.2);
-    }
-    if (!G.meleeHitDone && p.meleeT >= TUNING.melee.hitAt) {
-      G.meleeHitDone = true;
-      const result = resolveMelee();
-      p.confirmMelee(result.connected, result.killed);
-    }
-  } else {
-    G.meleeSwung = false;
-    G.meleeHitDone = false;
+  // Una sola ventana de impacto por gesto, incluso con varios subpasos.
+  if (p.state === 'melee' && !G.meleeHitDone && p.meleeT >= TUNING.melee.hitAt) {
+    G.meleeHitDone = true;
+    const result = resolveMelee();
+    p.confirmMelee(result.connected, result.killed);
+    G.weapons.noteMelee('hit', result);
   }
 
   // pasos: por distancia recorrida; el tipo según estado y velocidad
@@ -4565,11 +4570,18 @@ function simStep(dt) {
       audio.footstep(roadie ? 'roadie' : (p.speed < 3 ? 'walk' : 'run'));
       if (p.speed > 4) effects.dust(p.pos, 'step', p.y);
     }
-  } else if (p.state === 'cover' && p.speed > 1) {
-    // paso lateral pegado al muro: shuffle corto
+  } else if (p.state === 'crouch' && p.speed > 0.6 && p.grounded) {
+    // agachado: paso corto y bajo
     G.footAcc += p.speed * dt;
-    if (G.footAcc > 0.95) { G.footAcc = 0; audio.footstep('shuffle'); }
+    if (G.footAcc > 1.4) { G.footAcc = 0; audio.footstep('crouch'); }
   }
+  // ropa al agacharse/levantarse e inclinarse (flancos)
+  const crouchedNow = (p.crouch01 ?? 0) >= 0.5;
+  if (crouchedNow !== !!G.wasCrouched && !p.dead) audio.stance?.(crouchedNow ? 'crouch' : 'stand');
+  G.wasCrouched = crouchedNow;
+  const leanedNow = Math.abs(p.lean ?? 0) >= 0.5;
+  if (leanedNow && !G.wasLeaned && !p.dead) audio.lean?.();
+  G.wasLeaned = leanedNow;
 
   if (G.dummies) G.dummies.update(dt);
 
@@ -4641,12 +4653,40 @@ function simStep(dt) {
       }
     }
   }
-  if (G.net) { G.net.tickState(dt, p, G.weapons); G.net.tickBotState(dt, G.onlineBots?.bots); }
+  if (G.net) { G.net.tickState(dt, p, G.weapons, G.simClock); G.net.tickBotState(dt, G.onlineBots?.bots); }
 
   input.consumeEdges();
 }
 
+const OWN_ROCKET_HIDE = 2.2;
+const ownRocketsHidden = [];
+function revealOwnRockets() {
+  for (let i = ownRocketsHidden.length - 1; i >= 0; i--) {
+    const o = ownRocketsHidden[i], r = o.r;
+    const gone = !rockets.list.includes(r);
+    if (gone || Math.hypot(r.x - o.x, r.y - o.y, r.z - o.z) >= OWN_ROCKET_HIDE) {
+      if (!gone) r.mesh.visible = true;
+      ownRocketsHidden.splice(i, 1);
+    }
+  }
+}
+
+// Flancos de recarga ajena → audio.remoteReload / remoteReloadCancel.
+const remoteReloading = new Map();
+function remoteReloadEdge(id, on, wep, x, y, z, progress, total = null) {
+  const was = remoteReloading.get(id); // último progreso visto mientras recargaba
+  if (on && was === undefined) {
+    audio.remoteReload?.(wep, { x, y: y + 1.2, z }, total ?? TUNING.weapons[wep]?.reloadTime ?? 0, progress, id);
+  }
+  if (on) remoteReloading.set(id, progress);
+  else if (was !== undefined) {
+    remoteReloading.delete(id);
+    if (was < 0.75) audio.remoteReloadCancel?.(id); // cortada (muerte, cambio): sin el final
+  }
+}
+
 let padWasConnected = false;
+let bodyFpOn = false;
 
 // Un mapa construido con sustitutos (modelo fallido o tope de espera) se
 // repara cuando ese modelo llega: en el menú al momento y en línea solo fuera
@@ -4691,6 +4731,9 @@ function frame(now) {
   }
 
   const menuOpen = menuIsOpen();
+  // body.fp: composición del HUD en primera persona, puesta mientras se juega
+  const fpBody = playingMode();
+  if (fpBody !== bodyFpOn) { bodyFpOn = fpBody; document.body.classList.toggle('fp', fpBody); }
   if (!G.mode) updateMenuBackdrop(now);
   if (!G.mode) updateStartPrompts(null, true); // sin partida, sin señales de arranque
   const flowLocked = matchControlsLocked();
@@ -4759,7 +4802,7 @@ function frame(now) {
   if (G.mode && G.player) {
     // El input de cámara de este frame usa el estado scoped ya válido del
     // frame anterior; tras simStep se recalcula para cámara/HUD sin latencia.
-    shoulderCam.setScoped(sniperScopeActive());
+    shoulderCam.setScoped(scopeEngaged());
     if (!menuOpen) {
       const spectatorLocked = G.spectator.active;
       // Con la cámara de presentación en pantalla (intro, fin de ronda) el
@@ -4769,7 +4812,11 @@ function frame(now) {
       if (!spectatorLocked && !lookFrozen && (input.locked || input.lockDisabled)) {
         shoulderCam.applyMouse(input.lookDX, input.lookDY, input.invertY);
       }
-      if (!spectatorLocked && !lookFrozen && input.pad.connected) shoulderCam.applyStick(input.pad.camX, input.pad.camY, dt, input.invertYPad);
+      if (!spectatorLocked && !lookFrozen && input.pad.connected) {
+        // fricción de la asistencia (solo mando, solo jugando con los ojos)
+        const friction = fpCam.live ? padAimFriction() : 1;
+        shoulderCam.applyStick(input.pad.camX, input.pad.camY, dt, input.invertYPad, friction);
+      }
       // keeper: jugando sin lock (cooldown de Esc, despausa con gamepad,
       // lock post-await) → reintentar captura periódicamente
       // lockSuspended (F10): sin él, el keeper robaba el mouse al panel de
@@ -4797,11 +4844,16 @@ function frame(now) {
     // cortan y al reanudar se reprograman desde el progreso real del cargador.
     if (paused !== G.reloadAudioPaused) {
       G.reloadAudioPaused = paused;
-      const w = G.weapons;
-      if (paused) audio.reloadPause();
-      else {
+      const p = G.player, k = motionScale('shake');
+      if (paused) {
+        audio.reloadPause();
+        if (p.dodge || p.dodgeCd > TUNING.dodge.cooldown - 0.045) input.pad.rumble(0, 0, 0);
+      } else {
         audio.reloadResume();
-        if (w.reloading && !w.def.perShell) audio.reload(w.cur, w.def.reloadTime, 1 - w.st.reload / w.def.reloadTime);
+        if (p.dodge && p.dodge.t < 0.075) input.pad.rumble(75 - 1000 * p.dodge.t, 0.55 * k, 0.25 * k);
+        if (!p.dodge && p.dodgeCd > TUNING.dodge.cooldown - 0.045) {
+          input.pad.rumble(45 - 1000 * (TUNING.dodge.cooldown - p.dodgeCd), 0.20 * k, 0.65 * k);
+        }
       }
     }
     if (!paused) {
@@ -4818,31 +4870,53 @@ function frame(now) {
     updatePresentationAudio(flowView);
     hud.presentation(flowView);
     updateStartPrompts(flowView, menuOpen);
-    const scopeNow = sniperScopeActive();
+    const scopeNow = scopeEngaged();
     G.scopeActive = scopeNow; // diagnóstico/tests; sigue siendo estado derivado
     shoulderCam.setScoped(scopeNow);
     // El sniper usa 20° solo durante un scope realmente válido. Al iniciar
     // swap/melee vuelve de inmediato al ADS estándar aunque LT siga pulsado.
     shoulderCam.setAimFov(scopeNow ? G.weapons.def.fovAim : TUNING.cam.fovAim);
-    firstPerson.live = false; // [FP] lo vuelve a encender shoulderCam.update si la vista es la de los ojos
-    if (flowView && flowView.phase !== 'countdown') updateMatchCamera(now, flowView);
-    else if (G.spectator.active) updateSpectatorCamera(dt, now);
-    else shoulderCam.update(dt, G.player);
-    // [FP] cuerpo bloqueado a la vista solo mientras la cámara es la de los ojos
-    G.player.fpYawLock = firstPerson.live ? FP_TURN_DEG : 0;
+    // PRIMERA PERSONA = la vista de juego. Presentación, espectador y la
+    // reacción de muerte siguen con la cámara de hombro.
+    const presenting = !!(flowView && flowView.phase !== 'countdown');
+    const eyes = !presenting && !G.spectator.active && playingMode() &&
+      !G.player.dead && G.selfAlive;
+    if (eyes) {
+      // reaparición / ronda nueva: sin ADS/agachado alternado pegado y sin
+      // mezcla de postura heredada en el cable (RED §1: resetLife)
+      if (!fpCam.live) { fpCam.reset(); input.resetToggles(); }
+      // reloj de SIMULACIÓN: en la pausa offline la cámara no anima (resortes, sacudida)
+      fpCam.update(paused ? 0 : dt, G.player, {
+        // ojo = eyeWorld(pose que viaja): mismo punto que el tiro
+        pose: localPoseInput(), weapon: G.weapons.cur, scoped: scopeNow,
+        scopeFov: G.weapons.def.fovAim, settings: fpSettings(), sens: fpSens(scopeNow), sensFn: lookSensitivity,
+      });
+    } else {
+      if (fpCam.live) { fpCam.release(); shoulderCam._first = true; input.resetToggles(); }
+      if (presenting) updateMatchCamera(now, flowView);
+      else if (G.spectator.active) updateSpectatorCamera(dt, now);
+      else shoulderCam.update(dt, G.player);
+    }
     G.rig.setWeapon(G.weapons.cur, backWeapon()); // el intercambio real ocurre a mitad del gesto
     // Soldado propio visto desde SU cámara: de cerca no tapa la retícula y
     // en el scope no se dibuja delante de la lente (la sombra se queda).
     const ownView = !(flowView && flowView.phase !== 'countdown') && !G.spectator.active;
-    // [FP] en primera persona el soldado propio tampoco se dibuja (su sombra sí)
-    syncLocalSoldierView(G.rig, camera, ownView ? (scopeNow || firstPerson.live ? 'hidden' : 'near') : 'off', shoulderCam.crowd, shoulderCam.ghost);
+    // en primera persona el soldado propio no se dibuja (su sombra sí); en
+    // la cámara de muerte / espectador / presentación se ve entero
+    syncLocalSoldierView(G.rig, camera, ownView ? (fpCam.live ? 'hidden' : 'near') : 'off', fpCam.live ? 0 : shoulderCam.crowd, fpCam.live ? 0 : shoulderCam.ghost);
     // protección de spawn: highlight sutil en el color del equipo
     G.rig.root.visible = true;
     G.rig.setProtected(G.spawnProt > 0);
     G.rig.setTransform(G.player.pos.x, G.player.pos.z, G.player.yaw, G.player.y);
     const localAnim = G.player.animParams();
-    G.rig.update(dt, {
+    // la postura que se dibuja es la que viaja (net/client postureOf): en la
+    // transición agacharse↔levantarse el estado es `crouch` con la altura en
+    // coverAimExposure (= ce), e inclinación por coverLean (= cl)
+    const wirePose = localPose(G.player, G.weapons.cur, G.simClock);
+    if (!(paused && localAnim.state === 'melee')) G.rig.update(dt, {
       ...localAnim,
+      ...(G.player.dead ? {} : { state: wirePose.st === 'crouch' ? 'crouch' : localAnim.state,
+        coverAimExposure: wirePose.ce, coverLean: wirePose.cl }),
       swapping: G.weapons.swapping,
       throwT: G.throwT,
       throwTotal: TUNING.weapons.grenade.throwTime,
@@ -4851,19 +4925,18 @@ function frame(now) {
       reloadT: G.weapons.reloading ? 1 - G.weapons.st.reload / G.weapons.def.reloadTime : 0,
       aimLift: G.aimOver.lift,
     });
-    // [FP] arma en primera persona: después de la pose del rig (recarga,
-    // cambio, kick) y antes de los tiros (su muzzle origina tracer y fogonazo)
-    if (firstPerson.live || firstPerson.vm) firstPerson.updateViewModel(dt, shoulderCam);
-    while (G.pendingShots > 0) {
-      fireShot();
-      G.pendingShots--;
-    }
-    while (G.pendingThrows > 0) {
-      throwSmoke();
-      G.pendingThrows--;
-    }
+    // arma en primera persona: después de la pose del rig (recarga, cambio,
+    // kick) y antes de los tiros (su boca origina traza y fogonazo).
+    // Prototipo: lee `live` y el ojo de la cámara nueva.
+    firstPerson.live = fpCam.live;
+    firstPerson.eye.copy(fpCam.eye);
+    // el arma anima con el reloj de SIMULACIÓN: en la pausa offline se congela
+    if (fpCam.live || firstPerson.vm) firstPerson.updateViewModel(paused ? 0 : dt, shoulderCam);
     for (const r of G.remotes.values()) {
       r.update(dt);
+      const kicking = r.alive && r.st === 'melee';
+      if (kicking && !r._wasKicking) audio.meleeSwing({ position: { x: r.x, y: r.y + 1, z: r.z } });
+      r._wasKicking = kicking;
       // pasos de remotos: por distancia recorrida real, posicionales
       const mdx = r.x - (r._sx ?? r.x), mdz = r.z - (r._sz ?? r.z);
       r._sx = r.x; r._sz = r.z;
@@ -4872,18 +4945,26 @@ function frame(now) {
       const ry = r.y ?? 0;
       const airborne = r.st === 'jump' || r.st === 'flip' ||
         ry - world.groundHeight({ x: r.x, z: r.z }, PLAYER_R, ry) > 0.08;
-      if (r.alive && !airborne && (r.st === 'run' || r.st === 'roadie')) {
+      if (r.alive && !airborne && (r.st === 'run' || r.st === 'roadie' || r.st === 'crouch')) {
         r._facc = (r._facc ?? 0) + Math.hypot(mdx, mdz);
-        const roadie = r.st === 'roadie';
-        if (r._facc > (roadie ? 2.1 : 1.7)) {
+        const kind = r.st === 'crouch' ? 'crouch' : r.st === 'roadie' ? 'roadie' : 'run';
+        if (r._facc > (kind === 'crouch' ? 1.4 : kind === 'roadie' ? 2.1 : 1.7)) {
           r._facc = 0;
-          stepSound(r.x, r.z, roadie ? 'roadie' : 'run', r.y ?? 0, r.team);
+          stepSound(r.x, r.z, kind, r.y ?? 0, r.team);
         }
       } else {
         r._facc = 0;
       }
       if (r._wasAir && !airborne && r.alive) stepSound(r.x, r.z, 'land', r.y ?? 0, r.team);
       r._wasAir = airborne;
+      // recarga de otro jugador (flanco de `rl`): audible cerca y bajo
+      remoteReloadEdge(r.id, r.alive && r.reloading, r._lastW, r.x, r.y ?? 0, r.z, r.reloadT ?? 0);
+    }
+    // bots (locales o alojados) recargan de verdad: que se oiga igual
+    for (const b of (G.mode === 'bots' ? G.botMatch?.bots : G.mode === 'online' ? G.onlineBots?.bots : null) ?? []) {
+      const wep = b.wep ?? b.weapon;
+      remoteReloadEdge(b.id, b.alive && b.reloadT > 0, wep, b.pos.x, b.y ?? 0, b.pos.z,
+        b.reloadTotal > 0 ? 1 - b.reloadT / b.reloadTotal : 0, b.reloadTotal);
     }
 
     hud.ammo(G.weapons);
@@ -4894,7 +4975,7 @@ function frame(now) {
       : (G.mode === 'online' || G.mode === 'bots' ? G.selfHp / TUNING.combat.hp : 1));
     if (G.mode === 'online') resolveOnlineHurt();
     // arcos de daño: rumbo desde el jugador, orientados con el yaw de cámara
-    hud.feedback(paused ? 0 : dt, camera, G.player.pos.x, G.player.pos.z);
+    hud.feedback(paused ? 0 : dt, camera, G.player.pos.x, G.player.pos.z, G.spectator.active || G.player.dead);
     // countdown grande de reaparición (no en fin de ronda/partida: ahí la
     // cola de respawns se vació y el contador mentía, pisando "ROUND PARA…")
     const bmPhase = G.botMatch?.phase;
@@ -4913,16 +4994,21 @@ function frame(now) {
     } else if (G.mode === 'online') {
       hud.scoreboard(!flowView && input.scoreHeld && !menuOpen ? G.onlineRows : null, G.net?.id);
     }
-    if (flowView) { hud.reticle(false, null); hud.sniperScope(false); }
+    hud.setWeaponZone(firstPerson.fp2?.active ? firstPerson.fp2.vm.hudZones() : null);
+    if (flowView) { hud.reticle(null); hud.sniperScope(false); }
     else updateReticle();
+    updateMarkers(); // también fuera de la vista de los ojos: ahí oculta a los enemigos
+    if (!G.player.dead) hud.stance({ dodgeCd: G.player.dodgeCd, crouch: G.player.crouch01 ?? 0, lean: G.player.lean ?? 0 });
   } else {
+    if (fpCam.live) fpCam.release();
     G.scopeActive = false;
     shoulderCam.setScoped(false);
     hud.sniperScope(false);
   }
 
-  effects.update(dt);
   if (!ordnanceStepped) stepOrdnance(dt); // sin jugador (menú, transición)
+  revealOwnRockets();
+  effects.update(dt);
   specials.update(dt);
   updateAudioFrame(dt);
   renderFrame();

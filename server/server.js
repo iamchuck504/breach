@@ -11,6 +11,7 @@ import {
   nextLobbyMap, normalizeLobbySettings, teamCounts, validateLobby,
 } from '../src/game/lobby-rules.js';
 import { ROUND_FINISH_HOLD as DEFAULT_ROUND_FINISH_HOLD } from '../src/game/match-flow.js';
+import { dodgeDistance } from '../src/player/dodge.js';
 import { TUNING } from '../src/config/tuning.js';
 import { nextRespawnWave } from '../src/game/respawn-wave.js';
 import { PowerRespawn } from '../src/game/power-respawn.js';
@@ -20,7 +21,10 @@ import {evaluateBlast} from '../src/combat/blast.js';
 import {CombatPrototypes} from '../src/combat/prototypes.js';
 import { isSniperHeadshotDeath, rocketDeathLevel } from '../src/combat/death-reactions.js';
 import { makeSmokeProjectile, stepSmokeProjectile } from '../src/game/smoke-physics.js';
-import { claimPose, currentVolume, placeHitPose, hitAimHeights } from '../src/combat/hit-pose.js';
+import { claimPose, currentVolume, placeHitPose, hitAimHeights, hitPose, eyeWorld, recordOwnPose, shotPose, FPS_EYE_TOL, launchWorld, rocketConvergeMaxDeg } from '../src/combat/hit-pose.js';
+import { canFireInState, sprintFireOk } from '../src/combat/fire-gates.js';
+import { spreadFor } from '../src/combat/weapons.js';
+import { meleeHitOk, meleeReachOk, MELEE_REACH, MELEE_NET_TOL } from '../src/combat/melee-reach.js';
 import { adsSetback, shooterPlaneDistance } from '../src/combat/shooter-plane.js';
 // pose ADS del tirador alineada con el disparo: la actual o las de los
 // últimos 300 ms (el estado viaja a 20 Hz y el disparo puede adelantarse)
@@ -35,12 +39,13 @@ function aimedSetback(shooter, o) {
   return null;
 }
 import {
-  MAX_WS_PAYLOAD, MessageRateGuard, acceptMovement, consumeShotAmmo,
+  MAX_WS_PAYLOAD, MessageRateGuard, acceptMovement, dodgeFireReady, consumeShotAmmo,
   createAmmoBudget, grantWeaponAmmo, refillNormalAmmo, resetMovementGuard,
   fireCadenceAllows, commitFireCadence, noteMessageArrival,
+  acceptPosture, resetPostureGuard, POSTURE_UPRIGHT, advanceCadenceClock, srvBurstAllows, commitSrvBurst,
 } from './guards.js';
 import {
-  clipMapEndpoint, mapLineBlocked, mapSurfaceContact, projectileMapContact,
+  botPoseAllowsOrigin, BOT_ORIGIN_LAG, clipMapEndpoint, mapLineBlocked, mapPathBlocked, mapSurfaceContact, projectileMapContact,
   serverMapPhysics,
 } from './map-geometry.js';
 
@@ -87,12 +92,23 @@ const ROCKET_SURFACE_OFFSET = 0.28;
 const SMOKE_PHYSICS_STEP = 1 / 60;
 const SMOKE_FUSE = Number(process.env.SMOKE_FUSE ?? WD.grenade.fuse);
 const SMOKE_TIME = Number(process.env.SMOKE_TIME ?? WD.grenade.smokeTime);
-const VALID_STATES = new Set(['idle', 'run', 'roadie', 'dive', 'slide', 'cover_low',
+const VALID_STATES = new Set(['idle', 'run', 'roadie', 'dodge', 'dive', 'slide', 'cover_low',
   'cover_high', 'blind_over', 'blind_low_left', 'blind_low_right',
-  'blind_high_left', 'blind_high_right', 'jump', 'flip', 'mantle', 'melee', 'dead']);
+  'blind_high_left', 'blind_high_right', 'jump', 'flip', 'mantle', 'melee', 'dead', 'crouch']);
+// Un cliente FPS ya no emite cobertura, blindfire, dive ni flip (contrato §1;
+// los bots alojados sí, hasta su etapa). Si llegan, se traducen a la postura
+// FPS equivalente en altura de cabeza: agachado tras LOW sigue agachado (y su
+// asomo, `ce`, sigue valiendo), el resto, de pie. Nunca un volumen más
+// pequeño que lo que el cliente puede estar viendo.
+const FPS_RETIRED = { cover_low: 'crouch', blind_over: 'crouch', blind_low_left: 'crouch', blind_low_right: 'crouch',
+  cover_high: 'idle', blind_high_left: 'idle', blind_high_right: 'idle', dive: 'idle', flip: 'idle' };
+const fpsState = (entity, st) => (entity?.fps || entity?.bot ? FPS_RETIRED[st] : null) || st;
 const VALID_COVER_KINDS = new Set(['low', 'medium', 'high', 'railing', 'platform-edge',
   'vehicle', 'shelter', 'truck', 'bus']);
 const VISUAL_AIM_MAX = 52 * Math.PI / 180;
+const ACTION_EVENTS = new Set(['swapStart', 'swapEnd', 'reloadStart', 'reloadEnd', 'reloadCancel', 'throwStart', 'throwRelease', 'throwCancel']);
+// estados del contrato §1 (también para bots alojados: los retirados se traducen)
+const CONTRACT_STATES = new Set(['idle', 'run', 'roadie', 'dodge', 'jump', 'crouch', 'slide', 'mantle', 'melee']);
 const POSE_HISTORY_TIME = 0.75;
 const CLAIM_POSITION_TOLERANCE = 0.82;
 
@@ -114,6 +130,11 @@ const server = http.createServer((req, res) => {
   if (urlPath.includes('\0')) { textResponse(res, 400, 'bad request'); return; }
   // sonda de vida para el host (health check del proveedor); sin estado interno
   if (urlPath === '/healthz') { textResponse(res, 200, 'ok'); return; }
+  // pruebas (matriz honesta): rechazos del servidor por motivo
+  if (urlPath === '/test/refusals' && process.env.NODE_ENV === 'test') {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify(REFUSALS)); return;
+  }
   // estado de la sala; CORS abierto porque el cliente puede vivir en otro
   // dominio (sitio estático) y solo expone lo que ya ve cualquiera que entre
   if (urlPath === '/status') {
@@ -155,7 +176,8 @@ const prototypes=new CombatPrototypes({
  experimental:process.env.BREACH_EXPERIMENTAL_STUN==='1',
  actors:()=>allSlots().map(p=>({...p,protected:p.prot>nowSec(),blastH:blastHeightOf(p)})),
  physics:{resolveCircle:(...a)=>serverMapPhysics(settings.map).resolveCircle(...a),groundHeight:(...a)=>serverMapPhysics(settings.map).groundHeight(...a)},
- blocked:(a,b)=>mapLineBlocked(settings.map,[a.x,a.y,a.z],[b.x,b.y,b.z],.015),
+ // Cada subpaso del proyectil comprueba el tramo completo contra el sólido.
+ blocked:(a,b)=>protoBlocked(a,b),
  event:e=>{if(e.kind==='blastResolved'){checkRoundEnd();return;}broadcastRaw({t:'protoEvent',...e});},
  inventory:(id,item)=>{
   const actor=allSlots().find(p=>p.id===id);if(!actor)return;
@@ -175,6 +197,27 @@ let waveEpoch = 0;
 let wins = { red: 0, blue: 0 }, pools = { red: 0, blue: 0 };
 
 const nowSec = () => Date.now() / 1000;
+const protoBlocked = (a, b) => mapPathBlocked(settings.map, [a.x, a.y, a.z], [b.x, b.y, b.z]);
+// rechazos de humanos por motivo (GET /test/refusals con NODE_ENV=test)
+const REFUSALS = {};
+// BREACH_REFUSAL_LOG=<archivo> (pruebas): el detalle de cada rechazo, una línea JSON
+const REFUSAL_LOG = process.env.NODE_ENV === 'test' ? process.env.BREACH_REFUSAL_LOG : null;
+function refused(reason, detail = null) {
+  REFUSALS[reason] = (REFUSALS[reason] || 0) + 1;
+  if (REFUSAL_LOG) { try { fs.appendFileSync(REFUSAL_LOG, JSON.stringify({ t: +monoSec().toFixed(3), reason, ...(detail || {}) }) + '\n'); } catch { /* sin registro */ } }
+  return false;
+}
+// Rechazo de un lanzamiento (R8): identifica el lanzamiento pendiente por
+// actor (el humano o su bot), vida e id, con el motivo real (la PRIMERA regla
+// que falló), UNA sola vez por cid.
+function launchReject(ws, actor, { cid, kind, reason, life }, type = 'nadeReject') {
+  if (!actor) return;
+  if (cid) { const seen = (actor.rejectedCids ||= new Set()); if (seen.has(cid)) return; seen.add(cid); if (seen.size > 64) seen.delete(seen.values().next().value); }
+  if (!actor.bot) refused(`launch-${reason || 'origin'}`);
+  const current = actor.life || 0;
+  const launchLife = !actor.bot && Number.isSafeInteger(life) && life >= 0 && life <= current ? life : current;
+  send(ws, { t: type, cid, kind, id: actor.id, life: launchLife, reason: reason || 'origin' });
+}
 const LOG_FIRE_REJECTS = process.env.BREACH_LOG_FIRE_REJECTS === '1';
 // Texto de la red: solo si ES texto. String()/plantillas sobre un objeto
 // arbitrario pueden lanzar ({"toString":1,"valueOf":1}).
@@ -188,13 +231,91 @@ const monoSec = () => performance.now() / 1000;
 function poseSnapshot(entity, now) {
   return { at: now, x: entity.x || 0, y: entity.y || 0, z: entity.z || 0, st: entity.st || 'idle',
     yaw: entity.yaw || 0, aim: entity.aim ? 1 : 0, p: entity.p || 0, ae: entity.ae || 0, cl: entity.cl || 0,
-    sp: entity.sp || 0, w: entity.w, ...(entity.ceKnown ? { ce: entity.ce } : {}) };
+    sp: entity.sp || 0, w: entity.w, ...(entity.ceKnown ? { ce: entity.ce } : {}),
+    // reloj de simulación del cliente de la última muestra (mezcla por `ct`)
+    ...(Number.isFinite(entity.ct) ? { ct: entity.ct } : {}) };
 }
 // historial: lo difundido en cada snapshot. Se guarda más que la ventana de
 // posición (0.75 s) para reconstruir la entrada de dive/mantle/flip.
 const POSE_RETAIN = 1.6;
 function resetPoseHistory(entity, now = monoSec()) {
   entity.poseHistory = [poseSnapshot(entity, now)];
+  // estados PROPIOS recibidos (origen del disparo FPS) y su guarda de postura
+  entity.selfPoses = [];
+  resetPostureGuard(entity, nowSec());
+}
+// Postura aceptada (guards.js acceptPosture) sobre el estado ya validado.
+// `crouch` siempre lleva `ce` (sin él: agachado del todo) para que el
+// historial y los observadores tengan la altura de cabeza.
+function applyPosture(entity, rawCl, now, ct) {
+  const want = { st: entity.st, ce: entity.ceKnown ? entity.ce : undefined, cl: clamp(rawCl, -1, 1) };
+  const ps = acceptPosture(entity, { st: entity.st, aim: !!entity.aim, ce: want.ce, cl: want.cl }, now, ct);
+  // recorte de la guarda de postura de un cliente FPS: descarte parcial, contado
+  if (entity.fps && !entity.bot && (ps.st !== want.st ||
+      (want.st === 'crouch' && Math.abs(ps.ce - (want.ce ?? 0)) > 1e-9) ||
+      Math.abs(ps.cl - want.cl) > 1e-9)) refused('posture-clip', { want, got: ps });
+  entity.st = ps.st; entity.cl = ps.cl;
+  if (Number.isFinite(ps.ce)) { entity.ce = ps.ce; entity.ceKnown = entity.ceKnown || ps.st === 'crouch' || POSTURE_UPRIGHT.has(ps.st); }
+}
+// Estado propio tal como llegó (reloj monótono de recepción): de aquí sale la
+// cabeza del tirador para validar el origen de un cliente FPS.
+function recordSelfPose(entity, now = monoSec()) {
+  recordOwnPose(entity.selfPoses ||= [], poseSnapshot(entity, now));
+}
+// Proyectiles de un cliente FPS (cohete, humo, frag, aturdidora): mismo
+// estado y retraso que el disparo, ligados a la muestra `fs` del subpaso del
+// lanzamiento (aceptada ANTES por quien llama). La salida esperada se rehace
+// desde esa muestra: ojo + LAUNCH_OFFSET en el marco de la cámara (yaw + ae,
+// pitch) — la de fpCam.launchPoint —, acortada por la geometría; se admite a
+// ≤ LAUNCH_TOL de ese tramo, con ojo→salida y cabeza→ojo libres (antes: hasta
+// 0.78 m del ojo en cualquier dirección). Cohete: además `d` dentro del cono
+// del peor caso de spreadFor + 2° alrededor del eje de mirada.
+const LAUNCH_TOL = 0.06;
+function segDist3(p, a, b) {
+  const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], l2 = u[0] * u[0] + u[1] * u[1] + u[2] * u[2];
+  const k = l2 > 1e-9 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * u[0] + (p[1] - a[1]) * u[1] + (p[2] - a[2]) * u[2]) / l2)) : 0;
+  return Math.hypot(p[0] - a[0] - u[0] * k, p[1] - a[1] - u[1] * k, p[2] - a[2] - u[2] * k);
+}
+function fpsLaunchLegal(shooter, o, ts, weapon, dir = null) {
+  if (!dodgeFireReady(shooter, weapon) || !canFireInState(shooter.st, weapon) || !sprintFireOk(shooter.lastRoadieAt, nowSec(), weapon)) { shooter.lastRejectReason = 'state'; return false; }
+  const samples = shooter.selfPoses?.length ? shooter.selfPoses : [poseSnapshot(shooter, monoSec())];
+  const cur = samples[samples.length - 1], pose = shotPose(samples, ts);
+  const { eye, launch: L, fwd } = launchWorld(pose, cur.x, cur.y, cur.z, cur.yaw);
+  const ax = { fwd };
+  const w = placeHitPose(hitPose(pose), cur.x, cur.y, cur.z, cur.yaw), head = [w.hx, w.hy, w.hz];
+  const clear = (a, b) => !mapPathBlocked(settings.map, a, b);
+  if (segDist3(o, eye, L) > LAUNCH_TOL || !clear(head, eye) || !clear(eye, o)) { shooter.lastRejectReason = 'origin'; return false; }
+  if (dir) {
+    const len = Math.hypot(dir[0], dir[1], dir[2]) || 1;
+    const cos = (dir[0] * ax.fwd[0] + dir[1] * ax.fwd[1] + dir[2] * ax.fwd[2]) / len;
+    // convergencia hacia la cruz (rocketAimDir, compartida) + dispersión + 2°
+    const cone = rocketConvergeMaxDeg(L, eye, fwd) +
+      spreadFor(weapon, { aim: !!cur.aim, moving: 1, sliding: cur.st === 'slide', airborne: cur.st === 'jump' || !!shooter.air, sinceSprint: 0 }) + 2;
+    if (cos < Math.cos(cone * Math.PI / 180)) { shooter.lastRejectReason = 'origin'; return false; }
+  }
+  return true;
+}
+// muestra de un proyectil humano FPS: obligatoria y ANTES de cadencia y arma
+function acceptLaunchSample(shooter, msg, kind) {
+  const r = takeSample(shooter, msg, kind);
+  if (!r.ok) shooter.lastRejectReason = r.reason === 'sample-weapon' ? 'wrong-weapon' : r.reason === 'sample-state' ? 'state' : 'sample';
+  return r;
+}
+// Origen de un cliente FPS (DECISIONES §4): el tiro va ligado a UNA muestra
+// propia aceptada (la `fs` del disparo, ya pasada por las guardas de
+// movimiento y postura); de ella sale SU ojo con eyeWorld (y su mezcla de
+// estado, hit-pose.js shotPose). El origen debe estar a ≤ FPS_EYE_TOL de ese
+// ojo (solo cuantización) y el tramo centro de cabeza → origen, con sus dos
+// extremos, libre de geometría: ni rodear una esquina con el casco oculto ni
+// sacar el ojo a través de una pared.
+function fpsOriginLegal(shooter, o, ts) {
+  const samples = shooter.selfPoses?.length ? shooter.selfPoses : [poseSnapshot(shooter, monoSec())];
+  const cur = samples[samples.length - 1];
+  const pose = shotPose(samples, ts);
+  const eye = eyeWorld(pose, cur.x, cur.y, cur.z, cur.yaw);
+  if (distance3(o, eye) > FPS_EYE_TOL) return false;
+  const w = placeHitPose(hitPose(pose), cur.x, cur.y, cur.z, cur.yaw), head = [w.hx, w.hy, w.hz];
+  return !mapPathBlocked(settings.map, head, o);
 }
 function recordPose(entity, now = monoSec()) {
   entity.poseHistory ||= [];
@@ -225,19 +346,13 @@ const currentVolumeOf = (entity) => currentVolume([...(entity.poseHistory || [])
 // Origen de un disparo de bot (lo simula el host): debe salir de su cuerpo
 // difundido en los últimos BOT_ORIGIN_LAG s (desfase host→servidor; los
 // botState y el botFire viajan por el mismo socket), a menos de
-// BOT_MUZZLE_REACH en planta, entre 0.3 y 2.1 m sobre los pies, y con el
+// 1.2 m en planta, entre 0.3 y 2.1 m sobre los pies, y con el
 // tramo pecho→origen libre de geometría del mapa (no se dispara a través de
 // una cobertura).
-const BOT_ORIGIN_LAG = 0.3, BOT_MUZZLE_REACH = 1.2;
 function botOriginLegal(bot, o) {
   const mt = monoSec();
-  // solo poses DIFUNDIDAS (lo que vieron los observadores), nunca la recién recibida
-  const samples = (bot.poseHistory || []).filter((p) => p.at >= mt - BOT_ORIGIN_LAG && p.at <= mt);
-  return samples.some((p) => {
-    const rel = o[1] - (p.y || 0);
-    return Math.hypot(o[0] - p.x, o[2] - p.z) <= BOT_MUZZLE_REACH && rel >= 0.3 && rel <= 2.1 &&
-      !mapLineBlocked(settings.map, [p.x, (p.y || 0) + 1.3, p.z], o, 0.02);
-  });
+  return (bot.poseHistory || []).some(p => p.at >= mt - BOT_ORIGIN_LAG && p.at <= mt &&
+    botPoseAllowsOrigin(settings.map, p, o));
 }
 // altura de las muestras de exposición a explosiones según la pose
 function blastHeightOf(entity) {
@@ -267,7 +382,7 @@ function pickSpawn(team, index = -1) {
 }
 function pub(p) {
   return { id: p.id, name: p.name, team: p.team, bot: p.bot ? 1 : 0,
-    host: p.id === hostId ? 1 : 0, alive: !!p.alive, hp: Math.round(p.hp ?? HP),
+    host: p.id === hostId ? 1 : 0, life: p.life || 0, alive: !!p.alive, hp: Math.round(p.hp ?? HP),
     x: p.x ?? 0, z: p.z ?? 0, y: p.y ?? 0, v: p.v ?? 0,
     kills: p.kills ?? 0, deaths: p.deaths ?? 0 };
 }
@@ -400,16 +515,29 @@ function lateJoinPayload() {
     players: allSlots().map(pub), rows: statRows(),
     special: { wep: special.taken ? null : special.wep } };
 }
+// Solo presentación. Se fija el origen una vez, entre posiciones aceptadas.
+function noteDodgeVisual(actor, msg, next) {
+  if (next.st === 'dodge') actor.visualUntil = msg.ct + TUNING.dodge.duration + TUNING.net.interpDelay * 2;
+  actor.visualCt = Number.isFinite(msg.ct) && msg.ct <= actor.visualUntil ? msg.ct : undefined;
+  if (next.st !== 'dodge') { actor.dodgeVisual = null; return; }
+  if (actor.dodgeVisual) return;
+  const bounded = Number.isFinite(msg.ox) && Number.isFinite(msg.oz) &&
+    Math.hypot(msg.ox - next.x, msg.oz - next.z) <= dodgeDistance(msg.dg) + 0.02 &&
+    Math.hypot(msg.ox - actor.x, msg.oz - actor.z) <= TUNING.fp.sprintSpeed / TUNING.net.sendHz + 0.04;
+  actor.dodgeVisual = { ox: bounded ? msg.ox : actor.x, oz: bounded ? msg.oz : actor.z,
+    da: Number.isFinite(msg.da) ? wrapAngle(msg.da) : Math.atan2(next.z - actor.z, next.x - actor.x) };
+}
 function freshCombatState(p, spawn) {
   Object.assign(p, { x: spawn.x, z: spawn.z, y: 0, yaw: spawn.yaw, st: 'idle', aim: 0,
     p: 0, ae: 0, cl: 0, ce: 1, ck: null, w: 'smg', sp: 0, hp: HP, alive: true,
-    specialWep: null,
+    specialWep: null, wGrant: null, wSeen: 'smg', wInstant: false, lastActionWeapon: null,
+    lastRoadieAt: -Infinity, ct: undefined, visualCt: undefined, visualUntil: -Infinity, dodgeVisual: null, sa: undefined,
     weaponSlots: ['smg', 'shotgun', 'pistol', 'grenade'],
     ammoBudget: createAmmoBudget(), fireWeapon: null, // vida nueva: sin arma previa
     nades: p.bot ? 1 : WD.grenade.mag,
     lastNadeAt: -Infinity, lastRocketAt: -Infinity,
     lastDamage: 0, respawnAt: 0, prot: startAt + SPAWN_PROT,
-    lastFireAt: -Infinity, pendingShot: null });
+    lastFireAt: -Infinity, pendingShot: null, life: (p.life || 0) + 1 });
   resetMovementGuard(p, nowSec());
   resetPoseHistory(p);
 }
@@ -428,16 +556,27 @@ function syncBotTransport(b, host) {
 
 const dazed = (entity) => nowSec() < (entity?.dazeUntil || 0); // pateado: ni dispara, ni golpea, ni lanza
 function relayNade(sourceWs, shooter, msg) {
-  if(dazed(shooter)||prototypes.stunned(shooter?.id)||shooter?.weaponSlots?.[3]==='frag')return false;
-  if (!shooter?.alive || phase !== 'playing' || shooter.nades <= 0) return false;
+  if (shooter) shooter.lastRejectReason = 'state';
+  if(dazed(shooter)||prototypes.stunned(shooter?.id))return false;
+  if (!shooter?.alive || phase !== 'playing') return false;
+  if (shooter.weaponSlots?.[3] === 'frag') { shooter.lastRejectReason = 'wrong-weapon'; return false; }
+  if (shooter.nades <= 0) { shooter.lastRejectReason = 'ammo'; return false; }
   const o = vec3(msg.o), v = vec3(msg.v); if (!o || !v) return false;
   const now = nowSec();
-  if (now - shooter.lastNadeAt < NADE_RELAY_INTERVAL) return false;
-  if (!projectileCadenceAllows(shooter, 'grenade', now)) return false;
+  // orden fijo: muestra/arma → estado → origen → cadencia (ganchos/red.md)
+  const human = !shooter.bot && shooter.fps, smp = human ? acceptLaunchSample(shooter, msg, 'grenade') : { ok: true };
+  if (!smp.ok || !dodgeFireReady(shooter, 'grenade')) return false;
+  if (shooter.w !== 'grenade') { shooter.lastRejectReason = 'wrong-weapon'; return false; }
   const horizontalOrigin = Math.hypot(o[0] - shooter.x, o[2] - shooter.z);
   const verticalOrigin = Math.abs(o[1] - ((shooter.y || 0) + 1.1));
   const speed = Math.hypot(v[0], v[1], v[2]);
-  if (horizontalOrigin > 2.5 || verticalOrigin > 3 || speed < 0.5 || speed > 18) return false;
+  if (horizontalOrigin > 2.5 || verticalOrigin > 3 || speed < 0.5 || speed > 18) { shooter.lastRejectReason = 'origin'; return false; }
+  // humo de bot alojado: barrido desde su ojo, como el cohete (R6)
+  if (shooter.bot && !botOriginLegal(shooter, o)) { shooter.lastRejectReason = 'origin'; return false; }
+  if (human && !fpsLaunchLegal(shooter, o, smp.ts, 'grenade')) return false;
+  shooter.lastRejectReason = 'cadence';
+  if (now - shooter.lastNadeAt < NADE_RELAY_INTERVAL) return false;
+  if (!projectileCadenceAllows(shooter, 'grenade', now)) return false;
   const nid = `n${nextNadeId++}`;
   const cid = typeof msg.cid === 'string' && /^[a-zA-Z0-9:_-]{1,40}$/.test(msg.cid)
     ? msg.cid : null;
@@ -463,25 +602,36 @@ const projectileMeta = (shooter) => ({ wAt: shooter.wAt, wSeq: shooter.wSeq, wWe
 function projectileCadenceAllows(shooter, weapon, now) {
   // el arma del lanzamiento tiene que ser la EQUIPADA replicada, siempre
   if (shooter.w !== weapon) return false;
-  return fireCadenceAllows(shooter, weapon, projectileInterval(weapon), now, projectileMeta(shooter));
+  return fireCadenceAllows(shooter, weapon, projectileInterval(weapon), cadenceNow(shooter, now), projectileMeta(shooter));
 }
 function commitProjectileCadence(shooter, weapon, now) {
-  commitFireCadence(shooter, weapon, projectileInterval(weapon), now, projectileMeta(shooter));
+  commitFireCadence(shooter, weapon, projectileInterval(weapon), cadenceNow(shooter, now), projectileMeta(shooter));
 }
+const cadenceNow = (me, now) => (me?.fps && !me.bot && Number.isFinite(me.cclk) ? me.cclk : now);
 
 function relayRocket(sourceWs, shooter, msg) {
+  if (shooter) shooter.lastRejectReason = 'state';
   if(prototypes.stunned(shooter?.id)||dazed(shooter))return false;
-  if (!shooter?.alive || phase !== 'playing' ||
-      shooter.specialWep !== 'bazooka') return false;
-  const o = vec3(msg.o), d = vec3(msg.d); if (!o || !d) return false;
+  if (!shooter?.alive || phase !== 'playing') return false;
+  // sin la bazuca (en mano o poseída): el arma, primera regla
+  if (shooter.specialWep !== 'bazooka' || (!shooter.bot && shooter.fps && shooter.w !== 'bazooka')) { shooter.lastRejectReason = 'wrong-weapon'; return false; }
+  const o = vec3(msg.o), d = vec3(msg.d); if (!o || !d) { shooter.lastRejectReason = 'origin'; return false; }
   const now = nowSec();
-  if (now - shooter.lastRocketAt < ROCKET_RELAY_INTERVAL) return false;
-  if (!projectileCadenceAllows(shooter, 'bazooka', now)) return false;
+  // orden fijo (ganchos/red.md "Ronda 2 — orden de validación"): muestra/arma
+  // → estado → origen → cadencia → munición; el motivo es la PRIMERA que falla
+  const human = !shooter.bot && shooter.fps, smp = human ? acceptLaunchSample(shooter, msg, 'bazooka') : { ok: true };
+  if (!smp.ok || !dodgeFireReady(shooter, 'bazooka')) return false;
   const horizontalOrigin = Math.hypot(o[0] - shooter.x, o[2] - shooter.z);
   const verticalOrigin = Math.abs(o[1] - ((shooter.y || 0) + 1.1));
   const len = Math.hypot(d[0], d[1], d[2]);
+  shooter.lastRejectReason = 'origin';
   if (horizontalOrigin > 2.2 || verticalOrigin > 2.2 || len < 0.5 || len > 1.5) return false;
   if (shooter.bot && !botOriginLegal(shooter, o)) return false;
+  if (human && !fpsLaunchLegal(shooter, o, smp.ts, 'bazooka', d)) return false;
+  shooter.lastRejectReason = 'cadence';
+  if (now - shooter.lastRocketAt < ROCKET_RELAY_INTERVAL) return false;
+  if (!projectileCadenceAllows(shooter, 'bazooka', now)) return false;
+  shooter.lastRejectReason = 'ammo';
   if (!consumeShotAmmo(shooter, 'bazooka')) return false;
   const dir = d.map((n) => +(n / len).toFixed(6));
   const rid = `r${nextRocketId++}`;
@@ -584,7 +734,7 @@ function dropWeapon(target) {
 function validatedFirePose(shooter, raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const st = VALID_STATES.has(str(raw.st)) && raw.st !== 'dead'
-    ? raw.st : (shooter.st || 'idle');
+    ? fpsState(shooter, raw.st) : (shooter.st || 'idle');
   const ck = VALID_COVER_KINDS.has(str(raw.ck)) ? raw.ck : null;
   return {
     st, a: raw.a ? 1 : 0,
@@ -597,42 +747,120 @@ function validatedFirePose(shooter, raw) {
   };
 }
 
+// Semiángulo máximo (grados) de un perdigón alrededor del eje central:
+// spreadFor del peor caso compatible con el estado de la muestra + 2°.
+function worstSpread(shooter, weapon, now) {
+  const st = shooter.st, moving = Math.min(1, (shooter.sp || 0) * TUNING.move.roadieSpeed / TUNING.fp.runSpeed + 0.2);
+  const sinceSprint = Number.isFinite(shooter.lastRoadieAt) ? Math.max(0, now - shooter.lastRoadieAt - 0.1) : Infinity;
+  // en el aire también si la muestra lo dice aunque st siga `crouch` (R3)
+  return spreadFor(weapon, { aim: shooter.sa !== undefined ? !!shooter.sa : !!shooter.aim, moving, crouched: false, sliding: st === 'slide',
+    airborne: st === 'jump' || !!shooter.air, sinceSprint });
+}
+function shotgunCone(shooter, now) { return worstSpread(shooter, 'shotgun', now) + 2; }
+function bulletDirOk(shooter, o, pt, weapon, now) {
+  const yaw = (shooter.yaw || 0) + (shooter.ae || 0), p = shooter.p || 0;
+  const ax = [-Math.sin(yaw) * Math.cos(p), Math.sin(p), -Math.cos(yaw) * Math.cos(p)];
+  const d = [pt[0] - o[0], pt[1] - o[1], pt[2] - o[2]], l = Math.hypot(d[0], d[1], d[2]);
+  if (l < 0.01) return true;
+  const cone = (worstSpread(shooter, weapon, now) + 2) * Math.PI / 180;
+  return (d[0] * ax[0] + d[1] * ax[1] + d[2] * ax[2]) / l >= Math.cos(cone);
+}
+// La muestra aceptada entra en el historial que rebobinan los rivales con su
+// pose EVALUADA (`vol`: la mezcla exacta que autorizó el ojo, R5).
+function insertShotSample(shooter, ts) {
+  const h = shooter.poseHistory ||= [];
+  const s = poseSnapshot(shooter, monoSec());
+  const samples = shooter.selfPoses?.length ? shooter.selfPoses : [s];
+  s.vol = hitPose(shotPose(samples, ts));
+  if (!h.length || h[h.length - 1].at <= s.at) h.push(s);
+}
+// Muestra `fs` OBLIGATORIA de un cliente FPS (R2): objeto, `n` entero
+// posterior al último, `w` = el arma ya equipada según el estado previo (R14;
+// en melee, la que lleva en mano) y, si se da, el arma del mensaje.
+function takeSample(shooter, msg, expectWeapon) {
+  const fs = msg.fs && typeof msg.fs === 'object' && !Array.isArray(msg.fs) ? msg.fs : null;
+  const no = (reason, detail) => ({ ok: refused(reason, detail), reason });
+  // orden (red.md): arma del mensaje → muestra presente → n → arma de la muestra → guardas
+  if (expectWeapon && expectWeapon !== shooter.w) return no('sample-weapon');
+  if (!fs) return no('sample-missing');
+  if (!Number.isInteger(fs.n) || (Number.isFinite(shooter.lastN) && fs.n <= shooter.lastN)) {
+    return no('sample-seq', { n: fs.n, lastN: shooter.lastN, st: fs.st, lastSt: shooter.st });
+  }
+  if (fs.w !== shooter.w) return no('sample-weapon');
+  if (!acceptOwnState(shooter, fs, true)) return no('sample-state');
+  return { ok: true, ts: Number.isFinite(fs.ts) ? fs.ts : undefined };
+}
 function registerFire(shooter, msg, isBotFire = false) {
-  if(prototypes.stunned(shooter?.id)||dazed(shooter))return false;
-  if (!shooter?.alive || phase !== 'playing') return false;
-  const o = vec3(msg.o), pt = vec3(msg.p); if (!o || !pt) return false;
+  const reject = reason => !isBotFire && shooter?.fps ? refused(reason) : false;
+  if (prototypes.stunned(shooter?.id) || dazed(shooter)) return reject('fire-dazed');
+  if (!shooter?.alive || phase !== 'playing') return reject('fire-inactive');
+  const o = vec3(msg.o), pt = vec3(msg.p); if (!o || !pt) return reject('fire-point');
+  // C6: un cliente FPS debe nombrar un arma válida (antes caía a SMG)
+  if (!isBotFire && shooter?.fps && !FIREABLE.has(msg.w)) return refused('fire-weapon');
   const weapon = FIREABLE.has(msg.w) ? msg.w : 'smg', rule = FIRE_RULES[weapon], now = nowSec();
   // La bazooka nace exclusivamente mediante `rocket`; aceptar un `fire` en
   // el punto de explosión devolvería al cliente autoridad sobre la trayectoria.
-  if (weapon === 'bazooka') return false;
+  if (weapon === 'bazooka') return reject('fire-weapon');
+  // Cliente FPS: PRIMERO la muestra del subpaso (`fs`, con su `n` y su arma
+  // `w`) como estado propio; arma, cadencia, puertas y origen se validan
+  // sobre ESE estado, y no se vuelve a aplicar después (auditoría (a)).
+  const fpsShooter = !isBotFire && !!shooter.fps;
+  if (fpsShooter) {
+    const smp = takeSample(shooter, msg, FIREABLE.has(msg.w) && msg.w !== 'melee' ? msg.w : null);
+    if (!smp.ok) return false;
+    msg._ts = smp.ts;
+  }
   // el melee no depende del arma en mano; el resto debe coincidir con ella.
   // Cadencia (guards.js): horario virtual por arma, apertura ≥82 %, crédito
   // solo por jitter/atasco de transporte, gesto de cambio entre armas y `sq`
   // creciente (clientes nuevos) contra duplicados.
   const cadenceMeta = { sq: Number.isFinite(msg.sq) ? msg.sq : undefined,
     wAt: shooter.wAt, wSeq: shooter.wSeq, wWeapon: shooter.wSeen, wInstant: !!shooter.wInstant, requireSwapEvidence: true };
-  if ((weapon !== 'melee' && weapon !== shooter.w) ||
-      !fireCadenceAllows(shooter, weapon, rule.interval, now, cadenceMeta)) return false;
+  if (!dodgeFireReady(shooter, weapon)) return reject('fire-state');
+  if (weapon !== 'melee' && weapon !== shooter.w) return fpsShooter ? refused('fire-weapon') : false;
   const melee = weapon === 'melee';
-  // la embestida recorre hasta 3 m en 0,2 s: la posición conocida va por detrás
+  // la embestida recorre hasta 3 m en 0,2 s: la posición conocida va por
+  // detrás (bots). El cliente FPS manda su muestra: ni ese margen ni los 5 m.
   const originTolerance = melee ? 0.9 + TUNING.melee.tackleMax : (isBotFire ? 6 : 5);
   if (Math.hypot(o[0] - shooter.x, o[2] - shooter.z) > originTolerance ||
-      Math.abs(o[1] - ((shooter.y || 0) + 1.1)) > (melee ? 1.1 : 4)) return false;
+      Math.abs(o[1] - ((shooter.y || 0) + 1.1)) > (melee ? 1.1 : 4)) return reject('fire-origin');
   if (isBotFire && !melee && !botOriginLegal(shooter, o)) return false;
+  // cliente FPS: el tiro (y el golpe) salen del ojo de SU muestra
+  // (DECISIONES §4), en un estado que permite disparar y pasado el retraso
+  // sprint→disparo del arma (fire-gates.js: la misma tabla que el cliente)
+  if (fpsShooter) {
+    if (!melee && (!canFireInState(shooter.st, weapon) || !sprintFireOk(shooter.lastRoadieAt, now, weapon))) return refused('fire-state');
+    if (!fpsOriginLegal(shooter, o, msg._ts)) {
+      const sm = shooter.selfPoses || [], cur = sm[sm.length - 1], pose = sm.length ? shotPose(sm, msg._ts) : null;
+      const e = pose ? eyeWorld(pose, cur.x, cur.y, cur.z, cur.yaw) : null;
+      return refused('fire-origin', { o, eye: e?.map((v) => +v.toFixed(3)), d: e ? +distance3(o, e).toFixed(3) : null, st: cur?.st, ce: cur?.ce, cl: cur?.cl,
+        from: pose?.from?.st ?? null, since: pose?.since, fs: msg.fs, last3: sm.slice(-3).map((q) => ({ at: +q.at.toFixed(3), ct: q.ct, st: q.st, ce: q.ce, n: q.n })) });
+    }
+    // una bala (R4): `p` es la dirección EFECTIVA de la bala, dentro del cono
+    // de dispersión del peor caso de la muestra + 2° alrededor de su eje
+    if (!melee && weapon !== 'shotgun' && !bulletDirOk(shooter, o, pt, weapon, now)) return refused('fire-direction');
+  }
+  // cadencia DESPUÉS de muestra, estado y origen (orden documentado en red.md)
+  if (fpsShooter && !srvBurstAllows(shooter, weapon, rule.interval, now)) return refused('fire-burst', { w: weapon });
+  if (!fireCadenceAllows(shooter, weapon, rule.interval, cadenceNow(shooter, now), cadenceMeta)) {
+    return fpsShooter ? refused('fire-cadence', { why: shooter.lastRejectReason ?? shooter.cadenceWhy, cclk: shooter.cclk, now: +now.toFixed(3), ct: shooter.ct, bank: shooter.cBank, chain: shooter.fireChain?.[weapon], times: shooter.fireTimes?.[weapon]?.slice(-4), w: weapon }) : false;
+  }
   // Rango y falloff se miden desde el PLANO del tirador (pecho a 1.3 m),
   // igual que el cliente: en ADS el origen óptico es la cámara, ~2.2 m por
   // detrás, y medir desde ella descartaba disparos válidos y restaba daño.
   // El descuento solo existe si el PROPIO estado del tirador (aim y pitch de
   // sus snapshots recientes, no el bit del disparo) estaba en ADS y el origen
   // cae en el sobre de su cámara; hip/blindfire (cañón): base 0.
-  const planeVec = melee ? null : aimedSetback(shooter, o);
-  if (shooterPlaneDistance(o, pt, planeVec) > rule.range + (melee ? 0.22 : 2)) return false;
+  // Cliente FPS: el origen es su ojo, sin cámara retrasada que descontar.
+  const planeVec = melee || fpsShooter ? null : aimedSetback(shooter, o);
+  if (shooterPlaneDistance(o, pt, planeVec) > rule.range + (melee ? 0.22 : 2)) return reject('fire-range');
   if (melee) {
-    const dx = pt[0] - o[0], dz = pt[2] - o[2], len = Math.hypot(dx, dz);
-    const fx = -Math.sin(shooter.yaw || 0), fz = -Math.cos(shooter.yaw || 0);
-    if (len > 0.001 && (dx * fx + dz * fz) / len < Math.cos(62 * Math.PI / 180)) return false;
+    // cliente FPS: el yaw de MIRADA (C3: el cliente elige por la mirada; filtrar
+    // antes por la orientación del cuerpo daba marcador sin daño)
+    const ay = (shooter.yaw || 0) + (fpsShooter ? shooter.ae || 0 : 0);
+    if (!meleeReachOk(o, ay, pt, Infinity)) return reject('melee-direction');
   }
-  if (!consumeShotAmmo(shooter, weapon)) return false;
+  if (!consumeShotAmmo(shooter, weapon)) return reject('fire-ammo');
   const endpoint = clipMapEndpoint(settings.map, o, pt);
   // Solo retransmitir impactos que realmente coincidan con la primera
   // superficie física de ese rayo. Evita decals suspendidos o pintados a
@@ -647,11 +875,20 @@ function registerFire(shooter, msg, isBotFire = false) {
   const shotDir = shotLen > 0.001
     ? shotVec.map((v) => v / shotLen)
     : null;
-  commitFireCadence(shooter, weapon, rule.interval, now, cadenceMeta); shooter.pendingShot = {
-    sq: cadenceMeta.sq,
+  commitFireCadence(shooter, weapon, rule.interval, cadenceNow(shooter, now), cadenceMeta);
+  if (fpsShooter) commitSrvBurst(shooter, weapon, now);
+  shooter.pendingShot = {
+    sq: cadenceMeta.sq, meleeYaw: (shooter.yaw || 0) + (fpsShooter ? shooter.ae || 0 : 0),
     at: now, mt: monoSec(), wep: weapon, origin: o, endpoint, direction: shotDir,
     length: shotLen, remainingDamage: rule.maxDamage, hitIds: new Set(), planeVec,
+    // escopeta FPS: `p` es el EJE CENTRAL del cartucho; cada perdigón
+    // reclamado cabe en el cono del peor caso de spreadFor para el estado de
+    // la muestra + 2° (antes 20° alrededor del ÚLTIMO perdigón)
+    ...(fpsShooter && weapon === 'shotgun' ? { coneDeg: shotgunCone(shooter, now) } : {}),
   };
+  // la muestra aceptada entra en el historial que rebobinan los rivales: una
+  // exposición entre dos snapshots que autorizó el tiro también es impactable
+  if (fpsShooter) insertShotSample(shooter, msg._ts);
   const fp = validatedFirePose(shooter, msg.fp);
   broadcastRaw({ t: 'fire', id: shooter.id, o, p: endpoint, w: weapon,
     ...(decals?.length ? { d: decals } : {}), ...(fp ? { fp } : {}) }); return true;
@@ -770,7 +1007,7 @@ function claimMatchesShot(shot, point) {
   // Un fire de escopeta registra el último pellet, mientras el claim agrupa
   // todos; sus dos extremos pueden separarse hasta ~16°. Armas de un solo
   // proyectil mantienen un cono mucho más estrecho.
-  const degrees = shot.wep === 'shotgun' ? 20 : shot.wep === 'melee' ? 18 : 9;
+  const degrees = Number.isFinite(shot.coneDeg) ? shot.coneDeg : shot.wep === 'shotgun' ? 20 : shot.wep === 'melee' ? 18 : 9;
   return dot >= Math.cos(degrees * Math.PI / 180);
 }
 
@@ -781,6 +1018,9 @@ function commitAuthoritativeDamage(shooter, target, shot, msg, dist, authoritati
   const part = authoritative.part;
   shot.hitIds.add(target.id); shot.remainingDamage -= dmg;
   target.hp -= dmg; target.lastDamage = now;
+  if (process.env.NODE_ENV === 'test') {
+    send(shooter.ws, { t: 'testDamage', target: target.id, w: shot.wep, sq: shot.sq, dmg });
+  }
   if (shot.wep === 'melee') {
     const p = vec3(msg.p) || [target.x, (target.y || 0) + 1, target.z];
     // ATURDIMIENTO de la patada: lo decide y lo hace cumplir el servidor
@@ -827,34 +1067,43 @@ function commitAuthoritativeDamage(shooter, target, shot, msg, dist, authoritati
 }
 
 function registerHit(shooter, msg) {
+  const reject = reason => shooter?.fps && !shooter.bot && refused(reason);
   const target = players.get(msg.target) || bots.get(msg.target);
   const shot = shooter?.pendingShot, rule = shot ? FIRE_RULES[shot.wep] : null, now = nowSec();
-  if (!target || !target.alive || !shooter?.alive || phase !== 'playing' || target.prot > now) return;
+  if (!target || !target.alive || !shooter?.alive || phase !== 'playing' || target.prot > now) return reject('hit-inactive');
   const selfRocket = target.id === shooter.id && shot?.wep === 'bazooka';
-  if (target.team === shooter.team && !selfRocket) return;
-  if (!shot || !rule || now - shot.at > HIT_WINDOW || shot.hitIds.has(target.id)) return;
+  if (target.team === shooter.team && !selfRocket) return reject('hit-team');
+  if (!shot || !rule || now - shot.at > HIT_WINDOW || shot.hitIds.has(target.id)) return reject('hit-pending');
   // claim de otro disparo (cliente nuevo con `sq`): nunca se adjunta al vigente
-  if (Number.isFinite(msg.sq) && Number.isFinite(shot.sq) && msg.sq !== shot.sq) return;
-  const point = vec3(msg.p); if (!point) return;
+  if (Number.isFinite(msg.sq) && Number.isFinite(shot.sq) && msg.sq !== shot.sq) return reject('hit-seq');
+  const point = vec3(msg.p); if (!point) return reject('hit-point');
   // modelo de impacto y latencia del tirador (bots: los del host que los simula)
   const viewer = shooter.bot ? players.get(hostId) : shooter;
-  const pose = poseForClaim(target, point, shot, viewer?.hitModel !== 2, viewer?.rtt); if (!pose) return;
+  const pose = poseForClaim(target, point, shot, viewer?.hitModel !== 2, viewer?.rtt); if (!pose) return reject('hit-pose');
   // quemarropa: el cliente impactó con el origen DENTRO del rival (contacto de
   // longitud cero, sin dirección): vale solo si el punto está dentro del volumen
   const pointBlank = !shot.direction && shot.wep !== 'melee' && shot.wep !== 'bazooka';
   if ((pointBlank ? !pose.inside || distance3(point, shot.origin) > 0.05 : !claimMatchesShot(shot, point)) ||
-      mapLineBlocked(settings.map, shot.origin, point, shot.wep === 'melee' ? 0.24 : 0.18)) return;
+      mapLineBlocked(settings.map, shot.origin, point, shot.wep === 'melee' ? 0.24 : 0.18)) return reject('hit-geometry');
   // misma definición que el rango del fire: distancia desde el plano del tirador
   const dist = shooterPlaneDistance(shot.origin, point, shot.planeVec);
   const hitTolerance = shot.wep === 'melee' ? 0.28 : 2;
-  if (dist > (rule.hitRange ?? rule.range) + hitTolerance) return;
+  if (dist > (rule.hitRange ?? rule.range) + hitTolerance) return reject('hit-range');
   if (shot.wep === 'melee') {
-    const dx = pose.x - shooter.x, dz = pose.z - shooter.z, len = Math.hypot(dx, dz);
-    const fx = -Math.sin(shooter.yaw || 0), fz = -Math.cos(shooter.yaw || 0);
-    if (len > 0.001 && (dx * fx + dz * fz) / len < Math.cos(58 * Math.PI / 180)) return;
+    // cliente FPS: la MISMA regla que el cliente (melee-reach.js), desde el ojo
+    if (shooter.fps && !shooter.bot) {
+      // el mismo criterio que el cliente (melee-reach.js meleeHitOk): centro del
+      // blanco en 58° del yaw de MIRADA, contacto a su alcance desde el ojo
+      const centre = [pose.x, (pose.y || 0) + 0.9, pose.z];
+      if (!meleeHitOk(shot.origin, shot.meleeYaw, point, centre, MELEE_REACH + MELEE_NET_TOL)) return void refused('melee-reach');
+    } else {
+      const dx = pose.x - shooter.x, dz = pose.z - shooter.z, len = Math.hypot(dx, dz);
+      const fx = -Math.sin(shooter.yaw || 0), fz = -Math.cos(shooter.yaw || 0);
+      if (len > 0.001 && (dx * fx + dz * fz) / len < Math.cos(58 * Math.PI / 180)) return reject('hit-melee-direction');
+    }
   }
   const authoritative = authoritativeDamage(shooter, target, shot, msg, dist, pose);
-  commitAuthoritativeDamage(shooter, target, shot, msg, dist, authoritative, now);
+  if (!commitAuthoritativeDamage(shooter, target, shot, msg, dist, authoritative, now).applied) return reject('hit-damage');
 }
 
 function rocketPoint(rocket, distance) {
@@ -990,6 +1239,116 @@ function tickSmoke(now) {
   }
 }
 
+function dodgeBodyPush(actor, next) {
+  // Vecinos capaces de empujar en este tramo, incluida la interpolación
+  // remota. Cada solape corrige como máximo 3 m/s en el controlador.
+  return 3 * allSlots().filter(other => other !== actor && other.alive &&
+    Math.abs(other.y - next.y) <= 1.7 &&
+    Math.hypot(other.x - next.x, other.z - next.z) < 3.2).length;
+}
+
+// Estado propio de un jugador (mensaje `s`, o la muestra `fs` que viaja con
+// cada disparo FPS): guardas de movimiento y postura, arma replicada y
+// registro de la muestra aceptada. Devuelve true si se aceptó.
+// sample: la muestra `fs` de un disparo/lanzamiento (no trae munición ni
+// eventos; su arma `w` es la del subpaso y se valida con las mismas reglas).
+// `n` (secuencia común con los estados `s`): una muestra o estado que no sea
+// posterior al último aceptado se descarta (nunca se rebobina el estado vivo).
+function acceptOwnState(me, msg, sample = false) {
+  const ws = me.ws;
+  // Una ola puede llegar mientras aún viaja la postura del cadáver. Nunca
+  // confrontar sus coordenadas con el spawn ni corregir al jugador nuevo.
+  const currentLife = me.life ?? 0;
+  if (msg.life !== undefined && msg.life !== currentLife) {
+    if (!sample && process.env.NODE_ENV === 'test') {
+      send(ws, { t: 'testStateDiscard', n: msg.n, life: msg.life, current: currentLife });
+    }
+    return refused('state-life');
+  }
+  if (Number.isFinite(msg.n)) {
+    // descarte silencioso, también contado (matriz honesta: "cero" debe ver todo)
+    if (Number.isFinite(me.lastN) && msg.n <= me.lastN) return refused('state-stale', { n: msg.n, lastN: me.lastN });
+  }
+  if(prototypes.stunned(me.id)){
+    me.aim=0;me.sp=0;
+    send(ws,{t:'correction',x:me.x,y:me.y||0,z:me.z,reason:'stun'});return false;
+  }
+  if (phase !== 'playing' || !me.alive) {
+    me.st = 'idle'; me.aim = 0; me.ae = 0; me.cl = 0; me.ce = 1; me.ck = null;
+    me.sp = 0; me.rl = null; return false;
+  }
+  if (![msg.x, msg.y, msg.z, msg.yaw].every(Number.isFinite)) return refused('state-position');
+  const st = fpsState(me, VALID_STATES.has(str(msg.st)) && msg.st !== 'dead' ? msg.st : 'idle');
+  const stateNow = nowSec();
+  // C7: reloj de simulación acotado ANTES de las guardas (las ventanas de
+  // slide/placaje y el ritmo de postura van en él)
+  advanceCadenceClock(me, Number.isFinite(msg.ct) ? msg.ct : undefined, stateNow);
+  const next = { x: clamp(msg.x, -60, 60), z: clamp(msg.z, -60, 60), y: clamp(msg.y, 0, 20), st, dg: msg.dg, air: msg.air, aim: msg.aim, ...(Number.isFinite(msg.ct) ? { ct: msg.ct } : {}) };
+  if (st === 'dodge' || me.motionGuard?.inDodge) {
+    if (dazed(me) && !me.motionGuard?.inDodge) return refused('movement');
+    next.bodyPushRate = dodgeBodyPush(me, next);
+  }
+  if (!acceptMovement(me, next, stateNow, ALLOW_TEST_TELEPORTS)) {
+    send(ws, { t: 'correction', x: me.x, y: me.y || 0, z: me.z, reason: 'movement' });
+    return refused('movement', { st, x: next.x, z: next.z });
+  }
+  if (Number.isFinite(msg.n)) me.lastN = msg.n;
+  // yaw módulo 2π (el cliente lo acumula al girar; saturarlo en ±10 rad
+  // desalineaba la cabeza del servidor con el ojo del cliente)
+  noteDodgeVisual(me, msg, next);
+  me.x = next.x; me.z = next.z; me.y = next.y; me.yaw = wrapAngle(clamp(msg.yaw, -1e4, 1e4));
+  me.st = st;
+  if (st === 'dodge') me.dg = msg.dg;
+  if (st === 'roadie') me.lastRoadieAt = stateNow; // retraso sprint→disparo
+  me.aim = msg.aim ? 1 : 0; me.p = clamp(msg.p, -1.6, 1.6);
+  me.ae = clamp(msg.ae, -VISUAL_AIM_MAX, VISUAL_AIM_MAX);
+  me.ce = Number.isFinite(msg.ce) ? clamp(msg.ce, 0, 1) : 1;
+  me.ceKnown = Number.isFinite(msg.ce);
+  // postura FPS con ritmo acotado (guards.js): agachado/asomo/inclinación
+  applyPosture(me, msg.cl, stateNow, Number.isFinite(msg.ct) ? msg.ct : undefined);
+  me.ct = Number.isFinite(msg.ct) ? msg.ct : undefined;
+  me.ck = VALID_COVER_KINDS.has(str(msg.ck)) ? msg.ck : null;
+  me.sp = clamp(msg.sp, 0, 1); // velocidad (también en la muestra del disparo: adelanto de cabeza al trotar)
+  me.air = msg.air ? 1 : 0;    // en el aire (salto desde agachado: st sigue crouch)
+  // C2: `aim` de la dispersión de la muestra (sniper subiendo la mira = cadera)
+  me.sa = sample && (msg.sa === 0 || msg.sa === 1) ? msg.sa : undefined;
+  // la muestra de un disparo NO cambia el arma (R14: debe estar ya equipada)
+  if (msg.w !== undefined && !sample) {
+    const requestedWep = clampWep(msg.w);
+    const stateWep = (['frag','stun'].includes(requestedWep)&&!me.weaponSlots.includes(requestedWep)) || SPECIAL_WEAPONS.has(requestedWep) && me.specialWep !== requestedWep ? 'smg' : requestedWep;
+    // Hasta que el cliente confirme el arma del pedestal, estados capturados
+    // antes de la recogida (incluso de un cambio en curso) no la desequipan.
+    if (me.wGrant && stateWep === me.wGrant) me.wGrant = null;
+    if (!me.wGrant) me.w = stateWep;
+    // instante en que el arma replicada cambió: evidencia del gesto de cambio
+    if (me.w !== me.wSeen) { me.wSeen = me.w; me.wAt = cadenceNow(me, nowSec()); me.wSeq = me.msgSeq; me.wInstant = false; }
+    if (!me.wGrant) {
+      const def = WD[me.w] || WD.smg;
+      me.am = clamp(msg.am, 0, def.mag || 0); me.ar = clamp(msg.ar, 0, def.reserve || 0);
+      // progreso de recarga (opcional, solo presentación: la munición y el fin
+      // de la recarga se deciden donde siempre). Ausente = no recarga.
+      me.rl = Number.isFinite(msg.rl) ? clamp(msg.rl, 0, 1) : null;
+    }
+  }
+  // eventos de acción (una vez): validados y adjuntados al próximo snapshot
+  if (!sample && Array.isArray(msg.ev)) {
+    for (const e of msg.ev.slice(0, 4)) {
+      if (!Array.isArray(e) || !ACTION_EVENTS.has(str(e[0]))) continue;
+      const w = str(e[1]);
+      // El evento aceptado marca el intervalo comprometido de la granada.
+      // Tras una suelta o cancelación deja de impedir una esquiva nueva.
+      if (e[0] === 'throwStart' && WD[w]?.thrown && Number.isFinite(msg.ct)) {
+        me.motionGuard.throwReleaseCt = msg.ct + WD[w].throwRelease;
+      } else if (e[0] === 'throwRelease' || e[0] === 'throwCancel') {
+        delete me.motionGuard.throwReleaseCt;
+      }
+      (me.evQueue ||= []).push([e[0], VALID_WEAPONS.has(w) ? w : '']);
+    }
+    if (me.evQueue?.length > 8) me.evQueue.splice(0, me.evQueue.length - 8);
+  }
+  recordSelfPose(me, monoSec()); // cabeza propia para el origen de sus disparos
+  return true; // la pose difundida se registra al difundirla (snap)
+}
 wss.on('connection', (ws) => {
   let me = null;
   // latencia del tirador para el rebobinado de impactos: ping/pong de control
@@ -1011,12 +1370,19 @@ wss.on('connection', (ws) => {
   ws.on('message', (data) => {
     const bytes = typeof data === 'string' ? Buffer.byteLength(data) : (data?.byteLength || data?.length || 0);
     if (!rateGuard.allow(nowSec(), bytes)) {
-      ws.close(1008, 'rate limit'); return;
+      refused('rate-limit'); ws.close(1008, 'rate limit'); return;
     }
     let msg; try { msg = JSON.parse(data); } catch { return; }
     // solo objetos con tipo de texto (null, números o listas no son mensajes)
     if (!msg || typeof msg !== 'object' || Array.isArray(msg) || typeof msg.t !== 'string') return;
     if (msg.t === 'join' && !me) {
+      // Solo clientes FPS (DECISIONES §5): uno anterior no anuncia `fps` y se
+      // le rechaza por la vía de siempre (lobbyError antes del welcome, que el
+      // cliente muestra y tras la que cierra). Un cliente viejo no tiene texto
+      // para un código nuevo y enseña la clave: por eso el código se lee solo.
+      // y con el modelo de impacto por pose (hp 2): el modelo 1 leería
+      // `crouch` como de pie al validar daño
+      if (msg.fps !== 1 || msg.hp !== 2) { lobbyError(ws, 'reload-page', 'fps'); ws.close(1008, 'reload the page'); return; }
       const action = msg.action === 'create' ? 'create' : 'join';
       if (action === 'create' && players.size) { lobbyError(ws, 'lobby-exists'); return; }
       if (action === 'join' && !players.size) { lobbyError(ws, 'no-lobby'); return; }
@@ -1034,13 +1400,15 @@ wss.on('connection', (ws) => {
         v: Math.min(4, Math.max(0, Math.round(num(msg.v)))), hp: HP, alive: true,
         kills: 0, deaths: 0, w: 'smg', specialWep: null,
         // modelo de impacto anunciado en el join (2 = pose); ausente = anterior
-        hitModel: msg.hp === 2 ? 2 : 1,
+        hitModel: 2,
+        // cliente FPS (único admitido): origen en el ojo y topes de movimiento FPS
+        fps: true,
         lastFireAt: -Infinity, pendingShot: null };
       if (relieved) bots.delete(relieved.id);
       players.set(id, me); if (!hostId) { hostId = id; phase = 'lobby'; }
       if (!late) {
         syncLobbyBots();
-        send(ws, { t: 'welcome', id, team: me.team, lobby: lobbyPayload(), hp: 2 }); broadcastLobby();
+        send(ws, { t: 'welcome', id, team: me.team, lobby: lobbyPayload(), hp: 2, fps: 1, life: me.life || 0 }); broadcastLobby();
         console.log(`+ ${me.name} (${me.team}) — ${players.size} humanos, ${bots.size} bots`); return;
       }
       const joinedAt = nowSec();
@@ -1051,7 +1419,7 @@ wss.on('connection', (ws) => {
         Object.assign(me, { alive: false, hp: 0, respawnAt: relieved.respawnAt || 0,
           x: relieved.x ?? me.x, z: relieved.z ?? me.z, y: relieved.y || 0 });
       }
-      send(ws, { t: 'welcome', id, team: me.team, lobby: lobbyPayload(), hp: 2 });
+      send(ws, { t: 'welcome', id, team: me.team, lobby: lobbyPayload(), hp: 2, fps: 1, life: me.life || 0 });
       send(ws, lateJoinPayload());
       CRATES.forEach((c, i) => { if (!c.up) send(ws, { t: 'crate', i, up: 0 }); });
       for (const [dropId, d] of drops) send(ws, { t: 'dropA', id: dropId, wep: d.wep, x: d.x, z: d.z,
@@ -1063,18 +1431,32 @@ wss.on('connection', (ws) => {
     }
     if (!me) return;
     noteMessageArrival(me, nowSec()); // evidencia de atasco para la cadencia
-    if(msg.t==='protoClaim'){prototypes.claim(me.id,str(msg.id),msg.manual===true);return;}
+    if(msg.t==='protoClaim'){
+      if (!prototypes.claim(me.id,str(msg.id),msg.manual===true)) refused('pickup-prototype');
+      return;
+    }
     if(msg.t==='protoFire'){
-      if(!me.weaponSlots?.includes(msg.kind)||me.w!==msg.kind||['melee','dive','slide','mantle'].includes(me.st))return;
+      // estados: la tabla compartida con el cliente (fire-gates.js); antes se
+      // rechazaba frag/stun deslizando aunque el cliente lo permitía
+      const kind=['frag','stun'].includes(msg.kind)?msg.kind:null;
+      const pcid=typeof msg.cid==='string'&&/^[a-zA-Z0-9:_-]{1,40}$/.test(msg.cid)?msg.cid:null;
+      const refuse=(reason)=>{launchReject(ws,me,{cid:pcid,kind,reason,life:msg.fs?.life});};
+      if(!kind){refuse('wrong-weapon');return;}
+      // orden fijo: muestra/arma → estado → origen → cadencia → munición
+      const smp=me.fps?acceptLaunchSample(me,msg,kind):{ok:true};
+      if(!smp.ok){refuse(me.lastRejectReason);return;}
+      if(!me.weaponSlots?.includes(kind)||me.w!==kind){refuse('wrong-weapon');return;}
       const o=vec3(msg.o),d=vec3(msg.d),pnow=nowSec();
-      if(!o||!d||!projectileCadenceAllows(me,msg.kind,pnow))return;
+      if(!o||!d){refuse('origin');return;}
+      if(me.fps?!fpsLaunchLegal(me,o,smp.ts,kind):['melee','dive','slide','mantle'].includes(me.st)){refuse(me.lastRejectReason||'origin');return;}
+      if(!projectileCadenceAllows(me,kind,pnow)){refuse('cadence');return;}
       // solo un lanzamiento ACEPTADO por el motor consume horario
-      if(prototypes.fire(me.id,msg.kind,{x:o[0],y:o[1],z:o[2]},{x:d[0],y:d[1],z:d[2]}))commitProjectileCadence(me,msg.kind,pnow);
+      if(prototypes.fire(me.id,kind,{x:o[0],y:o[1],z:o[2]},{x:d[0],y:d[1],z:d[2]},pcid))commitProjectileCadence(me,kind,pnow);else refuse('ammo');
       const s=prototypes.state(me.id);
       if(['frag','stun'].includes(msg.kind))send(ws,{t:'protoInventory',id:me.id,kind:msg.kind,count:msg.kind==='frag'?s.frag:s.stunAmmo});
       return;
     }
-    if(prototypes.stunned(me.id)&&['takeDrop','takeSpecial','crate','takeCrate','reload'].includes(msg.t))return;
+    if(prototypes.stunned(me.id)&&['takeDrop','takeSpecial','crate','takeCrate','reload'].includes(msg.t))return refused('action-stunned');
     if (msg.t === 'lobbySettings') {
       if (!isHost(me) || phase !== 'lobby') { lobbyError(ws, 'host-only'); return; }
       const hadFill = settings.fillBots;
@@ -1130,46 +1512,14 @@ wss.on('connection', (ws) => {
       if (!validity.ok) { lobbyError(ws, 'invalid', validity.errors.join(',')); broadcastLobby(); return; }
       startMatch(); return;
     }
-    if (msg.t === 's') {
-      if(prototypes.stunned(me.id)){
-        me.aim=0;me.sp=0;
-        send(ws,{t:'correction',x:me.x,y:me.y||0,z:me.z,reason:'stun'});return;
-      }
-      if (phase !== 'playing' || !me.alive) {
-        me.st = 'idle'; me.aim = 0; me.ae = 0; me.cl = 0; me.ce = 1; me.ck = null;
-        me.sp = 0; me.rl = null; return;
-      }
-      if (![msg.x, msg.y, msg.z, msg.yaw].every((v) => typeof v === 'number' && Number.isFinite(v))) return;
-      const next = { x: clamp(msg.x, -60, 60), z: clamp(msg.z, -60, 60), y: clamp(msg.y, 0, 20) };
-      const stateNow = nowSec();
-      if (!acceptMovement(me, next, stateNow, ALLOW_TEST_TELEPORTS)) {
-        send(ws, { t: 'correction', x: me.x, y: me.y || 0, z: me.z, reason: 'movement' });
-        return;
-      }
-      me.x = next.x; me.z = next.z; me.y = next.y; me.yaw = clamp(msg.yaw, -10, 10);
-      me.st = VALID_STATES.has(str(msg.st)) && msg.st !== 'dead' ? msg.st : 'idle';
-      me.aim = msg.aim ? 1 : 0; me.p = clamp(msg.p, -1.6, 1.6);
-      me.ae = clamp(msg.ae, -VISUAL_AIM_MAX, VISUAL_AIM_MAX);
-      me.cl = clamp(msg.cl, -1, 1);
-      me.ce = Number.isFinite(msg.ce) ? clamp(msg.ce, 0, 1) : 1;
-      me.ceKnown = Number.isFinite(msg.ce);
-      me.ck = VALID_COVER_KINDS.has(str(msg.ck)) ? msg.ck : null;
-      const requestedWep = clampWep(msg.w);
-      const stateWep = (['frag','stun'].includes(requestedWep)&&!me.weaponSlots.includes(requestedWep)) || SPECIAL_WEAPONS.has(requestedWep) && me.specialWep !== requestedWep ? 'smg' : requestedWep;
-      // Estado VIEJO tras una recogida: el cliente lo envió antes de recibir
-      // specialTaken (aún con el arma anterior). No deshace la recogida ni
-      // consume su tiro inmediato; un cambio real llega después de ese plazo.
-      const staleAfterGrant = me.wGrant && nowSec() < me.wGrant.until && stateWep === me.wGrant.from;
-      if (!staleAfterGrant) me.w = stateWep;
-      // instante en que el arma replicada cambió: evidencia del gesto de cambio
-      if (me.w !== me.wSeen) { me.wSeen = me.w; me.wAt = nowSec(); me.wSeq = me.msgSeq; me.wInstant = false; }
-      const def = WD[me.w] || WD.smg;
-      me.am = clamp(msg.am, 0, def.mag || 0); me.ar = clamp(msg.ar, 0, def.reserve || 0);
-      me.sp = clamp(msg.sp, 0, 1);
-      // progreso de recarga (opcional, solo presentación: la munición y el fin
-      // de la recarga se deciden donde siempre). Ausente = no recarga.
-      me.rl = Number.isFinite(msg.rl) ? clamp(msg.rl, 0, 1) : null;
-      return; // la pose se registra al difundirla (snap)
+    if (msg.t === 's') { acceptOwnState(me, msg); return; }
+    // pruebas con TODAS las guardas activas (sin ALLOW_TEST_TELEPORTS): colocar
+    // al jugador explícitamente; reinicia guardas e historial como una aparición
+    if (msg.t === 'testPlace' && process.env.NODE_ENV === 'test') {
+      if (![msg.x, msg.z].every((v) => typeof v === 'number' && Number.isFinite(v))) return;
+      me.x = clamp(msg.x, -60, 60); me.z = clamp(msg.z, -60, 60); me.y = clamp(msg.y, 0, 20); me.yaw = wrapAngle(clamp(msg.yaw, -1e4, 1e4));
+      resetMovementGuard(me, nowSec()); resetPoseHistory(me); me.lastN = undefined; me.cclk = undefined;
+      send(ws, { t: 'correction', x: me.x, y: me.y, z: me.z, reason: 'testPlace' }); return;
     }
     if (msg.t === 'botState') {
       if (!isHost(me) || phase !== 'playing' || !Array.isArray(msg.bots)) return;
@@ -1181,13 +1531,24 @@ wss.on('connection', (ws) => {
         if(prototypes.stunned(b.id))continue;
         if (![s.x, s.y, s.z, s.yaw].every((v) => typeof v === 'number' && Number.isFinite(v))) continue;
         const next = { x: clamp(s.x, -60, 60), z: clamp(s.z, -60, 60), y: clamp(s.y, 0, 20) };
+        next.st = fpsState(b, VALID_STATES.has(s.st) ? s.st : 'idle');
+        next.dg = s.dg; next.ct = s.ct; next.aim = s.aim;
+        if (next.st === 'dodge' || b.motionGuard?.inDodge) {
+          if (dazed(b) && !b.motionGuard?.inDodge) continue;
+          next.bodyPushRate = dodgeBodyPush(b, next);
+        }
         if (!acceptMovement(b, next, stateNow, ALLOW_TEST_TELEPORTS)) continue;
-        b.x = next.x; b.z = next.z; b.y = next.y; b.yaw = clamp(s.yaw, -10, 10);
-        b.st = VALID_STATES.has(str(s.st)) && s.st !== 'dead' ? s.st : 'idle';
+        noteDodgeVisual(b, s, next);
+        b.x = next.x; b.z = next.z; b.y = next.y; b.yaw = wrapAngle(clamp(s.yaw, -1e4, 1e4));
+        // solo estados del contrato: los retirados de bots se traducen (auditoría)
+        b.st = fpsState(b, VALID_STATES.has(str(s.st)) && s.st !== 'dead' ? s.st : 'idle');
+        if (!CONTRACT_STATES.has(b.st)) b.st = 'idle';
+        if (b.st === 'dodge') b.dg = s.dg;
         b.aim = s.aim ? 1 : 0; b.p = clamp(s.p, -1.6, 1.6);
-        b.ae = clamp(s.ae, -VISUAL_AIM_MAX, VISUAL_AIM_MAX); b.cl = clamp(s.cl, -1, 1);
+        b.ae = clamp(s.ae, -VISUAL_AIM_MAX, VISUAL_AIM_MAX);
         b.ce = Number.isFinite(s.ce) ? clamp(s.ce, 0, 1) : 1;
         b.ceKnown = Number.isFinite(s.ce);
+        applyPosture(b, s.cl, stateNow);
         b.ck = VALID_COVER_KINDS.has(str(s.ck)) ? s.ck : null;
         const requestedWep = clampWep(s.w);
         b.w = SPECIAL_WEAPONS.has(requestedWep) && b.specialWep !== requestedWep ? 'smg' : requestedWep;
@@ -1227,14 +1588,16 @@ wss.on('connection', (ws) => {
     if (msg.t === 'rocket') {
       if (!relayRocket(ws, eventShooter(me, msg), msg)) {
         const cid = typeof msg.cid === 'string' ? msg.cid.slice(0, 40) : null;
-        send(ws, { t: 'rocketReject', cid });
+        launchReject(ws, eventShooter(me, msg), { cid, kind: 'bazooka', life: msg.fs?.life, reason: me.lastRejectReason || eventShooter(me, msg)?.lastRejectReason || 'origin' }, 'rocketReject');
       }
       return;
     }
     if (msg.t === 'nade') {
       if (!relayNade(ws, eventShooter(me, msg), msg)) {
+        if (LOG_FIRE_REJECTS) console.log('[nade rechazado]', JSON.stringify({ w: me.w, st: me.st, nades: me.nades, cadence: me.lastRejectReason }));
         const cid = typeof msg.cid === 'string' ? msg.cid.slice(0, 40) : null;
-        send(ws, { t: 'nadeReject', cid });
+        // qué se rechazó: el cliente devuelve el bote (weapons.refundThrow)
+        launchReject(ws, eventShooter(me, msg), { cid, kind: 'grenade', life: msg.fs?.life, reason: eventShooter(me, msg)?.lastRejectReason || 'origin' });
       }
       return;
     }
@@ -1255,7 +1618,11 @@ wss.on('connection', (ws) => {
         grantWeaponAmmo(me, d.wep, d.mag, d.res);
         // reemplazar el arma EN MANO por la del suelo es un cambio sin gesto
         // (el cliente solo cambia `cur` si sustituyó la que llevaba)
-        if (removed === me.w) { me.w = d.wep; me.wSeen = d.wep; me.wAt = nowSec(); me.wSeq = me.msgSeq; me.wInstant = true; }
+        if (removed === me.w) {
+          me.w = d.wep; me.wGrant = d.wep; me.wSeen = d.wep;
+          me.wAt = cadenceNow(me, nowSec()); me.wSeq = me.msgSeq; me.wInstant = true;
+          me.am = d.mag; me.ar = d.res; me.rl = null;
+        }
         drops.delete(msg.id); broadcastRaw({ t: 'dropR', id: msg.id });
         send(ws, { t: 'dropGive', replace: true, slot, wep: d.wep, mag: d.mag, res: d.res });
       } else {
@@ -1273,10 +1640,10 @@ wss.on('connection', (ws) => {
     // pickup del arma especial: gana el PRIMER reclamo válido y solo uno
     if (msg.t === 'takeSpecial') {
       const claimant = msg.bot && isHost(me) ? bots.get(msg.bot) : me;
-      if (!claimant?.alive || phase !== 'playing' || special.taken || !special.wep) return;
+      if (!claimant?.alive || phase !== 'playing' || special.taken || !special.wep) return refused('pickup-special');
       const spot = MAP_RUNTIME[settings.map]?.special;
       if (!spot || Math.hypot(claimant.x - spot.x, claimant.z - spot.z) > 2.2 ||
-          Math.abs((claimant.y || 0) - (spot.y || 0)) > 1.5) return;
+          Math.abs((claimant.y || 0) - (spot.y || 0)) > 1.5) return refused('pickup-special');
       special.taken = true; special.by = claimant.id; claimant.specialWep = special.wep;
       // recoger la especial la pone EN MANO al instante (sin gesto): cuenta como cambio
       // el servidor queda como tras un cambio real a esa arma: `w` incluido
@@ -1285,11 +1652,10 @@ wss.on('connection', (ws) => {
       claimant.weaponSlots ||= ['smg', 'shotgun', 'pistol', 'grenade'];
       const heldBefore = claimant.w;
       claimant.weaponSlots[specialPickupSlot(claimant.weaponSlots, heldBefore, special.wep)] = special.wep;
-      claimant.w = special.wep; claimant.wSeen = special.wep; claimant.wAt = nowSec(); claimant.wInstant = true;
+      claimant.w = special.wep; claimant.wSeen = special.wep; claimant.wAt = cadenceNow(claimant, nowSec()); claimant.wInstant = true;
       claimant.wSeq = me.msgSeq;
-      // plazo para estados viejos: lo que tarda specialTaken en llegar y el
-      // siguiente estado en volver (ida y vuelta + un envío a 20 Hz)
-      claimant.wGrant = { from: heldBefore, until: nowSec() + Math.min(0.5, (claimant.rtt ?? 0.15) + 0.1) };
+      claimant.wGrant = claimant.bot ? null : special.wep;
+      claimant.am = WD[special.wep].mag; claimant.ar = WD[special.wep].reserve; claimant.rl = null;
       grantWeaponAmmo(claimant, special.wep);
       broadcastRaw({ t: 'specialTaken', id: claimant.id, wep: special.wep });
       return;
@@ -1345,21 +1711,16 @@ setInterval(() => {
     const floor=serverMapPhysics(settings.map).groundHeight(p,.38,p.y||0);
     p.stunVy=(p.stunVy||0)-TUNING.jump.gravity/TICK_HZ;
     p.y=Math.max(floor,(p.y||0)+p.stunVy/TICK_HZ);p.aim=0;p.sp=0;
-    if(!String(p.st).includes('cover'))p.st='idle';
+    if(!String(p.st).includes('cover')&&p.st!=='crouch')p.st='idle';
   }
   if(players.size&&inMatch())broadcastRaw({t:'protoState',...prototypes.snapshot()});
   if (phase === 'playing') for (const p of allSlots()) {
     if (p.alive && p.hp < HP && now - p.lastDamage > REGEN_DELAY) p.hp = Math.min(HP, p.hp + REGEN_RATE / TICK_HZ);
     if (!p.alive && p.respawnAt > 0 && now >= p.respawnAt) {
-      p.alive = true; p.hp = HP; p.respawnAt = 0; p.prot = now + SPAWN_PROT;
-      p.w = 'smg'; p.specialWep = null; p.ammoBudget = createAmmoBudget(); p.fireWeapon = null;
-      p.weaponSlots = ['smg', 'shotgun', 'pistol', 'grenade'];
-      p.nades = p.bot ? 1 : WD.grenade.mag;
-      p.lastNadeAt = -Infinity; p.lastRocketAt = -Infinity;
-      const spawn = pickSpawn(p.team); Object.assign(p, { x: spawn.x, z: spawn.z, y: 0, yaw: spawn.yaw });
-      resetMovementGuard(p, now);
-      resetPoseHistory(p);
-      broadcastRaw({ t: 'respawn', id: p.id, spawn });
+      const spawn = pickSpawn(p.team);
+      freshCombatState(p, spawn);
+      p.prot = now + SPAWN_PROT;
+      broadcastRaw({ t: 'respawn', id: p.id, spawn, life: p.life });
     }
   }
   for (const [id, d] of drops) { d.t -= 1 / TICK_HZ; if (d.t <= 0) { drops.delete(id); broadcastRaw({ t: 'dropR', id }); } }
@@ -1375,11 +1736,13 @@ setInterval(() => {
     startsIn: (phase === 'intro' || phase === 'countdown')
       ? Math.max(0, startAt - now) : 0,
     lives: livesState(), wins: { ...wins },
-    ps: allSlots().map((p) => ({ id: p.id, x: p.x ?? 0, z: p.z ?? 0, y: p.y || 0,
+    ps: allSlots().map((p) => ({ id: p.id, life: p.life || 0, x: p.x ?? 0, z: p.z ?? 0, y: p.y || 0,
       yaw: p.yaw || 0, st: p.st || 'idle', aim: p.aim || 0, p: p.p || 0,
       ae: p.ae || 0, cl: p.cl || 0, ...(p.ceKnown ? { ce: p.ce } : {}),
       ...(p.ck ? { ck: p.ck } : {}), w: p.w || 'smg',
-      sp: p.sp || 0, ...(p.alive && p.rl != null ? { rl: +p.rl.toFixed(2) } : {}), hp: Math.round(p.hp), alive: p.alive,
+      ct: p.visualCt, ...(p.st === 'dodge' ? { dg: p.dg, ...p.dodgeVisual } : {}),
+      sp: p.sp || 0, ...(p.alive && p.rl != null ? { rl: +p.rl.toFixed(2) } : {}),
+      ...(p.evQueue?.length ? { ev: p.evQueue.splice(0) } : {}), hp: Math.round(p.hp), alive: p.alive,
       resp: !p.alive && p.respawnAt > now ? +(p.respawnAt - now).toFixed(2) : 0,
       rq: !p.alive && p.respawnAt > 0 ? 1 : 0,
       inv: p.prot > now ? 1 : 0, bot: p.bot ? 1 : 0 })) });
@@ -1400,6 +1763,7 @@ setInterval(() => {
   }
 }, 1000);
 
+function wrapAngle(a) { a = num(a) % (Math.PI * 2); return a > Math.PI ? a - Math.PI * 2 : a <= -Math.PI ? a + Math.PI * 2 : a; }
 function num(v) { return typeof v === 'number' && Number.isFinite(v) ? v : 0; }
 function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, num(v))); }
 function vec3(v) { if (!Array.isArray(v) || v.length !== 3) return null; const out = v.map(num); return out.every((n) => Math.abs(n) < 1000) ? out : null; }

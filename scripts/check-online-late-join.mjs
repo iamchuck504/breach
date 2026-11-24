@@ -9,11 +9,20 @@ import { WebSocket } from 'ws';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { eyeAt } from './lib-test.mjs';
 import { CHROME } from './lib-chrome.mjs';
 import { MAP_RUNTIME } from '../src/game/lobby-rules.js';
+import { freePort } from './lib-test.mjs';
+import { withSamples } from './lib-fps-sample.mjs';
+// PRUEBAS (ronda 2 de RED): cada fire/rocket/nade/protoFire humano lleva su muestra `fs`
+// (n creciente, w = arma equipada) desde el último estado `s` de ese emisor
+const SAMPLED = withSamples((peer, m) => peer.ws.send(JSON.stringify(m)));
+
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const PORT = 8831, MAP = process.env.MAP || 'fortaleza', MBPS = Number(process.env.MBPS || 20);
+const PORT = FREE_PORT, MAP = process.env.MAP || 'fortaleza', MBPS = Number(process.env.MBPS || 20);
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
   cwd: root, stdio: 'ignore',
@@ -25,7 +34,7 @@ function connect(name, action) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`ws://127.0.0.1:${PORT}`);
     const peer = { ws, welcome: null, messages: [], crates: {}, drops: new Set(), lastSnap: null };
-    ws.on('open', () => ws.send(JSON.stringify({ t: 'join', action, name, v: 0 })));
+    ws.on('open', () => ws.send(JSON.stringify({ t: 'join', action, name, v: 0, hp: 2, fps: 1 })));
     ws.on('error', reject);
     ws.on('message', (raw) => {
       const m = JSON.parse(raw);
@@ -38,14 +47,14 @@ function connect(name, action) {
     });
   });
 }
-const send = (p, m) => p.ws.send(JSON.stringify(m));
+const send = (p, m) => SAMPLED(p, m);
 const waitFor = async (p, pred, ms = 4000) => { const t = Date.now(); for (;;) { const m = p.messages.find(pred); if (m) return m; if (Date.now() - t > ms) throw new Error('timeout ' + pred); await delay(25); } };
 const killB = async (a, b, bx, bz) => {
   send(b, { t: 's', x: bx, z: bz, y: 0, yaw: 0, st: 'idle', w: 'smg', am: 49, ar: 150 });
-  send(a, { t: 's', x: bx, z: bz - 1.5, y: 0, yaw: 0, st: 'idle', w: 'shotgun', am: 8, ar: 24 });
+  send(a, { t: 's', x: bx, z: bz - 1.5, y: 0, yaw: Math.PI, st: 'idle', w: 'shotgun', am: 8, ar: 24 });
   await delay(700);
   const before = a.messages.length;
-  send(a, { t: 'fire', w: 'shotgun', o: [bx, 1.1, bz - 1.5], p: [bx, 1.1, bz], d: [] });
+  send(a, { t: 'fire', w: 'shotgun', o: eyeAt(bx, 0, bz - 1.5, Math.PI), p: [bx, 1.1, bz], d: [] });
   send(a, { t: 'hit', target: b.welcome.id, dmg: 1, part: 'body', gib: 0, pellets: 8, p: [bx, 1.0, bz] });
   return waitFor(a, (m) => m.t === 'dropA' && a.messages.indexOf(m) >= before, 3000);
 };
@@ -119,7 +128,10 @@ try {
   check('mismas armas en el suelo', JSON.stringify(late.drops) === JSON.stringify(host.drops), `${late.drops} vs ${host.drops}`);
   const expect = mine.filter((id) => id !== late.id).sort();
   check('mismos jugadores', JSON.stringify(late.remotes) === JSON.stringify(expect) && late.visible === late.remotes.length, `${late.remotes} vs ${expect} (visibles ${late.visible})`);
-  check('mallas de Fortaleza completas', late.meshes === 229, String(late.meshes));
+  // mapGroup con los tres GLB cargados: de 229 se restan seis dinteles
+  // fundidos en la piedra y se suman dos revestimientos que no proyectan sombra.
+  // Los doce apoyos usan el lote de vigas existente.
+  check('mallas de Fortaleza completas', late.meshes === 226, String(late.meshes));
   check('sin errores de página', errs.length === 0, errs.join(' | '));
   await ctx.close();
 } catch (e) { fails.push(e.message); console.log('FAIL', e.message); }

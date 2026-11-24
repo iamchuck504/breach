@@ -26,14 +26,14 @@ for kind in ('fort-gate','roof-access','roof-grille','roof-cabinet'):
         if bevel:
             b=o.modifiers.new('Soft manufactured edges','BEVEL');b.width=bevel;b.segments=1
         return o
-    def disc(name,x,y,z,r,m):
-        bpy.ops.mesh.primitive_cylinder_add(vertices=10,radius=r,depth=.006,location=(x,-z,y),rotation=(math.pi/2,0,0))
+    def disc(name,x,y,z,r,m,depth=.006):
+        bpy.ops.mesh.primitive_cylinder_add(vertices=10,radius=r,depth=depth,location=(x,-z,y),rotation=(math.pi/2,0,0))
         o=bpy.context.object;o.name=name;o.data.materials.append(m)
     if kind=='fort-gate':
         # A closed arched timber gate; never imply a traversable opening.
         for i in range(12):
             x=(i-5.5)*.125;top=1.88+math.sqrt(max(0,.77**2-x*x))
-            box('Individual oak stave',x,top/2,.013,.119,top,.025,body)
+            box('Individual oak stave',x,top/2,.0105,.119,top,.030,body)
         for x in (-.9,.9):
             for row in range(6):box('Dressed jamb',x,.16+row*.30,.020,.27,.287,.04,trim)
         for i in range(11):
@@ -44,10 +44,10 @@ for kind in ('fort-gate','roof-access','roof-grille','roof-cabinet'):
             o=bpy.data.objects.new('Arch voussoir',mesh);bpy.context.scene.collection.objects.link(o);mesh.materials.append(trim)
         for x in (-.4,.4):
             for y in (.46,1.35):
-                box('Forged hinge strap',x,y,.031,.66,.065,.015,metal,.002)
-                for dx in (-.26,.26):disc('Hinge rivet',x+dx,y,.043,.018,trim)
+                box('Forged hinge strap',x,y,.0295,.66,.065,.018,metal,.002)
+                for dx in (-.26,.26):disc('Hinge rivet',x+dx,y,.043,.018,trim,.016)
             disc('Lock escutcheon',x*.3,1.0,.04,.075,metal)
-            box('Door pull',x*.3,1.0,.051,.028,.15,.026,metal)
+            box('Door pull',x*.3,1.0,.0485,.028,.15,.031,metal)
     elif kind=='roof-access':
         box('Dark steel frame',0,1.16,.015,1.42,2.32,.03,dark)
         box('Insulated access door',0,1.16,.025,1.22,2.15,.026,body)

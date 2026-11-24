@@ -9,6 +9,7 @@
 // de JUEGO (el mismo dt acotado a 0.1 s por cuadro que usa main.js), nunca en
 // reloj de pared; los esperas de pared solo son topes generosos. THROTTLE=12
 // emula una CPU 12× más lenta (CDP) para comprobarlo.
+import { actionKeys } from './lib-test.mjs';
 import { chromium } from 'playwright-core';
 import { spawn } from 'node:child_process';
 import net from 'node:net';
@@ -404,7 +405,8 @@ try {
     await row('W sola mantenida → W activa al capturar, camina', { hold: ['KeyW'], expectKeys: ['KeyW'], moves: true });
     await row('Shift+W (Shift no repite) → corre al capturar', { hold: ['ShiftLeft', 'KeyW'], expectKeys: ['KeyW', 'ShiftLeft'], moves: true, sprint: true });
     await row('W+D (solo D repite) → ambas activas', { hold: ['KeyW', 'KeyD'], expectKeys: ['KeyD', 'KeyW'], moves: true });
-    await row('Espacio mantenido → retenido, SIN salto al capturar', { hold: ['Space'], expectKeys: ['Space'], moves: false, noJump: true });
+    const { jump } = await actionKeys(page, 'jump');
+    await row('Salto mantenido → retenido, SIN salto al capturar', { hold: [jump], expectKeys: [jump], moves: false, noJump: true });
     await row('pulsada y soltada antes de la captura → nada', {
       pre: async () => { await page.keyboard.down('KeyW'); await wait(200); await page.keyboard.up('KeyW'); }, expectKeys: [], moves: false });
     await row('macOS: Cmd+W (keyup de W nunca llega) → nada', { mac: true,
@@ -416,11 +418,11 @@ try {
       between: () => page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyW', key: 'w', repeat: true }))),
       expectKeys: ['KeyW'], moves: true });
     await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyW', key: 'w' })));
-    await row('macOS: repeat de Espacio tras el acorde → retenido, SIN salto', { mac: true,
-      pre: () => synth([['keydown', 'Space'], ['keydown', 'MetaLeft', 1], ['keyup', 'MetaLeft']]),
-      between: () => page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', key: ' ', repeat: true }))),
-      expectKeys: ['Space'], moves: false, noJump: true });
-    await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keyup', { code: 'Space', key: ' ' })));
+    await row('macOS: repeat de salto tras el acorde → retenido, SIN salto', { mac: true,
+      pre: () => synth([['keydown', jump], ['keydown', 'MetaLeft', 1], ['keyup', 'MetaLeft']]),
+      between: () => page.evaluate(code => window.dispatchEvent(new KeyboardEvent('keydown', { code, repeat: true })), jump),
+      expectKeys: [jump], moves: false, noJump: true });
+    await synth([['keyup', jump]]);
     await row('Windows/Linux: W mantenida, Win pulsada y soltada → W sigue', { mac: false, hold: ['KeyW'],
       between: () => synth([['keydown', 'MetaLeft', 1], ['keyup', 'MetaLeft']]), expectKeys: ['KeyW'], moves: true });
     await ctx.close();

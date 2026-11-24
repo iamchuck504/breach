@@ -70,7 +70,7 @@ export function readGLB(file) {
   return { json, accessor };
 }
 
-function writeGLB(file, json, chunks) {
+export function writeGLB(file, json, chunks) {
   // chunks: [{ data: TypedArray, target, accessor: {...} }] en orden de accessor
   const views = [], accessors = [];
   let offset = 0;
@@ -100,7 +100,7 @@ function writeGLB(file, json, chunks) {
 }
 
 // ---------- malla soldada ----------
-function weld(P, I) {
+export function weld(P, I) {
   const map = new Map(), remap = new Uint32Array(P.length / 3), pos = [];
   for (let i = 0; i < remap.length; i++) {
     // 1e-6 m: solo une copias exactas (las separó la normal al exportar)

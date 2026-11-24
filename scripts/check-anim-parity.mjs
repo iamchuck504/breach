@@ -10,7 +10,7 @@
 // 2) BOT: los constructores de parámetros del bot frente a los del jugador
 //    en las acciones que hace un bot (cover, asomarse, lean, recarga, cambio,
 //    lanzamiento, patada, salto, contexto de muerte) y la cadencia a 30/60/144 Hz.
-//   node scripts/check-anim-parity.mjs [--json=salida.json] [--port=8847]
+//   node scripts/check-anim-parity.mjs [--json=salida.json] [--port=FREE_PORT]
 import { WebSocket } from 'ws';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -24,11 +24,12 @@ import { RemotePlayer } from '../src/player/remote.js';
 import { NetClient } from '../src/net/client.js';
 import { Bot } from '../src/game/botmatch.js';
 import { TUNING } from '../src/config/tuning.js';
+import { freePort } from './lib-test.mjs';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const flags = Object.fromEntries(process.argv.slice(2).filter((a) => a.startsWith('--'))
   .map((a) => { const [k, ...v] = a.slice(2).split('='); return [k, v.join('=') || '1']; }));
-const port = Number(flags.port) || 8847;
+const port = flags.server ? Number(flags.port) || await freePort() : null;
 const R = 0.38;
 const failures = [];
 const report = { remote: {}, bot: {} };
@@ -52,6 +53,11 @@ function makeWorld() {
   return w;
 }
 const world = makeWorld();
+// PRUEBAS (corrida 6): los dobles de partida heredan de BotMatch (el bot ya llama
+// métodos suyos, p. ej. _eyeOf para el ojo de la pose difundida); solo se sustituye
+// lo que la prueba cuenta (botShoot, etc.)
+const { BotMatch: BM_ } = await import('../src/game/botmatch.js');
+const matchStub = (o) => Object.assign(Object.create(BM_.prototype), { world, bots: [], motion: new Map(), _clock: 0, external: true, cb: { effects: { tracer() {}, muzzleFlash() {}, impact() {} }, audio: { gun() {}, impact() {} }, humans: () => [] } }, o);
 const groundFn = (x, z, y) => world.groundHeight({ x, z }, R, y);
 
 // ---------- transporte ----------
@@ -75,7 +81,7 @@ function connect(name, action) {
     const ws = new WebSocket(`ws://127.0.0.1:${port}`);
     const p = { ws, id: null, messages: [], on: null };
     peers.push(p);
-    ws.on('open', () => ws.send(JSON.stringify({ t: 'join', name, action, v: 0 })));
+    ws.on('open', () => ws.send(JSON.stringify({ t: 'join', name, action, v: 0, hp: 2, fps: 1 })));
     ws.on('error', reject);
     ws.on('message', (raw) => {
       const m = JSON.parse(raw);
@@ -113,8 +119,8 @@ const cam = { yaw: 0, pitch: 0,
 const ctl = new Controller(world, cam, {});
 const wep = new Weapons();
 wep.infinite = true;
-const input = { mv: { x: 0, z: 0 }, aimHeld: false, sprintHeld: false, jumpPressed: false, evadePressed: false,
-  meleePressed: false, moveVec() { return this.mv; } };
+const input = { mv: { x: 0, z: 0 }, aimHeld: false, sprintHeld: false, jumpPressed: false, crouchHeld: false,
+  crouchPressed: false, leanAxis: 0, meleePressed: false, moveVec() { return this.mv; } };
 const G = { throwT: 0, throwPending: false, firing: false, firePressed: false };
 
 function localParams() {
@@ -126,39 +132,38 @@ function localParams() {
     x: ctl.pos.x, z: ctl.pos.z, y: ctl.y,
   };
 }
-const KEYS = ['state', 'latMove', 'vy', 'aim', 'coverAimExposure', 'coverLean', 'mantlePhase', 'evadePhase',
+const KEYS = ['state', 'latMove', 'crouch', 'slidePhase', 'vy', 'aim', 'coverAimExposure', 'coverLean', 'mantlePhase', 'evadePhase',
   'meleePhase', 'meleeTackle', 'flipT', 'flipDir', 'flipAxis', 'swapping', 'throwT', 'throwReleased',
   'reloading', 'reloadT', 'pump', 'moveForward', 'moveSide', 'twist', 'groundPitch'];
 const pick = (o) => { const r = {}; for (const k of KEYS) r[k] = o[k]; return r; };
 
 // ---------- guion ----------
-const placeCover = (face, u, yaw = null) => {
+// PRUEBAS (corrida 6, FPS): el guion usa lo que hoy hace el jugador. Se
+// retiraron strafe en cobertura pegada, blindfire, volteretas, patada de pared
+// y rodada (mecánicas retiradas: fps-movement afirma que no aparecen); en su
+// lugar: andar agachado de lado, asomo sobre LOW (ce), deslizamiento e
+// inclinación de pie en la orilla HIGH (cl).
+// de cara a la cara, a `gap` del plano, en la posición u a lo largo de ella
+const placeFacing = (face, u, gap = R + 0.12) => {
   const ux = face.b.x - face.a.x, uz = face.b.z - face.a.z, l = Math.hypot(ux, uz);
-  ctl.respawn({ x: face.a.x + ux / l * u + face.n.x * R, z: face.a.z + uz / l * u + face.n.z * R, yaw: 0 });
-  ctl.state = 'cover'; ctl.cover = face; ctl.yaw = yaw ?? yawFromDir(face.n.x, face.n.z);
-  cam.yaw = yawFromDir(-face.n.x, -face.n.z); cam.pitch = 0;
+  const yaw = yawFromDir(-face.n.x, -face.n.z);
+  ctl.respawn({ x: face.a.x + ux / l * u + face.n.x * gap, z: face.a.z + uz / l * u + face.n.z * gap, yaw });
+  cam.yaw = yaw; cam.pitch = 0;
 };
 const placeOpen = (x, z, camYaw) => { ctl.respawn({ x, z, yaw: camYaw }); cam.yaw = camYaw; cam.pitch = 0; };
 // at(a): la pulsación cae en el primer cuadro que cruza el instante a
 let tPrevStep = 0, tStep = 0;
 const at = (a) => tPrevStep < a && tStep >= a;
 const STEPS = [
-  { name: 'settle', dur: 0.8, start: () => placeCover(world.faces[0], 3) },
-  { name: 'strafe-left', dur: 0.75, input: () => { input.mv = { x: -1, z: 0 }; } },
-  { name: 'strafe-right', dur: 0.75, input: () => { input.mv = { x: 1, z: 0 }; } },
-  { name: 'ads-low', dur: 1.0, input: () => { input.mv = { x: 0, z: 0 }; input.aimHeld = true; } },
-  { name: 'blind-over', dur: 1.0, input: () => { input.aimHeld = false; G.firing = true; } },
-  { name: 'mantle', dur: 1.2, start: () => { G.firing = false; }, input: () => { input.mv = { x: 0, z: 1 }; input.jumpPressed = at(0.05); } },
+  { name: 'settle', dur: 0.8, start: () => placeFacing(world.faces[0], 3), input: () => { input.crouchHeld = true; } },
+  { name: 'crouch-left', dur: 0.75, input: () => { input.crouchHeld = true; input.mv = { x: -1, z: 0 }; } },
+  { name: 'crouch-right', dur: 0.75, input: () => { input.crouchHeld = true; input.mv = { x: 1, z: 0 }; } },
+  { name: 'peek-low', dur: 1.0, start: () => placeFacing(world.faces[0], 3), input: () => { input.mv = { x: 0, z: 0 }; input.crouchHeld = true; input.aimHeld = true; } },
+  { name: 'mantle', dur: 1.2, start: () => { input.crouchHeld = false; input.aimHeld = false; placeFacing(world.faces[0], 3); },
+    input: () => { input.mv = { x: 0, z: 1 }; input.jumpPressed = at(0.05); } },
   { name: 'jump', dur: 1.6, start: () => placeOpen(0, 8, Math.PI), input: (t) => { input.mv = { x: 0, z: t < 1.0 ? 1 : 0 }; input.jumpPressed = at(0.3); } },
-  ...[['roll-right', { x: 1, z: 0 }], ['roll-back', { x: 0, z: -1 }], ['roll-fwd', { x: 0, z: 1 }], ['roll-left', { x: -1, z: 0 }]]
-    .map(([name, mv]) => ({ name, dur: 1.5, start: () => placeOpen(0, 8, Math.PI),
-      input: (t) => { input.mv = t > 0.2 && t < 0.45 ? mv : { x: 0, z: 0 }; input.jumpPressed = at(0.05) || at(0.3); } })),
-  // pared en x = -14 (n = +x): carrera en diagonal hacia ella, salto y patada
-  { name: 'wallkick-lateral', dur: 1.8, start: () => placeOpen(-13.0, -4, Math.PI - 0.6),
-    input: (t) => { input.mv = { x: 0, z: t < 0.6 ? 1 : 0 }; input.jumpPressed = at(0.1) || at(0.32); } },
-  { name: 'wallkick-back', dur: 1.8, start: () => placeOpen(-12.9, 0, Math.PI / 2),
-    input: (t) => { input.mv = { x: 0, z: t < 0.5 ? 1 : 0 }; input.jumpPressed = at(0.1) || at(0.3); } },
-  { name: 'dive', dur: 1.2, start: () => placeOpen(0, 8, Math.PI), input: () => { input.mv = { x: 0, z: 1 }; input.evadePressed = at(0.35); } },
+  { name: 'slide', dur: 1.6, start: () => placeOpen(0, 12, Math.PI),
+    input: (t) => { input.mv = { x: 0, z: t < 1.1 ? 1 : 0 }; input.sprintHeld = t < 0.8; input.crouchPressed = at(0.75); } },
   { name: 'melee-run', dur: 1.6, start: () => placeOpen(0, 8, Math.PI), input: (t) => { input.mv = { x: 0, z: t < 0.9 ? 1 : 0 }; input.sprintHeld = t < 0.9; input.meleePressed = at(0.8); } },
   { name: 'melee-stand', dur: 1.2, start: () => { input.sprintHeld = false; placeOpen(0, 8, Math.PI); }, input: () => { input.mv = { x: 0, z: 0 }; input.meleePressed = at(0.2); } },
   { name: 'swap', dur: 1.2, start: () => wep.startSwap('shotgun') },
@@ -170,8 +175,9 @@ const STEPS = [
   { name: 'reload-shotgun', dur: 3.0, start: () => { G.firePressed = false; wep.startSwap('shotgun'); },
     input: () => { if (at(0.7)) { wep.st.mag = TUNING.weapons.shotgun.mag - 3; wep.startReload(); } } },
   { name: 'post-shotgun', dur: 0.8, start: () => wep.startSwap('smg') },
-  { name: 'high-lean', dur: 1.4, start: () => placeCover(world.faces[1], 3.65), input: () => { input.aimHeld = true; } },
-  { name: 'end', dur: 0.5, input: () => { input.aimHeld = false; } },
+  // orilla derecha (b) de la cara HIGH: de pie, apuntando e inclinado a la derecha
+  { name: 'high-lean', dur: 1.4, start: () => placeFacing(world.faces[1], 3.65, R + 0.25), input: () => { input.aimHeld = true; input.leanAxis = 1; } },
+  { name: 'end', dur: 0.5, input: () => { input.aimHeld = false; input.leanAxis = 0; } },
 ];
 
 let remote = null, actor = null, observer = null;
@@ -188,7 +194,7 @@ function stepLocal(sendNade) {
     STEPS[si].start?.();
   }
   const S = STEPS[si];
-  input.jumpPressed = false; input.evadePressed = false; input.meleePressed = false;
+  input.jumpPressed = false; input.crouchPressed = false; input.meleePressed = false;
   tStep = stepT;
   S.input?.(stepT);
   ctl.update(DT, input, G.firing);
@@ -350,20 +356,27 @@ const mae = (ps, k, when = () => true) => {
 };
 const frac = (ps, f) => (ps.length ? +(ps.filter(f).length / ps.length).toFixed(2) : null);
 const M = report.remote;
-for (const name of ['strafe-left', 'strafe-right']) {
+for (const name of ['crouch-left', 'crouch-right']) {
+  // andar agachado de lado: el remoto está agachado y se mueve hacia el mismo lado
   const ps = pairs(name, 0.3, 0.05);
-  const lm = mean(ps.map(([l]) => l.latMove)), rm = mean(ps.map(([, r]) => r.latMove ?? 0));
-  M[name] = { latMoveLocal: +lm.toFixed(2), latMoveRemoto: +rm.toFixed(2) };
-  check(Math.abs(lm) > 0.6 && Math.sign(lm) === Math.sign(rm) && Math.abs(lm - rm) < 0.3,
-    `remoto ${name}: latMove ${rm.toFixed(2)} frente a ${lm.toFixed(2)} del local`);
+  const lm = mean(ps.map(([l]) => l.moveSide)), rm = mean(ps.map(([, r]) => r.moveSide ?? 0));
+  M[name] = { moveSideLocal: +lm.toFixed(2), moveSideRemoto: +rm.toFixed(2),
+    mismoEstado: frac(ps, ([l, r]) => l.state === r.state), agachadoLocal: frac(ps, ([l]) => l.state === 'crouch') };
+  check(M[name].agachadoLocal > 0.85 && M[name].mismoEstado > 0.85 && Math.abs(lm) > 0.6 &&
+    Math.sign(lm) === Math.sign(rm) && Math.abs(lm - rm) < 0.3, `remoto ${name}: ${JSON.stringify(M[name])}`);
 }
 {
-  const ps = pairs('ads-low', 0.25);
-  M['ads-low'] = { exposicionMAE: mae(ps, 'coverAimExposure'), mismoEstado: frac(ps, ([l, r]) => l.state === r.state) };
-  check(M['ads-low'].exposicionMAE < 0.15 && M['ads-low'].mismoEstado > 0.85, `remoto ADS sobre cover bajo: ${JSON.stringify(M['ads-low'])}`);
-  const pb = pairs('blind-over', 0.25);
-  M['blind-over'] = { mismoEstado: frac(pb, ([l, r]) => l.state === r.state) };
-  check(M['blind-over'].mismoEstado > 0.85, `remoto blindfire: ${JSON.stringify(M['blind-over'])}`);
+  // asomo sobre LOW: la altura de cabeza (ce = coverAimExposure) llega al remoto
+  const ps = pairs('peek-low', 0.25);
+  M['peek-low'] = { exposicionMAE: mae(ps, 'coverAimExposure'), mismoEstado: frac(ps, ([l, r]) => l.state === r.state),
+    exposicionLocalMax: ps.length ? +Math.max(...ps.map(([l]) => l.coverAimExposure ?? 0)).toFixed(2) : null };
+  check(M['peek-low'].exposicionLocalMax > 0.9 && M['peek-low'].exposicionMAE < 0.15 && M['peek-low'].mismoEstado > 0.85,
+    `remoto asomo sobre LOW: ${JSON.stringify(M['peek-low'])}`);
+}
+{
+  const ps = pairs('slide', 0).filter(([l]) => l.state === 'slide');
+  M.slide = { n: ps.length, mismoEstado: frac(ps, ([, r]) => r.state === 'slide') };
+  check(ps.length > 10 && M.slide.mismoEstado > 0.8, `remoto deslizamiento: ${JSON.stringify(M.slide)}`);
 }
 {
   const ps = pairs('mantle', 0).filter(([l, r]) => l.state === 'mantle' && r.state === 'mantle');
@@ -376,20 +389,6 @@ for (const name of ['strafe-left', 'strafe-right']) {
   M.jump = { vyMAE: mae(ps, 'vy'), mismoSigno: frac(ps, ([l, r]) => Math.sign(l.vy) === Math.sign(r.vy ?? 0) || Math.abs(l.vy) < 1),
     vyRemotaMax: ps.length ? +Math.max(...ps.map(([, r]) => r.vy ?? 0)).toFixed(2) : null };
   check(ps.length > 10 && M.jump.vyMAE < 1.5 && M.jump.mismoSigno > 0.85, `remoto salto: ${JSON.stringify(M.jump)}`);
-}
-for (const name of ['roll-right', 'roll-back', 'roll-fwd', 'roll-left', 'wallkick-lateral', 'wallkick-back']) {
-  const ps = pairs(name, 0).filter(([l, r]) => l.state === 'flip' && r.state === 'flip');
-  const lf = LOCAL.find((l) => l.step === name && l.state === 'flip');
-  const rf = ps.length ? ps[Math.floor(ps.length / 2)][1] : null;
-  M[name] = { local: lf ? `${lf.flipAxis}${lf.flipDir > 0 ? '+' : '-'}` : 'sin flip', remoto: rf ? `${rf.flipAxis}${rf.flipDir > 0 ? '+' : '-'}` : 'sin flip',
-    faseMAE: mae(ps, 'flipT') };
-  check(!!lf, `guion ${name}: el jugador local no hizo la vuelta`);
-  if (lf) check(M[name].local === M[name].remoto && M[name].faseMAE < 0.2, `remoto ${name}: ${JSON.stringify(M[name])}`);
-}
-{
-  const ps = pairs('dive', 0).filter(([l, r]) => l.state === 'dive' && r.state === 'dive');
-  M.dive = { faseMAE: mae(ps, 'evadePhase'), n: ps.length };
-  check(ps.length > 5 && M.dive.faseMAE < 0.15, `remoto dive: ${JSON.stringify(M.dive)}`);
 }
 for (const name of ['melee-run', 'melee-stand']) {
   const ps = pairs(name, 0).filter(([l, r]) => l.state === 'melee' && r.state === 'melee');
@@ -438,7 +437,7 @@ for (const name of ['melee-run', 'melee-stand']) {
 {
   const ps = pairs('high-lean', 0.35);
   M['high-lean'] = { leanLocal: +mean(ps.map(([l]) => l.coverLean)).toFixed(2), leanRemoto: +mean(ps.map(([, r]) => r.coverLean ?? 0)).toFixed(2), mismoEstado: frac(ps, ([l, r]) => l.state === r.state) };
-  check(Math.abs(M['high-lean'].leanLocal - M['high-lean'].leanRemoto) < 0.2 && M['high-lean'].mismoEstado > 0.85, `remoto lean: ${JSON.stringify(M['high-lean'])}`);
+  check(M['high-lean'].leanLocal > 0.6 && Math.abs(M['high-lean'].leanLocal - M['high-lean'].leanRemoto) < 0.2 && M['high-lean'].mismoEstado > 0.85, `remoto inclinación en orilla HIGH: ${JSON.stringify(M['high-lean'])}`);
 }
 
 // ---------- BOT ----------
@@ -447,6 +446,7 @@ function makeBot() {
   const b = new Bot(new THREE.Scene(), bw, 'b1', '', 'red', { x: 0, z: 0, yaw: 0 }, 0);
   b.rig.groundFn = (x, z, y) => bw.groundHeight({ x, z }, R, y);
   b.fireHoldT = 0; // sin esperar a difundir la pose de nacimiento (no hay red)
+  b.poseHeld = 1e9; // ídem: la pose ya salió por botState (aquí no corre el paso de postura)
   return b;
 }
 const B = report.bot;
@@ -454,52 +454,54 @@ const B = report.bot;
 async function block(fn) {
   try { await fn(); } catch (e) { failures.push('bot: ' + e.message.split('\n')[0]); (B.errores ??= []).push(e.message.split('\n')[0]); }
 }
-// cover bajo: escondido de espaldas a la pared (como el jugador), asomado sube con la exposición
+// PRUEBAS (corrida 6, FPS): los bots ya no se pegan a la cobertura (sin
+// cover_low/cover_high, ganchos/bots.md): se agachan tras LOW, se asoman con ce y
+// se inclinan con cl en la orilla HIGH, igual que el jugador. La paridad se
+// compara en lo que llega al rig: estado, ce (coverAimExposure) y cl (coverLean).
+// Retirado: "de espaldas a la pared" y el strafe pegado (no existen); que el
+// bot escondido no vea ni dispare lo afirma check-fps-bots B.
 await block(async () => {
   const b = makeBot();
   const f = world.faces[0];
-  b.cover = { x: 0, z: -5 + 0.7, tx: 1, tz: 0, nx: 0, nz: 1, low: true, len: 6, kind: 'low' };
-  b.state = 'cover'; b.coverPhase = 'hide'; b.pos = { x: 0, z: -4.3 }; b.yaw = 0; b.rigYaw = 0;
-  b.velX = 0; b.velZ = 0; b.aim = false;
-  let anim;
-  for (let i = 0; i < 90; i++) { anim = b._coverPresentation('idle', 1 / 60); b._bodyYaw(anim, 1 / 60); }
-  const restYaw = yawFromDir(f.n.x, f.n.z);
-  const yawErr = Math.abs(Math.atan2(Math.sin(b.rigYaw - restYaw), Math.cos(b.rigYaw - restYaw)));
-  B.coverBajoEscondido = { estado: anim, errorYawDeg: +(yawErr * 180 / Math.PI).toFixed(1) };
-  check(anim === 'cover_low' && yawErr < 0.05, `bot escondido en cover bajo: ${JSON.stringify(B.coverBajoEscondido)}`);
-  b.coverPhase = 'peek'; b.aim = true;
-  let p;
-  for (let i = 0; i < 30; i++) { anim = b._coverPresentation('idle', 1 / 60); b._bodyYaw(anim, 1 / 60); p = b._rigParams(anim, 1 / 60); }
-  // jugador: mismo cover y ADS
-  placeCover(f, 3); input.mv = { x: 0, z: 0 }; input.aimHeld = true;
-  for (let i = 0; i < 30; i++) ctl.update(1 / 60, input, false);
-  const lp = ctl.animParams();
-  B.coverBajoAsomado = { bot: `${p.state} aim=${p.aim} ce=${p.coverAimExposure.toFixed(2)}`, jugador: `${lp.state} aim=${lp.aim} ce=${lp.coverAimExposure.toFixed(2)}` };
-  check(p.state === lp.state && p.aim === lp.aim && Math.abs(p.coverAimExposure - lp.coverAimExposure) < 0.05,
-    `bot asomado sobre cover bajo: ${JSON.stringify(B.coverBajoAsomado)}`);
-  // strafe pegado al cover: paso lateral
-  b.coverPhase = 'hide'; b.aim = false; b.velX = 3.5; b.velZ = 0;
-  for (let i = 0; i < 60; i++) { anim = b._coverPresentation('run', 1 / 60); b._bodyYaw(anim, 1 / 60); p = b._rigParams(anim, 1 / 60); }
-  input.aimHeld = false; placeCover(f, 1); input.mv = { x: 1, z: 0 };
-  for (let i = 0; i < 30; i++) ctl.update(1 / 60, input, false);
-  const lp2 = ctl.animParams();
-  B.coverStrafe = { bot: `${p.state} latMove=${p.latMove.toFixed(2)}`, jugador: `${lp2.state} latMove=${lp2.latMove.toFixed(2)}` };
-  check(p.state === lp2.state && Math.abs(p.latMove - lp2.latMove) < 0.2, `bot strafe en cover: ${JSON.stringify(B.coverStrafe)}`);
+  b.pos = { x: 0, z: -5 + R + 0.12 }; b.yaw = 0; b.rigYaw = 0; b.velX = 0; b.velZ = 0;
+  b.aim = false; b.wantCe = 0; b.wantCl = 0;
+  let anim, p;
+  for (let i = 0; i < 90; i++) { anim = b._posture('idle', 1 / 60); p = b._rigParams(anim, 1 / 60); }
+  placeFacing(f, 3); input.mv = { x: 0, z: 0 }; input.aimHeld = false; input.crouchHeld = true; input.leanAxis = 0;
+  for (let i = 0; i < 60; i++) ctl.update(1 / 60, input, false);
+  let lp = ctl.animParams();
+  B.lowEscondido = { bot: `${p.state} ce=${p.coverAimExposure.toFixed(2)}`, jugador: `${lp.state} ce=${lp.coverAimExposure.toFixed(2)}` };
+  check(p.state === 'crouch' && p.state === lp.state && Math.abs(p.coverAimExposure - lp.coverAimExposure) < 0.05,
+    `bot escondido tras LOW: ${JSON.stringify(B.lowEscondido)}`);
+  b.aim = true; b.wantCe = 1;
+  for (let i = 0; i < 40; i++) { anim = b._posture('idle', 1 / 60); p = b._rigParams(anim, 1 / 60); }
+  input.aimHeld = true;
+  for (let i = 0; i < 40; i++) ctl.update(1 / 60, input, false);
+  lp = ctl.animParams();
+  B.lowAsomado = { bot: `${p.state} aim=${p.aim} ce=${p.coverAimExposure.toFixed(2)}`, jugador: `${lp.state} aim=${lp.aim} ce=${lp.coverAimExposure.toFixed(2)}` };
+  // altura efectiva de cabeza: con ce = 1 el bot ya cuenta como de pie (idle) y el
+  // jugador sigue en crouch con ce = 1; rig y volumen son el mismo (CONTRATO, RED §1)
+  const h = (q) => (q.state === 'crouch' ? q.coverAimExposure : 1);
+  check(p.aim === lp.aim && Math.abs(h(p) - h(lp)) < 0.05 && h(lp) > 0.9 &&
+    ['crouch', 'idle'].includes(p.state) && ['crouch', 'idle'].includes(lp.state),
+    `bot asomado sobre LOW: ${JSON.stringify(B.lowAsomado)}`);
+  input.aimHeld = false; input.crouchHeld = false;
 });
-// cover alto: lean en la orilla con el mismo lado que el jugador
+// orilla HIGH: de pie, apuntando e inclinado al mismo lado que el jugador
 await block(async () => {
   const b = makeBot();
   const f = world.faces[1];
-  b.cover = { x: 8, z: -5 + 0.7, tx: 1, tz: 0, nx: 0, nz: 1, low: false, len: 4, kind: 'high' };
-  b.state = 'cover'; b.coverPhase = 'peek'; b.pos = { x: 9.65, z: -4.3 }; b.yaw = 0; b.rigYaw = 0; b.aim = true; b.velX = 0; b.velZ = 0;
+  b.pos = { x: 9.65, z: -5 + R + 0.25 }; b.yaw = 0; b.rigYaw = 0; b.velX = 0; b.velZ = 0;
+  b.aim = true; b.wantCe = 1; b.wantCl = 1;
   let anim, p;
-  for (let i = 0; i < 40; i++) { b.aim = true; anim = b._coverPresentation('idle', 1 / 60); b._bodyYaw(anim, 1 / 60); p = b._rigParams(anim, 1 / 60); }
-  placeCover(f, 3.65); input.mv = { x: 0, z: 0 }; input.aimHeld = true;
+  for (let i = 0; i < 40; i++) { b.aim = true; anim = b._posture('idle', 1 / 60); p = b._rigParams(anim, 1 / 60); }
+  placeFacing(f, 3.65, R + 0.25); input.mv = { x: 0, z: 0 }; input.aimHeld = true; input.leanAxis = 1;
   for (let i = 0; i < 40; i++) ctl.update(1 / 60, input, false);
   const lp = ctl.animParams();
-  B.coverAltoLean = { bot: `${p.state} aim=${p.aim} lean=${p.coverLean}`, jugador: `${lp.state} aim=${lp.aim} lean=${lp.coverLean}` };
-  check(p.state === lp.state && p.aim === lp.aim && p.coverLean === lp.coverLean, `bot lean en cover alto: ${JSON.stringify(B.coverAltoLean)}`);
-  input.aimHeld = false;
+  B.altoLean = { bot: `${p.state} aim=${p.aim} cl=${p.coverLean.toFixed(2)}`, jugador: `${lp.state} aim=${lp.aim} cl=${(+lp.coverLean).toFixed(2)}` };
+  check(p.state === lp.state && p.aim === lp.aim && Math.abs(p.coverLean - lp.coverLean) < 0.05,
+    `bot inclinado en orilla HIGH: ${JSON.stringify(B.altoLean)}`);
+  input.aimHeld = false; input.leanAxis = 0;
 });
 // recarga y cambio de arma: mismas fases que Weapons
 await block(async () => {
@@ -544,7 +546,8 @@ await block(async () => {
 await block(async () => {
   const b = makeBot();
   let released = null, swappedIn = null;
-  const fake = { cb: { smoke: { throwNade: (o, v) => { released = { o, v }; } } }, external: false, _nadeSeq: 0 };
+  // doble de partida que hereda de BotMatch (botThrowSmoke ya llama this._eyeOf)
+  const fake = matchStub({ cb: { smoke: { throwNade: (o, v) => { released = { o, v }; } } }, external: false, _nadeSeq: 0 });
   Bot.prototype.constructor; // (sin uso: el método vive en BotMatch)
   const { BotMatch } = await import('../src/game/botmatch.js');
   fake.botReleaseSmoke = BotMatch.prototype.botReleaseSmoke;
@@ -600,7 +603,7 @@ await block(async () => {
   const G1 = {};
   for (const w of ['smg', 'shotgun', 'sniper', 'bazooka']) {
     const b = mk(); let shots = 0;
-    const m = { botShoot: () => { shots++; return true; }, botFireRocket: () => { shots++; }, rocketPathClear: () => true };
+    const m = matchStub({ botShoot: () => { shots++; return true; }, botFireRocket: () => { shots++; }, rocketPathClear: () => true });
     b.wep = w; b.specialAmmo = 5; b.dazeT = 0.4; b.shotCd = 0; b.burstT = 1; b.pauseT = 0;
     b._fireAt(1 / 60, m, { id: 'e', x: 0, z: -10, y: 0 }, 10);
     G1[w] = shots;
@@ -633,7 +636,7 @@ await block(async () => {
   // antes del primer tiro con el arma nueva
   {
     const b = mk(); b.wep = 'smg'; b.ammo.shotgun = 8; b.swapCd = 0; let shotAt = null, wAt = null, t = 0;
-    const m = { botShoot: () => { if (shotAt == null) shotAt = t; return true; } };
+    const m = matchStub({ botShoot: () => { if (shotAt == null) shotAt = t; return true; } });
     b._trySwap('shotgun');
     for (let i = 0; i < 90; i++) {
       t += 1 / 60; b.shotCd = Math.max(-0.5, b.shotCd - 1 / 60);
@@ -649,7 +652,7 @@ await block(async () => {
   {
     const b = makeBot(); b.reactT = 0; b.yaw = 0; b.rigYaw = 0; b.swapAnim = 0; b._stepDt = 1 / 60;
     b.respawn({ x: 0, z: 0, yaw: 0 });
-    let shots = 0; const m = { botShoot: () => { shots++; return true; } };
+    let shots = 0; const m = matchStub({ botShoot: () => { shots++; return true; } });
     b.shotCd = 0; b.burstT = 1; b.pauseT = 0; b.reactT = 0;
     b._fireAt(1 / 60, m, { id: 'e', x: 0, z: -6, y: 0 }, 6);
     B.esperaTrasNacer = { tirosEnElMismoPaso: shots, esperaS: +(2.5 / TUNING.net.sendHz).toFixed(3) };
@@ -662,24 +665,14 @@ await block(async () => {
   const b2 = mk(); b2.wep = 'smg'; b2.ammo.smg = 10; b2._startReload(); while (b2.reloadT > 0) b2._reloadStep(1 / 60);
   // sin reserva no recarga y cambia a la otra arma
   const b3 = mk(); b3.wep = 'smg'; b3.ammo.smg = 0; b3.reserve.smg = 0; b3.swapCd = 2;
-  b3._fireAt(1 / 60, { botShoot: () => true }, { id: 'e', x: 0, z: -10, y: 0 }, 10);
+  b3._fireAt(1 / 60, matchStub({ botShoot: () => true }), { id: 'e', x: 0, z: -10, y: 0 }, 10);
   B.municion = { escopetaVaciaS: +t.toFixed(2), jugadorS: +(sd.mag * sd.reloadTime).toFixed(2),
     reservaEscopeta: `${sd.reserve}→${b.reserve.shotgun}`, reservaSMG: `${md.reserve}→${b2.reserve.smg}`,
     secoCambiaA: b3.wep, secoRecarga: b3.reloadT > 0 };
   check(Math.abs(t - sd.mag * sd.reloadTime) < 0.05 && b.ammo.shotgun === sd.mag && b.reserve.shotgun === sd.reserve - sd.mag &&
     b2.ammo.smg === md.mag && b2.reserve.smg === md.reserve - (md.mag - 10) && b3.wep === 'shotgun' && !B.municion.secoRecarga,
     `bot munición: ${JSON.stringify(B.municion)}`);
-  // vuelta: el eje sale del recorrido con la regla de los observadores
-  const { inferFlip } = await import('../src/combat/hit-pose.js');
-  const b4 = mk(); b4.velX = 3; b4.velZ = 0; b4.grounded = true; b4.jumpCd = 0;
-  const r0 = Math.random; Math.random = () => 0.1; b4._jump(true); Math.random = r0;
-  const pre = { ...b4.flip.pre };
-  let p0 = null;
-  for (let i = 0; i < 20; i++) { b4.pos.x += 5.7 / 60; if (b4.flip.el >= 0.03 && !p0) p0 = { ...b4.pos }; b4.flip.el += 1 / 60;
-    if (!b4.flip.set && b4.flip.el >= 0.16) { const s = b4.flip; s.p0 = s.p0 ?? { x: p0.x, z: p0.z, el: 0.03 }; } }
-  const obs = inferFlip(pre, { x: 5.7, z: 0 }, 0);
-  B.vueltaBot = { observador: `${obs.axis}${obs.dir}` };
-  check(obs.kind === 'roll', `vuelta de bot no reconstruible: ${JSON.stringify(obs)}`);
+  // PRUEBAS (corrida 6): "vuelta de bot reconstruible" retirada: los bots ya no hacen voltereta.
 });
 // origen de los tiros de un bot alojado: lo que el servidor acepta
 // (server.js botOriginLegal: ≤1.2 m en planta del cuerpo, 0.3–2.1 m sobre los
@@ -696,8 +689,9 @@ await block(async () => {
       rockets: { fire() {} } } });
   const cases = [
     ['de pie', (b) => {}],
-    ['asomado sobre cover bajo', (b) => { b.pos = { x: 0, z: -4.3 }; b.state = 'cover'; b.coverPhase = 'peek'; b.aim = true; }],
-    ['en el aire (vuelta)', (b) => { b.y = 1.2; b.flip = { t: 0.4, axis: 'z', dir: 1, dur: 0.55 }; }],
+    ['agachado tras LOW', (b) => { b.pos = { x: 0, z: -4.3 }; b.ce = 0; b.wantCe = 0; b._posture('idle', 1 / 60); }],
+    ['asomado sobre LOW', (b) => { b.pos = { x: 0, z: -4.3 }; b.aim = true; b.ce = 1; b.wantCe = 1; b._posture('idle', 1 / 60); }],
+    ['en el aire (salto)', (b) => { b.y = 1.2; b.vy = 3; b.grounded = false; }],
   ];
   let bad = 0;
   for (const [, setup] of cases) {
@@ -717,13 +711,13 @@ await block(async () => {
   B.origenTirosBot = { tiros: origins.length, fueraDeLoQueAceptaElServidor: bad };
   check(origins.length >= 5 && bad === 0, `bot: origen de tiro que el servidor rechazaría: ${JSON.stringify(B.origenTirosBot)}`);
 });
-// salto, vuelta y contexto de muerte
+// salto (la voltereta se retiró: sin flipAxis/flipDir que comparar)
 await block(async () => {
   const b = makeBot();
-  b.vy = 4; b.flip = { t: 0.3, axis: 'x', dir: -1 };
-  const p = b._rigParams('flip', 1 / 60);
-  B.saltoVuelta = { vy: p.vy, flip: `${p.flipAxis}${p.flipDir}`, flipT: p.flipT };
-  check(p.vy === 4 && p.flipAxis === 'x' && p.flipDir === -1 && p.flipT === 0.3, `bot salto/vuelta: ${JSON.stringify(B.saltoVuelta)}`);
+  b.vy = 4;
+  const p = b._rigParams('jump', 1 / 60);
+  B.salto = { vy: p.vy, estado: p.state };
+  check(p.vy === 4 && p.state === 'jump', `bot salto: ${JSON.stringify(B.salto)}`);
 });
 // cadencia: arrastre del sobrante, igual a la configurada a cualquier fps
 await block(async () => {
@@ -732,7 +726,7 @@ await block(async () => {
   for (const hz of [30, 60, 144]) {
     const b = makeBot(); const dt = 1 / hz;
     let shots = 0;
-    const match = { botShoot: () => { shots++; return true; } };
+    const match = matchStub({ botShoot: () => { shots++; return true; } });
     b.reactT = 0; b.burstT = 1e9; b.pauseT = 0; b.shotCd = 0; b.ammo.smg = 1e9; b.yaw = 0; b.rigYaw = 0;
     const enemy = { id: 'e', x: 0, z: -10, y: 0 };
     for (let t = 0; t < 30; t += dt) {
@@ -763,4 +757,4 @@ if (failures.length) {
   for (const f of failures) console.error(' - ' + f);
   process.exit(1);
 }
-console.log('ANIM PARITY OK · remoto (cover, salto, mantle, vueltas, dive, patada, cambio, lanzamiento, lean) · bot (cover, lean, recarga, cambio, lanzamiento, patada, cadencia)');
+console.log('ANIM PARITY OK · remoto (agachado, asomo, salto, mantle, slide, patada, cambio, lanzamiento, recarga, inclinación) · bot (agachado, asomo, inclinación, recarga, cambio, lanzamiento, patada, cadencia)');

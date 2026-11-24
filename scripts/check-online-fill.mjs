@@ -10,9 +10,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { clearClip } from './lib-clip.mjs';
 import { CHROME } from './lib-chrome.mjs';
+import { freePort } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const PORT = 8815;
+const PORT = FREE_PORT;
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const env = { ...process.env, PORT: String(PORT), INTRO_TIME: '1', COUNTDOWN_TIME: '0.5', NODE_ENV: 'test' };
 delete env.BREACH_FILL_BOTS; // esta suite prueba el valor por defecto (relleno activo)

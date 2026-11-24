@@ -32,6 +32,19 @@ function buildBlocks(ctx, plan) {
 }
 
 // Equipos de techo de los edificios vecinos (iluminados por la luna).
+function hasRoofEquipment(ctx, x, z) {
+  return Math.max(Math.abs(x), Math.abs(z)) <= (ctx.budget.detail > 0.5 ? 140 : 95);
+}
+
+// La corona sube 3,5 m sobre el bloque. Cada lente lleva un soporte
+// de 65 cm que la deja visible sobre el borde también desde la calle.
+function towerRoof(b) {
+  const w = (b.x1 - b.x0) / 2, d = (b.z1 - b.z0) / 2;
+  const x = (b.x0 + b.x1) / 2, z = (b.z0 + b.z1) / 2, top = b.top + 3.5;
+  const mounts = [-1, 1].map(s => [x + s * (w / 2 - 0.22), z + s * (d / 2 - 0.22)]);
+  return { w, d, top, mounts };
+}
+
 function buildRoofs(ctx, plan) {
   const { THREE } = ctx;
   const rnd = ctx.rng('city-roofs');
@@ -45,10 +58,17 @@ function buildRoofs(ctx, plan) {
     geos.push(g);
   };
   const box = (x, y, z, w, h, d, hex) => { const g = new THREE.BoxGeometry(w, h, d); g.translate(x, y, z); paint(g, hex); };
-  const near = ctx.budget.detail > 0.5 ? 140 : 95;
   for (const b of plan.buildings) {
     const cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2, w = b.x1 - b.x0, d = b.z1 - b.z0;
-    if (Math.max(Math.abs(cx), Math.abs(cz)) > near) continue;
+    if (b.kind === 'tower') {
+      const roof = towerRoof(b);
+      box(cx, b.top + 1.75, cz, roof.w, 3.5, roof.d, 0x2a2d32);
+      for (const [x, z] of roof.mounts) {
+        box(x, roof.top + 0.325, z, 0.18, 0.65, 0.18, 0x66524e);
+        box(x, roof.top + 0.70, z, 0.19, 0.10, 0.19, 0xd73a32);
+      }
+    }
+    if (!hasRoofEquipment(ctx, cx, cz)) continue;
     const y = b.top - 0.9; // losa del techo (el pretil sube 0.9)
     // caseta de escalera
     const sx = cx + (rnd() - 0.5) * w * 0.4, sz = cz + (rnd() - 0.5) * d * 0.4;
@@ -61,8 +81,6 @@ function buildRoofs(ctx, plan) {
       const t = new THREE.CylinderGeometry(1.2, 1.2, 2.2, 10); t.translate(tx, y + 2.9, tz); paint(t, 0x6d6157);
       for (const [ox, oz] of [[-0.8, -0.8], [0.8, -0.8], [-0.8, 0.8], [0.8, 0.8]]) box(tx + ox, y + 0.9, tz + oz, 0.14, 1.8, 0.14, 0x3a3c3f);
     }
-    // corona técnica de las torres
-    if (b.kind === 'tower') box(cx, y + 2.2, cz, w * 0.5, 4.4, d * 0.5, 0x2a2d32);
   }
   // chimeneas de las que sale el vapor (./atmos.js)
   for (const [x, y, z] of plan.stacks) {
@@ -104,7 +122,7 @@ void main() {
   // baliza: destello de medio segundo; estrobo: doble destello corto
   float beacon = smoothstep(0.0, 0.05, ph) * (1.0 - smoothstep(0.2, 0.32, ph));
   float strobe = step(ph, 0.04) + step(0.1, ph) * step(ph, 0.14);
-  vOn = aB.w < 0.5 ? 0.12 + beacon : aB.w < 1.5 ? strobe : 0.7;
+  vOn = aB.w < 0.5 ? 0.38 + beacon : aB.w < 1.5 ? strobe : 0.7;
   vCol = aCol;
   vec4 mv = viewMatrix * vec4(p, 1.0);
   gl_PointSize = clamp(aB.z * uScale / max(1.0, -mv.z), 1.5, 9.0) * (0.7 + 0.3 * vOn);
@@ -126,10 +144,11 @@ function buildLights(ctx, plan) {
   // torres: baliza en las esquinas de la corona, todas sincronizadas
   for (const b of plan.buildings) {
     if (b.kind !== 'tower') continue;
-    const y = b.top + 3.6;
-    const cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2, hw = (b.x1 - b.x0) * 0.24, hd = (b.z1 - b.z0) * 0.24;
-    add(cx - hw, y, cz - hd, 0.5, 0, 30, 0, red);
-    add(cx + hw, y, cz + hd, 0.5, 0, 30, 0, red);
+    const roof = towerRoof(b);
+    for (const [x, z] of roof.mounts) {
+      // La cara que mira hacia el campo queda por delante del propio piloto.
+      add(x - Math.sign(x) * 0.09, roof.top + 0.76, z, 0.5, 0, 36, 0, red);
+    }
   }
   for (const [x, y0, z, h] of masts(plan)) add(x, y0 + h + 0.15, z, 0.5, 0.02, 14, 0, red);
   // avión: estroboscópica blanca y luz roja de posición a su lado

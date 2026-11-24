@@ -13,9 +13,13 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CHROME } from './lib-chrome.mjs';
+import { actionKeys, freePort } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT_1 = await freePort();
+const FREE_PORT_2 = await freePort();
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const PORT = 8844, WS_PORT = 8845;
+const PORT = FREE_PORT_1, WS_PORT = FREE_PORT_2;
 const vite = spawn(process.execPath, [path.join(root, 'node_modules', 'vite', 'bin', 'vite.js'),
   '--host', '127.0.0.1', '--port', String(PORT), '--strictPort'], { cwd: root, stdio: 'ignore' });
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
@@ -43,7 +47,16 @@ const manualClock = () => {
     return native((t) => { if (window.__clock.manual && cb.name === 'frame') return; cb(t); });
   };
   window.__manual = () => { window.__clock.manual = true; window.__clock.now = performance.now(); };
+  // PRUEBAS (corrida 6): el bote sale en el evento throwRelease y avanza un paso de física
+  // en el mismo cuadro; la velocidad y el origen de LANZAMIENTO se leen al crearlo
+  window.__launches = [];
+  const hookLaunch = () => { // se instala al primer cuadro manual (el juego ya existe)
+    const S0 = window.BREACH_SMOKE; if (!S0 || S0.__hooked) return; S0.__hooked = true;
+    const t0 = S0.throwNade.bind(S0);
+    S0.throwNade = (o, v, opt) => { window.__launches.push({ o: { x: o.x, y: o.y, z: o.z }, v: { x: v.x, y: v.y, z: v.z } }); return t0(o, v, opt); };
+  };
   window.__frames = (n, fps, each) => {
+    hookLaunch();
     for (let i = 0; i < n; i++) {
       window.__clock.now += 1000 / fps;
       for (const cb of queue.splice(0)) cb(window.__clock.now);
@@ -92,8 +105,8 @@ try {
       const n0 = S.projs.length;
       I._mouseFire = true; I.firePressed = true;
       window.__frames(Math.ceil(fps * 1.2), fps, (i) => { place(); if (i === 1) I._mouseFire = false; return S.projs.length > n0; });
-      const p = S.projs[S.projs.length - 1];
-      out.push(p && S.projs.length > n0 ? { fps, pitch, y: (p.vy - 4.2) / 12, x: p.vx / 12 } : { fps, pitch, error: true });
+      const p = S.projs.length > n0 ? window.__launches[window.__launches.length - 1] : null;
+      out.push(p ? { fps, pitch, y: (p.v.y - 4.2) / 12, x: p.v.x / 12 } : { fps, pitch, error: true });
       S.clear();
     }
     return out;
@@ -111,7 +124,7 @@ try {
 
   // Lanzamientos cerca de geometría: la dirección nunca vuelve hacia el
   // jugador y el bote nunca nace al otro lado del cover.
-  const close = await page.evaluate(() => {
+  const close = await page.evaluate(kb => {
     const G = window.BREACH, I = window.BREACH_INPUT, S = window.BREACH_SMOKE, W = window.BREACH_WORLD, THREE = window.THREE;
     const pick = (lo, hi) => W.colliders.filter((c) => c.h >= lo && c.h <= hi && c.maxx - c.minx > 1.6 && c.maxz - c.minz > 0.3 &&
       Math.abs((c.minz + c.maxz) / 2) < 30 && Math.abs(c.maxx) < 30)
@@ -132,11 +145,16 @@ try {
       }
     }
     if (low) cases.push({ name: 'pegado a cover bajo, de frente', ...at(low), yaw: Math.PI / 2, pitch: 0.15 });
+    // PRUEBAS (corrida 6, FPS): las posturas que sustituyen a la cobertura pegada
+    if (low) cases.push({ name: 'agachado tras cover bajo', ...at(low), yaw: Math.PI / 2, pitch: 0.15, keys: [kb.crouch] });
+    if (high) cases.push({ name: 'inclinado en la orilla de cover alto', x: high.maxx + 0.45, z: high.maxz + 0.25, yaw: Math.PI * 0.75, pitch: 0, keys: [kb.leanLeft] });
+    if (high) cases.push({ name: 'agachado e inclinado en la orilla de cover alto', x: high.maxx + 0.45, z: high.minz - 0.25, yaw: Math.PI * 0.25, pitch: 0, keys: [kb.crouch, kb.leanRight] });
     cases.push({ name: 'apuntando al cielo', x: -16, z: 20, yaw: 0, pitch: 1.2 });
     const out = [];
     for (const k of cases) {
       const place = () => { G.player.pos.x = k.x; G.player.pos.z = k.z; G.player.y = 0;
         G.player.yaw = k.yaw; G.player.cam.yaw = k.yaw; G.player.cam.pitch = k.pitch; };
+      for (const key of k.keys ?? []) I.keys.add(key);
       place(); window.__frames(100, 60, place);
       const n0 = S.projs.length;
       I._mouseFire = true; I.firePressed = true;
@@ -144,21 +162,27 @@ try {
       const pr = S.projs[S.projs.length - 1];
       if (!pr || S.projs.length === n0) { out.push({ name: k.name, error: 'sin bote' }); continue; }
       const fwd = new THREE.Vector3(-Math.sin(k.yaw) * Math.cos(k.pitch), Math.sin(k.pitch), -Math.cos(k.yaw) * Math.cos(k.pitch));
-      const dir = new THREE.Vector3(pr.vx, pr.vy - 4.2, pr.vz).normalize();
-      const chest = new THREE.Vector3(k.x, 1.3, k.z), rel = new THREE.Vector3(pr.x, pr.y, pr.z);
+      const L = window.__launches[window.__launches.length - 1];
+      const dir = new THREE.Vector3(L.v.x, L.v.y - 4.2, L.v.z).normalize();
+      // la suelta se mide desde el OJO (origen FPS, como valida el servidor: cabeza→ojo→salida)
+      const fp = window.BREACH_FP;
+      const chest = fp?.eye ? fp.eye.clone() : new THREE.Vector3(k.x, 1.6, k.z), rel = new THREE.Vector3(pr.x, pr.y, pr.z);
       // el bote ya pudo moverse un paso: se mide su origen registrado si existe
-      const o = pr.o ? new THREE.Vector3(pr.o.x, pr.o.y, pr.o.z) : rel;
+      const o = new THREE.Vector3(L.o.x, L.o.y, L.o.z);
       const v = o.clone().sub(chest), len = v.length();
       const blocked = len > 0.02 && W.raycast(chest, v.normalize(), len) !== null;
-      out.push({ name: k.name, dot: +dir.dot(fwd).toFixed(3), releaseBehindCover: blocked });
+      out.push({ name: k.name, dot: +dir.dot(fwd).toFixed(3), releaseBehindCover: blocked, st: G.player.state, lean: +G.player.lean.toFixed(2) });
+      for (const key of k.keys ?? []) I.keys.delete(key);
+      window.__frames(20, 60);
       S.clear();
     }
     return { found: { high: !!high, low: !!low }, out };
-  });
+  }, await actionKeys(page, 'crouch', 'leanLeft', 'leanRight'));
   check('escenarios de lanzamiento cercano encontrados', close.found.high && close.found.low, JSON.stringify(close.found));
   for (const c of close.out) {
     check(`lanzamiento ${c.name}: sigue a la cámara y nace del lado propio`,
-      !c.error && c.dot > 0.5 && !c.releaseBehindCover, JSON.stringify(c));
+      !c.error && c.dot > 0.5 && !c.releaseBehindCover &&
+      (!c.name.includes('agachado') || c.st === 'crouch') && (!c.name.includes('inclinado') || Math.abs(c.lean) > 0.5), JSON.stringify(c));
   }
 
   const paused = await page.evaluate(() => {
@@ -224,56 +248,62 @@ try {
   check('soltar y re-pulsar entre pasos no conserva crédito de cadencia',
     relGap.minGap >= 60 / 620 - 1e-6 && relGap.minGap < 1, `${(relGap.minGap * 1000).toFixed(1)} ms (nominal ${(60000 / 620).toFixed(1)}) ${JSON.stringify(relGap.misses)}`);
 
-  // recarga a mitad (antes de meter el cargador) y pausa: la pieza
-  // programada se corta y al reanudar se reprograma desde el progreso real
+  // PRUEBAS (corrida 6): el audio de manejo va por EVENTOS del arma (audio.attachWeapons):
+  // la lógica congelada en pausa no emite y no hay piezas programadas que cortar. Se
+  // afirma la garantía de punta a punta: en pausa no suena nada de manejo; al reanudar
+  // cada paso suena UNA vez y en el cuadro de su evento; el bombeo se oye una sola vez.
   const reload = await page.evaluate(() => {
     const G = window.BREACH, A = window.BREACH_AUDIO, menu = document.getElementById('menu');
     G.weapons.startSwap('pistol'); window.__frames(60, 60);
     G.weapons.st.mag = 5; G.weapons.startReload();
     const dur = G.weapons.def.reloadTime;
     window.__frames(Math.round(dur * 0.3 * 60), 60);
-    const log = [];
-    const p0 = A._play.bind(A), s0 = A.engine?.stopTag?.bind(A.engine);
-    A._play = (name, o) => { log.push({ k: 'play', name, in: o?.at != null ? +(o.at - A._now()).toFixed(3) : null }); return p0(name, o); };
-    if (s0) A.engine.stopTag = (tag, f) => { log.push({ k: 'stop', tag }); return s0(tag, f); };
+    const log = []; let frame = 0;
+    const p0 = A._play.bind(A);
+    A._play = (name, o) => { log.push({ k: 'play', name, f: frame, in: o?.at != null ? +(o.at - A._now()).toFixed(3) : null }); return p0(name, o); };
+    const off = G.weapons.on('reloadStep', (e) => log.push({ k: 'step', name: e.name, f: frame }));
     const progress = 1 - G.weapons.st.reload / dur;
-    menu.classList.remove('off'); window.__frames(120, 60);
+    menu.classList.remove('off'); window.__frames(120, 60, () => { frame++; });
     const duringPause = log.slice();
-    menu.classList.add('off'); window.__frames(1, 60);
-    A._play = p0; if (s0) A.engine.stopTag = s0;
+    menu.classList.add('off');
+    window.__frames(Math.ceil((0.55 - progress) * dur * 60) + 10, 60, () => { frame++; });
+    A._play = p0; off?.();
     return { dur, progress, hasEngine: !!A.engine, duringPause, afterResume: log.slice(duringPause.length) };
   });
-  const cut = reload.duringPause.some((e) => e.k === 'stop' && e.tag === 'reload');
-  const magIn = reload.afterResume.find((e) => e.k === 'play' && e.name === 'mag_in_light');
-  const want = (0.55 - reload.progress) * reload.dur;
-  check('la pausa corta las piezas de recarga programadas', !reload.hasEngine || cut, JSON.stringify(reload.duringPause));
-  check('al reanudar, el cargador suena según el progreso real',
-    !reload.hasEngine || (magIn && Math.abs(magIn.in - want) < 0.05),
-    `programado en ${magIn?.in} s, esperado ${want.toFixed(3)} s`);
+  const magPlays = reload.afterResume.filter((e) => e.k === 'play' && e.name === 'mag_in_light');
+  const magStep = reload.afterResume.find((e) => e.k === 'step' && e.name === 'magIn');
+  check('en pausa no suena nada de manejo', !reload.duringPause.some((e) => e.k === 'play') && !reload.duringPause.some((e) => e.k === 'step'),
+    JSON.stringify(reload.duringPause));
+  check('al reanudar, el cargador suena UNA vez y en el cuadro de su evento magIn',
+    !reload.hasEngine || (magPlays.length === 1 && !!magStep && magPlays[0].f === magStep.f && magPlays[0].in === null),
+    JSON.stringify(reload.afterResume));
 
-  // escopeta: pausar dentro de los 80 ms entre el último cartucho y el
-  // bombeo corta el bombeo y lo reanuda con lo que le faltaba
+  // escopeta: pausar en el retraso entre el paso 'pump' y el bombeo: el bombeo
+  // programado se corta en pausa y al reanudar suena una sola vez con lo que faltaba
   const pump = await page.evaluate(() => {
     const G = window.BREACH, A = window.BREACH_AUDIO, menu = document.getElementById('menu');
     if (!A.engine) return { hasEngine: false };
     G.weapons.startSwap('shotgun'); window.__frames(60, 60);
     G.weapons.st.mag = G.weapons.def.mag - 1; G.weapons.startReload();
     const log = [];
-    const p0 = A._play.bind(A), s0 = A.engine.stopTag.bind(A.engine), d0 = A.reloadDone.bind(A);
-    let doneAt = null;
-    A.reloadDone = (w) => { doneAt = A._now(); return d0(w); };
+    let pumpStep = false;
+    const off = G.weapons.on('reloadStep', (e) => { if (e.name === 'pump') pumpStep = true; });
+    const p0 = A._play.bind(A), s0 = A.engine.stopTag.bind(A.engine);
     A._play = (name, o) => { if (name === 'pump') log.push({ k: 'play', in: o?.at != null ? +(o.at - A._now()).toFixed(3) : null }); return p0(name, o); };
     A.engine.stopTag = (tag, f) => { if (tag === 'pump') log.push({ k: 'stop' }); return s0(tag, f); };
-    window.__frames(120, 60, () => doneAt !== null);
+    window.__frames(240, 60, () => pumpStep);
+    const before = log.slice();
     menu.classList.remove('off'); window.__frames(60, 60);
-    const paused = log.slice();
-    menu.classList.add('off'); window.__frames(1, 60);
-    A._play = p0; A.engine.stopTag = s0; A.reloadDone = d0;
-    return { hasEngine: true, done: doneAt !== null, paused, resumed: log.slice(paused.length) };
+    const paused = log.slice(before.length);
+    menu.classList.add('off'); window.__frames(40, 60);
+    A._play = p0; A.engine.stopTag = s0; off?.();
+    return { hasEngine: true, pumpStep, before, paused, resumed: log.slice(before.length + paused.length) };
   });
-  check('pausa justo tras el último cartucho: el bombeo se corta y se reanuda',
-    !pump.hasEngine || (pump.done && pump.paused.some((e) => e.k === 'stop') &&
-      pump.resumed.some((e) => e.k === 'play' && e.in > 0 && e.in <= 0.08)), JSON.stringify(pump));
+  const pumpPlaysAfter = (pump.resumed ?? []).filter((e) => e.k === 'play');
+  check('pausa en el retraso del bombeo: se corta en pausa y suena UNA vez al reanudar con lo que faltaba',
+    !pump.hasEngine || (pump.pumpStep && pump.before.filter((e) => e.k === 'play').length === 1 &&
+      pump.paused.some((e) => e.k === 'stop') && !pump.paused.some((e) => e.k === 'play') &&
+      pumpPlaysAfter.length === 1 && pumpPlaysAfter[0].in > 0 && pumpPlaysAfter[0].in <= 0.275 + 1e-3), JSON.stringify(pump));
 
   check('el humo no envejece con la pausa abierta', paused.cloudDt === 0, `Δt=${paused.cloudDt}`);
   check('el cohete queda congelado con la pausa abierta',
@@ -290,9 +320,12 @@ try {
   await op.waitForTimeout(800);
   peer = await new Promise((resolve, reject) => {
     const ws = new WebSocket(`ws://127.0.0.1:${WS_PORT}`);
-    ws.on('open', () => ws.send(JSON.stringify({ t: 'join', action: 'join', name: 'PEER', v: 0 })));
+    ws.on('open', () => ws.send(JSON.stringify({ t: 'join', action: 'join', name: 'PEER', v: 0, hp: 2, fps: 1 })));
     ws.on('error', reject);
-    ws.on('message', (raw) => { const m = JSON.parse(raw); if (m.t === 'welcome') resolve({ ws, id: m.id }); });
+    const to = setTimeout(() => reject(new Error('PEER sin welcome')), 20000);
+    ws.on('message', (raw) => { const m = JSON.parse(raw);
+      if (m.t === 'welcome') { clearTimeout(to); resolve({ ws, id: m.id }); }
+      if (m.t === 'lobbyError') { clearTimeout(to); reject(new Error('PEER rechazado: ' + m.code)); } });
   });
   await op.waitForFunction(() => { const b = document.getElementById('btn-lobby-start'); return b && !b.disabled; },
     null, { timeout: 10000, polling: 100 });

@@ -115,7 +115,7 @@ export function build(ctx) {
   // del color del equipo, orla y dobladillo ocre, la torre del sello en lino
   // y la tela más sucia hacia abajo. (x,y,z) = centro de la vara; (nx,nz) =
   // normal hacia fuera del muro.
-  const banner = (x, y, z, nx, nz, { w = 1.1, len = 4, main, tail = 'swallow', off = 0.08 }) => {
+  const banner = (x, y, z, nx, nz, { w = 1.1, len = 4, main, tail = 'swallow', off = 0.08, embed = 0 }) => {
     const tx = -nz, tz = nx;
     const bx = x + nx * off, bz = z + nz * off;
     const tailLen = tail === 'none' ? 0 : w * 0.45;
@@ -129,7 +129,7 @@ export function build(ctx) {
       [bx + nx * 0.02 + tx * (w / 2 + 0.12), y + 0.03, bz + nz * 0.02 + tz * (w / 2 + 0.12)], 0.03, iron, 4);
     for (const s of [-1, 1]) {
       const ex = bx + tx * s * (w / 2 + 0.12), ez = bz + tz * s * (w / 2 + 0.12);
-      prism([ex - nx * off, y + 0.03, ez - nz * off], [ex, y + 0.03, ez], 0.022, iron, 4);
+      prism([ex - nx * (off + embed), y + 0.03, ez - nz * (off + embed)], [ex, y + 0.03, ez], 0.022, iron, 4);
       prism([ex - nx * 0.01, y + 0.03, ez - nz * 0.01], [ex + tx * s * 0.07, y + 0.03, ez + tz * s * 0.07], 0.04, bronze, 4);
     }
     // emblema: almenas, cuerpo de la torre y su puerta (medidas en w)
@@ -243,7 +243,9 @@ export function build(ctx) {
     const hy = (i, j) => {
       // lomos suaves entre los listones y bolsas de agua secas
       const u = i / nxs, v = j / nzs;
-      return top + 0.05 * Math.sin(v * Math.PI * nzs / 2) * Math.sin(u * Math.PI) + (sr() - 0.5) * 0.02;
+      const y = top + 0.05 * Math.sin(v * Math.PI * nzs / 2) * Math.sin(u * Math.PI) + (sr() - 0.5) * 0.02;
+      // La lona reposa sobre las tablas incluso en el mínimo de la ondulación.
+      return Math.max(c.h + 0.008, y);
     };
     const grid = [];
     for (let j = 0; j <= nzs; j++) for (let i = 0; i <= nxs; i++) grid.push([x0 + (x1 - x0) * i / nxs, hy(i, j), z0 + (z1 - z0) * j / nzs, 0.01]);
@@ -313,7 +315,7 @@ export function build(ctx) {
       for (const [tx, tz] of [[0, 0], [cx, cz * 1.5]]) {
         const ax = tx - cx, az = tz - cz, l = Math.hypot(ax, az);
         const nx = ax / l, nz = az / l;
-        banner(cx + nx * 2.28, 7.75, cz + nz * 2.28, nx, nz, { w: 1.2, len: 4.2, main: teamAt(cz), off: 0.16 });
+        banner(cx + nx * 2.28, 7.75, cz + nz * 2.28, nx, nz, { w: 1.2, len: 4.2, main: teamAt(cz), off: 0.16, embed: 0.47 });
       }
     }
 

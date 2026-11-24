@@ -7,7 +7,7 @@ const browser=await chromium.launch({executablePath:CHROME});
 try{
   const page=await browser.newPage({viewport:{width:2200,height:820}});
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
-  await page.goto('http://127.0.0.1:5200/?nolock=1');
+  await page.goto((process.env.BASE || 'http://127.0.0.1:5200') + '/?nolock=1');
   const report=await page.evaluate(async()=>{
     const T=await import('/node_modules/three/build/three.module.js');
     const {Rig}=await import('/src/player/rig.js');
@@ -36,9 +36,10 @@ try{
       const r=rigs[i],old=references[i];
       for(const weapon of ['smg','pistol','shotgun','sniper','bazooka','grenade']){
         r.setWeapon(weapon);old.setWeapon(weapon);
-        for(const state of ['idle','run','roadie','cover_low','blind_over','blind_high_left','blind_high_right','melee','dead','idle']){
+        // PRUEBAS (corrida 6): + posturas FPS (agachado con inclinación/asomo, slide, salto, trepar)
+        for(const state of ['idle','run','roadie','cover_low','blind_over','blind_high_left','blind_high_right','crouch','slide','jump','mantle','melee','dead','idle']){
           for(let f=0;f<25;f++){
-            const p={state,speed:.7,aim:state==='idle',aimPitch:.15};
+            const p={state,speed:.7,aim:state==='idle'||state==='crouch',aimPitch:.15,...(state==='crouch'?{coverLean:-.7,coverAimExposure:f/25}:{})};
             old.update(1/60,p);r.update(1/60,p);
             old.root.updateWorldMatrix(true,true);r.root.updateWorldMatrix(true,true);
             const a=joints(old),b=joints(r);

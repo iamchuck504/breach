@@ -1,109 +1,40 @@
-// Regresión visual/funcional: ADS permanece estable en la intención de cámara;
-// hip/blindfire proyectan la trayectoria física del muzzle. Blindfire
-// contextual amplía este contrato en check-blindfire.
+// Regresión visual/funcional de la retícula en PRIMERA PERSONA (PRUEBAS, corrida 6):
+// ADS y mira se quedan en el centro (el rayo del tiro sale del ojo por el centro de
+// pantalla) aunque haya una pared solo delante de la boca del arma; el sniper pega
+// donde promete la cruz; el cohete sale hacia el punto de la retícula.
+// Retirado (solo existía en tercera persona): retícula de cadera = proyección del
+// cañón físico, paralaje cadera/óptico, "el cuerpo propio no tapa el ADS de hombro"
+// y el marcador del cañón por arma. El cuerpo propio ya no se dibuja jugando y el
+// tiro en cadera también sale del ojo (check-fps-camera §4, check-fps-shot-instant).
 import { chromium } from 'playwright-core';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CHROME } from './lib-chrome.mjs';
+import { freePort, waitHttp } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const server = spawn(process.execPath, [
   path.join(root, 'node_modules', 'vite', 'bin', 'vite.js'),
-  '--host', '127.0.0.1', '--port', '8790',
+  '--host', '127.0.0.1', '--port', String(FREE_PORT),
 ], { cwd: root, stdio: 'ignore' });
 
 let browser;
 try {
-  await new Promise((resolve) => setTimeout(resolve, 900));
+  await waitHttp(`http://127.0.0.1:${FREE_PORT}/`);
   browser = await chromium.launch({ executablePath: CHROME });
   const page = await browser.newPage({ viewport: { width: 880, height: 640 } });
   const pageErrors = [];
   page.on('pageerror', (e) => pageErrors.push(e.message));
-  await page.goto('http://localhost:8790/?nolock=1', { waitUntil: 'networkidle' });
+  await page.goto(`http://localhost:${FREE_PORT}/?nolock=1`, { waitUntil: 'networkidle' });
   await page.evaluate(() => document.getElementById('btn-enter')?.click());
   await page.waitForSelector('#splash.off', { state: 'attached' });
   await page.evaluate(() => document.getElementById('btn-practice').click());
-  await page.waitForTimeout(1800);
-
-  // Repro exacto: girar de golpe, esperar en low-ready y disparar. Sin ADS,
-  // tanto la retícula como el disparo deben seguir el eje físico del barrel.
-  await page.evaluate(() => {
-    const G = window.BREACH;
-    G.weapons.cur = 'smg';
-    G.weapons.st.mag = 50;
-    G.weapons.st.cd = 0;
-    G.player.cam.pitch = -0.48;
-    G.player.cam.yaw = 0;
-    G.player.yaw = 0;
-    for (const d of G.dummies.list) d.alive = false;
-  });
-  await page.waitForTimeout(100);
-
-  const result = await page.evaluate(async () => {
-    const G = window.BREACH;
-    G.player.cam.yaw = 1.05;
-    G.player.yaw = 1.05;
-    const I = window.BREACH_INPUT, W = window.BREACH_WORLD;
-    const E = window.BREACH_EFFECTS;
-    const oldTracer = E.tracer;
-    const oldRandom = Math.random;
-    let shotDot = null;
-    E.tracer = function(origin, point, emphasized) {
-      const expected = G.rig.gunForward(new window.THREE.Vector3()).normalize();
-      const actual = point.clone().sub(origin).normalize();
-      shotDot = actual.dot(expected);
-      return oldTracer.call(this, origin, point, emphasized);
-    };
-    Math.random = () => 0;
-    I._mouseFire = true;
-    I.firePressed = true;
-    await new Promise((resolve) => setTimeout(resolve, 85));
-    I._mouseFire = false;
-    await new Promise((resolve) => setTimeout(resolve, 34));
-    Math.random = oldRandom;
-    E.tracer = oldTracer;
-
-    G.rig.root.updateWorldMatrix(true, true);
-    const muzzle = G.rig.muzzleWorld(new window.THREE.Vector3()).clone();
-    const barrelDir = G.rig.gunForward(new window.THREE.Vector3()).normalize();
-    const contact = W.raycastHit(muzzle, barrelDir, G.weapons.def.range);
-    const t = contact?.t ?? W.raycast(muzzle, barrelDir, G.weapons.def.range) ??
-      G.weapons.def.range;
-    const point = muzzle.clone().addScaledVector(barrelDir, t);
-    window.BREACH_CAM.updateMatrixWorld(true);
-    const projected = point.project(window.BREACH_CAM);
-    const expected = {
-      x: (projected.x * 0.5 + 0.5) * innerWidth,
-      y: (-projected.y * 0.5 + 0.5) * innerHeight,
-    };
-    const dot = document.getElementById('barrel-dot');
-    const rect = dot.getBoundingClientRect();
-    const actual = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-    return {
-      visible: dot.classList.contains('on'),
-      shotDot,
-      expected,
-      actual,
-      errorPx: Math.hypot(expected.x - actual.x, expected.y - actual.y),
-      centerOffset: Math.hypot(expected.x - innerWidth * 0.5,
-        expected.y - innerHeight * 0.5),
-      hitDistance: t,
-    };
-  });
-
-  if (pageErrors.length) throw new Error(`errores de página: ${pageErrors.join(' | ')}`);
-  if (!result.visible) throw new Error('la retícula no estaba visible');
-  // Exigir paralaje evita que una retícula central pase por casualidad: esta
-  // escena debe demostrar que la marca realmente puede abandonar el centro.
-  if (result.centerOffset < 4) {
-    console.error('RETICLE PARALLAX DEBUG', JSON.stringify(result));
-    throw new Error('el escenario no produjo paralaje para validar hip fire');
-  }
-  if (result.errorPx > 0.75 || result.shotDot < 0.9999) {
-    console.error('RETICLE DEBUG', JSON.stringify(result));
-    throw new Error('hip fire separó retícula, barrel y trayectoria física');
-  }
+  await page.waitForFunction(() => window.BREACH?.player && window.BREACH_FP?.live && (window.BREACH.simClock ?? 0) > 0.5, null, { timeout: 600000, polling: 'raf' });
+  // espera en tiempo de juego dentro de la página
+  await page.evaluate(() => { window.__gwait = (ms) => new Promise((r) => { const G = window.BREACH, end = G.simClock + ms / 1000; const f = () => (G.simClock >= end ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); }); });
 
   // ADS físico: una pared situada solo delante del muzzle no mueve ni cambia
   // la cruz, pero sí debe ganar frente al fondo visible cuando se dispara.
@@ -115,11 +46,11 @@ try {
     G.player.cam.yaw = 0.35;
     G.player.yaw = 0.35;
     I._mouseAim = true;
-    await new Promise((resolve) => setTimeout(resolve, 360));
+    await window.__gwait(360);
 
     G.rig.root.updateWorldMatrix(true, true);
-    const muzzle = G.rig.muzzleWorld(new window.THREE.Vector3()).clone();
-    const ray = G.player.cam.aimRay();
+    const muzzle = (window.BREACH_VM?.muzzleWorld?.(new window.THREE.Vector3()) ?? G.rig.muzzleWorld(new window.THREE.Vector3())).clone();
+    const ray = window.BREACH_FP.aimRay();
     const cameraOrigin = ray.origin.clone();
     const oldRaycastHit = W.raycastHit.bind(W);
     const oldRaycast = W.raycast.bind(W);
@@ -134,16 +65,16 @@ try {
       return oldRaycastHit(origin, dir, maxDist);
     };
     W.raycast = () => null;
-    await new Promise((resolve) => setTimeout(resolve, 70));
+    await window.__gwait(70);
 
-    const ring = document.getElementById('crosshair');
+    const ring = document.getElementById('reticle');
     const rect = ring.getBoundingClientRect();
     const actual = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
     W.raycastHit = oldRaycastHit;
     W.raycast = oldRaycast;
     I._mouseAim = false;
     return {
-      visible: ring.classList.contains('aim'),
+      visible: ring.classList.contains('on'),
       blocked: ring.classList.contains('blocked'),
       actual,
       centerOffset: Math.hypot(actual.x - innerWidth * 0.5, actual.y - innerHeight * 0.5),
@@ -171,7 +102,7 @@ try {
     G.player.cam.pitch = -0.04;
     for (const d of G.dummies.list) d.alive = false;
     I._mouseAim = true;
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await window.__gwait(260);
     // esperar a que el lerp de la cámara ADS se ASIENTE: el stub de abajo
     // clasifica los rayos por cercanía a cameraOrigin (<0.12) y una cámara
     // aún en tránsito hace que el tiro real nazca lejos del punto capturado
@@ -180,13 +111,13 @@ try {
       // origen Y dirección: con solo el origen quieto, el pitch aún podía
       // asentarse y la cruz quedaba ~30 px fuera del punto capturado
       // (fallo intermitente ~1 de cada 5 corridas)
-      let last = G.player.cam.aimRay();
+      let last = window.BREACH_FP.aimRay();
       last = { origin: last.origin.clone(), dir: last.dir.clone() };
       // 3 FRAMES quietos seguidos (hasta 150 frames): en CI un frame dura
       // cientos de ms y muestras por setTimeout caían dentro del mismo frame
       for (let i = 0, still = 0; i < 150 && still < 3; i++) {
         await new Promise((resolve) => requestAnimationFrame(() => resolve()));
-        const now2 = G.player.cam.aimRay();
+        const now2 = window.BREACH_FP.aimRay();
         const quiet = now2.origin.distanceTo(last.origin) < 0.004 && now2.dir.angleTo(last.dir) < 0.0005;
         still = quiet ? still + 1 : 0;
         last = { origin: now2.origin.clone(), dir: now2.dir.clone() };
@@ -194,8 +125,8 @@ try {
     }
 
     G.rig.root.updateWorldMatrix(true, true);
-    const muzzle = G.rig.muzzleWorld(new window.THREE.Vector3()).clone();
-    const ray = G.player.cam.aimRay();
+    const muzzle = (window.BREACH_VM?.muzzleWorld?.(new window.THREE.Vector3()) ?? G.rig.muzzleWorld(new window.THREE.Vector3())).clone();
+    const ray = window.BREACH_FP.aimRay();
     const cameraOrigin = ray.origin.clone();
     const farCollider = { id: 'far' }, nearCollider = { id: 'near' };
     const oldRaycastHit = W.raycastHit.bind(W);
@@ -212,7 +143,7 @@ try {
         collider: fromCamera ? farCollider : nearCollider };
     };
     W.raycast = () => null;
-    await new Promise((resolve) => setTimeout(resolve, 80));
+    await window.__gwait(80);
 
     const guidePoint = cameraOrigin.clone().addScaledVector(ray.dir, 24);
     const projected = guidePoint.clone().project(window.BREACH_CAM);
@@ -246,7 +177,7 @@ try {
     I._mouseFire = true;
     I.firePressed = true;
     for (let i = 0; i < 20 && !fired; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 25));
+      await window.__gwait(25);
     }
     I._mouseFire = false;
     I._mouseAim = false;
@@ -295,12 +226,12 @@ try {
     const alive = G.dummies.list.map((d) => d.alive);
     for (const d of G.dummies.list) d.alive = false;
     I._mouseAim = true;
-    await new Promise((resolve) => setTimeout(resolve, 320));
+    await window.__gwait(320);
 
     let captured = null;
     const oldFire = R.fire.bind(R);
     R.fire = (origin, direction) => {
-      const ray = G.player.cam.aimRay();
+      const ray = window.BREACH_FP.aimRay();
       const hit = W.raycastHit(ray.origin, ray.dir, G.weapons.def.range);
       const point = ray.origin.clone().addScaledVector(ray.dir,
         hit?.t ?? G.weapons.def.range);
@@ -320,7 +251,7 @@ try {
     // el aim-over puede retener el click mientras el arma libra un borde:
     // mantener el gatillo hasta capturar el cohete (tope 500ms)
     for (let i = 0; i < 25 && !captured; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await window.__gwait(20);
     }
     I._mouseFire = false;
     I._mouseAim = false;
@@ -340,6 +271,9 @@ try {
     const G = window.BREACH, I = window.BREACH_INPUT;
     const weapons = ['pistol', 'smg', 'shotgun', 'bazooka', 'sniper'];
     const out = [];
+    // loadout de fábrica: las especiales de los pasos anteriores reemplazaron un hueco
+    // (drop-policy) y poner `cur` en un arma sin estado no es un estado del juego
+    G.weapons.reset();
     I._mouseAim = true;
     for (const weapon of weapons) {
       if ((weapon === 'bazooka' || weapon === 'sniper') && !G.weapons.hasWeapon(weapon)) {
@@ -348,12 +282,12 @@ try {
         G.weapons.cur = weapon;
       }
       G.weapons.swapT = 0;
-      await new Promise((resolve) => setTimeout(resolve, 220));
+      await window.__gwait(220);
       const scoped = weapon === 'sniper';
-      const el = document.getElementById(scoped ? 'scope-reticle' : 'crosshair');
+      const el = document.getElementById(scoped ? 'scope-reticle' : 'reticle');
       const points = [];
       for (let frame = 0; frame < 18; frame++) {
-        await new Promise((resolve) => setTimeout(resolve, 16));
+        await window.__gwait(16);
         const r = el.getBoundingClientRect();
         points.push({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
       }
@@ -364,7 +298,7 @@ try {
       out.push({ weapon, maxCenterError, maxDrift,
         visible: scoped
           ? document.getElementById('sniper-scope').classList.contains('on')
-          : el.classList.contains('aim') });
+          : el.classList.contains('on') });
     }
     I._mouseAim = false;
     return out;
@@ -376,146 +310,8 @@ try {
     throw new Error(`retícula inestable: ${unstable.map((v) => v.weapon).join(', ')}`);
   }
 
-  // Contrato visual de tercera persona: al apuntar, la cámara puede acercar y
-  // reducir FOV, pero su línea central nunca puede atravesar hombro, cabeza,
-  // brazos ni arma del jugador local. Este caso evita repetir una ADS
-  // técnicamente alineada pero visualmente inutilizable.
-  const adsVisibility = await page.evaluate(async () => {
-    const G = window.BREACH, I = window.BREACH_INPUT;
-    const weapons = ['pistol', 'smg', 'shotgun', 'bazooka', 'sniper'];
-    const out = [];
-    I._mouseAim = true;
-    G.player.state = 'idle';
-    G.player.cover = null;
-    G.player.cam.pitch = -0.04;
-    for (const weapon of weapons) {
-      if ((weapon === 'bazooka' || weapon === 'sniper') && !G.weapons.hasWeapon(weapon)) {
-        G.weapons.giveSpecial(weapon);
-      } else G.weapons.cur = weapon;
-      G.weapons.swapT = 0;
-      await new Promise((resolve) => setTimeout(resolve, 240));
-      G.rig.root.updateWorldMatrix(true, true);
-      const ray = G.player.cam.aimRay();
-      const caster = new window.THREE.Raycaster(ray.origin, ray.dir, 0.025, 2.8);
-      const hits = caster.intersectObject(G.rig.root, true).filter((hit) => {
-        const material = hit.object.material;
-        if (!hit.object.visible || material?.visible === false || material?.opacity === 0) return false;
-        let node = hit.object;
-        while (node) {
-          if (node === G.rig.nameTag) return false;
-          node = node.parent;
-        }
-        return true;
-      });
-      const bounds = { left: Infinity, right: -Infinity, top: Infinity, bottom: -Infinity };
-      const corner = new window.THREE.Vector3();
-      G.rig.root.traverse((obj) => {
-        if (!obj.isMesh || !obj.geometry) return;
-        let node = obj;
-        while (node) {
-          if (!node.visible || node === G.rig.nameTag) return;
-          node = node.parent;
-        }
-        obj.geometry.computeBoundingBox();
-        const box = obj.geometry.boundingBox;
-        if (!box) return;
-        for (const x of [box.min.x, box.max.x]) {
-          for (const y of [box.min.y, box.max.y]) {
-            for (const z of [box.min.z, box.max.z]) {
-              corner.set(x, y, z).applyMatrix4(obj.matrixWorld).project(window.BREACH_CAM);
-              if (!Number.isFinite(corner.x) || !Number.isFinite(corner.y) ||
-                  corner.z < -1.1 || corner.z > 1.1) continue;
-              const sx = (corner.x * 0.5 + 0.5) * innerWidth;
-              const sy = (-corner.y * 0.5 + 0.5) * innerHeight;
-              bounds.left = Math.min(bounds.left, sx);
-              bounds.right = Math.max(bounds.right, sx);
-              bounds.top = Math.min(bounds.top, sy);
-              bounds.bottom = Math.max(bounds.bottom, sy);
-            }
-          }
-        }
-      });
-      out.push({
-        weapon,
-        blockers: hits.slice(0, 4).map((hit) => ({
-          name: hit.object.name || hit.object.type,
-          distance: hit.distance,
-        })),
-        fov: window.BREACH_CAM.fov,
-        bounds,
-        rightRatio: bounds.right / innerWidth,
-      });
-    }
-    I._mouseAim = false;
-    return out;
-  });
-  const obscured = adsVisibility.filter((item) => item.blockers.length > 0 ||
-    item.fov >= 50 || !Number.isFinite(item.rightRatio) || item.rightRatio > 0.46);
-  if (obscured.length) {
-    console.error('ADS VISIBILITY DEBUG', JSON.stringify(adsVisibility));
-    throw new Error(`ADS obstruido por el jugador: ${obscured.map((v) => v.weapon).join(', ')}`);
-  }
-  const maxAdsRightRatio = Math.max(...adsVisibility.map((item) => item.rightRatio));
-
-  const hipPhysical = await page.evaluate(async () => {
-    const G = window.BREACH, I = window.BREACH_INPUT;
-    const W = window.BREACH_WORLD;
-    const weapons = ['pistol', 'smg', 'shotgun', 'grenade', 'bazooka', 'sniper'];
-    const out = [];
-    I._mouseAim = false;
-    for (const weapon of weapons) {
-      if ((weapon === 'bazooka' || weapon === 'sniper') && !G.weapons.hasWeapon(weapon)) {
-        G.weapons.giveSpecial(weapon);
-      } else G.weapons.cur = weapon;
-      G.weapons.swapT = 0;
-      await new Promise((resolve) => setTimeout(resolve, 90));
-      const el = document.getElementById('barrel-dot');
-      const errors = [];
-      const centerOffsets = [];
-      for (let frame = 0; frame < 8; frame++) {
-        await new Promise((resolve) => setTimeout(resolve, 16));
-        const r = el.getBoundingClientRect();
-        const actual = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-        G.rig.root.updateWorldMatrix(true, true);
-        const muzzle = G.rig.muzzleWorld(new window.THREE.Vector3()).clone();
-        const dir = G.rig.gunForward(new window.THREE.Vector3()).normalize();
-        const range = G.weapons.def.range > 0 ? G.weapons.def.range : 60;
-        const contact = W.raycastHit(muzzle, dir, range);
-        const t = contact?.t ?? W.raycast(muzzle, dir, range) ?? range;
-        const projected = muzzle.clone().addScaledVector(dir, t).project(window.BREACH_CAM);
-        // La granada no tiene cañón: su lanzamiento sigue al centro de cámara
-        // (check-throw-flow) y la marca hip debe prometer exactamente eso.
-        const expected = G.weapons.def.thrown
-          ? { x: innerWidth / 2, y: innerHeight / 2 }
-          : { x: (projected.x * 0.5 + 0.5) * innerWidth, y: (-projected.y * 0.5 + 0.5) * innerHeight };
-        errors.push(Math.hypot(actual.x - expected.x, actual.y - expected.y));
-        centerOffsets.push(Math.hypot(expected.x - innerWidth * 0.5,
-          expected.y - innerHeight * 0.5));
-      }
-      out.push({
-        weapon,
-        visible: el.classList.contains('on'),
-        maxPhysicalError: Math.max(...errors),
-        minCenterOffset: Math.min(...centerOffsets),
-      });
-    }
-    return out;
-  });
-  const wrongHip = hipPhysical.filter((item) => !item.visible ||
-    item.maxPhysicalError > 1.25);
-  if (wrongHip.length) {
-    console.error('HIP RETICLE PHYSICAL DEBUG', JSON.stringify(hipPhysical));
-    throw new Error(`retícula hip no sigue barrel: ${wrongHip.map((v) => v.weapon).join(', ')}`);
-  }
-  // Con el pitch de este escenario, una pose hip realmente física no puede
-  // coincidir con el centro óptico. Esto detecta el error sutil de orientar el
-  // propio barrel a cámara y después declarar que la retícula "sigue barrel".
-  const centeredHip = hipPhysical.filter((item) => item.weapon !== 'grenade' && item.minCenterOffset < 4);
-  if (centeredHip.length) {
-    console.error('HIP RETICLE CENTERED DEBUG', JSON.stringify(hipPhysical));
-    throw new Error(`hip fire volvió a comportarse como ADS: ${centeredHip.map((v) => v.weapon).join(', ')}`);
-  }
-  console.log(`RETICLE OK · barrel ${result.errorPx.toFixed(2)} px · ADS/scope centrados con colisión física · silueta ${(maxAdsRightRatio * 100).toFixed(1)}% · bazooka ${rocketAim.dotExpected.toFixed(5)} · 6 armas físicas`);
+  if (pageErrors.length) throw new Error(`errores de página: ${pageErrors.join(' | ')}`);
+  console.log(`RETICLE OK · ADS/mira centrados con obstrucción solo en la boca · 5 armas estables · bazuca ${rocketAim.dotExpected.toFixed(5)}`);
 } finally {
   await browser?.close();
   server.kill();

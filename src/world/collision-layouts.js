@@ -93,6 +93,21 @@ export function rampHeight(layout, p, r = 0) {
 //    establo, fragua y la escalera exterior de cada galería.
 // La muralla vieja se abre en tres puertas por lado y las galerías en cinco.
 const FORT = { wallZ: 27, outerX: 40, outerZ: 36, gate: 2.2, sideGate: [14.2, 17.8] };
+export const FORT_SHRUB_BEDS = Object.freeze([
+  // Envolventes físicas de los arbustos. Su follaje se coloca sobre estas mismas huellas.
+  make(-19.1, -25.0, 1.2, 2.8, 0.64, 'low', { visual: false, cover: false }),
+  make(-20.1, -15, 1.0, 0.8, 0.6, 'low', { visual: false, cover: false }),
+  make(-19.65, 3.6, 1.2, 1.3, 0.54, 'low', { visual: false, cover: false }),
+  make(20.1, 2.7, 1.2, 1.2, 0.54, 'low', { visual: false, cover: false }),
+  make(19.95, -3.6, 1.1, 1.2, 0.54, 'low', { visual: false, cover: false }),
+  make(19.8, -18.3, 1.6, 2.1, 0.56, 'low', { visual: false, cover: false }),
+  make(20.2, -2, 1.3, 1.5, 0.62, 'low', { visual: false, cover: false }),
+  make(-20.05, 9.7, 1.1, 1.7, 0.46, 'low', { visual: false, cover: false }),
+  make(18.2, -10.6, 0.8, 0.8, 0.45, 'low', { visual: false, cover: false }),
+  make(-6.4, 25.45, 1.9, 1.9, 0.58, 'low', { visual: false, cover: false }),
+  make(-12.85, -25.5, 1.6, 1.7, 0.46, 'low', { visual: false, cover: false }),
+  make(-15.2, -15.8, 0.8, 0.8, 0.5, 'low', { visual: false, cover: false }),
+]);
 const fortalezaBoxes = [
   // muralla exterior
   make(0, -FORT.outerZ, FORT.outerX * 2 + 0.8, 0.8, HIGH, 'wall', { mirror: false }),
@@ -192,19 +207,7 @@ const fortalezaBoxes = [
   // existe en el lado este, sin espejo
   make(20.7, 0, 0.7, 4.7, 2.5, 'low',
     { visual: false, cover: false, mirror: false }),
-  // Non-cover shrub beds moved behind the new side entrances, never across them.
-  make(-19.1, -25.0, 1.2, 2.8, 0.64, 'low', { visual: false, cover: false }),
-  make(-20.1, -15, 1.0, 0.8, 0.6, 'low', { visual: false, cover: false }),
-  make(-19.65, 3.6, 1.2, 1.3, 0.54, 'low', { visual: false, cover: false }),
-  make(20.1, 2.7, 1.2, 1.2, 0.54, 'low', { visual: false, cover: false }),
-  make(19.95, -3.6, 1.1, 1.2, 0.54, 'low', { visual: false, cover: false }),
-  make(19.8, -18.3, 1.6, 2.1, 0.56, 'low', { visual: false, cover: false }),
-  make(20.2, -2, 1.3, 1.5, 0.62, 'low', { visual: false, cover: false }),
-  make(-20.05, 9.7, 1.1, 1.7, 0.46, 'low', { visual: false, cover: false }),
-  make(18.2, -10.6, 0.8, 0.8, 0.45, 'low', { visual: false, cover: false }),
-  make(-6.4, 25.45, 1.9, 1.9, 0.58, 'low', { visual: false, cover: false }),
-  make(-12.85, -25.5, 1.6, 1.7, 0.46, 'low', { visual: false, cover: false }),
-  make(-15.2, -15.8, 0.8, 0.8, 0.5, 'low', { visual: false, cover: false }),
+  ...FORT_SHRUB_BEDS,
 ];
 // ESCALERA EXTERIOR de cada galería: sube por la liza pegada al muro de la
 // galería y entra por la puerta alta. La del este arranca del lado rojo y la
@@ -276,7 +279,10 @@ const azoteasBoxes = [
   // casetas laterales tapa el spawn. Antes paraba en x -8 y dejaba una
   // rendija de 1,2 m: ni salida ni muro, y los bots se atascaban en ella.
   make(-1.85, -31.35, 14.7, 1.2, HIGH, 'hut'),
-  make(7.4, -27.9, 4.6, 1.1, MID, 'hut'),
+  // FPS (revisión a la altura de los ojos): 4.6 → 6.0 m hacia el este. Con
+  // la LOS del servidor (el vacío no tapa balas) el ojo de pie veía el
+  // bolsillo desde la azotea vecina rival en diagonal, rozando su punta.
+  make(8.1, -27.9, 6.0, 1.1, MID, 'hut'),
   make(-8.2, -27.7, 4, 2.2, LOW, 'ac'),
   make(-8.2, -27.7, 3.9, 2.1, 1.18, 'ac', { visual: false, cover: false }),
   make(11.5, -22.8, 3.8, 3.8, LOW, 'glass'),
@@ -325,7 +331,11 @@ const azoteasBoxes = [
   // Antes se veía un punto de aparición desde la cuarta parte de la mitad
   // rival; ahora el bolsillo queda tapado y conserva cuatro salidas.
   make(-9.8, -34.4, 1.2, 5.6, HIGH, 'hut'),
-  make(9.8, -34.4, 1.2, 5.6, HIGH, 'hut'),
+  // FPS: la derecha llega hasta la cara norte del escudo (z −30.75; antes
+  // −31.6). Por esa rendija el flanco este propio veía, por encima de los
+  // LOW, el puesto de aparición del otro extremo. La salida sigue: 3.7 m
+  // entre escudo y caseta, luego 2.3 m hacia el este.
+  make(9.8, -33.975, 1.2, 6.45, HIGH, 'hut'),
   // PRIMERA LÍNEA: el tramo entre el spawn y media cancha era campo abierto.
   make(16.6, -30.4, 4.2, 2.2, LOW, 'ac'),
   make(-17.4, -31.2, 1.2, 4.4, LOW, 'vent'),

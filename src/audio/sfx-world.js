@@ -110,13 +110,45 @@ function land(r, v) {
   sat(x, 1.5);
   return M(x, 0.9);
 }
-/** Deslizamiento a cobertura: tela + suelo rozando. */
+/**
+ * Deslizamiento en primera persona (0.5 s, velocidad que cae a ×0.42):
+ * caída del cuerpo al suelo, roce que pierde fuerza con la velocidad y un
+ * arrastre corto de frenada al final. Todo ruido con forma.
+ */
 function slideFoley(r) {
-  const d = 0.48;
+  const d = 0.62;
   const x = mono(d);
-  noise(x, r, { dur: d, type: 'bp', f: curve([[0, 1600], [1, 700]]), q: 0.8, amp: 0.7, env: (t) => win(t / d, 0.08, 0.55) });
-  noise(x, r, { dur: d, type: 'lp', f: 420, amp: 0.6, env: (t) => win(t / d, 0.1, 0.5) });
-  clicks(x, r, 0.02, d - 0.1, 120, 2600, 1.6, 0.22, 0.0008, (u) => 1 - u);
+  // arranque: cadera y bota golpean el suelo + tela
+  pulse(x, 0, 120 * r.vary(1, 0.1), 0.6);
+  noise(x, r, { dur: 0.08, color: 'brown', type: 'lp', f: 420, amp: 1.1, env: (t) => ad(t, 0.002, 0.025) });
+  noise(x, r, { dur: 0.1, color: 'pink', type: 'bp', f: 1100, q: 0.7, amp: 0.45, env: (t) => win(t / 0.1, 0.2, 0.6) });
+  // roce: la energía y el brillo bajan con la velocidad (1 → 0.42)
+  const sc = mono(0.5);
+  noise(sc, r, { dur: 0.5, type: 'bp', f: curve([[0, 1500], [1, 650]]), q: 0.8, amp: 0.75, env: (t) => win(t / 0.5, 0.08, 0.25) * (1 - 0.58 * (t / 0.5)) });
+  noise(sc, r, { dur: 0.5, color: 'brown', type: 'lp', f: 380, amp: 0.55, env: (t) => win(t / 0.5, 0.1, 0.3) * (1 - 0.5 * (t / 0.5)) });
+  clicks(sc, r, 0.02, 0.42, 140, 2400, 1.6, 0.2, 0.0008, (u) => 1 - 0.7 * u);
+  mixInto(x, sc, 0.02, 1);
+  // frenada: la bota muerde el suelo
+  knock(x, r, 0.47 + r.range(0, 0.03), { amp: 0.4, bright: 1300, body: 380, dec: 0.012, weight: 0.3, weightF: 110, metal: 0.04, mf: [500, 2000], mt: [0.002, 0.006] });
+  noise(x, r, { at: 0.47, dur: 0.12, type: 'bp', f: 900, q: 0.8, amp: 0.3, env: (t) => win(t / 0.12, 0.1, 0.6) });
+  lp(x, 6500);
+  dcBlock(x);
+  return M(x, 0.8);
+}
+// Ráfaga de la esquiva FPS: el silbido cae con la velocidad del cuerpo.
+// La tela y las dos pisadas entran por sus propios eventos de simulación.
+function dodgeAir(r) {
+  const d = 0.24, x = mono(d);
+  noise(x, r, { dur: d, type: 'bp', f: curve([[0, 750], [0.16, 2900], [1, 540]]),
+    q: 1.5, amp: 0.85, env: t => win(t / d, 0.12, 0.77) });
+  return M(x, 0.8);
+}
+// Un único sonido espacial: el contacto de la suela ancla el soplo y la tela.
+function dodgeStep(r, variant) {
+  const x = mono(0.26);
+  mixInto(x, stepConcrete(r)[0], 0, 0.83);
+  mixInto(x, dodgeAir(r)[0], 0.008, 0.57);
+  mixInto(x, cloth(r, variant)[0], 0.018, 0.43);
   return M(x, 0.8);
 }
 /** Espalda contra la cobertura: golpe sordo + equipo. */
@@ -141,16 +173,38 @@ function dive(r) {
   scrape(x, r, 0.24, 0.14, 1000, 800, 0.2, { q: 0.8, grain: 0.9 });
   return M(x, 0.85);
 }
-/** Trepar: manos que golpean el borde, roce y esfuerzo. */
+/**
+ * Trepar sobre una cobertura baja (0.42 s, TUNING.mantle.time): las dos
+ * manos golpean el borde, roce de tela y equipo contra el canto, aire y las
+ * botas que caen arriba al final del gesto.
+ */
 function mantle(r) {
-  const x = mono(0.55);
-  noise(x, r, { dur: 0.03, type: 'bp', f: 1500, q: 1, amp: 0.8, env: (t) => ed(t, 0.006) });
-  pulse(x, 0, 140, 0.4);
-  noise(x, r, { at: 0.08, dur: 0.22, type: 'bp', f: curve([[0, 700], [1, 1300]]), q: 1.2, amp: 0.45, env: (t) => win(t / 0.22, 0.2, 0.5) });
-  const br = mono(0.3);
-  vocal(br, r, { dur: 0.26, f0: () => 125, amp: (u) => win(u, 0.1, 0.6), formants: [[600, 4, 1], [1100, 5, 0.5]], breath: 0.9 });
-  mixInto(x, br, 0.05, 0.35);
+  const x = mono(0.62);
+  for (const at of [0, 0.045 + r.range(0, 0.02)]) {
+    noise(x, r, { at, dur: 0.02, type: 'bp', f: r.range(1300, 1800), q: 0.9, amp: 0.7, env: (t) => ed(t, 0.004) });
+    pulse(x, at, 150 * r.vary(1, 0.1), 0.35);
+  }
+  scrape(x, r, 0.09, 0.22, 800, 1300, 0.35, { q: 0.8, grain: 0.85 });
+  noise(x, r, { at: 0.08, dur: 0.24, color: 'pink', type: 'bp', f: 950, q: 0.7, amp: 0.3, env: (t) => win(t / 0.24, 0.25, 0.5) });
+  knock(x, r, 0.2, { amp: 0.25, bright: 1100, body: 320, dec: 0.01, weight: 0.2, weightF: 140, metal: 0.05, mf: [500, 2000], mt: [0.002, 0.008] });
+  // botas arriba
+  const at = 0.4 + r.range(0, 0.03);
+  pulse(x, at, 95 * r.vary(1, 0.1), 0.7);
+  noise(x, r, { at, dur: 0.12, color: 'brown', type: 'lp', f: 380, amp: 1.1, env: (t) => ad(t, 0.002, 0.03) });
+  noise(x, r, { at: at + 0.004, dur: 0.06, type: 'lp', f: 1400, amp: 0.45, env: (t) => ad(t, 0.002, 0.016) });
+  lp(x, 7000);
+  dcBlock(x);
   return M(x, 0.8);
+}
+/** Tela y equipo al agacharse, levantarse o inclinarse: susurro corto, sin golpe metálico. */
+function cloth(r, v) {
+  const d = r.range(0.12, 0.2);
+  const x = mono(d + 0.05);
+  noise(x, r, { dur: d, color: 'pink', type: 'bp', f: r.range(650, 1250), q: 0.7, amp: 0.6, env: (t) => win(t / d, 0.3, 0.55) });
+  scrape(x, r, 0.01, d * 0.7, 900, 1300, 0.18, { q: 0.8, grain: 0.9 });
+  if (v % 3 === 0) knock(x, r, d * 0.6, { amp: 0.3, bright: 1100, body: 300, dec: 0.009, weight: 0.2, weightF: 150, metal: 0.04, mf: [600, 2000], mt: [0.002, 0.006] });
+  lp(x, 5000);
+  return M(x, 0.6);
 }
 function whoosh(r) {
   const d = r.range(0.16, 0.22);
@@ -161,51 +215,80 @@ function whoosh(r) {
 
 /* ------------------------------------------------- feedback de combate */
 
+// Confirmaciones de impacto y de baja: percusión, nunca notas (el dueño ya
+// rechazó las "campanitas"). Antes: seno de 3.6 kHz (cuerpo), 4.8 kHz +
+// modos de 2.65 kHz (cabeza) y una quinta 1250/1875 Hz en triangular (baja).
+// Ahora se distinguen por golpe, brillo y ritmo, no por altura:
+//   cuerpo  — palmada seca y acolchada (~2 kHz), 50 ms;
+//   cabeza  — doble chasquido brillante (~4–6 kHz) con racimo metálico de
+//             pocos ms (el casco), 70 ms;
+//   baja    — golpe grave de peso + chasquido, 200 ms (cabeza: con el doble
+//             chasquido encima).
 function hitTick(r) {
-  const x = mono(0.06);
-  tone(x, { dur: 0.05, f: 3600 * r.vary(1, 0.07), amp: 0.7, env: (t) => ad(t, 0.0004, 0.007) });
-  noise(x, r, { dur: 0.004, type: 'hp', f: 5000, amp: 0.4, env: (t) => ed(t, 0.0006) });
-  return [x];
+  const x = mono(0.07);
+  noise(x, r, { dur: 0.012, type: 'bp', f: r.range(1900, 2500), q: 0.9, amp: 1, env: (t) => ad(t, 0.0004, 0.0035) });
+  noise(x, r, { dur: 0.04, color: 'pink', type: 'bp', f: 950, q: 0.8, amp: 0.55, env: (t) => ad(t, 0.0005, 0.008) });
+  pulse(x, 0, 170 * r.vary(1, 0.08), 0.08);
+  lp(x, 9000);
+  return M(x, 0.85);
 }
-// cabeza: más agudo y con un "tink" metálico corto: se distingue sin mirar
+function headTicks(x, r, at, amp) {
+  for (const [dt, a] of [[0, 1], [0.011 + r.range(0, 0.002), 0.75]]) {
+    noise(x, r, { at: at + dt, dur: 0.006, type: 'hp', f: 3200, amp: amp * a, env: (t) => ed(t, 0.0009) });
+    noise(x, r, { at: at + dt, dur: 0.02, type: 'bp', f: r.range(4600, 5800), q: 1.1, amp: amp * a * 0.6, env: (t) => ed(t, 0.0028) });
+  }
+  // el casco: racimo metálico inarmónico de 1.5–5 ms (no una campana)
+  metal(x, r, at + 0.001, { n: 14, f0: 2600, f1: 9500, t0: 0.0015, t1: 0.005, amp: amp * 0.55 });
+}
 function hitHead(r) {
-  const x = mono(0.16);
-  tone(x, { dur: 0.05, f: 4800 * r.vary(1, 0.04), amp: 0.6, env: (t) => ad(t, 0.0004, 0.006) });
-  modes(x, 0.002, [[2650 * r.vary(1, 0.03), 0.035, 0.4], [6900, 0.018, 0.15]], 1, r);
-  noise(x, r, { dur: 0.004, type: 'hp', f: 6000, amp: 0.4, env: (t) => ed(t, 0.0006) });
-  return M(x, 0.8);
+  const x = mono(0.09);
+  headTicks(x, r, 0, 1);
+  pulse(x, 0, 220, 0.18);
+  lp(x, 11000);
+  return M(x, 0.85);
 }
 function killConfirm(r, head) {
-  const x = mono(head ? 0.6 : 0.42);
-  tone(x, { dur: 0.08, f: 1250, wave: 'tri', amp: 0.6, env: (t) => ad(t, 0.001, 0.03) });
-  tone(x, { at: 0.055, dur: 0.3, f: 1875, wave: 'tri', amp: 0.6, env: (t) => ad(t, 0.001, 0.07) });
-  tone(x, { at: 0.055, dur: 0.3, f: 3750, amp: 0.15, env: (t) => ad(t, 0.001, 0.05) });
-  tone(x, { dur: 0.06, f: curve([[0, 260], [1, 140]]), amp: 0.5, env: (t) => ad(t, 0.001, 0.02) });
-  noise(x, r, { dur: 0.005, type: 'hp', f: 4000, amp: 0.2, env: (t) => ed(t, 0.001) });
-  if (head) modes(x, 0.13, [[2812, 0.12, 0.35], [5625, 0.06, 0.12]], 1, r);
-  lp(x, 7000);
-  return W(x, 0.8, 0.3);
-}
-// daño recibido: el golpe al cuerpo de Crashterra sin la alarma del traje
-function hurt(r) {
-  const x = mono(0.3);
-  const k = r.vary(1, 0.16);
-  tone(x, { dur: 0.15, f: curve([[0, 130 * k], [1, 60 * k]]), amp: 1, env: (t) => ad(t, 0.001, 0.035) });
-  noise(x, r, { dur: 0.1, type: 'bp', f: 900, q: 0.8, amp: 0.8, env: (t) => ad(t, 0.0008, 0.02) });
-  clicks(x, r, 0, 0.04, 600, 2000, 1.5, 0.4, 0.001, (u) => 1 - u);
-  sat(x, 2);
+  const x = mono(head ? 0.26 : 0.24);
+  const k = r.vary(1, 0.06);
+  // peso: presión + ruido grave; un segundo golpe más blando (el cuerpo que cae)
+  pulse(x, 0, 95 * k, 1);
+  noise(x, r, { dur: 0.12, color: 'brown', type: 'lp', f: 320, amp: 1.5, env: (t) => ad(t, 0.0015, 0.03) });
+  noise(x, r, { at: 0.004, dur: 0.02, type: 'bp', f: 1700, q: 0.9, amp: 0.55, env: (t) => ed(t, 0.004) });
+  pulse(x, 0.075, 70 * k, 0.5);
+  noise(x, r, { at: 0.075, dur: 0.12, color: 'brown', type: 'lp', f: 260, amp: 0.8, env: (t) => ad(t, 0.002, 0.035) });
+  if (head) headTicks(x, r, 0, 0.8);
+  sat(x, 1.6);
+  lp(x, head ? 11000 : 6000);
+  dcBlock(x);
   return M(x, 0.9);
 }
-function heartbeat1(x, at, amp, k = 1) {
-  tone(x, { at, dur: 0.2, f: curve([[0, 70 * k], [1, 42 * k]]), amp, env: (t) => ad(t, 0.006, 0.045) });
+// daño recibido: golpe al cuerpo + desgarro de banda media. Sin el seno que
+// barría (130→60 Hz). La dirección la da el paneo y, si viene de atrás, el
+// corte de agudos que aplica el facade (delante = más brillante).
+function hurt(r) {
+  const x = mono(0.2);
+  const k = r.vary(1, 0.14);
+  pulse(x, 0, 110 * k, 0.9);
+  noise(x, r, { dur: 0.12, color: 'brown', type: 'lp', f: 380 * k, amp: 1.3, env: (t) => ad(t, 0.001, 0.028) });
+  noise(x, r, { at: 0.002, dur: 0.06, type: 'bp', f: r.range(1300, 1900), q: 0.8, amp: 0.6, env: (t) => ad(t, 0.0008, 0.012) });
+  clicks(x, r, 0, 0.035, 600, 2000, 1.5, 0.3, 0.001, (u) => 1 - u);
+  sat(x, 1.8);
+  lp(x, 7000);
+  dcBlock(x);
+  return M(x, 0.9);
+}
+// latido: dos golpes de presión grave (lub-dub), sin seno barrido
+function heartbeat1(x, r, at, amp, k = 1) {
+  pulse(x, at, 65 * k, amp);
+  noise(x, r, { at, dur: 0.14, color: 'brown', type: 'lp', f: 170 * k, amp: amp * 1.4, env: (t) => ad(t, 0.006, 0.04) });
 }
 function heartbeat(r) {
-  const x = mono(0.6);
+  const x = mono(0.55);
   const k = r.vary(1, 0.1);
-  heartbeat1(x, 0, 1, k);
-  heartbeat1(x, r.range(0.24, 0.29), 0.7, k * 0.94);
-  noise(x, r, { dur: 0.05, type: 'lp', f: 200, amp: 0.3, env: (t) => ed(t, 0.01) });
-  lp(x, 300);
+  heartbeat1(x, r, 0, 1, k);
+  heartbeat1(x, r, r.range(0.24, 0.29), 0.7, k * 0.94);
+  lp(x, 380);
+  dcBlock(x, 12);
   return M(x, 0.9);
 }
 function death(r) {
@@ -215,7 +298,7 @@ function death(r) {
   noise(x, r, { dur: 0.2, type: 'bp', f: 700, q: 0.8, amp: 0.8, env: (t) => ed(t, 0.04) });
   // el mundo se apaga: un tono que cae + latidos finales
   tone(x, { at: 0.12, dur: 1.5, f: curve([[0, 420], [1, 55]]), wave: 'tri', amp: 0.18, env: (t) => win(t / 1.5, 0.05, 0.6) });
-  for (const at of [0.7, 1.0, 1.5]) heartbeat1(x, at, 0.5);
+  for (const at of [0.7, 1.0, 1.5]) heartbeat1(x, r, at, 0.5);
   sat(x, 1.4);
   return trimTail(normalize(withRoom(x, 0.15, 1, 0.5, 1, 0.3), 0.9));
 }
@@ -487,24 +570,32 @@ export function addWorldSounds(b) {
   b.add('step_concrete', { ...S, gen: stepConcrete, variants: 8, db: -13 });
   b.add('step_metal', { ...S, gen: stepMetal, variants: 6, db: -14 });
   b.add('step_earth', { ...S, gen: stepEarth, variants: 8, db: -14 });
+  b.add('dodge_step', { ...S, gen: dodgeStep, variants: 3, db: -13 });
   b.add('step_scuff', { ...S, gen: scuff, variants: 4, db: -18 });
   b.add('gear', { ...S, gen: gear, variants: 6, db: -24, group: 'gear', max: 3 });
   const P = { bus: 'world', prio: 80, cat: 'foley', order: 2, pitchVar: 0.05, dbVar: 1.5, max: 2, gap: 0.05 };
   b.add('jump', { ...P, gen: jump, variants: 3, db: -15 });
   b.add('land', { ...P, gen: land, variants: 4, db: -5 });
-  b.add('slide', { ...P, gen: slideFoley, variants: 3, db: -14 });
+  b.add('slide', { ...P, gen: slideFoley, variants: 3, db: -13 });
   b.add('cover_hit', { ...P, gen: coverHit, variants: 3, db: -5 });
+  b.add('dodge_air', { ...P, gen: dodgeAir, variants: 3, db: -12 });
   b.add('dive', { ...P, gen: dive, variants: 3, db: -10 });
-  b.add('mantle', { ...P, gen: mantle, variants: 2, db: -13 });
+  b.add('mantle', { ...P, gen: mantle, variants: 3, db: -12 });
+  // agacharse / levantarse / inclinarse (primera persona)
+  b.add('cloth', { ...P, gen: cloth, variants: 6, db: -22, max: 2, gap: 0.08, group: 'cloth' });
   b.add('whoosh', { ...P, gen: whoosh, variants: 3, db: -15 });
   // feedback: bus ui, máxima prioridad, nunca robado por el mundo
   const H = { bus: 'ui', prio: 96, cat: 'feedback', order: 1, pitchVar: 0.02, dbVar: 0.5, max: 2 };
-  b.add('hit_tick', { ...H, gen: hitTick, variants: 3, db: -14, gap: 0.03 });
-  b.add('hit_head', { ...H, gen: hitHead, variants: 2, db: -14, gap: 0.03 });
-  b.add('kill_confirm', { ...H, gen: (r) => killConfirm(r, false), variants: 1, db: -9, gap: 0.05 });
-  b.add('kill_head', { ...H, gen: (r) => killConfirm(r, true), variants: 1, db: -9, gap: 0.05 });
-  b.add('hurt', { ...H, prio: 90, gen: hurt, variants: 4, db: -10, gap: 0.08, pitchVar: 0.05 });
-  b.add('heartbeat', { ...H, prio: 85, gen: heartbeat, variants: 2, db: -10, max: 1, gap: 0.2 });
+  // +14 dB respecto a tercera persona: en primera persona llegan sobre el
+  // cuerpo del propio disparo, a medio metro (y lo bajan un instante: hitDuck)
+  b.add('hit_tick', { ...H, gen: hitTick, variants: 3, db: 1, gap: 0.03 });
+  b.add('hit_head', { ...H, gen: hitHead, variants: 3, db: 1, gap: 0.03 });
+  b.add('kill_confirm', { ...H, gen: (r) => killConfirm(r, false), variants: 2, db: -9, gap: 0.05 });
+  b.add('kill_head', { ...H, gen: (r) => killConfirm(r, true), variants: 2, db: -9, gap: 0.05 });
+  // sin el seno barrido de antes la energía K-ponderada cae ~8 dB: el nivel
+  // se repone para que el golpe y el latido se sigan notando (−3 dB vs antes)
+  b.add('hurt', { ...H, prio: 90, gen: hurt, variants: 4, db: -5, gap: 0.08, pitchVar: 0.05 });
+  b.add('heartbeat', { ...H, prio: 85, gen: heartbeat, variants: 2, db: -6, max: 1, gap: 0.2 });
   b.add('death', { ...H, prio: 99, gen: death, variants: 1, db: -6, order: 3 });
   b.add('respawn', { ...H, gen: respawn, variants: 1, db: -17, order: 3 });
   b.add('prot_end', { ...H, gen: protEnd, variants: 1, db: -21, order: 3 });

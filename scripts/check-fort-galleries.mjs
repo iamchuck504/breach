@@ -25,7 +25,7 @@ const browser=await chromium.launch({executablePath:CHROME,headless:true});
 try{
  const page=await browser.newPage({viewport:{width:1280,height:720}}),errors=[];
  page.on('pageerror',e=>errors.push(e.message));
- await page.goto('http://127.0.0.1:5200/?nolock=1');
+ await page.goto((process.env.BASE || 'http://127.0.0.1:5200') + '/?nolock=1');
  const result=await page.evaluate(async()=>{
   const T=await import('/node_modules/three/build/three.module.js');
   const {preloadUrbanAssets}=await import('/src/world/urban-assets.js');await preloadUrbanAssets();
@@ -85,9 +85,12 @@ try{
     const found=world.findCover({x:side*22.35,z:0},{x:-side,z:0},1.1,.38,.45,3);
     if(!found||Math.abs(found.face.h-1.1)>.001||found.face.topY!==4.1)throw Error('Upper sill cover missing');
     const camera={yaw:side*Math.PI/2,pitch:0,flatForward:()=>({x:-side,z:0}),flatRight:()=>({x:0,z:side})};
-    const p=new Controller(world,camera);p.pos={...found.target};p.y=3;p._enterCover(found.face,found.target);
-    for(let i=0;i<90;i++)p.update(1/60,{moveVec:()=>({x:0,z:0}),aimHeld:i<45,sprintHeld:false},false);
-    covers.push({y:p.y,state:p.state,x:p.pos.x});
+    // PRUEBAS (corrida 6, FPS): sin cobertura pegada; agachado tras el alféizar
+    // (LOW a y=3) y asomándose al apuntar, sin perder la altura de la galería
+    const p=new Controller(world,camera);p.respawn({x:found.target.x,z:found.target.z,yaw:camera.yaw});p.y=3;
+    let peak=0;
+    for(let i=0;i<90;i++){p.update(1/60,{moveVec:()=>({x:0,z:0}),aimHeld:i<45,crouchHeld:true,sprintHeld:false,jumpPressed:false,crouchPressed:false,leanAxis:0},false);if(i<45)peak=Math.max(peak,p.peek);}
+    covers.push({y:p.y,state:p.state,x:p.pos.x,peak,peekAfter:p.peek});
   }
   const renderer=new T.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});
   renderer.setSize(1280,720);renderer.shadowMap.enabled=true;renderer.shadowMap.type=T.PCFSoftShadowMap;
@@ -117,6 +120,6 @@ try{
  assert(result.routes.every(r=>r.path.slice(0,-1).every(p=>p.z*r.end>=0)),'no detour to enemy spawn');
  assert(result.motion.every(r=>r.maxStep<.16&&Math.abs(r.y)<.01),'smooth ascent and return to ground');
  assert(result.botMotion.every(r=>r.maxJump<.05&&Math.abs(r.y)<.01),'bots must walk, not bounce up stairs');
- assert(result.covers.every(r=>r.state==='cover'&&Math.abs(r.y-3)<.01),'upper cover must retain deck elevation');
+ assert(result.covers.every(r=>r.state==='crouch'&&Math.abs(r.y-3)<.01&&r.peak>.9&&r.peekAfter<.05),'upper sill: crouch keeps deck elevation, peeks while aiming and drops after: '+JSON.stringify(result.covers));
  assert.deepEqual(errors,[]);
 }finally{await browser.close();}

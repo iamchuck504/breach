@@ -1,5 +1,8 @@
 // Regresiones de cámara/cuerpo/disparo sin navegador. Ataca giros de 180°,
 // alternancia rápida y el desfase de un frame que antes tenía aimRay().
+// PRUEBAS (corrida 6, FPS): sin cobertura pegada ni blindfire; el cuerpo sigue
+// a la vista a TUNING.fp.yawLockDeg (1440°/s). Se retiró "ADS -> blindfire en
+// el mismo frame" (no hay blindfire). Ver run6/pruebas/tabla.md.
 import * as THREE from 'three';
 import { ShoulderCamera } from '../src/core/camera.js';
 import { Controller } from '../src/player/controller.js';
@@ -27,16 +30,12 @@ const camera3d = new THREE.PerspectiveCamera(57, 16 / 9, 0.1, 100);
 const camera = new ShoulderCamera(camera3d, world);
 const player = new Controller(world, camera);
 const input = {
-  aimHeld: false, sprintHeld: false, jumpPressed: false, evadePressed: false,
+  aimHeld: false, sprintHeld: false, jumpPressed: false, crouchHeld: false,
   moveVec() { return { x: 0, z: 0 }; },
 };
 
-function putInLowCover() {
+function putReady() {
   player.respawn({ x: 0, z: 0.38, yaw: 0 });
-  player.cover = {
-    a: { x: -3, z: 0 }, b: { x: 3, z: 0 }, n: { x: 0, z: 1 }, h: 1.1,
-  };
-  player.state = 'cover';
   player.stateT = 0.5;
 }
 
@@ -48,17 +47,16 @@ const expected = new THREE.Vector3(-Math.cos(0.22), Math.sin(0.22), 0).normalize
 check(ray.dot(expected) > 0.999999,
   `aimRay conserva orientación vieja (dot=${ray.dot(expected)})`);
 
-// Un 180° en blindfire no puede invertir el cuerpo en un frame.
-putInLowCover();
+// Un 180° disparando no puede invertir el cuerpo en un frame.
+putReady();
 camera.yaw = Math.PI;
 const before = player.yaw;
 player.update(DT, input, true);
 const firstStep = Math.abs(delta(player.yaw, before));
-// En cover el giro de disparo corre al doble (82f7a60, controller: dt*2);
-// sigue acotado por frame: un 180° nunca se resuelve en un solo paso.
-const blindMax = TUNING.combat.bodyTurnBlindDeg * Math.PI / 180 * DT * 2;
-check(firstStep <= blindMax + 1e-8,
-  `blindfire giró ${firstStep * 180 / Math.PI}° en un frame`);
+// el cuerpo sigue a la vista con un giro acotado por cuadro
+const turnMax = TUNING.fp.yawLockDeg * Math.PI / 180 * DT;
+check(firstStep <= turnMax + 1e-8,
+  `el cuerpo giró ${firstStep * 180 / Math.PI}° en un frame`);
 check(!player.fireAligned(), '180° quedó habilitado para disparar de inmediato');
 
 // El click/held queda disponible apenas cuerpo y arma entran en el margen.
@@ -67,47 +65,39 @@ while (!player.fireAligned() && frames < 120) {
   player.update(DT, input, true);
   frames++;
 }
-check(player.fireAligned(), 'blindfire nunca recuperó alineación');
-check(frames >= 10 && frames <= 30,
+check(player.fireAligned(), 'el disparo nunca recuperó alineación');
+// progresivo (no en el primer cuadro) y ágil (lo que tarda el giro acotado + margen)
+const maxFrames = Math.ceil(Math.PI / turnMax) + 3;
+check(frames >= 2 && frames <= maxFrames,
   `alineación de 180° tardó ${frames} frames (debe ser progresiva y ágil)`);
 check(Math.abs(player.animParams().aimYawErr) <=
   TUNING.combat.visualAimMaxDeg * Math.PI / 180 + 1e-8,
   'el arma excedió su compensación visual máxima');
 
 // Alternar izquierda/derecha agresivamente nunca excede el límite angular.
-putInLowCover();
+putReady();
 for (let i = 0; i < 90; i++) {
   camera.yaw = i % 2 ? Math.PI * 0.9 : -Math.PI * 0.9;
   const y0 = player.yaw;
   player.update(DT, input, true);
   const step = Math.abs(delta(player.yaw, y0));
-  check(step <= blindMax + 1e-8, `alternancia frame ${i}: salto de ${step}`);
+  check(step <= turnMax + 1e-8, `alternancia frame ${i}: salto de ${step}`);
 }
 
 // ADS usa el mismo contrato de alineación y una velocidad propia, sin snap.
-putInLowCover();
+putReady();
 camera.yaw = Math.PI;
 input.aimHeld = true;
 const adsBefore = player.yaw;
 player.update(DT, input, true);
 const adsStep = Math.abs(delta(player.yaw, adsBefore));
-const adsMax = TUNING.combat.bodyTurnAimDeg * Math.PI / 180 * DT * 2; // cover: mismo dt*2
+const adsMax = turnMax; // FPS: la misma cota con o sin ADS
 check(adsStep <= adsMax + 1e-8, `ADS hizo snap de ${adsStep}`);
 check(!player.fireAligned(), 'ADS de 180° ignoró la coherencia cuerpo/cámara');
 
-// Mantener fuego al soltar ADS debe activar blindfire en el mismo frame.
-camera.yaw = player.yaw;
-input.aimHeld = true;
-player.update(DT, input, true);
-check(player.aim, 'ADS no se activó en cover bajo');
-input.aimHeld = false;
-player.update(DT, input, true);
-check(!player.aim && player.firingBlind > 0.69,
-  'ADS -> blindfire heredó la orientación/pose del frame anterior');
-
-// Un único click de escopeta a 180° debe sobrevivir hasta que blindfire se
+// Un único click de escopeta a 180° debe sobrevivir hasta que el cuerpo se
 // alinee; antes el buffer de 0.30 s expiraba apenas un frame demasiado pronto.
-putInLowCover();
+putReady();
 camera.yaw = Math.PI;
 input.aimHeld = false;
 const weapons = new Weapons();

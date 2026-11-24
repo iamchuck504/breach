@@ -10,9 +10,12 @@ import { clearClip } from './lib-clip.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
 import { CHROME } from './lib-chrome.mjs';
+import { actionKeys, freePort } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
-  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: '8791' }, stdio: 'ignore',
+  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: String(FREE_PORT) }, stdio: 'ignore',
 });
 await new Promise((r) => setTimeout(r, 900));
 
@@ -20,7 +23,7 @@ const browser = await chromium.launch({ executablePath: CHROME, headless: true }
 const page = await browser.newPage();
 let pageErrors = 0;
 page.on('pageerror', (e) => { pageErrors++; console.log('PAGEERROR:', e.message); });
-await page.goto('http://localhost:8791/?nolock=1', { waitUntil: 'networkidle' });
+await page.goto(`http://localhost:${FREE_PORT}/?nolock=1`, { waitUntil: 'networkidle' });
 await page.evaluate(() => { window.BREACH.mapChoice = 'fortaleza'; });
 await page.evaluate(() => document.getElementById('btn-practice').click());
 await page.waitForTimeout(1500);
@@ -187,9 +190,10 @@ const spot = await page.evaluate(() => {
   return { wep: S.active.wep };
 });
 check('pedestal especial activo (sniper)', spot?.wep === 'sniper', JSON.stringify(spot));
-await page.keyboard.down('Space');
+const { pickup } = await actionKeys(page, 'pickup');
+await page.keyboard.down(pickup);
 await page.waitForTimeout(1100);
-await page.keyboard.up('Space');
+await page.keyboard.up(pickup);
 s = await page.evaluate(() => window.__state());
 check('sniper tomado reemplaza primaria', s.slots.includes('sniper'), s.slots.join(','));
 check('sniper queda en mano', s.cur === 'sniper', `cur=${s.cur}`);

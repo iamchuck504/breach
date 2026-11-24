@@ -5,15 +5,19 @@
 //     un bot se valida contra su `w` replicado, una recogida solo vale para su
 //     arma, la bazooka de bot respeta cargador y recarga, y un frag rechazado
 //     no consume horario.
+import { withSamples, nextN } from './lib-fps-sample.mjs';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import { TUNING } from '../src/config/tuning.js';
 import { MAP_RUNTIME } from '../src/game/lobby-rules.js';
+import { freePort } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const port = 8843;
+const port = FREE_PORT;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
   cwd: root, stdio: ['ignore', 'pipe', 'pipe'],
@@ -26,14 +30,16 @@ const check = (name, ok, extra = '') => { console.log(`${ok ? 'OK ' : 'FAIL'} ${
 
 const history = [];
 let ws;
-const send = (m) => ws.send(JSON.stringify(m));
+// muestra `fs` obligatoria (ronda 2): desde el último estado propio
+const sendS = withSamples((_p, m) => ws.send(JSON.stringify(m)));
+const send = (m) => sendS('host', m);
 const count = (pred) => history.filter(pred).length;
 try {
   for (let i = 0; i < 80 && !log.includes('BREACH server'); i++) await wait(50);
   ws = new WebSocket(`ws://127.0.0.1:${port}`);
   ws.on('message', (raw) => { try { history.push(JSON.parse(raw)); } catch { /* */ } });
   await new Promise((r, j) => { ws.once('open', r); ws.once('error', j); });
-  send({ t: 'join', action: 'create', name: 'HOST', v: 0 });
+  send({ t: 'join', action: 'create', name: 'HOST', v: 0, hp: 2, fps: 1 });
   await wait(200);
   const me = history.find((m) => m.t === 'welcome');
   send({ t: 'lobbyBotAdd', team: me.team === 'red' ? 'blue' : 'red' });
@@ -117,14 +123,18 @@ try {
   const state = (x = px, z = pz) => send({ t: 's', x, y: 0, z, yaw: 0, st: 'idle', aim: 0, p: 0, w, am: 50, ar: 150, sp: 0 });
   state(); await wait(300);
   // (d) primer lanzamiento de la vida con OTRA arma equipada → rechazado
-  send({ t: 'nade', cid: 'n:first', o: [px, 1.4, pz], v: [0, 3, -8] }); await wait(200);
+  // salida de un humano FPS: ojo + viewmodel (hit-pose.js launchWorld)
+  const { launchWorld } = await import('../src/combat/hit-pose.js');
+  const L = (x, z, y = 0) => launchWorld({ st: 'idle' }, x, y, z, 0).launch.map((v) => +v.toFixed(3));
+  send({ t: 'nade', cid: 'n:first', o: L(px, pz), v: [0, 3, -8] }); await wait(200);
   check('humo como primera acción con la SMG equipada → rechazado', !!history.find((m) => m.t === 'nadeReject' && m.cid === 'n:first'));
   const myFires = () => count((m) => m.t === 'fire' && m.id === me.id);
   let f0 = myFires();
-  send({ t: 'fire', w: 'smg', o: [px, 1.1, pz], p: [px, 1.1, pz - 10], d: [] }); await wait(150);
+  // FPS: el tiro sale del ojo (antes 1.1 m)
+  send({ t: 'fire', w: 'smg', o: [px, 1.6, +(pz - 0.08).toFixed(3)], p: [px, 1.1, pz - 10], d: [] }); await wait(150); // ojo exacto (yaw 0)
   check('jugador: SMG aceptada', myFires() === f0 + 1);
   w = 'shotgun'; state(); await wait(300);
-  const nade = (cid) => send({ t: 'nade', cid, o: [px, 1.4, pz], v: [0, 3, -8] });
+  const nade = (cid) => send({ t: 'nade', cid, o: L(px, pz), v: [0, 3, -8] });
   nade('n:wrong'); await wait(200);
   check('humo con el instante de cambio de la escopeta → rechazado', !!history.find((m) => m.t === 'nadeReject' && m.cid === 'n:wrong'));
   w = 'grenade'; state(); await wait(300);
@@ -148,7 +158,7 @@ try {
     send({ t: 'protoFire', kind: 'frag', o: [pick.x + 9, 1, pick.z], d: [0, 0, -1] }); // origen ilegal
     await wait(200);
     check('frag con origen ilegal: rechazado, sin gastar', inv() === before, `${before}→${inv()}`);
-    send({ t: 'protoFire', kind: 'frag', o: [pick.x, (pick.y || 0) + 1.2, pick.z], d: [0, 0, -1] });
+    send({ t: 'protoFire', kind: 'frag', o: L(pick.x, pick.z, pick.y || 0), d: [0, 0, -1] });
     await wait(250);
     check('frag válido justo después del rechazado → aceptado', inv() === before - 1, `${before}→${inv()}`);
   }

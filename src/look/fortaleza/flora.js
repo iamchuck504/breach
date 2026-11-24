@@ -22,8 +22,9 @@ const K_STALK = 5;  // faldón del trigal: rayas verticales de cañas
 
 // Acumulador de geometría: arrays planos, una BufferGeometry al final.
 class Batch {
-  constructor() { this.p = []; this.n = []; this.c = []; this.k = []; this.i = []; this.count = 0; }
+  constructor() { this.p = []; this.n = []; this.c = []; this.k = []; this.i = []; this.count = 0; this.maxSway = 0; }
   v(x, y, z, nx, ny, nz, col, w = 0, ph = 0, kind = K_FREE) {
+    this.maxSway = Math.max(this.maxSway, w);
     const l = Math.hypot(nx, ny, nz) || 1;
     this.p.push(x, y, z); this.n.push(nx / l, ny / l, nz / l);
     this.c.push(col.r, col.g, col.b); this.k.push(w, ph, kind);
@@ -39,6 +40,8 @@ class Batch {
     g.setAttribute('aLk', new THREE.Float32BufferAttribute(this.k, 3));
     g.setIndex(this.count > 65535 ? new THREE.Uint32BufferAttribute(this.i, 1) : new THREE.Uint16BufferAttribute(this.i, 1));
     g.computeBoundingSphere();
+    // lkWind alcanza menos de 1,6 veces el peso con la racha máxima.
+    g.boundingSphere.radius += 1.6 * this.maxSway;
     return g;
   }
 }
@@ -60,6 +63,8 @@ const fbm = (x, z, s) => 0.55 * vnoise(x, z, s) + 0.3 * vnoise(x * 2.1 + 5.3, z 
 
 export function build(ctx) {
   const { THREE, world, palette: P, budget } = ctx;
+  // También en la primera carga, antes del primer render de Three.
+  world.mapGroup.updateWorldMatrix(true, true);
   const D = budget.detail;
   // Q: densidad de lo pequeño y numeroso, cae más rápido que D (en 'off'
   // ronda 0.13): la hierba y las hojas son lo primero que sobra en un equipo lento
@@ -198,6 +203,7 @@ export function build(ctx) {
   // muros de 6 m de las galerías y los pies de escalera.) Las aristas internas
   // de un muro hecho de varias cajas se descartan al mirar si delante hay otro
   // collider.
+  const solids = world.colliders.filter(c => !c.moveOnly);
   const edges = [];
   for (const c of world.colliders) {
     if ((c.minY ?? 0) > 0.05 || c.moveOnly) continue;
@@ -221,21 +227,35 @@ export function build(ctx) {
     const MAXH = 0.27;
     const fieldFlowers = [fWhite, fYellow, fWhite, fPurple, fYellow];
     const plantAt = (x, z, lush) => {
+      // Cabe la planta entera, incluidas las flores laterales. Desplazarla el
+      // mínimo hacia suelo libre conserva la distribución sembrada del muro.
+      let plants = field;
+      const margin = lush ? 0.21 : 0.14;
+      const near = solids.filter(c => (c.minY ?? 0) < MAXH && x > c.minx-margin && x < c.maxx+margin &&
+        z > c.minz-margin && z < c.maxz+margin);
+      if (near.length) {
+        const options = near.flatMap(c => [[c.minx-margin-.001,z], [c.maxx+margin+.001,z],
+          [x,c.minz-margin-.001], [x,c.maxz+margin+.001]]);
+        options.sort((a,b) => Math.hypot(a[0]-x,a[1]-z) - Math.hypot(b[0]-x,b[1]-z));
+        const site = options.find(([px,pz]) => Math.hypot(px-x,pz-z) < 2*margin && free(px,pz,margin));
+        if (site) [x,z] = site;
+        else plants = new Batch(); // consumir la misma semilla sin plantar en piedra
+      }
       const t = r();
       if (lush) {
-        if (t < 0.68) tuft(field, r, x, z, -0.01, 4 + Math.floor(r() * 4), 0.08, MAXH - r() * 0.08, mix(grass, grassDry, r() * 0.6), 0.075);
+        if (t < 0.68) tuft(plants, r, x, z, 0.001, 4 + Math.floor(r() * 4), 0.08, MAXH - r() * 0.08, mix(grass, grassDry, r() * 0.6), 0.075);
         else if (t < 0.84) {
           // ramillete: 2-4 flores del mismo color + algo de hierba
           const col = fieldFlowers[Math.floor(vnoise(x * 0.25, z * 0.25, 9) * fieldFlowers.length * 0.999)];
           const n = 2 + Math.floor(r() * 2);
-          for (let i = 0; i < n; i++) flower(field, r, x + (r() - 0.5) * 0.18, z + (r() - 0.5) * 0.18, -0.01, 0.09 + r() * 0.15, 0.022 + r() * 0.018, col, 0.06);
-          tuft(field, r, x, z, -0.01, 3, 0.06, 0.16, grass, 0.06);
-        } else rosette(field, r, x, z, -0.005, 0.09 + r() * 0.08, mix(grassDeep, moss, r()));
+          for (let i = 0; i < n; i++) flower(plants, r, x + (r() - 0.5) * 0.18, z + (r() - 0.5) * 0.18, 0.001, 0.09 + r() * 0.15, 0.022 + r() * 0.018, col, 0.06);
+          tuft(plants, r, x, z, 0.001, 3, 0.06, 0.16, grass, 0.06);
+        } else rosette(plants, r, x, z, 0.001, 0.09 + r() * 0.08, mix(grassDeep, moss, r()));
       } else {
         // patio empedrado: briznas cortas, musgo y alguna flor entre juntas
-        if (t < 0.6) tuft(field, r, x, z, -0.01, 3 + Math.floor(r() * 3), 0.04, 0.14, mix(moss, grassDry, r() * 0.5), 0.06);
-        else if (t < 0.85) rosette(field, r, x, z, -0.005, 0.05 + r() * 0.05, mix(moss, lichen, r() * 0.4));
-        else flower(field, r, x, z, -0.01, 0.05 + r() * 0.07, 0.016 + r() * 0.01, r() < 0.5 ? fWhite : fYellow, 0.05);
+        if (t < 0.6) tuft(plants, r, x, z, 0.001, 3 + Math.floor(r() * 3), 0.04, 0.14, mix(moss, grassDry, r() * 0.5), 0.06);
+        else if (t < 0.85) rosette(plants, r, x, z, 0.001, 0.05 + r() * 0.05, mix(moss, lichen, r() * 0.4));
+        else flower(plants, r, x, z, 0.001, 0.05 + r() * 0.07, 0.016 + r() * 0.01, r() < 0.5 ? fWhite : fYellow, 0.05);
       }
     };
 
@@ -288,6 +308,7 @@ export function build(ctx) {
     const r = ctx.rng('flora-climb');
     const ivyCols = [ivy, fol[2], mix(ivy, moss, 0.4), fol[0]];
     // hoja-rombo en el plano del muro (n), a `off` metros de la piedra
+    const leafBox = new THREE.Box3(), corner = new THREE.Vector3();
     const leaf = (cx, y, cz, tx, tz, nx, nz, off, ang, L, W, col, sway, ph) => {
       const dx = Math.cos(ang), dy = Math.sin(ang);       // eje de la hoja (en el plano)
       const px = -dy, py = dx;                              // perpendicular
@@ -295,6 +316,14 @@ export function build(ctx) {
       const ox = nx + (r() - 0.5) * 0.4, oy = 0.25 + (r() - 0.5) * 0.3, oz = nz + (r() - 0.5) * 0.4;
       const pts = [P(-dx * L * 0.5, -dy * L * 0.5, off), P(px * W * 0.5 + dx * L * 0.05, py * W * 0.5 + dy * L * 0.05, off + 0.006),
         P(dx * L * 0.5, dy * L * 0.5, off + 0.012), P(-px * W * 0.5 + dx * L * 0.05, -py * W * 0.5 + dy * L * 0.05, off + 0.006)];
+      for (const p of pts) p[1] = Math.max(0.005, p[1]);
+      // En las esquinas, la envolvente escalonada del torreón puede envolver
+      // una hoja aunque su centro esté sobre la circunferencia teórica.
+      leafBox.makeEmpty();
+      for (const p of pts) leafBox.expandByPoint(corner.fromArray(p));
+      const {min, max} = leafBox;
+      if (solids.some(c => max.x > c.minx && min.x < c.maxx && max.z > c.minz &&
+        min.z < c.maxz && max.y > (c.minY ?? 0) && min.y < c.h)) return;
       const id = pts.map(([x, yy, z], i) => climb.v(x, yy, z, ox, oy, oz, i === 0 ? tmpC.copy(col).multiplyScalar(0.8) : col, sway, ph, K_WALL));
       climb.t(id[0], id[1], id[2]); climb.t(id[0], id[2], id[3]);
     };
@@ -392,7 +421,7 @@ export function build(ctx) {
     {
       const box = new THREE.Box3(), m4 = new THREE.Matrix4();
       world.mapGroup.traverse((o) => {
-        if (!o.isMesh || !o.visible || !o.geometry?.attributes.position) return;
+        if (!o.isMesh || !o.visible || o.name === 'fort-grass' || !o.geometry?.attributes.position) return;
         const gb = localBox(o.geometry);
         if (Math.min(gb.max.x - gb.min.x, gb.max.y - gb.min.y, gb.max.z - gb.min.z) > 1e-3) return;
         const n = o.isInstancedMesh ? Math.min(o.count, 400) : 1;
@@ -414,10 +443,14 @@ export function build(ctx) {
       if (f.h < 2.9 || f.h > 6.5 || f.len < 1.4) continue;
       const len = f.len, top = f.h > 3.2 ? 3.4 : f.h - 0.08;
       const tx = (f.b.x - f.a.x) / len, tz = (f.b.z - f.a.z) / len;
-      const o = { tx, tz, nx: f.n.x, nz: f.n.z, at: (u) => [f.a.x + tx * u, f.a.z + tz * u] };
+      // El sillar sobresale 14 mm y la moldura hasta 24 mm. La banda
+      // continua y las hojas arrancan delante de esa piel, incluso con viento.
+      const o = { tx, tz, nx: f.n.x, nz: f.n.z, at: (u) =>
+        [f.a.x + tx * u + f.n.x * 0.026, f.a.z + tz * u + f.n.z * 0.026] };
       const ok = (u) => {
         const [x, z] = o.at(u);
         const fx = x + f.n.x * 0.35, fz = z + f.n.z * 0.35;
+        if (ctx.blocked(x, z, 0.005)) return false;
         if (gateGap(fx, fz) || onDecal(x, z)) return false;
         // nada pegado delante (otro muro, escalera, pasarela); fuera del campo vale
         return !ctx.blocked(fx, fz, 0.1);
@@ -611,7 +644,7 @@ export function build(ctx) {
           // deformación función de la posición: vértices compartidos coinciden
           const dsp = 1 + 0.16 * Math.sin(ux * 3.1 + seed) * Math.sin(uy * 2.7 + seed * 1.3) * Math.sin(uz * 3.3 + seed * 0.7) + 0.08 * Math.sin(ux * 7 + uz * 5 + seed);
           const tp = taper ? 1 - taper * Math.max(uy, 0) : 1;
-          const x = cx + ux * rx * dsp * tp, y = cy + uy * ry * dsp, z = cz + uz * rz * dsp * tp;
+          const x = cx + ux * rx * dsp * tp, y = Math.max(LAND, cy + uy * ry * dsp), z = cz + uz * rz * dsp * tp;
           id.push(B.v(x, y, z, ux / rx, uy / ry + 0.15, uz / rz, colFn(ux, uy, uz, x, y, z), swayFn(y), ph, K_LEAFY));
         }
         B.t(id[0], id[1], id[2]);
@@ -642,7 +675,7 @@ export function build(ctx) {
             const a = Math.PI * (j / PROF);                 // 0 = un lado, π = el otro
             const ca = Math.cos(a), sa = Math.sin(a);
             const bump = 1 + 0.16 * (hash2(Math.round(x * 7 + z * 7), j, seed) - 0.5) * sa;
-            const px = x + sx * ca * ww * bump, pz = z + sz * ca * ww * bump, py = LAND - 0.05 + sa * hh * bump;
+            const px = x + sx * ca * ww * bump, pz = z + sz * ca * ww * bump, py = LAND + sa * hh * bump;
             const col = shadeCol(base, ca * sx, sa, ca * sz, hash2(Math.round(x * 7 + z * 7), j + 9, seed));
             cur.push(trees.v(px, py, pz, sx * ca, sa + 0.2, sz * ca, col, sa * 0.012, lump, K_LEAFY));
           }
@@ -662,7 +695,7 @@ export function build(ctx) {
       && Math.abs(x) < 115 && Math.abs(z) < 115 && treesAt.every(([tx, tz, tr]) => Math.hypot(x - tx, z - tz) > (tr + rad) * 0.85)
       && !(Math.abs(x) < 9 && Math.abs(z) > 40); // caminos norte y sur despejados
     function broadleaf(x, z, H, R, base, kind) {
-      const y0 = LAND - 0.2, crown = H - R * 0.9;
+      const y0 = LAND, crown = H - R * 0.9;
       // tronco: cilindro de 6 lados que se afina
       const tr = 0.16 + R * 0.06, segs = 6;
       const trunkTop = crown + R * 0.1;
@@ -671,7 +704,7 @@ export function build(ctx) {
         return trees.v(x + Math.cos(a) * rad, y, z + Math.sin(a) * rad, Math.cos(a), 0, Math.sin(a), col, w, 0);
       });
       const lo = ring(y0, tr * 1.25, barkDark, 0), hi = ring(trunkTop, tr * 0.6, bark, 0.006);
-      for (let i = 0; i < segs; i++) { const j = (i + 1) % segs; trees.t(lo[i], lo[j], hi[j]); trees.t(lo[i], hi[j], hi[i]); }
+      for (let i = 0; i < segs; i++) { const j = (i + 1) % segs; trees.t(lo[i], hi[j], lo[j]); trees.t(lo[i], hi[i], hi[j]); }
       // copa: 3-5 masas alrededor del centro
       const n = 3 + Math.floor(r() * 2), seed = r() * 100;
       const masses = [[0, crown + R * 0.15, 0, R]];
@@ -738,7 +771,7 @@ export function build(ctx) {
       const out = near ? Math.pow(r(), 1.8) * 14 : 4 + r() * 40;
       const x = side < 2 ? (side ? 1 : -1) * (WX + out + 0.1) : along * (WX + out + 2);
       const z = side < 2 ? along * (WZ + out + 2) : (side === 2 ? 1 : -1) * (WZ + out + 0.1);
-      if (wallDist(x, z) < 0.05 || inWheat(x, z, 0.2) || !clearOf(x, z, 0.2)) continue;
+      if (wallDist(x, z) < 0.60 || inWheat(x, z, 0.2) || !clearOf(x, z, 0.2)) continue;
       const n = fbm(x * 0.09, z * 0.09, 11);
       if (r() < 0.86) {
         tuft(meadow, r, x, z, LAND, 6 + Math.floor(r() * 5), 0.2, 0.4 + n * 0.45, mix(grass, grassDry, Math.pow(r(), 2) * 0.8), 0.13);

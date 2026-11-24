@@ -183,6 +183,9 @@ for (const [st, dur] of [['mantle', TUNING.mantle.time], ['dive', TUNING.evade.d
       : t < 1 + ROLL_DUR ? { st: 'flip', x: -6.4 * (t - 1), y: 1, sp: 6.4 / RS } : { st: 'idle', x: -6.4 * ROLL_DUR }),
     mantle: (t) => ({ st: t >= 1 && t < 1.42 ? 'mantle' : 'idle', z: t >= 1 ? -(t - 1) : 0 }),
     dive: (t) => ({ st: t >= 1 && t < 1 + TUNING.evade.diveTime ? 'dive' : 'run', z: -4 * t, sp: 0.6 }),
+    // FPS: agacharse (ce = altura de cabeza), asomo con ADS e inclinación
+    crouch: (t) => ({ st: t >= 0.8 && t < 1.8 ? 'crouch' : 'idle', ce: t < 0.8 ? 1 : t < 1.4 ? Math.max(0, 1 - (t - 0.8) / 0.18) : Math.min(1, (t - 1.4) / 0.2),
+      aim: t >= 1.4 ? 1 : 0, cl: Math.max(-1, Math.min(1, Math.sin(t * 3) * 1.2)), x: 0.5 * t }),
   };
   const round = (o) => JSON.stringify(o, (k, v) => (typeof v === 'number' ? +v.toFixed(5) : v));
   for (const [name, f] of Object.entries(streams)) {
@@ -283,7 +286,27 @@ try {
       [`ads_${wep}`, { st: 'idle', aim: true, wep }], [`ads_${wep}_down`, { st: 'idle', aim: true, wep, pitch: -0.55 }]])),
     blind_over: { st: 'blind_over', pitch: 0 }, blind_over_down: { st: 'blind_over', pitch: -0.55 }, roadie: { st: 'roadie' }, slide: { st: 'slide' },
     dive_5: { st: 'dive', phase: 0.5 }, mantle_4: { st: 'mantle', phase: 0.4 },
+    // FPS (corrida 6): agachado, subida (ce) e inclinación
+    crouch_idle: { st: 'crouch', ce: 0 }, crouch_aim: { st: 'crouch', aim: true, ce: 0, wep: 'smg' },
+    ...Object.fromEntries([25, 50, 75].flatMap((q) => [[`crouch_idle_${q}`, { st: 'crouch', ce: q / 100 }],
+      [`crouch_aim_${q}`, { st: 'crouch', aim: true, ce: q / 100, wep: 'smg' }]])),
   };
+  // las posturas de cobertura ya no se pueden asentar con el controlador FPS:
+  // sin medida, se conservan (las usan los bots) y no se comparan
+  const skipped = Object.keys(cases).filter((k) => !fresh[k]);
+  for (const k of skipped) delete cases[k];
+  // inclinación: la tabla guarda desplazamientos; se compara la pose entera
+  for (const sd of ['r', 'l']) {
+    const cl = sd === 'r' ? 1 : -1;
+    for (const [base, pose] of [['lean_stand', { st: 'idle' }], ['lean_stand_aim', { st: 'idle', aim: true, wep: 'smg' }],
+      ['lean_crouch', { st: 'crouch', ce: 0 }], ['lean_crouch_aim', { st: 'crouch', aim: true, ce: 0, wep: 'smg' }]]) {
+      if (!m[`${base}_${sd}`]) continue;
+      const v = hitPose({ ...pose, cl }), oh2 = [0, 0, 1.52].map((x, i) => x - m.idle.head[i]);
+      const head = m[`${base}_${sd}`].head.map((x, i) => x + oh2[i]);
+      const dh = Math.hypot(...v.h.map((x, i) => x - head[i]));
+      assert.ok(dh <= 0.08, `${base}_${sd}: la cabeza inclinada no sigue al rig (${dh.toFixed(2)} m)`);
+    }
+  }
   for (const [k, pose] of Object.entries(cases)) {
     const v = hitPose(pose), f = fresh[k];
     const dh = Math.hypot(...v.h.map((x, i) => x - f.h[i])), db = Math.hypot(...v.b.map((x, i) => x - f.b[i]));
@@ -298,8 +321,16 @@ try {
     assert.ok(off <= v.hr * 0.7, `${k}: el visor dibujado queda a ${off.toFixed(2)} m del centro de la cabeza (de frente)`);
   }
   // casco dibujado por encima del cover bajo al apuntar: dentro de la esfera
-  const s = m.low_aim, vol = hitPose(cases.low_aim);
-  const top = s.headMax[2], centreY = vol.h[2];
-  assert.ok(top > 1.1 && centreY + vol.hr > 1.1 + 0.15, `cover bajo + ADS: casco dibujado hasta ${top.toFixed(2)} m, cabeza impactable hasta ${(centreY + vol.hr).toFixed(2)} m`);
-  console.log('HIT POSE (rig real) OK ·', Object.keys(cases).length, 'posturas contra el rig,', Object.keys(STANCES).length, 'medidas');
+  if (m.low_aim) {
+    const s = m.low_aim, vol = hitPose(cases.low_aim);
+    const top = s.headMax[2], centreY = vol.h[2];
+    assert.ok(top > 1.1 && centreY + vol.hr > 1.1 + 0.15, `cover bajo + ADS: casco dibujado hasta ${top.toFixed(2)} m, cabeza impactable hasta ${(centreY + vol.hr).toFixed(2)} m`);
+  }
+  // FPS: agachado, el casco DIBUJADO queda bajo LOW (1.1): lo escondido se
+  // dibuja escondido (anclado como la tabla: idle = 1.52)
+  const lift = 1.52 - m.idle.head[2];
+  for (const k of ['crouch_idle', 'crouch_aim', 'lean_crouch_r', 'lean_crouch_l', 'lean_crouch_aim_r', 'lean_crouch_aim_l'])
+    if (m[k]) assert.ok(m[k].headMax[2] + lift < 1.1, `${k}: casco dibujado a ${(m[k].headMax[2] + lift).toFixed(2)} m, asoma sobre LOW`);
+  console.log('HIT POSE (rig real) OK ·', Object.keys(cases).length, 'posturas contra el rig,', Object.keys(STANCES).length, 'medidas',
+    skipped.length ? `· sin cobertura en el controlador, conservadas: ${skipped.join(', ')}` : '');
 } finally { await browser.close(); }

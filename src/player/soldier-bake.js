@@ -15,6 +15,7 @@
 // equipo. Las texturas no hacen falta.
 import * as THREE from 'three';
 import { patch, NOISE } from '../look/glsl.js';
+import { applyViewModelWorldFinish } from '../render/pipeline.js';
 
 // Colores exactos de equipo del overhaul (también en las paletas de mapa).
 export const SOLDIER_TEAM = Object.freeze({ red: 0xe8402f, blue: 0x2f7fe8 });
@@ -24,6 +25,7 @@ const LEGACY_TEAM = [0xd94f3f, 0x4f8de0];
 
 const TEAM_ZONES = ['head', 'chest', 'pauldron', 'thigh'];
 const KIND = { suit: 0, armor: 1, metal: 2, webbing: 3, mark: 4, visor: 5, glow: 6 };
+export { KIND as SOLDIER_SURFACE_KIND };
 const IDENTITY = new THREE.Matrix4();
 const lin = (r, g, b) => new THREE.Color(r, g, b);
 
@@ -68,6 +70,14 @@ function namedSurface(name, region, variant) {
   return null;
 }
 
+// Las dos vistas consultan los mismos objetos de paleta del modelo.
+const paleta = new Map();
+export function soldierSurface(name, region, variant) {
+  const key = name.toLowerCase() + '|' + region + '|' + variant;
+  if (!paleta.has(key)) paleta.set(key, namedSurface(name, region, variant));
+  return paleta.get(key);
+}
+
 // Cualquier otro material (avatar procedural, cobre, etc.): se respeta su
 // color y PBR; los MeshBasic eran luces planas y pasan a emisivos.
 function genericSurface(material) {
@@ -103,11 +113,30 @@ function regionOf(mesh, rig) {
 }
 
 function surfaceFor(material, mesh, rig) {
-  return (material.name && namedSurface(material.name, rig ? regionOf(mesh, rig) : 'other', rig?.variant ?? 0)) ||
+  return (material.name && soldierSurface(material.name, rig ? regionOf(mesh, rig) : 'other', rig?.variant ?? 0)) ||
     genericSurface(material);
 }
 
 // ---------- material compartido ----------
+const LOCAL_FADE = /* glsl */`
+  // SOLDADO PROPIO (solo su material, uLocal=1): trama ordenada (screen-
+  // door: sin mezcla ni orden de dibujo; la sombra sale de otro pase). Nada
+  // en espacio de pantalla: (a) lo que está cerca de la lente se vuelve
+  // translúcido en un degradado suave de profundidad (en hip y ADS normales
+  // el soldado está a >1.5 m y queda opaco) y (b) con la cámara de verdad
+  // apretada contra él por la colisión (uFade, suavizado en la CPU) todo el
+  // soldado se aclara por igual. uGun: el arma se aclara la mitad.
+  // Va al final del bloque: las derivadas de arriba ya se calcularon.
+  if (uLocal > 0.5) {
+    float sKeep = smoothstep(0.25, 0.95, vViewPosition.z);
+    sKeep *= (1.0 - uHide) * (1.0 - uFade * mix(0.75, 0.45, uGun));
+    // Bayer 4x4 aritmético sobre el píxel (estable al moverse la cámara)
+    vec2 sB = floor(gl_FragCoord.xy);
+    vec2 sB2 = floor(sB * 0.5);
+    float sT = fract(sB.x * 0.5 + sB.y * sB.y * 0.75) + 0.25 * fract(sB2.x * 0.5 + sB2.y * sB2.y * 0.75);
+    if (sKeep < 0.999 && sKeep <= sT + 0.03125) discard;
+  }`;
+
 const SHADER = {
   vertexPars: /* glsl */`
 attribute vec4 aSurf; attribute vec2 aDetail;
@@ -153,23 +182,7 @@ ${NOISE}`,
   float sL = dot(sAlb, vec3(0.2126, 0.7152, 0.0722));
   sAlb = mix(sAlb, vec3(sL) * 0.6, uCorpse * 0.82);
   diffuseColor.rgb = sAlb;
-  // SOLDADO PROPIO (solo su material, uLocal=1): trama ordenada (screen-
-  // door: sin mezcla ni orden de dibujo; la sombra sale de otro pase). Nada
-  // en espacio de pantalla: (a) lo que está cerca de la lente se vuelve
-  // translúcido en un degradado suave de profundidad (en hip y ADS normales
-  // el soldado está a >1.5 m y queda opaco) y (b) con la cámara de verdad
-  // apretada contra él por la colisión (uFade, suavizado en la CPU) todo el
-  // soldado se aclara por igual. uGun: el arma se aclara la mitad.
-  // Va al final del bloque: las derivadas de arriba ya se calcularon.
-  if (uLocal > 0.5) {
-    float sKeep = smoothstep(0.25, 0.95, vViewPosition.z);
-    sKeep *= (1.0 - uHide) * (1.0 - uFade * mix(0.75, 0.45, uGun));
-    // Bayer 4x4 aritmético sobre el píxel (estable al moverse la cámara)
-    vec2 sB = floor(gl_FragCoord.xy);
-    vec2 sB2 = floor(sB * 0.5);
-    float sT = fract(sB.x * 0.5 + sB.y * sB.y * 0.75) + 0.25 * fract(sB2.x * 0.5 + sB2.y * sB2.y * 0.75);
-    if (sKeep < 0.999 && sKeep <= sT + 0.03125) discard;
-  }
+${LOCAL_FADE}
 }`,
   rough: /* glsl */`roughnessFactor = mix(vSurf.x, 0.92, uCorpse);`,
   // metalnessFactor ya existe aquí (metalnessmap_fragment va antes)
@@ -189,7 +202,8 @@ ${NOISE}`,
 };
 
 const MATERIALS = new Map();
-function makeMaterial(team, corpse) {
+const WEAPON_FINISH = new WeakMap();
+function makeMaterial(team, corpse, finish) {
   const material = new THREE.MeshStandardMaterial({ name: 'soldier look', vertexColors: true, roughness: 1, metalness: 1 });
   const uniforms = {
     uTeam: { value: new THREE.Color(SOLDIER_TEAM[team] ?? SOLDIER_TEAM.red) },
@@ -197,20 +211,35 @@ function makeMaterial(team, corpse) {
     uRim: { value: 0.5 },
     uLocal: { value: 0 }, uHide: { value: 0 }, uFade: { value: 0 }, uGun: { value: 0 },
   };
-  patch(material, { ...SHADER, uniforms, key: 'soldier-v1' });
+  if (finish) {
+    applyViewModelWorldFinish(finish, material);
+    uniforms.uGun.value = 1;
+    WEAPON_FINISH.set(material, finish);
+    // Tras la iluminación común, desaturar sólo durante la muerte.
+    patch(material, { uniforms, key: 'world-weapon',
+      fragmentPars: 'uniform float uCorpse, uLocal, uHide, uFade, uGun;',
+      fragment: LOCAL_FADE });
+    const compile = material.onBeforeCompile;
+    material.onBeforeCompile = (shader, renderer) => {
+      compile(shader, renderer);
+      shader.fragmentShader = shader.fragmentShader.replace('#include <opaque_fragment>',
+        'outgoingLight = mix(outgoingLight, vec3(dot(outgoingLight, vec3(0.2126, 0.7152, 0.0722))) * 0.6, uCorpse * 0.82);\n#include <opaque_fragment>');
+    };
+  } else patch(material, { ...SHADER, uniforms, key: 'soldier-v1' });
   material.userData.soldierLook = team;
   material.userData.soldierUniforms = uniforms;
   if (!corpse) material.userData.shared = true;
   return material;
 }
 // Un material por equipo, compartido por todos los rigs vivos.
-export function soldierMaterial(team) {
-  if (!MATERIALS.has(team)) MATERIALS.set(team, makeMaterial(team, false));
-  return MATERIALS.get(team);
+export function soldierMaterial(team, finish) {
+  const key = finish ?? team;
+  if (!MATERIALS.has(key)) MATERIALS.set(key, makeMaterial(team, false, finish));
+  return MATERIALS.get(key);
 }
 // Copia propia de un cadáver (su desaturación es por rig). Mismo programa.
 export function soldierCorpseMaterial(source) {
-  return makeMaterial(source.userData.soldierLook, true);
+  return makeMaterial(source.userData.soldierLook, true, WEAPON_FINISH.get(source));
 }
 
 // Materiales del soldado PROPIO (cuerpo y armas): mismo programa que el de
@@ -242,7 +271,12 @@ export function syncLocalSoldierView(rig, camera, mode, crowd = 0, ghost = 0) {
   if (body && body.material === shared) body.material = L.body;
   for (const k in rig.guns) {
     const baked = rig.guns[k]?.userData.bakedMesh;
-    if (baked && baked.material === shared) baked.material = L.gun;
+    const finish = WEAPON_FINISH.get(baked?.material);
+    if (finish && baked.material === soldierMaterial(rig.team, finish)) {
+      L.weapon ??= makeMaterial(rig.team, false, finish);
+      L.weapon.userData.localSoldier = true;
+      baked.material = L.weapon;
+    } else if (baked && baked.material === shared) baked.material = L.gun;
   }
   const now = performance.now() / 1000;
   const dt = L.t ? Math.min(0.1, Math.max(0, now - L.t)) : 1;
@@ -251,7 +285,8 @@ export function syncLocalSoldierView(rig, camera, mode, crowd = 0, ghost = 0) {
   const target = raw < 0.15 ? 0 : raw;
   L.fade += (target - L.fade) * (1 - Math.exp(-(target > L.fade ? 10 : 3) * dt));
   if (L.fade < 0.002) L.fade = 0;
-  for (const m of [L.body, L.gun]) {
+  for (const m of [L.body, L.gun, L.weapon]) {
+    if (!m) continue;
     const u = m.userData.soldierUniforms;
     u.uLocal.value = mode === 'off' ? 0 : 1;
     u.uHide.value = hide ? 1 : 0;
@@ -259,7 +294,10 @@ export function syncLocalSoldierView(rig, camera, mode, crowd = 0, ghost = 0) {
   }
   // contorno de spawn: ni dentro del scope ni con la cámara apretada;
   // visto desde otra cámara ('off') va entero
-  if (rig._outlineMat) rig._outlineMat.opacity = hide ? 0 : mode === 'off' ? 0.45 : 0.45 * (1 - L.fade);
+  if (rig._outlineMat) {
+    rig._outlineMat.visible = !hide;
+    rig._outlineMat.opacity = hide ? 0 : mode === 'off' ? 0.45 : 0.45 * (1 - L.fade);
+  }
 }
 
 // Contorno de la protección de spawn: la misma geometría y el mismo
@@ -282,7 +320,7 @@ function localMatrix(mesh, stop, out) {
 // sources: [{ mesh, matrix, bone }]. Devuelve BufferGeometry no indexada
 // por grupo de material: posición, normal, color, aSurf, aDetail (+ skin).
 const c8 = (x) => Math.round(Math.min(1, Math.max(0, x)) * 255);
-function mergeSources(sources, rig, skinned) {
+function mergeSources(sources, rig, skinned, weaponFinish) {
   const parts = [];
   let total = 0;
   for (const s of sources) {
@@ -299,10 +337,11 @@ function mergeSources(sources, rig, skinned) {
       const material = mats[grp.materialIndex ?? 0];
       if (!material || material.visible === false) continue;
       const count = Math.min(grp.count, (index ? index.count : pos.count) - grp.start);
-      parts.push({ s, pos, normal, index, start: grp.start, count, surf: surfaceFor(material, s.mesh, rig) });
+      parts.push({ s, pos, normal, index, start: grp.start, count, surf: weaponFinish ? weaponFinish(material) : surfaceFor(material, s.mesh, rig) });
       total += count;
     }
   }
+  const wear = weaponFinish ? new Float32Array(total) : null;
   const P = new Float32Array(total * 3), N = new Float32Array(total * 3), C = new Uint8Array(total * 3);
   const S = new Uint8Array(total * 4), D = new Uint8Array(total * 2);
   const SI = skinned ? new Uint8Array(total * 4) : null, SW = skinned ? new Uint8Array(total * 4) : null;
@@ -318,6 +357,7 @@ function mergeSources(sources, rig, skinned) {
       // escala negativa invierte el orden: se restaura para no voltear caras
       const kk = flip ? (k - (k % 3)) + (2 - (k % 3)) : k;
       const i = index ? index.getX(part.start + kk) : part.start + kk;
+      if (wear) wear[o] = s.mesh.geometry.attributes._wear.getX(i);
       v.fromBufferAttribute(pos, i).applyMatrix4(s.matrix);
       P[o * 3] = v.x; P[o * 3 + 1] = v.y; P[o * 3 + 2] = v.z;
       v.fromBufferAttribute(normal, i).applyMatrix3(nm).normalize();
@@ -333,6 +373,7 @@ function mergeSources(sources, rig, skinned) {
     }
   }
   const geometry = new THREE.BufferGeometry();
+  if (wear) geometry.setAttribute('aWear', new THREE.BufferAttribute(wear, 1));
   geometry.setAttribute('position', new THREE.BufferAttribute(P, 3));
   geometry.setAttribute('normal', new THREE.BufferAttribute(N, 3));
   geometry.setAttribute('color', new THREE.BufferAttribute(C, 3, true));
@@ -428,31 +469,50 @@ export function bakeSoldierBody(rig) {
 }
 
 /** Fusiona el modelo visible de un arma en un Mesh hijo del arma. */
-export function bakeSoldierGun(rig, gun, key) {
+export function bakeSoldierGun(rig, gun, key, weaponFinish, finish) {
   const old = gun.userData.bakedMesh;
   const meshes = [];
   gun.traverse((o) => { if (o.isMesh && o !== old) meshes.push(o); });
   const sources = [];
+  const parts = gun.userData.weaponParts;
+  const bones = parts && rig.gunMount ? Object.values(parts).map(p => p.bone) : [];
+  const skinned = bones.length > 0;
   for (const mesh of meshes) {
     if (!visibleBelow(mesh, gun)) continue;
-    sources.push({ mesh, bone: 0, matrix: localMatrix(mesh, gun, new THREE.Matrix4()), order: sources.length });
+    let bone = 0;
+    if (skinned) {
+      let parent = mesh.parent;
+      while (parent && !bones.includes(parent)) parent = parent.parent;
+      bone = bones.indexOf(parent);
+      if (bone < 0) throw new Error(`Pieza sin pivote en ${key}`);
+    }
+    sources.push({ mesh, bone, matrix: localMatrix(mesh, gun, new THREE.Matrix4()), order: sources.length });
   }
-  // Nada nuevo que fusionar (p. ej. frag/stun sin plantilla GLB): el modelo
-  // ya fusionado se queda. Nunca se desmonta nada sin tener reemplazo.
+  // Durante la carga del GLB solo están los sockets lógicos.
   if (!sources.length) return old ?? null;
   if (old) { old.removeFromParent(); gun.userData.bakedMesh = null; }
-  const cacheKey = `${key}:${gun.userData.blenderVisual ? 'b' : 'p'}`;
+  const cacheKey = `${key}:${gun.userData.blenderVisual ? (skinned ? 'articulada' : 'estática') : 'p'}`;
   const signature = sources.map((s) => s.mesh.geometry.attributes.position?.count).join(',');
   let cached = GUN_CACHE.get(cacheKey);
   if (!cached || cached.signature !== signature) {
-    cached = { signature, geometry: mergeSources(sources, null, false) };
+    cached = { signature, geometry: mergeSources(sources, null, skinned, weaponFinish) };
     if (!GUN_CACHE.has(cacheKey)) GUN_CACHE.set(cacheKey, cached);
   }
   for (const mesh of meshes) disposeSource(mesh);
-  const baked = new THREE.Mesh(cached.geometry, soldierMaterial(rig.team));
+  const material = soldierMaterial(rig.team, finish);
+  let baked;
+  if (skinned) {
+    baked = new THREE.SkinnedMesh(cached.geometry, material);
+    // Vértices en el marco del arma en reposo; cada inversa devuelve el
+    // vértice a su pivote. Funciona también al mudar el arma de padre.
+    const inverses = bones.map(b => localMatrix(b, gun, new THREE.Matrix4()).invert());
+    baked.bind(new THREE.Skeleton(bones, inverses), IDENTITY);
+    baked.boundingSphere = cached.geometry.boundingSphere.clone();
+    baked.boundingSphere.radius += 1;
+  } else baked = new THREE.Mesh(cached.geometry, material);
   baked.name = 'soldier-weapon';
   baked.receiveShadow = true;
-  baked.castShadow = gun.parent === rig.gunMount;
+  baked.castShadow = !rig.gunMount || gun.parent === rig.gunMount;
   gun.add(baked);
   gun.userData.bakedMesh = baked;
   return baked;

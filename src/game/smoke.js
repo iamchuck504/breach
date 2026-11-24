@@ -2,6 +2,9 @@
 // delay de activación y nube volumétrica ligera formada por sprites suaves.
 // Los bots consultan blocksSegment() desde su chequeo de línea de visión.
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { loadGLB } from '../view/fp/assets.js';
+import { surfaceOf } from '../view/fp/material.js';
 import { TUNING } from '../config/tuning.js';
 import { makeSmokeProjectile, stepSmokeProjectile } from './smoke-physics.js';
 
@@ -44,6 +47,29 @@ function smokeTexture(size = 128) {
   return texture;
 }
 
+// Solo el cuerpo: la anilla y la cuchara ya se han soltado. Se hornea una vez
+// con los colores del arma para dibujar cada bote en una sola llamada.
+let canister;
+function smokeCanister() {
+  return canister ??= loadGLB('grenade').then((scene) => {
+    const body = scene.getObjectByName('body'), parts = [];
+    body.traverse((mesh) => {
+      if (!mesh.isMesh) return;
+      const geometry = mesh.geometry.clone();
+      const color = surfaceOf(mesh.material.name, 'gun').color;
+      const rgb = new Float32Array(3 * geometry.attributes.position.count);
+      for (let i = 0; i < rgb.length; i += 3) color.toArray(rgb, i);
+      geometry.setAttribute('color', new THREE.BufferAttribute(rgb, 3));
+      parts.push(geometry);
+    });
+    const geometry = mergeGeometries(parts);
+    for (const part of parts) part.dispose();
+    geometry.center();
+    geometry.scale(0.5, 0.5, 0.5);
+    return geometry;
+  });
+}
+
 export class SmokeSystem {
   constructor(scene, world, audio) {
     this.scene = scene;
@@ -62,10 +88,17 @@ export class SmokeSystem {
       material.userData.baseOpacity = opacity;
       return material;
     });
-    this._nadeGeo = new THREE.CylinderGeometry(0.055, 0.055, 0.16, 8);
-    this._nadeMat = new THREE.MeshStandardMaterial({
-      color: 0x525a61, roughness: 0.8, metalness: 0.2, flatShading: true,
-    });
+    const fallback = new THREE.CylinderGeometry(0.055, 0.055, 0.16, 8);
+    this._nadeGeo = fallback;
+    this._nadeMat = new THREE.MeshStandardMaterial({ color: 0x525a61, roughness: 0.65, metalness: 0.2 });
+    smokeCanister().then((geometry) => {
+      this._nadeGeo = geometry;
+      this._nadeMat.color.setHex(0xffffff);
+      this._nadeMat.vertexColors = true;
+      this._nadeMat.needsUpdate = true;
+      for (const p of this.projs) p.mesh.geometry = geometry;
+      fallback.dispose();
+    }).catch((e) => console.warn('[humo] No se pudo cargar el cuerpo del bote', e));
   }
 
   throwNade(o, v, options = {}) {

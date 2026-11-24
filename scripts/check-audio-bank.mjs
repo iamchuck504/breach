@@ -17,8 +17,18 @@ import { fileURLToPath } from 'node:url';
 import { measure } from '../src/audio/analysis.js';
 import { SR } from '../src/audio/dsp.js';
 import { MAX_VOICES, softClipCurve } from '../src/audio/engine.js';
+import { TUNING } from '../src/config/tuning.js';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+// El motor elige variante, tono y nivel de cada voz con Math.random: sin
+// semilla, cada corrida mezclaba pasos distintos y la compuerta de >8 kHz del
+// sprint oscilaba alrededor de su límite. Semilla fija = render idéntico
+// (--seed N para barrer otras).
+{
+  const si = process.argv.indexOf('--seed');
+  let a = (si > 0 ? Number(process.argv[si + 1]) : 0x5eed) >>> 0;
+  Math.random = () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
 const fails = [];
 const check = (ok, msg) => { if (!ok) fails.push(msg); };
 const db = (x) => 20 * Math.log10(Math.max(1e-9, x));
@@ -265,14 +275,22 @@ const coverage = [
   ['paso propio piedra', () => audio.footstep('run'), ['step_stone']],
   ['paso enemigo', () => audio.footstep('run', { position: P(3, -3, 0.22), team: 'blue' }), ['step_stone']],
   ['paso agachado (equipo)', () => audio.footstep('roadie'), ['step_stone', 'gear']],
-  ['arrastre en cobertura', () => audio.footstep('shuffle'), ['step_scuff']],
+  // PRUEBAS (corrida 6): retirados "arrastre en cobertura", "contacto con cobertura" y
+  // "evasión": sus mecánicas (cobertura pegada, rodada) ya no existen y nadie los
+  // llama; el paso agachado y la tela de postura (abajo) son su equivalente FPS.
   ['aterrizaje', () => audio.land(), ['land']],
   ['salto', () => audio.jump(), ['jump']],
   ['deslizamiento', () => audio.slide(), ['slide']],
-  ['contacto con cobertura', () => audio.thump(), ['cover_hit']],
-  ['evasión', () => audio.dive(), ['dive']],
   ['trepar', () => audio.mantle(), ['mantle']],
   ['whoosh', () => audio.whoosh(), ['whoosh']],
+  // primera persona (run6)
+  ['paso agachado', () => audio.footstep('crouch'), ['step_stone']],
+  ['agacharse (tela)', () => audio.stance('crouch'), ['cloth']],
+  ['levantarse (tela)', () => audio.stance('stand'), ['cloth']],
+  ['inclinarse', () => audio.lean(), ['cloth']],
+  ['aterrizaje pesado', () => audio.land(9), ['land']],
+  ['explosión a 2 m (presión)', () => audio.explosion({ position: P(1.2, -1.5) }), ['boom', 'boom_near']],
+  ['recarga de un remoto cercano', () => audio.remoteReload('smg', P(3, -4), 1.9), ['mag_out', 'mag_in']],
   ['ui mover', () => audio.uiMove(), ['ui_move']],
   ['ui confirmar', () => audio.uiConfirm(), ['ui_confirm']],
   ['ui volver', () => audio.uiBack(), ['ui_back']],
@@ -518,7 +536,11 @@ const { tonality, longTerm, rt60Band } = await import('../src/audio/analysis.js'
 const monoOf = (ch) => { if (ch.length === 1) return ch[0]; const m = new Float32Array(ch[0].length); for (const c of ch) for (let i = 0; i < m.length; i++) m[i] += c[i] / ch.length; return m; };
 // objetos físicos: mecánica, manejo, pasos, foley, recogidas, capas del arma
 const OBJECT_CATS = new Set(['handling', 'step', 'foley', 'pickup', 'weapon']);
-const OBJECT_NAMES = new Set(['pedestal_spawn', 'nade_bounce']);
+// + primera persona (run6): confirmaciones de impacto/baja, daño, latido,
+// presión de explosión cercana y paso de cohete se diseñaron como percusión
+// y ruido: misma compuerta que los objetos (ningún "pitido" ni campanita)
+const OBJECT_NAMES = new Set(['pedestal_spawn', 'nade_bounce', 'hit_tick', 'hit_head', 'kill_confirm', 'kill_head', 'hurt', 'heartbeat',
+  'boom_near', 'rocket_pass']);
 // señales eléctricas a propósito: el condensador del aturdidor y su pitido de listo
 const TONAL_OK = new Set(['stun_charge', 'ready_chirp']);
 // cada canal por separado: promediar a mono puede anular un tono en contrafase
@@ -562,6 +584,15 @@ for (const name of new Set(Object.values(SPACE_PROFILES).map((s) => s.ir))) {
   check(r1 && r4 && r8 && r4 / r1 <= 0.55 && r8 / r1 <= 0.4, `${name}: los agudos de la cola duran demasiado (rt60 1k ${r1?.toFixed(2)} s, 4k ${r4?.toFixed(2)} s, 8k ${r8?.toFixed(2)} s)`);
 }
 // mezclas reales por el facade (mismo envío y nivel de sala que el juego)
+function biquadLp(f) {
+  const w0 = (2 * Math.PI * f) / SR, c = Math.cos(w0), al = Math.sin(w0) / (2 * Math.pow(10, 0.5 / 20)), a0 = 1 + al;
+  return [(1 - c) / 2 / a0, (1 - c) / a0, (1 - c) / 2 / a0, (-2 * c) / a0, (1 - al) / a0];
+}
+function biq(q, z, x) {
+  const y = q[0] * x + q[1] * z[0] + q[2] * z[1] - q[3] * z[2] - q[4] * z[3];
+  z[1] = z[0]; z[0] = x; z[3] = z[2]; z[2] = y;
+  return y;
+}
 function renderClip(list, t0, dur, irName, level) {
   const N = Math.ceil(dur * SR);
   const dry = new Float32Array(N), send = new Float32Array(N);
@@ -570,10 +601,18 @@ function renderClip(list, t0, dur, irName, level) {
     const src = r.buf?.ch;
     if (!src?.[0]) continue;
     const s0 = Math.round((r.at - t0) * SR), n = Math.floor(src[0].length / r.rate);
+    // el paso bajo de la voz (cadena del motor: filtro → ganancia → envío), como
+    // el BiquadFilter de WebAudio (RBJ, Q 0.5 dB). Antes se ignoraba: la
+    // compuerta medía agudos que el juego no reproduce (pasos propios a 4.8 kHz)
+    const lpf = r.cut < 18500 ? biquadLp(r.cut) : null;
+    const zs = [[0, 0, 0, 0], [0, 0, 0, 0]];
     for (let i = 0; i < n; i++) {
       const k = s0 + i;
       if (k < 0 || k >= N) continue;
-      const j = Math.floor(i * r.rate), a = src[0][j], b = (src[1] ?? src[0])[j], v = (a + b) * 0.5;
+      const j = Math.floor(i * r.rate);
+      let a = src[0][j], b = (src[1] ?? src[0])[j];
+      if (lpf) { a = biq(lpf, zs[0], a); b = src[1] ? biq(lpf, zs[1], b) : a; }
+      const v = (a + b) * 0.5;
       dry[k] += v * r.gain; send[k] += v * r.send;
       dryC[0][k] += a * r.gain; dryC[1][k] += b * r.gain;
     }
@@ -599,7 +638,7 @@ function hp3k(x) {
 }
 const energy = (x, a = 0, b = x.length) => { let e = 0; for (let i = Math.max(0, a); i < Math.min(x.length, b); i++) e += x[i] * x[i]; return e; };
 const fort = SPACE_PROFILES.fortaleza;
-// sprint propio 10 s sobre piedra (paso cada 2.1 m a 7.6 m/s, con equipo y sala)
+// sprint propio 10 s sobre piedra (paso cada 2.1 m a la velocidad de sprint FPS, con equipo y sala)
 ctx.advance(5);
 audio.setSurfaceQuery(() => 'stone');
 audio.setAmbience('fortaleza');
@@ -608,7 +647,7 @@ recording = true;
 let s0 = ctx.currentTime;
 const stepT = [];
 for (let t = 0, next = 0.05; t < 10; t += 1 / 240) {
-  if (t >= next) { stepT.push(ctx.currentTime - s0); audio.footstep('roadie'); next += 2.1 / 7.6; }
+  if (t >= next) { stepT.push(ctx.currentTime - s0); audio.footstep('roadie'); next += 2.1 / TUNING.fp.sprintSpeed; }
   ctx.advance(1 / 240);
 }
 recording = false;
@@ -624,9 +663,9 @@ const roomDb = 10 * Math.log10(energy(sprint.wet) / Math.max(1e-30, energy(sprin
 const sprintLt = longTerm(sprint.mix);
 check(floorDb <= -18, `sprint: la banda >3 kHz entre zancadas queda a ${floorDb.toFixed(1)} dB del golpe del paso (fondo agudo continuo; máx −18)`);
 check(roomDb <= -4, `sprint: la sala lleva ${roomDb.toFixed(1)} dB respecto al paso seco (halo que no se vacía; máx −4)`);
-check(sprintLt.above(8000) <= 0.001, `sprint: ${(sprintLt.above(8000) * 100).toFixed(2)} % de la energía sobre 8 kHz (siseo; máx 0.1 %)`);
+check(sprintLt.above(8000) <= 0.001, `sprint: ${(sprintLt.above(8000) * 100).toFixed(3)} % de la energía sobre 8 kHz (siseo; máx 0.1 %)`);
 // recargas completas con las duraciones reales del arma
-const { TUNING } = await import('../src/config/tuning.js');
+// (TUNING se importa arriba: también lo usa la cadencia del sprint)
 const reloadRows = [];
 for (const w of ['smg', 'pistol', 'shotgun', 'sniper', 'bazooka']) {
   ctx.advance(4);
@@ -654,7 +693,7 @@ for (const w of ['smg', 'pistol', 'shotgun', 'sniper', 'bazooka']) {
   check(t.domFrac <= 0.08 && lt.peakDb <= 16, `recarga ${w}: suena a nota (${(t.domFrac * 100).toFixed(0)} % en ${t.domHz} Hz; pico persistente ${lt.peakDb.toFixed(1)} dB en ${lt.peakHz} Hz)`);
   check(lt.above(8000) <= 0.007, `recarga ${w}: ${(lt.above(8000) * 100).toFixed(2)} % de la energía sobre 8 kHz (máx 0.7 %)`);
 }
-console.log(`TIMBRE · peor objeto ${worstNote.name} (${(worstNote.domFrac * 100).toFixed(0)} % en un parcial, ${worstNote.ringMs.toFixed(0)} ms) · colas rt60 1k/4k/8k: ${irRows.join(', ')} · sprint: agudo entre zancadas ${floorDb.toFixed(1)} dB, sala ${roomDb.toFixed(1)} dB, >8 kHz ${(sprintLt.above(8000) * 100).toFixed(2)} % · recargas parcial/pico: ${reloadRows.join(', ')}`);
+console.log(`TIMBRE · peor objeto ${worstNote.name} (${(worstNote.domFrac * 100).toFixed(0)} % en un parcial, ${worstNote.ringMs.toFixed(0)} ms) · colas rt60 1k/4k/8k: ${irRows.join(', ')} · sprint: agudo entre zancadas ${floorDb.toFixed(1)} dB, sala ${roomDb.toFixed(1)} dB, >8 kHz ${(sprintLt.above(8000) * 100).toFixed(3)} % · recargas parcial/pico: ${reloadRows.join(', ')}`);
 
 /* ------------------- 5. robustez: frecuencias de contexto, rechazos, balas */
 
@@ -683,10 +722,19 @@ mockRate = SR; mockConvolverBroken = false;
 // un método que falla por dentro nunca propaga la excepción
 {
   const a = new Audio();
-  a.engine = { play() { throw new Error('boom'); }, stopTag() { throw new Error('boom'); } };
+  let hitTickAttempted = false;
+  a.engine = {
+    duckVoices() {},
+    play(name) {
+      if (name === 'hit_tick') hitTickAttempted = true;
+      throw new Error('boom');
+    },
+    stopTag() { throw new Error('boom'); },
+  };
   a.ctx = ctx;
   let threw = false;
   try { a.hit(); a.reload('smg', 1.9); a.death(); a.stopGameplay(); } catch { threw = true; }
+  check(hitTickAttempted, 'la confirmación debe llegar al fallo de reproducción simulado');
   check(!threw, 'un fallo interno del audio se propagó al juego');
 }
 // grupo de pasos lleno: el aliado no roba al enemigo; el enemigo sí al aliado.
@@ -747,6 +795,18 @@ console.log(`FUGAS · nodos tras cada ronda ${nodes[1]} → ${nodes.at(-1)} · n
 check(nodes.at(-1) <= nodes[1], `los nodos crecen entre rondas: ${nodes[1]} → ${nodes.at(-1)}`);
 check(eng.liveNodes() === 0 && voicesLeft === 0, 'quedan voces/nodos colgados tras 4 s de silencio');
 
+// La mezcla en primera persona (render offline con automatización, sincronía
+// por eventos del arma, 4v4) vive en check-audio-fp.mjs: se corre aquí para
+// que la cadena de pruebas existente la incluya sin tocar package.json.
+if (!process.argv.includes('--no-fp')) {
+  try {
+    const out = execFileSync(process.execPath, [path.join(root, 'scripts/check-audio-fp.mjs')], { encoding: 'utf8', maxBuffer: 16 << 20 });
+    process.stdout.write(out);
+  } catch (e) {
+    process.stdout.write(e.stdout ?? '');
+    fails.push('check-audio-fp falló (ver arriba)');
+  }
+}
 if (fails.length) {
   console.error(`\nAUDIO BANK FALLO (${fails.length}):\n  ` + fails.join('\n  '));
   process.exit(1);

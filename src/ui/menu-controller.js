@@ -196,7 +196,21 @@ function lobbyGraph(scope) {
   return graph;
 }
 
+// Páginas de ajustes (settings-ui.js): una lista vertical en orden de lectura;
+// izquierda/derecha cambian el valor de sliders y selectores (ver move()).
+function settingsPageGraph(scope) {
+  const graph = navMap();
+  const rows = queryAll(scope, '.set-sections input, .set-sections select');
+  const reset = query(scope, '[data-reset-page]');
+  const back = scope.dataset.navBack ? query(scope, '#' + scope.dataset.navBack) : null;
+  linkLine(graph, [...rows, reset], 'down');
+  if (reset && back) link(graph, reset, 'right', back);
+  if (back && rows.length) setRoute(graph, back, 'up', rows.at(-1));
+  return graph;
+}
+
 function navigationGraph(scope) {
+  if (scope.classList?.contains('settings-page')) return settingsPageGraph(scope);
   if (scope.id === 'main-card') return mainGraph(scope);
   if (scope.id === 'controls-card') return controlsGraph(scope);
   if (scope.id === 'char-card') return characterGraph(scope);
@@ -326,6 +340,16 @@ export class MenuControllerNavigator {
 
   back() {
     if (!this.active()) return false;
+    // Una tarjeta puede declarar su propio "atrás" (data-nav-back = id del
+    // botón): las páginas de ajustes vuelven al hub sin pasar por main.js.
+    const scope = this._scope();
+    const own = scope?.dataset?.navBack && document.getElementById(scope.dataset.navBack);
+    if (own && visible(own)) {
+      own.click();
+      this.onMove?.();
+      queueMicrotask(() => this._ensureFocus(this.mode === 'controller', true));
+      return true;
+    }
     const handled = this.onBack?.() !== false;
     if (handled) {
       this.onMove?.();

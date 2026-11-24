@@ -212,7 +212,10 @@ try {
   await tap(12);
 
   await tap(0);  // open local lobby
-  await page.waitForFunction(() => !document.getElementById('lobby-card').classList.contains('off'), null, { timeout: 5000, polling: 50 }).catch(() => {});
+  // PRUEBAS (corrida 6): tope en CUADROS (120), no 5 s de reloj: en el runner sin GPU
+  // un cuadro dura cientos de ms y el tope de reloj dejaba pasar el gesto sin verlo
+  { const f0 = await page.evaluate(() => window.__frames);
+    await page.waitForFunction((f) => !document.getElementById('lobby-card').classList.contains('off') || window.__frames >= f + 120, f0, { timeout: 600000, polling: 50 }); }
   await frames(2);
   if (!await page.$eval('#lobby-card', (el) => !el.classList.contains('off'))) {
     const state = await page.evaluate(() => ({
@@ -289,7 +292,10 @@ try {
   await tap(0);
   await page.waitForSelector('#menu.off', { state: 'attached' });
   await tap(9); // MENU: pause
-  await page.waitForFunction(() => !document.getElementById('menu').classList.contains('off'), null, { timeout: 5000, polling: 50 }).catch(() => {});
+  // PRUEBAS (corrida 6): tope en CUADROS (120), no 5 s de reloj: en el runner sin GPU
+  // un cuadro dura cientos de ms y el tope de reloj dejaba pasar el gesto sin verlo
+  { const f0 = await page.evaluate(() => window.__frames);
+    await page.waitForFunction((f) => !document.getElementById('menu').classList.contains('off') || window.__frames >= f + 120, f0, { timeout: 600000, polling: 50 }); }
   if (!await page.$eval('#menu', (el) => !el.classList.contains('off'))) {
     const state = await page.evaluate(() => ({
       mode: window.BREACH?.mode,

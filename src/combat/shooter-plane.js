@@ -5,6 +5,8 @@
 // punto menos la proyección (pecho − origen) sobre la dirección de ESE punto.
 import { TUNING } from '../config/tuning.js';
 
+// Corrida 6: los clientes FPS disparan desde el ojo y el servidor ya no les
+// aplica este crédito (server.js registerFire); queda para bots alojados.
 export const SHOOTER_PLANE_Y = 1.3;
 export const SHOOTER_PLANE_MAX = 3;
 // holgura del sobre de cámara: suavizado del pivote, latencia de estados y

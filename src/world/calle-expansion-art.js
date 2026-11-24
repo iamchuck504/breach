@@ -29,7 +29,7 @@ export function decorateCalleExpansion(world, buildings) {
     floor(side<0?'service-alley-floor':'workshop-floor',side*25.25,0,7.5,40.4,concrete,.016);
     for(const z of [-18,18])floor('open-street-passage',side*18.80,z,5.4,4.4,concrete,.016);
     // v3: patio de manzana y patio trasero del spawn
-    floor(side<0?'parking-yard-floor':'workshop-yard-floor',side*(29.8+CALLE_3.yardX)/2,0,CALLE_3.yardX-29.8,40.4,concrete,.016);
+    floor(side<0?'parking-yard-floor':'workshop-yard-floor',side*(29.0+CALLE_3.yardX)/2,0,CALLE_3.yardX-29.0,40.4,concrete,.016);
     floor('back-lot-floor',side*25.275,side*31.5,7.45,21,concrete,.016);
   }
   // Visible walls and solid outer corners exactly match their collision boxes.
@@ -63,7 +63,7 @@ export function decorateCalleExpansion(world, buildings) {
       // Masonry closes the seam. Other batches must also discard the last
       // storefront sign/awning fragments below the complete upper windows.
       const cut=part.name==='Existing_envelope'||part.name.startsWith('District_Brick')?4.4:4.55;
-      if(bounds.max.y<=cut){part.visible=false;return;}
+      if(bounds.max.y<=cut){part.castShadow=false;part.visible=false;return;}
       // Trim crossing wall panels as well as removing entire storefronts.
       // Otherwise their lower halves overlap the new district walls.
       if(bounds.min.y<cut){
@@ -78,7 +78,7 @@ export function decorateCalleExpansion(world, buildings) {
       const chunk=bounds.min.y<cut?Math.floor((z+30)/24):'shared';
       const key=part.geometry.uuid+materials.map(m=>m.uuid).join(':')+':'+chunk;
       if(!facadeInstances.has(key))facadeInstances.set(key,{geometry:part.geometry,material:part.material,matrices:[]});
-      facadeInstances.get(key).matrices.push(part.matrixWorld.clone());part.visible=false;
+      facadeInstances.get(key).matrices.push(part.matrixWorld.clone());part.castShadow=false;part.visible=false;
     });
   }
   for(const {geometry,material,matrices} of facadeInstances.values()){
@@ -88,11 +88,11 @@ export function decorateCalleExpansion(world, buildings) {
   }
   // Readable directions at all four real openings, at human-scale sight height.
   for(const side of [-1,1])for(const z of [-18,18]) {
-    world._addMapSign(side<0?'SERVICE ALLEY':'MOTOR WORKS',side*16.0,3.05,z,
+    world._addMapSign(side<0?'SERVICE ALLEY':'MOTOR WORKS',side*(18.85-2.7-.0325),3.46,z,
       side<0?Math.PI/2:-Math.PI/2,{w:3.1,h:.56,parent:root,
         style:side<0?'transit':'industrial',subtitle:side<0?'LOADING ACCESS':'REPAIR / SERVICE'});
     // Small lintel above a 4.4m-wide opening: posts are the building corners.
-    cube('passage-lintel',side*18.85,3.46,z,5.4,.18,4.4,metal);
+    cube('passage-lintel',side*18.85,3.46,z,5.4,.18,4.39,metal);
     for(const end of [-1,1]) {
       const x=side*18.85;
       cube('passage-edge-marking',x,.03,z+end*1.92,5.4,.025,.10,yellow);
@@ -171,7 +171,7 @@ export function decorateCalleExpansion(world, buildings) {
       cube('vehicle-lift-upright',s*x,1.45,s*liftZ,.30,2.9,.30,yellow);
       cube('lift-guide',s*x,1.55,s*(liftZ-.17),.10,2.5,.035,metal);
     }
-    cube('lift-overhead-rail',s*23.025,2.85,s*liftZ,2.85,.10,.3,yellow);
+    cube('lift-overhead-rail',s*23.025,2.85,s*liftZ,2.25,.10,.28,yellow);
   }
   // autos: el del callejón y los de cada patio, con su pareja girada 180°
   const carColors=[0x58646c,0x655647,0x4d5a48,0x6b5d55];
@@ -187,7 +187,7 @@ export function decorateCalleExpansion(world, buildings) {
   const paint=mat(0xa5a8a1),blue=mat(0x3d5964);
   for(const x of [21.57,28.97])for(const z of [-13,13]){
     cube('workshop-painted-dado',x,.78,z,.015,1.55,x<22?5.6:7.8,paint);
-    cube('workshop-service-stripe',x,1.5,z,.025,.16,x<22?5.6:7.8,blue);
+    cube('workshop-service-stripe',x,1.5,z,.025,.16,x<22?5.58:7.78,blue);
   }
   // v3 — TALLER bajo marquesina y ANDÉN de carga
   const canopy=CALLE_3.canopy,canopyMat=mat(0x39464d,{metalness:.55,roughness:.5});
@@ -298,7 +298,7 @@ export function decorateCalleExpansion(world, buildings) {
   for(const z of [-10.6,10.6]){
     const tyre=new THREE.Mesh(new THREE.TorusGeometry(.26,.095,6,12),black);
     tyre.name='stored-workshop-tyre';tyre.rotation.y=Math.PI/2;
-    tyre.position.set(28.87,2.45,z);root.add(tyre);
+    tyre.position.set(28.84,2.45,z);root.add(tyre);
     cube('tyre-wall-hook',28.88,2.75,z,.17,.035,.05,metal);
   }
   // Small pavement wear patches away from painted lines. Transparent edges,
@@ -310,8 +310,9 @@ export function decorateCalleExpansion(world, buildings) {
   const stainTex=new THREE.CanvasTexture(stainCanvas);stainTex.colorSpace=THREE.SRGBColorSpace;
   const stain=new THREE.MeshStandardMaterial({map:stainTex,transparent:true,depthWrite:false,roughness:.3,metalness:.12});
   for(const side of [-1,1]){
-    floor('vehicle-oil-stain',side*6.5,side*1.5,2.1,3.2,stain,.027);
-    floor('localized-damp-pavement',side*26.5,side*4,1.5,2.5,stain,.027);
+    // El centro de la mancha asoma junto al chasis, con un borde bajo el autobús.
+    floor('vehicle-oil-stain',side*8.3,side*1.5,2.1,3.2,stain,.027);
+    floor('localized-damp-pavement',side*26.5,side*4,1.5,2.5,stain,.033);
     for(let i=0;i<3;i++)floor('service-paper-litter',side*(28.45-i*.17),side*(15+i*.30),.15,.21,mat(i%2?0x7b817a:0xa39779),.031+i*.001);
   }
 }
@@ -390,7 +391,7 @@ const bakedMaterials = new Map();
 const TINTS = new WeakMap();
 export const tintOf = (mesh) => TINTS.get(mesh) ?? null;
 function bakeClass(m) {
-  if (own(m, 'onBeforeCompile') || m.userData.lookPatched || m.vertexColors || m.transparent || !m.visible) return null;
+  if (m.polygonOffset || own(m, 'onBeforeCompile') || m.userData.lookPatched || m.vertexColors || m.transparent || !m.visible) return null;
   if (m.map || m.alphaMap || m.emissiveMap || m.bumpMap || m.normalMap || m.roughnessMap || m.metalnessMap || m.aoMap || m.lightMap) return null;
   if (m.emissive && (m.emissive.r + m.emissive.g + m.emissive.b) * m.emissiveIntensity > 0.02) return null;
   if (m.isMeshStandardMaterial && !m.isMeshPhysicalMaterial) return `std:${Math.round(m.roughness * 4) / 4}:${Math.round(m.metalness * 2) / 2}:${m.side}:${m.flatShading}`;

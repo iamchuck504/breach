@@ -11,10 +11,13 @@ import { fileURLToPath } from 'node:url';
 import { clearClip } from './lib-clip.mjs';
 import { CHROME } from './lib-chrome.mjs';
 import { decksFor } from '../src/world/collision-layouts.js';
+import { freePort } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MAPS = process.argv.length > 2 ? process.argv.slice(2) : ['azoteas', 'calle2'];
-const PORT = 8827, LIMIT_S = 100;
+const PORT = FREE_PORT, LIMIT_S = 100;
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
   cwd: root, env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: String(PORT), NODE_ENV: 'test' }, stdio: 'ignore',
 });

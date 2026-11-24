@@ -5,7 +5,7 @@
 // y las caras de cobertura que consume el sistema de cover.
 import * as THREE from 'three';
 import { MAP_RUNTIME } from '../game/lobby-rules.js';
-import { rampHeight } from './collision-layouts.js';
+import { FORT_SHRUB_BEDS, decksFor, rampHeight } from './collision-layouts.js';
 import { decorateMapV2 } from './maps-v2-art.js';
 import { BLOCK } from './block-heights.js';
 import { getMap, isCustomLayout, cratesOf, specialOf, spawnsOf, footprint, paletteById }
@@ -21,10 +21,16 @@ import { calleShopDisplay } from './calle-shop-display.js';
 import { DISTRICT_FACADES } from './district-facades.js';
 import { polishCalleProp } from './calle-prop-polish.js';
 import { polishArchitecture } from './architecture-polish.js';
-import {galleryHeight,FORT_GALLERY} from './fortaleza-galleries.js';
-import {addFortalezaGalleries} from './fortaleza-gallery-art.js';
+import {galleryBoxes,galleryHeight,FORT_GALLERY} from './fortaleza-galleries.js';
+import {addFortalezaGalleries, finishFortStone} from './fortaleza-gallery-art.js';
+import {clipMasonryBatch,galleryThresholds,masonryBox} from './fortaleza-masonry.js';
 import {addMapIdentity} from './map-identity.js';
-import { MapLook } from '../look/index.js';
+import { MapLook, mulberry } from '../look/index.js';
+
+const FORT_SIEGE_CRATES = [
+  [20.05, -18, 0.8, 0], [20.1, -10, 0.65, 0.2], [20.0, -2, 0.75, -0.15],
+  [20.05, 7, 0.7, 0.25], [20.05, 15, 0.85, -0.2], [19.55, -17.7, 0.55, 0.4],
+];
 
 const FIELD_X = 15, FIELD_Z = 18; // semiancho / semilargo
 const SOLDIER_HEIGHT = 1.63;
@@ -48,7 +54,8 @@ function buildSharedCollision(world, layout, styles) {
   for (const box of collisionBoxesFor(layout)) {
     const { x, z, w, d, h, style, ...options } = box;
     const firstFace=world.faces.length;
-    world._box(x, z, w, d, h, { ...(styles[style] || {}), ...options });
+    world._box(x, z, w, d, h, { ...(styles[style] || {}), ...options,
+      stoneLintel: layout === 'fortaleza' && style === 'wall' && !!box.minY });
     // Living-body envelope; does not expand ballistic or navigation geometry.
     if ((layout==='fortaleza' && ['wall','high'].includes(style)) ||
         (layout==='azoteas' && ['wall','hut'].includes(style)) ||
@@ -374,6 +381,8 @@ export class World {
 
   // ---------- texturas procedurales (canvas nítido — cero blur/filtros) ----------
   _initTextures() {
+    // El mismo desgaste y las mismas ventanas en cada carga.
+    this._textureRandom = mulberry(0x5e71);
     this._cv = {
       stone: this._stoneCanvas(4, 3, false),   // sillares de muro
       stoneTop: this._stoneCanvas(3, 3, true), // losas planas para los topes
@@ -626,9 +635,10 @@ export class World {
     // Ruido de valor en tres octavas sobre retículas que envuelven en el
     // borde: manchas irregulares sin dirección dominante. (Sumar pocas ondas
     // senoidales dejaba un rayado diagonal visible al muestrearlo fino.)
+    const random = mulberry(0x9b132);
     const channel = () => {
       const octaves = [8, 16, 32].map((cells) => ({
-        cells, values: Float32Array.from({ length: cells * cells }, () => Math.random()),
+        cells, values: Float32Array.from({ length: cells * cells }, random),
       }));
       const smooth = (t) => t * t * (3 - 2 * t);
       const sample = ({ cells, values }, x, y) => {
@@ -872,13 +882,13 @@ export class World {
     }
     // manchas y chorreados
     for (let i = 0; i < 10; i++) {
-      g.fillStyle = `rgba(70,66,58,${0.05 + Math.random() * 0.08})`;
-      g.fillRect(Math.random() * s, Math.random() * s, 14 + Math.random() * 40, 8 + Math.random() * 26);
+      g.fillStyle = `rgba(70,66,58,${0.05 + this._textureRandom() * 0.08})`;
+      g.fillRect(this._textureRandom() * s, this._textureRandom() * s, 14 + this._textureRandom() * 40, 8 + this._textureRandom() * 26);
     }
     for (let i = 0; i < 6; i++) {
-      const x = Math.random() * s;
+      const x = this._textureRandom() * s;
       g.fillStyle = 'rgba(60,56,48,0.14)';
-      g.fillRect(x, Math.random() * s * 0.4, 2, 30 + Math.random() * 60);
+      g.fillRect(x, this._textureRandom() * s * 0.4, 2, 30 + this._textureRandom() * 60);
     }
     // pernos de encofrado
     g.fillStyle = 'rgba(50,46,40,0.5)';
@@ -895,16 +905,16 @@ export class World {
     const g = cv.getContext('2d');
     g.fillStyle = '#57544f'; g.fillRect(0, 0, s, s);
     for (let i = 0; i < 1100; i++) { // agregado
-      const l = 28 + Math.random() * 22;
+      const l = 28 + this._textureRandom() * 22;
       g.fillStyle = `hsl(40, 3%, ${l}%)`;
-      g.fillRect(Math.random() * s, Math.random() * s, 2, 2);
+      g.fillRect(this._textureRandom() * s, this._textureRandom() * s, 2, 2);
     }
     g.strokeStyle = 'rgba(24,22,20,0.55)'; g.lineWidth = 2; // grietas
     for (let i = 0; i < 4; i++) {
-      let x = Math.random() * s, y = Math.random() * s;
+      let x = this._textureRandom() * s, y = this._textureRandom() * s;
       g.beginPath(); g.moveTo(x, y);
       for (let k = 0; k < 5; k++) {
-        x += (Math.random() - 0.5) * 60; y += 14 + Math.random() * 26;
+        x += (this._textureRandom() - 0.5) * 60; y += 14 + this._textureRandom() * 26;
         g.lineTo(x, y);
       }
       g.stroke();
@@ -924,8 +934,8 @@ export class World {
     for (let y = 0; y < s; y += bh, row++) {
       const off = row % 2 ? bw / 2 : 0;
       for (let x = -bw; x < s + bw; x += bw) {
-        const shade = 0.72 + Math.random() * 0.34;
-        g.fillStyle = Math.random() < 0.18 ? light : base;
+        const shade = 0.72 + this._textureRandom() * 0.34;
+        g.fillStyle = this._textureRandom() < 0.18 ? light : base;
         g.globalAlpha = shade;
         g.fillRect(x + off + joint, y + joint, bw - joint * 2, bh - joint * 2);
         g.globalAlpha = 1;
@@ -934,12 +944,12 @@ export class World {
       }
     }
     for (let i = 0; i < 13; i++) {
-      const x = Math.random() * s;
+      const x = this._textureRandom() * s;
       const grd = g.createLinearGradient(x, 0, x + 10, 0);
       grd.addColorStop(0, 'rgba(12,15,18,0)');
-      grd.addColorStop(0.5, `rgba(12,15,18,${0.08 + Math.random() * 0.13})`);
+      grd.addColorStop(0.5, `rgba(12,15,18,${0.08 + this._textureRandom() * 0.13})`);
       grd.addColorStop(1, 'rgba(12,15,18,0)');
-      g.fillStyle = grd; g.fillRect(x, 0, 10, 45 + Math.random() * 190);
+      g.fillStyle = grd; g.fillRect(x, 0, 10, 45 + this._textureRandom() * 190);
     }
     return cv;
   }
@@ -957,8 +967,8 @@ export class World {
       g.fillStyle = 'rgba(0,0,0,.30)'; g.fillRect(0, y + 8, s, 3);
     }
     for (let i = 0; i < 18; i++) {
-      g.fillStyle = `rgba(105,58,39,${0.08 + Math.random() * 0.16})`;
-      g.fillRect(Math.random() * s, Math.random() * s, 8 + Math.random() * 32, 3 + Math.random() * 12);
+      g.fillStyle = `rgba(105,58,39,${0.08 + this._textureRandom() * 0.16})`;
+      g.fillRect(this._textureRandom() * s, this._textureRandom() * s, 8 + this._textureRandom() * 32, 3 + this._textureRandom() * 12);
     }
     return cv;
   }
@@ -978,14 +988,14 @@ export class World {
     grime.addColorStop(1, 'rgba(30,27,24,.28)');
     g.fillStyle = grime; g.fillRect(0, 0, w, h);
     for (let i = 0; i < 42; i++) {
-      const x = Math.random() * w, y = 14 + Math.random() * (h - 22);
-      g.fillStyle = `rgba(91,52,37,${0.025 + Math.random() * 0.065})`;
-      g.fillRect(x, y, 4 + Math.random() * 22, 1 + Math.random() * 4);
+      const x = this._textureRandom() * w, y = 14 + this._textureRandom() * (h - 22);
+      g.fillStyle = `rgba(91,52,37,${0.025 + this._textureRandom() * 0.065})`;
+      g.fillRect(x, y, 4 + this._textureRandom() * 22, 1 + this._textureRandom() * 4);
     }
     g.strokeStyle = 'rgba(230,225,214,.32)'; g.lineWidth = 1;
     for (let i = 0; i < 14; i++) {
-      const x = Math.random() * w, y = 20 + Math.random() * 80;
-      g.beginPath(); g.moveTo(x, y); g.lineTo(x + 10 + Math.random() * 28, y + (Math.random() - 0.5) * 7); g.stroke();
+      const x = this._textureRandom() * w, y = 20 + this._textureRandom() * 80;
+      g.beginPath(); g.moveTo(x, y); g.lineTo(x + 10 + this._textureRandom() * 28, y + (this._textureRandom() - 0.5) * 7); g.stroke();
     }
     return cv;
   }
@@ -1006,10 +1016,10 @@ export class World {
     g.fillStyle = sky; g.fillRect(0, 0, w, h);
     // silueta tenue de la ciudad reflejada en la mitad inferior
     for (let i = 0; i < 9; i++) {
-      const bw = 14 + Math.random() * 24;
-      const bx = (i / 9) * w + Math.random() * 10;
-      const bh = 22 + Math.random() * 34;
-      g.fillStyle = `rgba(6,13,18,${0.35 + Math.random() * 0.25})`;
+      const bw = 14 + this._textureRandom() * 24;
+      const bx = (i / 9) * w + this._textureRandom() * 10;
+      const bh = 22 + this._textureRandom() * 34;
+      g.fillStyle = `rgba(6,13,18,${0.35 + this._textureRandom() * 0.25})`;
       g.fillRect(bx, h - bh, bw, bh);
     }
     // vetas diagonales de reflejo (la firma clásica del vidrio estilizado)
@@ -1031,7 +1041,7 @@ export class World {
     return cv;
   }
 
-  _puddleCanvas() {
+  _puddleCanvas(outline = true) {
     const s = 256;
     const cv = document.createElement('canvas');
     cv.width = cv.height = s;
@@ -1048,7 +1058,7 @@ export class World {
     g.bezierCurveTo(197, 33, 244, 78, 234, 137);
     g.bezierCurveTo(249, 195, 188, 226, 129, 210);
     g.bezierCurveTo(70, 229, 14, 193, 20, 134); g.fill();
-    g.strokeStyle = 'rgba(187,208,218,.22)'; g.lineWidth = 3; g.stroke();
+    if (outline) { g.strokeStyle = 'rgba(187,208,218,.22)'; g.lineWidth = 3; g.stroke(); }
     return cv;
   }
 
@@ -1116,9 +1126,9 @@ export class World {
     const g = cv.getContext('2d');
     g.fillStyle = '#8f8d88'; g.fillRect(0, 0, s, s);
     for (let i = 0; i < 900; i++) { // grava
-      const l = 45 + Math.random() * 35;
+      const l = 45 + this._textureRandom() * 35;
       g.fillStyle = `hsl(40, 4%, ${l}%)`;
-      g.fillRect(Math.random() * s, Math.random() * s, 2, 2);
+      g.fillRect(this._textureRandom() * s, this._textureRandom() * s, 2, 2);
     }
     g.strokeStyle = 'rgba(30,28,26,0.5)'; g.lineWidth = 4; // juntas de brea
     for (const t of [0, s / 2, s]) {
@@ -1140,7 +1150,7 @@ export class World {
     const cols = 5, rows = 11, cw = w / cols, rh = h / rows;
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        const lit = Math.random();
+        const lit = this._textureRandom();
         g.fillStyle = lit < 0.22 ? '#ffd9a0' : lit < 0.32 ? '#a8c8ff' : '#171a24';
         g.fillRect(c * cw + 4, r * rh + 5, cw - 8, rh - 9);
       }
@@ -1152,8 +1162,9 @@ export class World {
   _roofMarkCanvas() {
     const s = 256;
     const cv = document.createElement('canvas');
-    cv.width = cv.height = s;
+    cv.width = cv.height = 4 * s;
     const g = cv.getContext('2d');
+    g.scale(4, 4);
     g.clearRect(0, 0, s, s);
     g.strokeStyle = 'rgba(92,196,224,.58)';
     g.lineWidth = 8;
@@ -1170,7 +1181,7 @@ export class World {
     g.fillStyle = 'rgba(169,222,234,.62)';
     g.font = 'bold 14px monospace';
     g.textAlign = 'center';
-    g.fillText('SECTOR 09', 128, 226);
+    g.fillText('SECTOR 09', 128, 244);
     return cv;
   }
 
@@ -1187,6 +1198,38 @@ export class World {
       g.closePath(); g.fill();
     }
     g.fillStyle = 'rgba(255,255,255,.14)'; g.fillRect(0, 0, w, 3);
+    return cv;
+  }
+
+  _parkingSignCanvas() {
+    const cv = document.createElement('canvas');
+    cv.width = 128; cv.height = 192;
+    const g = cv.getContext('2d');
+    g.fillStyle = '#e4dfcf'; g.fillRect(0, 0, 128, 192);
+    g.strokeStyle = '#5d6261'; g.lineWidth = 3; g.strokeRect(5, 5, 118, 182);
+    g.fillStyle = '#222b30'; g.textAlign = 'center';
+    g.font = 'bold 70px sans-serif'; g.fillText('P', 64, 87);
+    g.strokeStyle = '#9a3934'; g.lineWidth = 8;
+    g.beginPath(); g.arc(64, 62, 40, 0, 2 * Math.PI); g.stroke();
+    g.beginPath(); g.moveTo(36, 34); g.lineTo(92, 90); g.stroke();
+    g.font = 'bold 27px sans-serif'; g.fillText('NO', 64, 139);
+    g.font = 'bold 24px sans-serif'; g.fillText('PARKING', 64, 168, 110);
+    return cv;
+  }
+
+  _serviceHatchCanvas() {
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = 128;
+    const g = cv.getContext('2d');
+    g.fillStyle = '#48525a'; g.fillRect(0, 0, 128, 128);
+    g.fillStyle = '#222b32'; g.fillRect(5, 5, 118, 118);
+    g.fillStyle = '#657077'; g.fillRect(7, 7, 114, 114);
+    // Junta, tornillos y tirador empotrado en una sola superficie.
+    for (const x of [14, 114]) for (const y of [14, 114]) {
+      g.fillStyle = '#393f44'; g.beginPath(); g.arc(x, y, 2.5, 0, 2 * Math.PI); g.fill();
+    }
+    g.fillStyle = '#293138'; g.fillRect(48, 93, 32, 10);
+    g.fillStyle = '#859095'; g.fillRect(51, 95, 26, 3);
     return cv;
   }
 
@@ -1274,13 +1317,17 @@ export class World {
     batch.count += 4;
   }
 
-  _batchBox(x, z, w, d, h, sideColor, topColor) {
+  _batchBox(x, z, w, d, h, sideColor, topColor, base = 0) {
     const x0 = x - w / 2, x1 = x + w / 2;
     const z0 = z - d / 2, z1 = z + d / 2;
     const S = this._batchUvScale ?? 1.7;
-    const uw = w / S, ud = d / S, vh = h / S;
+    const uw = w / S, ud = d / S, vh = (h - base) / S;
     const b = this._boxBatch;
-    this._contactBoxes?.push([x0, x1, z0, z1]);
+    if (this.layout === 'fortaleza' || this.layout === 'azoteas') {
+      (b.solids ??= []).push(masonryBox([x0,base,z0],[x1,h,z1],
+        {side:b.sides.count,top:b.tops.count,bottom:base>0}));
+    }
+    if (!base) this._contactBoxes?.push([x0, x1, z0, z1]);
     // AO falso gratis: zócalo oscuro y borde superior claro dentro del mismo
     // atributo de color; no agrega geometría, materiales ni draw calls.
     const bottom = new THREE.Color(sideColor).multiplyScalar(0.74).getHex();
@@ -1290,23 +1337,31 @@ export class World {
     const meta = [(Math.abs(Math.sin(x * 12.9898 + z * 78.233) * 43758.5453)) % 1, h];
 
     this._batchQuad(b.sides,
-      [[x1, 0, z0], [x1, h, z0], [x1, h, z1], [x1, 0, z1]],
-      [1, 0, 0], [[0, 0], [0, vh], [ud, vh], [ud, 0]], sideGradient, [d, h], meta);
+      [[x1, base, z0], [x1, h, z0], [x1, h, z1], [x1, base, z1]],
+      [1, 0, 0], [[0, 0], [0, vh], [ud, vh], [ud, 0]], sideGradient, [d, h - base], meta);
     this._batchQuad(b.sides,
-      [[x0, 0, z1], [x0, h, z1], [x0, h, z0], [x0, 0, z0]],
-      [-1, 0, 0], [[0, 0], [0, vh], [ud, vh], [ud, 0]], sideGradient, [d, h], meta);
+      [[x0, base, z1], [x0, h, z1], [x0, h, z0], [x0, base, z0]],
+      [-1, 0, 0], [[0, 0], [0, vh], [ud, vh], [ud, 0]], sideGradient, [d, h - base], meta);
     this._batchQuad(b.sides,
-      [[x1, 0, z1], [x1, h, z1], [x0, h, z1], [x0, 0, z1]],
-      [0, 0, 1], [[0, 0], [0, vh], [uw, vh], [uw, 0]], sideGradient, [w, h], meta);
+      [[x1, base, z1], [x1, h, z1], [x0, h, z1], [x0, base, z1]],
+      [0, 0, 1], [[0, 0], [0, vh], [uw, vh], [uw, 0]], sideGradient, [w, h - base], meta);
     this._batchQuad(b.sides,
-      [[x0, 0, z0], [x0, h, z0], [x1, h, z0], [x1, 0, z0]],
-      [0, 0, -1], [[0, 0], [0, vh], [uw, vh], [uw, 0]], sideGradient, [w, h], meta);
+      [[x0, base, z0], [x0, h, z0], [x1, h, z0], [x1, base, z0]],
+      [0, 0, -1], [[0, 0], [0, vh], [uw, vh], [uw, 0]], sideGradient, [w, h - base], meta);
     this._batchQuad(b.tops,
       [[x0, h, z0], [x0, h, z1], [x1, h, z1], [x1, h, z0]],
       [0, 1, 0], [[0, 0], [0, ud], [uw, ud], [uw, 0]], topColor, [w, d], meta);
+    if (base) this._batchQuad(b.tops,
+      [[x0, base, z1], [x0, base, z0], [x1, base, z0], [x1, base, z1]],
+      [0, -1, 0], [[0, 0], [0, ud], [uw, ud], [uw, 0]], sideColor, [w, d], meta);
   }
 
   _flushBoxBatch() {
+    if (this._boxBatch.solids) {
+      const neighbors = this.layout === 'fortaleza' ? galleryBoxes().map(b => masonryBox([b.x-b.w/2,b.visualBase??b.minY??0,b.z-b.d/2],
+        [b.x+b.w/2,b.h,b.z+b.d/2])).concat(galleryThresholds()) : [];
+      clipMasonryBatch(this._boxBatch,neighbors);
+    }
     const build = (batch, texture, name) => {
       if (!batch.count) return;
       const g = new THREE.BufferGeometry();
@@ -1354,7 +1409,7 @@ export class World {
     const boxes = this._contactBoxes;
     this._contactBoxes = null;
     if (!boxes?.length) return;
-    const reach = 0.5, y = 0.012, dark = 0.34;
+    const reach = 0.5, y = this.layout === 'fortaleza' ? 0.008 : 0.012, dark = 0.34;
     const pos = [], col = [], idx = [];
     const quad = (a, b, c, d) => { // a,b = borde junto al bloque; c,d = borde exterior
       const base = pos.length / 3;
@@ -1425,6 +1480,10 @@ export class World {
   }
 
   _applyEnvironment(layout) {
+    // Con sol rasante, desplazar la muestra media texela sobre la normal
+    // evita bandas de autosombra en jambas y alféizares iluminados.
+    const shadow = this.sun.shadow;
+    shadow.normalBias = ['fortaleza','azoteas','calle'].includes(layout) ? (shadow.camera.right-shadow.camera.left)/shadow.mapSize.x*.5 : 0;
     if (layout === 'fortaleza') {
       // Hora dorada: contraste cálido/frío para separar piedra y jugadores.
       // El relleno (cielo + ambiente) sumaba casi tanto como el sol: las
@@ -1626,7 +1685,7 @@ export class World {
   // Caja física + visual. mirror=true agrega la copia rotada 180° (-x,-z).
   _box(x, z, w, d, h, {
     mirror = true, color = 0x9a958c, top = 0xaeaaa1, cover = true, visual = true,
-    surface = null, decorLink = null, minY = 0, walkSurface = false, coverBase = 0, moveOnly = false,
+    surface = null, decorLink = null, stoneLintel = false, minY = 0, walkSurface = false, coverBase = 0, moveOnly = false,
   } = {}) {
     const place = (px, pz) => {
       // CLONADO DE MAPAS: place() es el embudo por el que pasa cada caja de
@@ -1638,20 +1697,42 @@ export class World {
         ...(minY?{minY}:{}),...(walkSurface?{walkSurface}:{}),...(coverBase?{coverBase}:{}),...(moveOnly?{moveOnly}:{}) });
       if (this._suppressBoxes) return;
       // variación sutil de tono por caja: rompe la monotonía sin romper la paleta
-      const jit = 0.95 + Math.random() * 0.1;
+      const seeded = ['azoteas','calle2','fortaleza'].includes(this.customMap?.base ?? this.layout);
+      const random = seeded ? mulberry(Math.imul(Math.round(px * 1000),73856093) ^ Math.imul(Math.round(pz * 1000),19349663)) : Math.random;
+      const jit = 0.95 + random() * 0.1;
       const tone = (hex) => {
         const out = new THREE.Color(hex).multiplyScalar(jit);
         // Fortaleza: además del brillo, cada bloque vira un poco a cálido o a
         // frío. Va en el color por vértice que ya existía: no cuesta nada.
-        if (this._fortLook) { const warm = (Math.random() - 0.5) * 0.07; out.r *= 1 + warm; out.b *= 1 - warm; }
+        if (this._fortLook) { const warm = (random() - 0.5) * 0.07; out.r *= 1 + warm; out.b *= 1 - warm; }
         return out.getHex();
       };
       const c = tone(color);
       const t = tone(top);
-      if (visual && !minY) this._batchBox(px, pz, w, d, h, c, t);
-      else if(visual){
-        const mesh=new THREE.Mesh(new THREE.BoxGeometry(w,h-minY,d),new THREE.MeshLambertMaterial({color:c}));
-        mesh.position.set(px,(h+minY)/2,pz);mesh.castShadow=true;mesh.receiveShadow=true;this.mapGroup.add(mesh);
+      if (visual && (!minY || stoneLintel)) {
+        // Encuentros de piedra a tope. La pestaña corta del homenaje entraba
+        // 40 cm en la otra pared. En las cuatro esquinas del patio las dos
+        // albardillas se cruzan: una pasa 5 mm por debajo de la otra.
+        const fort = this.layout === 'fortaleza';
+        const lap = fort && Math.abs(px) === 4.6 && Math.abs(pz) === 4.1 && d === 1 ? 0.4 : 0;
+        const cap = fort && Math.abs(px) === 21.4 && Math.abs(pz) > FORT_GALLERY.end ? 0.005 : 0;
+        this._batchBox(px, pz - Math.sign(pz)*lap/2, w, d-lap, h-cap, c, t, minY);
+      } else if(visual){
+        // El travesaño del rellano termina contra el larguero, sin duplicar su esquina.
+        const roofRail = this.layout === 'azoteas' && minY === BLOCK.MID && coverBase === minY;
+        const fortRail = this.layout === 'fortaleza' && minY === BLOCK.HIGH;
+        const lap = (roofRail || fortRail) && w > d && d === .2 ? d : 0;
+        const outer = roofRail ? Math.sign(px - Math.sign(px)*Math.abs(decksFor('azoteas')[0].x)) : Math.sign(px);
+        const geometry = new THREE.BoxGeometry(w-lap,h-minY,d);
+        if ((roofRail || fortRail) && (d === .2 || w === .2)) {
+          // La losa dibuja el apoyo; el larguero ya cierra el extremo del travesaño.
+          const normal = geometry.attributes.normal;
+          geometry.clearGroups();
+          geometry.setIndex(Array.from(geometry.index.array).filter(i =>
+            normal.getY(i) !== -1 && !(lap && normal.getX(i) === outer)));
+        }
+        const mesh=new THREE.Mesh(geometry,new THREE.MeshLambertMaterial({color:c}));
+        mesh.position.set(px-outer*lap/2,(h+minY)/2,pz);mesh.castShadow=true;mesh.receiveShadow=true;this.mapGroup.add(mesh);
       }
       const minx = px - w / 2, maxx = px + w / 2, minz = pz - d / 2, maxz = pz + d / 2;
       const material = surface ||
@@ -2190,7 +2271,10 @@ export class World {
           // render/raycast it alongside the Blender replacement.
           const fallback=new THREE.Group();fallback.name='procedural-prop-fallback';fallback.visible=false;
           for(const child of [...group.children])fallback.add(child);
+          fallback.traverse(o => { if (o.isMesh) o.castShadow = false; });
           group.add(fallback,model);
+          // El reflector trasero del contenedor coincidía con el frente del comercio.
+          if (kind==='dumpster') model.position.z += .035;
           if(kind==='kiosk'&&data.decorLink?.includes('north'))model.rotation.y=Math.PI;
           group.userData.blenderProp=id;
         }
@@ -2549,7 +2633,7 @@ export class World {
         [-3.13, 1.27], [-2.86, 2.27], [-1.77, 2.27], [-1.51, 1.27],
       ], glassMat, 0.070, 4);
       add(0.016, 1.86, 0.018, skinX, 1.16, -1.48, seamMat);
-      add(0.016, 0.018, 1.58, skinX, 0.34, -2.25, seamMat);
+      add(0.016, 0.018, 1.55, skinX, 0.34, -2.25, seamMat);
       add(0.026, 0.040, 0.25, skinX + side * 0.010, 1.08, -1.66, trimMat);
       // Retrovisor anclado al pilar A con carcasa negra de proporción útil.
       add(0.26, 0.035, 0.035, side * (S.width / 2 + 0.18), 1.90, -3.03, trimMat);
@@ -2566,8 +2650,8 @@ export class World {
       // única banda de servicio. Ya no parece una colección de barrotes.
       add(0.025, 0.15, 3.70, side * (S.width / 2 + 0.060), 1.62, 0.88, stripeMat);
       for (const pz of [-0.08, 1.06, 2.20]) {
-        add(0.020, 1.78, 0.018, side * (S.width / 2 + 0.062), 1.48, pz, seamMat);
-        add(0.024, 0.025, 0.92, side * (S.width / 2 + 0.064), 0.62, pz + 0.45, seamMat);
+        add(0.020, 1.78, 0.018, side * (S.width / 2 + 0.065), 1.48, pz, seamMat);
+        add(0.024, 0.025, 0.88, side * (S.width / 2 + 0.069), 0.62, pz + 0.45, seamMat);
       }
     }
     add(S.width + 0.10, 0.12, 4.68, 0, 2.88, 1.06, trimMat);
@@ -2599,7 +2683,7 @@ export class World {
       add(0.035, 0.27, 0.026, gx, 0.65, -S.length / 2 - 0.092, hubMat);
     }
     // Portones traseros con paneles, bisagras, cierre y luces verticales.
-    add(S.width - 0.14, 2.38, 0.050, 0, 1.52, S.length / 2 + 0.035, cargoMat);
+    add(S.width - 0.14, 2.38, 0.050, 0, 1.52, S.length / 2 + 0.042, cargoMat);
     add(0.030, 2.22, 0.060, 0, 1.50, S.length / 2 + 0.070, seamMat);
     for (const sx of [-0.84, 0.84]) {
       add(0.08, 1.90, 0.065, sx, 1.52, S.length / 2 + 0.075, seamMat);
@@ -2688,11 +2772,16 @@ export class World {
       [-1.12, 1.20, -4.645], [-0.98, 2.76, -4.170],
       [0.98, 2.76, -4.170], [1.12, 1.20, -4.645],
     ], lower, 3);
-    panel([
-      [-1.05, 1.28, -4.653], [-0.91, 2.68, -4.181],
-      [0.91, 2.68, -4.181], [1.05, 1.28, -4.653],
-    ], glass, 4);
-    add(0.042, 1.39, 0.026, 0, 1.98, -4.468, lower, -0.34);
+    const bottom = [-1.05, 1.28, -4.653], top = [-0.91, 2.68, -4.181];
+    panel([bottom, top, [-top[0], top[1], top[2]], [-bottom[0], bottom[1], bottom[2]]], glass, 4);
+    const slope = (top[2] - bottom[2]) / (top[1] - bottom[1]);
+    const onGlass = (x, y) => new THREE.Vector3(x, y, bottom[2] + slope * (y - bottom[1]) - 0.008);
+    const glassBar = (a, b, width) => {
+      const mid = a.clone().lerp(b, 0.5), dir = b.clone().sub(a);
+      const bar = add(width, dir.length(), 0.018, mid.x, mid.y, mid.z, lower);
+      bar.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+    };
+    glassBar(onGlass(0, bottom[1]), onGlass(0, top[1]), 0.042);
     add(1.50, 0.20, 0.055, 0, 0.70, -4.55, lower);
     add(S.width + 0.08, 0.18, 0.16, 0, 0.31, -4.57, lower);
     add(0.48, 0.12, 0.040, 0, 0.40, -4.665, bodyInset);
@@ -2810,7 +2899,7 @@ export class World {
       add(0.12, 0.34, 0.16, sx * 1.01, 2.48, -4.04, lower);
     }
     for (const sx of [-0.43, 0.43]) {
-      add(0.030, 0.52, 0.030, sx, 1.84, -4.54, lower, 0.25, sx > 0 ? 0.45 : -0.45);
+      glassBar(onGlass(sx + Math.sign(sx) * 0.11, 1.61), onGlass(sx - Math.sign(sx) * 0.11, 2.07), 0.030);
     }
     if (variant) {
       const cracked = new THREE.Mesh(
@@ -2820,7 +2909,7 @@ export class World {
           alphaTest: 0.08, side: THREE.DoubleSide,
         }),
       );
-      cracked.position.set(0.48, 2.14, -4.43); cracked.rotation.x = 0.27; group.add(cracked);
+      cracked.position.copy(onGlass(0.48, 2.14)); cracked.rotation.x = Math.atan(slope); group.add(cracked);
     }
     polishCalleProp(this, group, 'bus', {variant});
     this.mapGroup.add(group);
@@ -3149,8 +3238,10 @@ export class World {
 
     // Charcos irregulares y parches húmedos. Son planos compartiendo una sola
     // textura, sin reflejos en tiempo real ni partículas costosas.
+    const wet = this.layout === 'calle2' && this.look.has('calle');
+    if (wet) this._cv.puddleWet ??= this._puddleCanvas(false);
     const puddleMat = new THREE.MeshBasicMaterial({
-      map: this._tex('puddle'), color: 0x8fb5ca, transparent: true,
+      map: this._tex(wet ? 'puddleWet' : 'puddle'), color: 0x8fb5ca, transparent: true,
       opacity: 0.38, depthWrite: false, side: THREE.DoubleSide,
     });
     for (const [x, z, sx, sz, ry] of [
@@ -3763,8 +3854,6 @@ export class World {
       // bancas de acera contra la fachada, mirando a la calle
       for (const [nx, nz] of [[14.85, -20.5], [14.85, 24.2]]) {
         eachSide(nx, nz, (g) => {
-          // This decorative bench crossed the cafe entrance; no collider is involved.
-          if (expanded && nz === -20.5 && g.position.x > 0) return;
           for (const dz of [-0.78, 0.78]) box(g, 0.52, 0.07, 0.09, 0, 0.42, dz, darkSteelMat);
           for (const dz of [-0.78, 0.78]) box(g, 0.46, 0.36, 0.07, 0, 0.20, dz, darkSteelMat);
           for (const ox of [-0.17, -0.03, 0.11]) box(g, 0.12, 0.05, 1.80, ox, 0.47, 0, woodMat);
@@ -3975,7 +4064,7 @@ export class World {
       fixture.position.set(wallX - side * 0.22, 2.95, z); this.mapGroup.add(fixture);
       for (const dz of [-1.22, 1.22]) {
         loadingTransform.position.set(side * 14.45, 0.034, z + dz);
-        loadingTransform.rotation.set(-Math.PI / 2, 0, Math.PI / 2); loadingTransform.updateMatrix();
+        loadingTransform.rotation.set(-Math.PI / 2, 0, expanded ? 0 : Math.PI / 2); loadingTransform.updateMatrix();
         loadingEdges.setMatrixAt(loadingEdgeIndex++, loadingTransform.matrix);
       }
       for (let i = 0; i < 4; i++) {
@@ -4124,14 +4213,26 @@ export class World {
       const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.065, 0.38, 8), hydrantMat);
       arm.rotation.z = Math.PI / 2; arm.position.y = 0.32; h.add(arm); this.mapGroup.add(h);
     }
+    if (expanded) this._cv.parkingSign ??= this._parkingSignCanvas();
     for (const [x, z, side] of [[-12.55, -2, -1], [12.55, 2, 1], [-12.55, 34, -1], [12.55, -34, 1]]) {
       const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 2.8, 7), streetMetal);
       pole.position.set(x, 1.4, z); this.mapGroup.add(pole);
-      const plate = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.48, 0.72),
-        new THREE.MeshBasicMaterial({ color: side < 0 ? 0xb7c1bd : 0xd4c6aa, side: THREE.DoubleSide }),
-      );
-      plate.position.set(x + side * 0.04, 2.34, z); plate.rotation.y = side < 0 ? Math.PI / 2 : -Math.PI / 2;
+      const geo = expanded ? new THREE.BoxGeometry(.48, .72, .008).translate(0, 0, -.004)
+        : new THREE.PlaneGeometry(.48, .72);
+      if (expanded) {
+        // Solo la cara hacia la calzada lleva tinta; el canto y el dorso son lisos.
+        const { normal, uv } = geo.attributes;
+        for (let i = 0; i < uv.count; i++) if (normal.getZ(i) < .5) uv.setXY(i, .02, .02);
+      }
+      const plate = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+        color: side < 0 ? 0xb7c1bd : 0xd4c6aa,
+        map: expanded ? this._tex('parkingSign') : null,
+        side: expanded ? THREE.FrontSide : THREE.DoubleSide,
+      }));
+      if (expanded) plate.name = 'sidewalk-parking-sign';
+      // La placa queda en la cara del poste que mira a la calle y deja 2.14 m libres.
+      plate.position.set(x + side * (expanded ? -.05 : .04), expanded ? 2.50 : 2.34, z);
+      plate.rotation.y = side < 0 ? Math.PI / 2 : -Math.PI / 2;
       this.mapGroup.add(plate);
     }
     // Seis luces prácticas sin sombras mantienen legibles los módulos nuevos
@@ -4651,7 +4752,14 @@ export class World {
     const castleKit=cloneUrbanAsset('fortress-kit');
     if(castleKit){
       castleKit.name='fortaleza-blender-castle';
-      castleKit.traverse(o=>{if(o.isMesh){o.castShadow=true;o.receiveShadow=true;}});
+      const relief = { Carved_pale_stone: -2, Aged_brass_heraldry: -2,
+        Ashlar_facing_Limestone: -1, Ashlar_facing_Carved_pale_stone: -2 };
+      castleKit.traverse((o) => {
+        if (!o.isMesh) return;
+        finishFortStone(o, relief[o.name]);
+        o.castShadow = !o.name.startsWith('Ashlar_facing');
+        o.receiveShadow = true;
+      });
       this.mapGroup.add(castleKit);
     }
     const courtyardX=21; // original towers/parapets do not follow annex bounds
@@ -4746,7 +4854,10 @@ export class World {
     const outer = [];
     const ox = this.fx + 0.4, oz = this.fz + 0.4;
     for (let x = -ox + 0.6; x <= ox - 0.5; x += step) { outer.push([x, -oz, 0]); outer.push([x, oz, 0]); }
-    for (let z = -oz + 0.6; z <= oz - 0.5; z += step) { outer.push([-ox, z, Math.PI / 2]); outer.push([ox, z, Math.PI / 2]); }
+    for (let z = -oz + 0.6; z <= oz - 0.5; z += step) {
+      const endZ = THREE.MathUtils.clamp(z, -oz + 0.90, oz - 0.90);
+      outer.push([-ox, endZ, Math.PI / 2], [ox, endZ, Math.PI / 2]);
+    }
     const outerMerlon = new THREE.InstancedMesh(new THREE.BoxGeometry(0.8, 0.55, 0.95), stoneMat, outer.length);
     outerMerlon.name = 'fortaleza-outer-merlons';
     outer.forEach(([x, z, ry], i) => {
@@ -4926,15 +5037,12 @@ export class World {
     this.mapGroup.add(sunDisk);
 
     // Carril de asedio (este): cajas al pie de la muralla, fuera de la ruta.
-    const crateData = [
-      [20.05, -18, 0.8, 0], [20.1, -10, 0.65, 0.2], [20.0, -2, 0.75, -0.15],
-      [20.05, 7, 0.7, 0.25], [20.05, 15, 0.85, -0.2], [19.55, -17.7, 0.55, 0.4],
-    ];
     const siegeWood = new THREE.MeshLambertMaterial({ color: 0x735239 });
     const crates = new THREE.InstancedMesh(
       new THREE.BoxGeometry(0.75, 0.68, 0.75),
-      siegeWood, crateData.length);
-    crateData.forEach(([x, z, sc, ry], i) => {
+      siegeWood, FORT_SIEGE_CRATES.length);
+    crates.name = 'fort-siege-crates';
+    FORT_SIEGE_CRATES.forEach(([x, z, sc, ry], i) => {
       q.setFromEuler(e.set(0, ry, 0));
       m4.compose(p.set(x, 0.34 * sc, z), q, s.set(sc, sc, sc));
       crates.setMatrixAt(i, m4);
@@ -4946,17 +5054,22 @@ export class World {
     const beamData = [
       [20.52, 1.25, -2.2, 0, 0.13, 2.5, 0.13],
       [20.52, 1.25, 2.2, 0, 0.13, 2.5, 0.13],
-      [20.52, 0.55, 0, 0, 0.13, 0.13, 4.6],
-      [20.52, 1.9, 0, 0, 0.13, 0.13, 4.6],
+      [20.52, 0.55, 0, 0, 0.118, 0.13, 4.6],
+      [20.52, 1.9, 0, 0, 0.118, 0.13, 4.6],
       [20.49, 1.23, 0, -0.34, 0.1, 0.1, 4.5],
     ];
+    // Los apoyos del establo y de la fragua llegan al tejado con la misma madera del andamio.
+    const shedPosts = [[34.9, -17], [34.9, -12], [34.9, -7], [-35.2, -12], [-35.85, -15.4], [-35.85, -8.6]];
+    for (const side of [-1, 1]) for (const [x, z] of shedPosts) {
+      beamData.push([side * x, 3.4, side * z, 0, 0.5, 0.8, 0.5]);
+    }
     const beams = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), siegeWood, beamData.length);
     beamData.forEach(([x, y, z, rx, sx, sy, sz], i) => {
       q.setFromEuler(e.set(rx, 0, 0));
       m4.compose(p.set(x, y, z), q, s.set(sx, sy, sz));
       beams.setMatrixAt(i, m4);
     });
-    beams.castShadow = true;
+    beams.castShadow = beams.receiveShadow = true;
     this.mapGroup.add(beams);
 
     // Faro central: antes coronaba el pilar del patio; ahora cuelga del cruce
@@ -4965,7 +5078,7 @@ export class World {
     const keepBeams = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), siegeWood, 6);
     keepBeams.name = 'fortaleza-keep-beams';
     [[0, 0, 9.4, 0.3], [0, 0, 0.3, 9.4], [-3, 0, 0.22, 9.4], [3, 0, 0.22, 9.4], [0, -3, 9.4, 0.22], [0, 3, 9.4, 0.22]].forEach(([x, z, sx, sz], i) => {
-      m4.compose(p.set(x, BLOCK.HIGH - 0.13, z), q.identity(), s.set(sx, 0.26, sz));
+      m4.compose(p.set(x, BLOCK.HIGH - 0.14 - (sx < sz ? 0.020 : 0), z), q.identity(), s.set(sx, 0.30, sz));
       keepBeams.setMatrixAt(i, m4);
     });
     keepBeams.castShadow = true;
@@ -5006,14 +5119,14 @@ export class World {
     });
     // [x, z, giroY, ancho, alto, yCentro] — caras que miran al campo
     const ivies = [
-      [-20.95, -8, Math.PI / 2, 2.6, 2.6, 1.55],   // muralla oeste
+      [-20.95, -9.1, Math.PI / 2, 2.6, 2.6, 1.55],   // muralla oeste
       // Las entradas a las escaleras ocupan z 15.8..18.0 en cada extremo del
       // muro: la hiedra va sobre piedra, nunca cruzando el vano (la del
       // noroeste tapaba más de un metro de la puerta desde que se abrieron).
       [-20.95, -19.25, Math.PI / 2, 2.1, 2.2, 1.4], // carril jardín (oeste)
       [-20.95, 5, Math.PI / 2, 3.4, 2.8, 1.55],
       [-20.95, 20.3, Math.PI / 2, 2.3, 2.4, 1.45],
-      [20.95, 8, -Math.PI / 2, 2.6, 2.6, 1.55],
+      [20.95, 9.1, -Math.PI / 2, 2.6, 2.6, 1.55],
       [-10, -26.55, 0, 3.0, 2.7, 1.5],    // muralla norte/sur (cara interna)
       [10, 26.55, Math.PI, 3.0, 2.7, 1.5],
       [-8.5, -15.47, 0, 2.2, 1.7, 0.95],           // muro mediano de base
@@ -5026,22 +5139,28 @@ export class World {
     for (const [x, z, ry, w, h, y] of ivies) {
       const p = new THREE.Mesh(new THREE.PlaneGeometry(w, h), ivyMat);
       p.position.set(x, y, z);
+      p.name = 'fort-ivy';
       p.rotation.y = ry;
       this.mapGroup.add(p);
     }
 
     // matas de pasto instanciadas (2 planos cruzados por mata)
     const spots = [];
-    for (let i = 0; i < 90; i++) {
+    const rnd = mulberry(3907);
+    for (let i = 0; i < 900 && spots.length < 90; i++) {
       // pegadas a la muralla interior o alrededor de bloques, no en los carriles
-      const side = Math.floor(Math.random() * 4);
-      const t = Math.random() * 2 - 1;
+      const side = Math.floor(rnd() * 4);
+      const t = rnd() * 2 - 1;
       let x, z;
-      if (side === 0) { x = -this.fx + 0.55 + Math.random() * 0.9; z = t * (this.fz - 2); }
-      else if (side === 1) { x = this.fx - 0.55 - Math.random() * 0.9; z = t * (this.fz - 2); }
-      else if (side === 2) { z = -this.fz + 0.55 + Math.random() * 0.9; x = t * (this.fx - 2); }
-      else { z = this.fz - 0.55 - Math.random() * 0.9; x = t * (this.fx - 2); }
-      spots.push([x, z, Math.random() * Math.PI, 0.75 + Math.random() * 0.7]);
+      if (side === 0) { x = -this.fx + 0.55 + rnd() * 0.9; z = t * (this.fz - 2); }
+      else if (side === 1) { x = this.fx - 0.55 - rnd() * 0.9; z = t * (this.fz - 2); }
+      else if (side === 2) { z = -this.fz + 0.55 + rnd() * 0.9; x = t * (this.fx - 2); }
+      else { z = this.fz - 0.55 - rnd() * 0.9; x = t * (this.fx - 2); }
+      const ry = rnd() * Math.PI, scale = 0.75 + rnd() * 0.7;
+      const r = 0.275 * scale;
+      if (this.colliders.some(c => (c.minY ?? 0) < 0.4 * scale && x + r > c.minx && x - r < c.maxx &&
+        z + r > c.minz && z - r < c.maxz)) continue;
+      spots.push([x, z, ry, scale]);
     }
     const grassMat = new THREE.MeshLambertMaterial({
       map: this._tex('grass'), alphaTest: 0.5, side: THREE.DoubleSide,
@@ -5058,6 +5177,8 @@ export class World {
         m4.compose(v.set(x, 0, z), q, sc.set(s, s, s));
         im.setMatrixAt(i, m4);
       });
+      im.name = 'fort-grass';
+      im.computeBoundingSphere();
       this.mapGroup.add(im);
     }
 
@@ -5072,14 +5193,40 @@ export class World {
       [-12.9, -25.9, 0.8], [12.9, 25.9, 0.8], [6.3, -25.9, 1.0], [-6.3, 25.9, 1.0],
       [18.2, -10.6, 0.75], [-18.2, 10.6, 0.75], [-15.2, -15.8, 0.85], [15.2, 15.8, 0.85],
     ];
+    const beds = FORT_SHRUB_BEDS.flatMap(bed => [-1, 1].map(side =>
+      ({ x: side * bed.x, z: side * bed.z, bed })));
+    const inBed = (x, z, site) => Math.abs(x-site.x) < site.bed.w/2 && Math.abs(z-site.z) < site.bed.d/2;
+    bushGeo.computeBoundingBox();
+    const crownHeight = bushGeo.boundingBox.max.y - bushGeo.boundingBox.min.y;
     for (const [x, z, s] of bushes) {
       const b = new THREE.Mesh(bushGeo, bushMats[(x * 7 + z * 13 & 1) === 0 ? 0 : 1]);
-      b.position.set(x, 0.3 * s, z);
-      b.scale.set(s, s * 0.72, s);
+      const height = Math.max(crownHeight * s * 0.72, ...beds.filter(site => inBed(x,z,site)).map(site => site.bed.h)) + 0.006;
+      b.name = 'fort-bush';
+      b.position.set(x, height / 2, z);
+      b.scale.set(s, height / crownHeight, s);
       b.rotation.y = x + z;
       b.castShadow = true;
       this.mapGroup.add(b);
     }
+
+    // Algunas huellas sostienen cajas de asedio y dos huellas se solapan.
+    // Solo el espacio sin representación recibe follaje nuevo.
+    const emptyBeds = beds.filter(site => !bushes.some(([x,z]) => inBed(x,z,site)) &&
+      !FORT_SIEGE_CRATES.some(([x,z]) => inBed(x,z,site)));
+    const foliage = new THREE.InstancedMesh(bushGeo, bushMats[0], emptyBeds.length);
+    foliage.name = 'fort-shrub-beds';
+    emptyBeds.forEach(({ x, z, bed }, i) => {
+      // Dos esquinas del parterre en z ±2,7 tocan la cobertura contigua.
+      const byCover = Math.abs(z) === 2.7;
+      const depth = byCover ? 0.68 : bed.d;
+      const height = bed.h + 0.006;
+      m4.compose(v.set(x, height / 2, z), q.identity(),
+        sc.set(bed.w / 0.8, height / crownHeight, depth / 0.8));
+      foliage.setMatrixAt(i, m4);
+    });
+    foliage.castShadow = true;
+    foliage.computeBoundingSphere();
+    this.mapGroup.add(foliage);
 
     // árboles tras la muralla (copas visibles desde el patio) + cipreses
     const trunkMat = new THREE.MeshLambertMaterial({ color: 0x6e5138 });
@@ -5093,10 +5240,12 @@ export class World {
     ];
     for (const [x, z, s] of trees) {
       const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.22 * s, 0.3 * s, 2.4 * s, 6), trunkMat);
+      trunk.name = 'fort-trunk';
       trunk.position.set(x, 1.2 * s, z);
       this.mapGroup.add(trunk);
       for (const [ox, oy, oz, r] of [[0, 3.1, 0, 1.35], [0.9, 2.5, 0.3, 0.95], [-0.8, 2.6, -0.4, 0.85]]) {
         const c = new THREE.Mesh(new THREE.IcosahedronGeometry(r * s, 0), leafMats[(ox > 0 ? 1 : 0)]);
+        c.name = 'fort-crown';
         c.position.set(x + ox * s, oy * s, z + oz * s);
         c.castShadow = true;
         this.mapGroup.add(c);
@@ -5104,8 +5253,10 @@ export class World {
     }
     // cipreses junto a los torreones lejanos
     for (const [x, z, s] of [[-55, -18, 1], [50, 19, 1.15], [-45, 38, 0.85], [46, -41, 1]]) {
-      const cy = new THREE.Mesh(new THREE.ConeGeometry(0.85 * s, 4.6 * s, 7), leafMats[0]);
-      cy.position.set(x, 2.3 * s - 0.4, z);
+      const height = 4.6 * s - 0.36; // cortar la base enterrada a la cota de la campiña
+      const cy = new THREE.Mesh(new THREE.ConeGeometry(0.85 * s, height, 7), leafMats[0]);
+      cy.name = 'fort-cypress';
+      cy.position.set(x, height / 2 - 0.04, z);
       this.mapGroup.add(cy);
     }
   }
@@ -5424,8 +5575,11 @@ export class World {
     crane.position.set(spots.crane.x, 0, spots.crane.z);
     crane.rotation.y = Math.atan2(spots.crane.z, -spots.crane.x);
     this.mapGroup.add(crane);
-    addBox(crane, 1.7, BLOCK.HIGH - BLOCK.MID, 1.7,
-      0, BLOCK.MID + (BLOCK.HIGH - BLOCK.MID) / 2, 0, casing);
+    const core = collisionBoxesFor('azoteas').find(b => b.x===spots.crane.x && b.z===spots.crane.z && b.visual===false);
+    const pedestal = new THREE.Group();
+    pedestal.position.copy(crane.position);
+    this.mapGroup.add(pedestal);
+    addBox(pedestal, core.w, core.h-BLOCK.MID, core.d, 0, (core.h+BLOCK.MID)/2, 0, casing);
     addBox(crane, 2.05, 0.16, 2.05, 0, BLOCK.HIGH + 0.08, 0, dark);
     const towerBottom = BLOCK.HIGH + 0.16, towerH = 5.0, towerTop = towerBottom + towerH;
     for (const x of [-0.55, 0.55]) {
@@ -5471,7 +5625,7 @@ export class World {
     addBox(crane, 0.34, 0.26, 0.34, 10.8, boomY - 2.16, 0, dark, false);
     // Indicador montado sobre la carcasa (antes quedaba separado de la base
     // porque la decoración de la grúa está rotada respecto al cover AABB).
-    addBox(crane, 0.9, 0.08, 0.04, 0, BLOCK.MID + 0.42, 0.87, cyan, false);
+    addBox(pedestal, 0.9, 0.08, 0.04, 0, BLOCK.MID + 0.42, core.d/2+.015, cyan, false);
     addBeacon(crane, 0, towerTop + 0.16, 0);
     addSteam(crane, -0.5, BLOCK.HIGH + 0.2, -0.45);
 
@@ -5483,25 +5637,25 @@ export class World {
     // orienta la pluma de la grúa la dejaba atravesada sobre el cover físico.
     generator.rotation.y = 0;
     this.mapGroup.add(generator);
-    addBox(generator, 1.7, BLOCK.HIGH - BLOCK.MID, 1.7,
+    addBox(generator, core.w, BLOCK.HIGH - BLOCK.MID, core.d,
       0, BLOCK.MID + (BLOCK.HIGH - BLOCK.MID) / 2, 0, casing);
     addBox(generator, 2.05, 0.14, 2.05, 0, BLOCK.HIGH + 0.07, 0, dark);
     for (const z of [-2.05, 2.05]) {
-      addBox(generator, 1.75, 0.55, 1.25, 0, BLOCK.MID + 0.28, z, steel);
-      for (let i = -2; i <= 2; i++) {
-        addBox(generator, 0.06, 0.34, 1.27, i * 0.25,
+      addBox(generator, core.w+.02, 0.55, 1.25, 0, BLOCK.MID + 0.28, z, steel);
+      for (const side of [-1,1]) {
+        addBox(generator, 0.04, 0.34, 1.2, side*(core.w/2+.015),
           BLOCK.MID + 0.28, z, dark, false);
       }
     }
-    addBox(generator, 0.09, 0.78, 1.2, -0.88, BLOCK.MID + 0.55, 0, dark, false);
-    addBox(generator, 0.09, 0.78, 1.2, 0.88, BLOCK.MID + 0.55, 0, dark, false);
+    addBox(generator, 0.09, 0.78, 1.2, -core.w/2-.02, BLOCK.MID + 0.55, 0, dark, false);
+    addBox(generator, 0.09, 0.78, 1.2, core.w/2+.02, BLOCK.MID + 0.55, 0, dark, false);
     const stack = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.2, 2.2, 8), dark);
-    stack.position.set(0.48, BLOCK.HIGH + 1.1, -0.35);
+    stack.position.set(0.48, BLOCK.HIGH + 1.17, -0.35);
     generator.add(stack);
     const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.27, 0.2, 0.12, 8), steel);
     cap.position.set(0.48, BLOCK.HIGH + 2.2, -0.35);
     generator.add(cap);
-    for (const z of [-2.72, 2.72]) {
+    for (const z of [-core.d/2, core.d/2]) {
       addBox(generator, 1.15, 0.08, 0.08, 0, BLOCK.MID + 0.18, z, cyan, false);
     }
     addBeacon(generator, -0.48, BLOCK.HIGH + 0.22, 0.42);
@@ -5748,7 +5902,7 @@ export class World {
     for (const [x, z] of acUnits) {
       for (const ry of [0, Math.PI / 2]) {
         q.setFromEuler(e.set(0, ry, 0));
-        m4.compose(p.set(x, BLOCK.LOW + 0.085, z), q, s.set(0.55, 0.025, 0.075));
+        m4.compose(p.set(x, BLOCK.LOW + 0.085 + (ry ? .004 : 0), z), q, s.set(0.55, 0.025, 0.075));
         blades.setMatrixAt(bladeI++, m4);
       }
     }
@@ -5797,20 +5951,22 @@ export class World {
 
     // Franjas ámbar: muros de carril, casetas de los tanques y escudos de spawn.
     const hazardSpots = [
-      [17.44, 1.34, -14, -Math.PI / 2, 1.3], [-17.44, 1.34, 14, Math.PI / 2, 1.3],
-      [-19.04, 1.35, -15.75, Math.PI / 2, 1.0], [19.04, 1.35, 15.75, -Math.PI / 2, 1.0],
-      [2.2, 1.5, -30.74, 0, 1.2], [-2.2, 1.5, 30.74, Math.PI, 1.2],
-      [26, 1.0, -30.19, 0, 1.5], [-26, 1.0, 30.19, Math.PI, 1.5],
-      [-23.79, 1.0, -6.8, Math.PI / 2, 1.2], [23.79, 1.0, 6.8, -Math.PI / 2, 1.2],
+      [17.418, 1.34, -14, -Math.PI / 2, 1.3], [-17.418, 1.34, 14, Math.PI / 2, 1.3],
+      [-18.816, 1.35, -15.75, Math.PI / 2, 1.0], [18.816, 1.35, 15.75, -Math.PI / 2, 1.0],
+      [2.2, 1.5, -30.716, 0, 1.2], [-2.2, 1.5, 30.716, Math.PI, 1.2],
+      [24.5, 1.0, -30.166, 0, .95], [-24.5, 1.0, 30.166, Math.PI, .95],
+      [-23.766, 1.0, -6.8, Math.PI / 2, 1.2], [23.766, 1.0, 6.8, -Math.PI / 2, 1.2],
     ];
     const hazards = new THREE.InstancedMesh(
       new THREE.PlaneGeometry(1.7, 0.22),
-      new THREE.MeshBasicMaterial({ map: this._tex('hazard') }), hazardSpots.length);
+      new THREE.MeshLambertMaterial({ map: this._tex('hazard') }), hazardSpots.length);
+    hazards.receiveShadow = true;
     hazardSpots.forEach(([x, y, z, ry, sc], i) => {
       q.setFromEuler(e.set(0, ry, 0));
       m4.compose(p.set(x, y, z), q, s.set(sc, 1, 1));
       hazards.setMatrixAt(i, m4);
     });
+    hazards.name = 'azoteas-hazard-plates';
     this.mapGroup.add(hazards);
 
     // Balizas de borde: rojo/azul en bases, cian en flancos. Una sola malla.
@@ -5826,7 +5982,8 @@ export class World {
     }
     const edgeLights = new THREE.InstancedMesh(
       new THREE.BoxGeometry(0.55, 0.07, 0.12),
-      new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true }), edgeData.length);
+      new THREE.MeshBasicMaterial({ color: 0xffffff }), edgeData.length);
+    edgeLights.name = 'azoteas-edge-lights';
     edgeData.forEach(([x, z, color, ry], i) => {
       q.setFromEuler(e.set(0, ry, 0));
       m4.compose(p.set(x, 0.055, z), q, s.set(1, 1, 1));
@@ -5838,21 +5995,23 @@ export class World {
 
     // Charcos de lluvia muy sutiles: rompen el mosaico sin reflejos costosos.
     const puddleData = [
-      [-25.5, -30, 2.1, 0.85], [-19.5, 3, 1.45, 0.65], [-27, 22.5, 1.8, 0.8],
-      [25.5, 30, 2.1, 0.85], [19.5, -3, 1.45, 0.65], [27, -22.5, 1.8, 0.8],
+      [-25.5, -28.35, 2.1, 0.85], [-16.85, 2.25, 1.45, 0.65], [-27, 21.0, 1.8, 0.8],
+      [25.5, 28.35, 2.1, 0.85], [16.85, -2.25, 1.45, 0.65], [27, -21.0, 1.8, 0.8],
       [-7.5, 16.5, 1.4, 0.58], [7.5, -16.5, 1.4, 0.58],
       [-14, -26, 1.3, 0.55], [14, 26, 1.3, 0.55],
     ];
+    this._cv.puddleWet ??= this._puddleCanvas(false);
     const puddles = new THREE.InstancedMesh(
       new THREE.CircleGeometry(1, 18),
       new THREE.MeshBasicMaterial({
-        color: 0x15273a, transparent: true, opacity: 0.36, depthWrite: false,
+        color: 0x83a1ba, map: this._tex('puddleWet'), transparent: true, opacity: .85, depthWrite: false,
       }), puddleData.length);
     puddleData.forEach(([x, z, sx, sz], i) => {
       q.setFromEuler(e.set(-Math.PI / 2, 0, (x - z) * 0.13));
       m4.compose(p.set(x, 0.026, z), q, s.set(sx, sz, 1));
       puddles.setMatrixAt(i, m4);
     });
+    puddles.name = 'azoteas-puddles';
     this.mapGroup.add(puddles);
 
     // Volúmenes técnicos oscuros sobre edificios: la ciudad deja de parecer
@@ -5901,7 +6060,7 @@ export class World {
         ladderParts.setMatrixAt(li++, m4);
       }
       for (const x of [-0.26, 0.26]) {
-        m4.compose(p.set(tx + x, BLOCK.HIGH + 0.73, lz), q.identity(), s.set(0.045, 1.45, 0.045));
+        m4.compose(p.set(tx + x, BLOCK.HIGH + 0.73, lz + Math.sign(lz)*.006), q.identity(), s.set(0.045, 1.45, 0.045));
         ladderParts.setMatrixAt(li++, m4);
       }
     });
@@ -5920,17 +6079,22 @@ export class World {
       this.mapGroup.add(pipe);
     }
     const hatchSpots = [
-      [-9, -31.5], [9, 31.5], [23, -5], [-23, 5],
-      [-5.5, 20], [5.5, -20], [28, -14], [-28, 14],
+      [-8.8, -29.8], [8.8, 29.8], [23, -5], [-23, 5],
+      [-5.5, 20], [5.5, -20], [29.4, -14], [-29.4, 14],
     ];
-    const hatches = new THREE.InstancedMesh(
-      new THREE.BoxGeometry(1.3, 0.03, 1.3),
-      new THREE.MeshLambertMaterial({ color: 0x232b36 }), hatchSpots.length);
+    this._cv.serviceHatch ??= this._serviceHatchCanvas();
+    const hatchGeometry = new THREE.BoxGeometry(1.3, .03, 1.3);
+    const { normal, uv } = hatchGeometry.attributes;
+    for (let i = 0; i < uv.count; i++) if (normal.getY(i) < .5) uv.setXY(i, .02, .02);
+    const hatches = new THREE.InstancedMesh(hatchGeometry,
+      new THREE.MeshLambertMaterial({ map: this._tex('serviceHatch') }), hatchSpots.length);
+    hatches.receiveShadow = true;
     hatchSpots.forEach(([hx, hz], i) => {
       q.setFromEuler(e.set(0, (hx * 3 + hz) * 0.21, 0));
-      m4.compose(p.set(hx, 0.016, hz), q, s.set(1, 1, 1));
+      m4.compose(p.set(hx, 0.019, hz), q, s.set(1, 1, 1));
       hatches.setMatrixAt(i, m4);
     });
+    hatches.name = 'azoteas-service-hatches';
     this.mapGroup.add(hatches);
 
     // Halos con sprites: dan sensación de emisión sin PointLights ni sombras.

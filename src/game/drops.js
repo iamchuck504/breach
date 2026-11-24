@@ -2,11 +2,9 @@
 // Quien la recoja recibe las balas restantes. Dura 8 s (parpadea los
 // últimos 2) y desaparece. En online el server es la autoridad.
 import * as THREE from 'three';
-import { WEAPON_BUILDERS, WEAPON_SCALES, buildSMG } from '../player/rig.js';
-import { attachBlenderPickup } from '../player/blender-soldier.js';
+import { createWorldWeapon } from './world-weapon.js';
 
 const LIFE = 8, BLINK_AT = 2;
-const TEAM_HEX = { red: 0xd94f3f, blue: 0x4f8de0 };
 
 export class WeaponDrops {
   constructor(scene) {
@@ -16,10 +14,7 @@ export class WeaponDrops {
 
   spawn(id, wep, x, z, team, mag = 0, res = 0, t = LIFE, y = 0) {
     if (this.drops.has(id)) return;
-    const mesh = (WEAPON_BUILDERS[wep] ?? buildSMG)(TEAM_HEX[team] ?? 0x999999);
-    const s = WEAPON_SCALES[wep] ?? [1.3, 1.3, 1.35];
-    mesh.scale.set(s[0], s[1], s[2]);
-    attachBlenderPickup(mesh,wep,team);
+    const mesh = createWorldWeapon(wep, team);
     // offset determinista desde el id: en online todos los clientes ven el
     // arma en el MISMO punto (Math.random dispersaba hasta 0.57m por pantalla)
     let h = 0;
@@ -42,7 +37,7 @@ export class WeaponDrops {
     d.mesh.userData.blenderDisposed=true;
     this.scene.remove(d.mesh);
     d.mesh.traverse((o) => {
-      // Las armas procedurales comparten primitivas/materiales con los rigs.
+      // Los recogibles comparten geometrías y materiales con otras instancias.
       // Destruirlos al recoger un drop corrompería los personajes restantes.
       if (o.geometry && !o.geometry.userData.shared) o.geometry.dispose();
       if (o.material) {
