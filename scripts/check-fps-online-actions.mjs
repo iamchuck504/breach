@@ -59,7 +59,10 @@ try {
     const W = window.BREACH_WORLD, V = window.THREE;
     const free = (x, z) => { const q = { x, z }; W.resolveCircle(q, 0.38, 0); return Math.hypot(q.x - x, q.z - z) < 0.01 && W.groundHeight(q, 0.38, 0) < 0.05; };
     for (let d = 0; d < 20; d += 0.5) for (const x of [d, -d]) {
-      if (!free(x, -3) || !free(x, 3)) continue;
+      // Comprobar también el suelo entre ambos: aquí A acelera y desliza.
+      let libre = true;
+      for (let z = -3; z <= 3; z += 0.25) if (!free(x, z)) { libre = false; break; }
+      if (!libre) continue;
       if (W.raycast(new V.Vector3(x, 1.4, -3), new V.Vector3(0, 0, 1), 6, 0) === null) return { x, za: -3, zb: 3 };
     }
     return null;
@@ -106,15 +109,23 @@ try {
   s = await waitSeen((q) => Math.abs(q.cl) > 0.6);
   check('B ve a A inclinado (cabeza desplazada en el volumen)', Math.abs(s?.cl ?? 0) > 0.6 && Math.abs(s.headS) > 0.12, JSON.stringify(s));
   await a.keyboard.up(kb.leanLeft); await waitGame(a, 0.4);
-  // deslizar: sprint y agacharse (hacia un lado libre, de vuelta después)
-  await a.evaluate(() => { const p = window.BREACH.player; p.cam.yaw = p.yaw = Math.PI / 2; });
+  // Deslizar por el claro comprobado. Hacia -X hay una cobertura baja a
+  // poco más de un metro del punto de partida de Fortaleza.
   await a.keyboard.down(kb.forward); await a.keyboard.down(kb.sprint);
-  await untilGame(a, () => window.BREACH.player.state === 'roadie' && window.BREACH.player.speed > 6, 2);
-  await a.keyboard.press(kb.crouch);
-  const localSlide = await untilGame(a, () => window.BREACH.player.state === 'slide', 0.5);
-  s = await waitSeen((q) => q.st === 'slide', 1.5);
+  const ready = await untilGame(a, () => {
+    const p = window.BREACH.player;
+    return p.state === 'roadie' && p.speed > 6 && p.grounded && p.slideCd <= 0;
+  }, 2);
+  let localSlide = false, remoteSlide = false;
+  if (ready) {
+    await a.keyboard.press(kb.crouch);
+    [localSlide, remoteSlide] = await Promise.all([
+      untilGame(a, () => window.BREACH.player.state === 'slide', 0.5),
+      untilGame(b, id => window.BREACH.remotes.get(id)?.st === 'slide', 1.5, idA),
+    ]);
+  }
   await a.keyboard.up(kb.sprint); await a.keyboard.up(kb.forward);
-  check('B ve a A deslizar', s?.st === 'slide', JSON.stringify({ localSlide, s }));
+  check('B ve a A deslizar', localSlide && remoteSlide, JSON.stringify({ ready, localSlide, remoteSlide }));
   await waitGame(a, 0.8);
   // trepar: A junto a una cara LOW, saltando hacia ella
   const low = await a.evaluate(() => {

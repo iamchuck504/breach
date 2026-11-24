@@ -414,6 +414,7 @@ export class NetClient {
     const pack = (v) => [+v.x.toFixed(2), +v.y.toFixed(2), +v.z.toFixed(2)];
     const fp = packedFirePose(bot);
     this.send({ t: 'botFire', id, o: pack(origin), p: pack(point), w: wep,
+      ...(Number.isFinite(bot?.simTime) ? { ct: +bot.simTime.toFixed(3) } : {}),
       d: impacts.slice(0, 8).map(pack), ...(fp ? { fp } : {}) });
   }
 

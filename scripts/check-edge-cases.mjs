@@ -12,7 +12,7 @@ import { clearClip } from './lib-clip.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
 import { CHROME } from './lib-chrome.mjs';
-import { actionKeys, freePort } from './lib-test.mjs';
+import { actionKeys, freePort, untilGame, waitGame } from './lib-test.mjs';
 // puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
 const FREE_PORT = await freePort();
 
@@ -36,7 +36,7 @@ const check = (name, ok, extra = '') => {
 await page.goto(`http://localhost:${FREE_PORT}/?nolock=1`, { waitUntil: 'networkidle' });
 await page.evaluate(() => { window.BREACH.mapChoice = 'fortaleza'; });
 await page.evaluate(() => document.getElementById('btn-practice').click());
-await page.waitForTimeout(1500);
+await page.waitForFunction(() => window.BREACH?.mode === 'practice' && window.BREACH.player && window.BREACH.weapons);
 await page.evaluate(() => {
   window.__tp = (x, z, yaw = Math.PI) => {
     const p = window.BREACH.player;
@@ -52,27 +52,29 @@ await page.evaluate(() => {
   const G = window.BREACH;
   G.weapons.startSwap('pistol');
 });
-await page.waitForTimeout(700);
-await page.evaluate(() => {
-  const G = window.BREACH;
-  G.weapons.st.mag = 4; // forzar recarga con sentido
+// Preparar el cargador de la pistola equipada y dar cada orden en el
+// cuadro que cumple su precondición, incluso si la simulación va despacio.
+const requestedReload = await untilGame(page, () => {
+  const w = window.BREACH.weapons;
+  if (w.cur !== 'pistol' || w.swapping) return false;
+  w.st.mag = 4;
   window.BREACH_INPUT.reloadPressed = true;
-});
-await page.waitForTimeout(150);
-await page.evaluate(() => { window.BREACH_INPUT.meleePressed = true; });
-await page.waitForTimeout(500);
+  return true;
+}, 2);
+const kicked = requestedReload && await untilGame(page, () => {
+  if (!window.BREACH.weapons.reloading) return false;
+  window.BREACH_INPUT.meleePressed = true;
+  return true;
+}, 1);
+const interrupted = kicked && await untilGame(page, () =>
+  window.BREACH.player.state === 'melee' && !window.BREACH.weapons.reloading, 1);
+await waitGame(page, 2.1);
 let s = await page.evaluate(() => ({
-  st: window.BREACH.player.state,
-  reloading: window.BREACH.weapons.reloading,
-  cur: window.BREACH.weapons.cur,
-}));
-await page.waitForTimeout(1600);
-s = await page.evaluate(() => ({
   mag: window.BREACH.weapons.st.mag, cur: window.BREACH.weapons.cur,
   st: window.BREACH.player.state,
 }));
 check('melee durante recarga: conserva munición y recupera control',
-  s.mag === 4 && s.cur === 'pistol' && (s.st === 'idle' || s.st === 'run'), JSON.stringify(s));
+  interrupted && s.mag === 4 && s.cur === 'pistol' && (s.st === 'idle' || s.st === 'run'), JSON.stringify(s));
 
 // --- melee DURANTE cambio de arma: sin estados rotos
 await page.evaluate(() => {

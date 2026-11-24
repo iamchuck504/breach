@@ -538,6 +538,7 @@ function freshCombatState(p, spawn) {
     lastNadeAt: -Infinity, lastRocketAt: -Infinity,
     lastDamage: 0, respawnAt: 0, prot: startAt + SPAWN_PROT,
     lastFireAt: -Infinity, pendingShot: null, life: (p.life || 0) + 1 });
+  if (p.bot) p.cclk = undefined; // el host reinicia simTime al reaparecer el bot
   resetMovementGuard(p, nowSec());
   resetPoseHistory(p);
 }
@@ -816,6 +817,12 @@ function registerFire(shooter, msg, isBotFire = false) {
   // creciente (clientes nuevos) contra duplicados.
   const cadenceMeta = { sq: Number.isFinite(msg.sq) ? msg.sq : undefined,
     wAt: shooter.wAt, wSeq: shooter.wSeq, wWeapon: shooter.wSeen, wInstant: !!shooter.wInstant, requireSwapEvidence: true };
+  // El host puede enviar varios subpasos juntos. Solo el horario del arma
+  // usa el instante simulado; las ventanas de ráfaga siguen midiendo llegadas.
+  if (isBotFire && (Number.isFinite(msg.ct) || Number.isFinite(shooter.cclk))) {
+    advanceCadenceClock(shooter, msg.ct, now);
+    cadenceMeta.scheduleNow = shooter.cclk;
+  }
   if (!dodgeFireReady(shooter, weapon)) return reject('fire-state');
   if (weapon !== 'melee' && weapon !== shooter.w) return fpsShooter ? refused('fire-weapon') : false;
   const melee = weapon === 'melee';
@@ -1538,6 +1545,7 @@ wss.on('connection', (ws) => {
           next.bodyPushRate = dodgeBodyPush(b, next);
         }
         if (!acceptMovement(b, next, stateNow, ALLOW_TEST_TELEPORTS)) continue;
+        if (Number.isFinite(b.cclk)) advanceCadenceClock(b, s.ct, stateNow);
         noteDodgeVisual(b, s, next);
         b.x = next.x; b.z = next.z; b.y = next.y; b.yaw = wrapAngle(clamp(s.yaw, -1e4, 1e4));
         // solo estados del contrato: los retirados de bots se traducen (auditoría)

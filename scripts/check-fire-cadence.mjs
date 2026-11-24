@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import { Weapons } from '../src/combat/weapons.js';
 import { TUNING } from '../src/config/tuning.js';
 import * as G from '../server/guards.js';
+import { NetClient } from '../src/net/client.js';
 
 const W = TUNING.weapons;
 const WIN = [0.1, 0.2, 0.4, 1];
@@ -334,6 +335,34 @@ for (const r of rows) console.log(`${r.ok ? 'OK ' : 'FAIL'} ${r.wep.padEnd(8)} $
   G.refillNormalAmmo(b);
   assert.equal(G.consumeShotAmmo(b, 'smg', W.smg.mag * 0.1), true, 'caja de munición sin cargador lleno');
   console.log('OK  bot: especial re-recogida y caja de munición dan cargador nuevo');
+}
+
+// Un host lento envía juntos subpasos distintos. Reproducir los intervalos
+// de llegada observados en CI y comprobar también el límite de ráfaga real.
+{
+  const host = new NetClient();
+  const point = { x: 0, y: 1, z: 0 };
+  let message;
+  host.send = m => { message = m; };
+  const fire = (bot, ct, arrival) => {
+    host.botFire('b1', point, point, 'smg', [], { simTime: ct });
+    assert.equal(message.ct, ct);
+    G.advanceCadenceClock(bot, message.ct, arrival);
+    const meta = { scheduleNow: bot.cclk };
+    if (!G.fireCadenceAllows(bot, 'smg', iv('smg'), arrival, meta)) return false;
+    G.commitFireCadence(bot, 'smg', iv('smg'), arrival, meta);
+    return true;
+  };
+  const bot = { bot: true };
+  assert.ok(fire(bot, 1, 10));
+  assert.ok(fire(bot, 1.117, 10.071));
+  assert.ok(fire(bot, 1.233, 10.159));
+  const grouped = { bot: true };
+  assert.ok(fire(grouped, 1, 20));
+  assert.ok(fire(grouped, 1.117, 20));
+  assert.equal(fire(grouped, 1.233, 20), false);
+  assert.equal(grouped.lastRejectReason, 'window');
+  console.log('OK  bot alojado: tiros honestos separados por subpasos y tope de ráfaga por llegada');
 }
 
 // Bot alojado: sniper y bazooka también con cargador y recarga

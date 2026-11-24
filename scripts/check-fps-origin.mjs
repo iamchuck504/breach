@@ -13,11 +13,11 @@
 //    que sube de golpe recortada; estados retirados traducidos; tope de
 //    movimiento FPS.
 // 3. Matriz con el NetClient real: servidor nuevo → `crouch`; servidor sin
-//    `fps` (anterior) → `cover_low`; cliente viejo → rechazado.
+//    `fps` (anterior) → rechazo y cierre; cliente viejo → rechazado.
 import assert from 'node:assert/strict';
-import { spawn, execSync } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
+import { once } from 'node:events';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -29,7 +29,7 @@ import { spreadFor as spreadForW } from '../src/combat/weapons.js';
 import { withSamples, nextN } from './lib-fps-sample.mjs';
 const srvWrap = (a) => { a = a % (Math.PI * 2); return a > Math.PI ? a - Math.PI * 2 : a <= -Math.PI ? a + Math.PI * 2 : a; };
 import { mapLineBlocked } from '../server/map-geometry.js';
-import { freePort } from './lib-test.mjs';
+import { freePort, waitHttp } from './lib-test.mjs';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const note = (s) => console.log(s);
@@ -470,9 +470,9 @@ const waitFor = (peer, pred, timeout = 1200) => new Promise((resolve) => {
 });
 const send = withSamples((p, m) => p.ws.send(JSON.stringify(m)));
 const peers = [];
-let fakeOld = null, oldServer = null, oldDir = null;
+let oldServer, oldDir;
 try {
-  await delay(700);
+  await waitHttp(`http://127.0.0.1:${port}/status`);
   // cliente anterior (sin fps): rechazado por lobbyError antes del welcome
   const old = await connect({ action: 'create', name: 'OLD', v: 0, hp: 2 });
   const err = old.messages.find((m) => m.t === 'lobbyError');
@@ -751,9 +751,9 @@ try {
   note('4e estados de bot: cover_low/blind → crouch, dive/flip/cover_high → idle (server.js CONTRACT_STATES); ver check-fps-bots-hosted');
 
   // ---------- 3. matriz de versiones (decisión 16) contra el servidor ANTERIOR real ----------
-  // HEAD (antes de la corrida) extraído con git archive (solo lectura) y
-  // arrancado tal cual. Cliente nuevo + servidor sin `fps` → `server-outdated`
-  // y no entra; cliente nuevo + nuevo → juega; anterior + nuevo → 2a.
+  // Revisión publicada en main antes del cambio de protocolo; HEAD en un PR
+  // incluye el propio cambio. El servidor de esta revisión omite fps en welcome.
+  const legacyRevision = '9fc6f1235def4816f9ddcc2686c428773b89d8f5';
   globalThis.WebSocket = WebSocket;
   const { NetClient } = await import('../src/net/client.js');
   const fakeWep = { cur: 'smg', st: { mag: 30, reserve: 90 }, reloading: false, def: { reloadTime: 2 } };
@@ -766,33 +766,42 @@ try {
   nc.tickState(1, crouched, fakeWep, 1);
   assert.ok(sent.at(-1).st === 'crouch' && Number.isFinite(sent.at(-1).n) && Number.isFinite(sent.at(-1).ct), 'cliente nuevo: estado sin crouch, n o ct');
   nc.close();
-  oldDir = path.join(os.tmpdir(), `breach-head-${process.pid}`);
-  fs.mkdirSync(oldDir, { recursive: true });
-  execSync(`git -C ${JSON.stringify(root)} archive HEAD server src | tar -x -C ${JSON.stringify(oldDir)}`);
-  fs.symlinkSync(path.join(root, 'node_modules'), path.join(oldDir, 'node_modules'));
-  fs.writeFileSync(path.join(oldDir, 'package.json'), fs.readFileSync(path.join(root, 'package.json')));
+  oldDir = fs.mkdtempSync(path.join(root, '.fps-origin-'));
+  const archive = execFileSync('git', ['archive', legacyRevision, 'server', 'src', 'package.json'], { cwd: root, maxBuffer: 32 * 1024 * 1024 });
+  execFileSync('tar', ['-xf', '-', '-C', oldDir], { input: archive });
+  const legacyPort = await freePort();
   oldServer = spawn(process.execPath, [path.join(oldDir, 'server', 'server.js')], {
-    env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: String(port + 1), INTRO_TIME: '0', COUNTDOWN_TIME: '0', NODE_ENV: 'test', ALLOW_TEST_TELEPORTS: '1' }, stdio: 'ignore' });
-  await delay(900);
+    cwd: oldDir, env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: String(legacyPort), INTRO_TIME: '0', COUNTDOWN_TIME: '0', NODE_ENV: 'test', ALLOW_TEST_TELEPORTS: '1' }, stdio: 'ignore' });
+  await waitHttp(`http://127.0.0.1:${legacyPort}/status`);
   const nc2 = new NetClient(); let outdatedEvent = null;
   nc2.on('server-outdated', (e) => { outdatedEvent = e; });
-  const errOld = await nc2.connect(`ws://127.0.0.1:${port + 1}`, 'NC', 0, 'create').then(() => null, (e) => e);
+  const errOld = await nc2.connect(`ws://127.0.0.1:${legacyPort}`, 'NC', 0, 'create').then(() => null, (e) => e);
   assert.ok(errOld?.code === 'server-outdated' && outdatedEvent && !nc2.connected, `cliente nuevo con servidor anterior: ${errOld?.code ?? 'entró'}`);
-  await delay(150);
-  assert.ok(nc2.ws.readyState >= 2, 'el socket con el servidor anterior sigue abierto');
-  // R9: welcome con fps:1 pero sin hp:2 → server-outdated
-  {
-    const fake = new WebSocketServer({ port: port + 2 });
-    fake.on('connection', (ws) => ws.on('message', () => ws.send(JSON.stringify({ t: 'welcome', id: 'p1', team: 'red', lobby: {}, fps: 1 }))));
-    const nc3 = new NetClient();
-    const e3 = await nc3.connect(`ws://127.0.0.1:${port + 2}`, 'NC', 0, 'join').then(() => null, (e) => e);
-    fake.close();
-    assert.ok(e3?.code === 'server-outdated', `R9: welcome sin hp:2 → ${e3?.code ?? 'entró'}`);
+  if (nc2.ws.readyState !== WebSocket.CLOSED) {
+    await once(nc2.ws, 'close', { signal: AbortSignal.timeout(6000) });
   }
-  note('3 matriz (decisión 16): nuevo/nuevo → juega (crouch, n, ct); nuevo/ANTERIOR (HEAD real) → server-outdated, socket cerrado, no entra; anterior/nuevo → rechazado (2a)');
+  assert.equal(nc2.ws.readyState, WebSocket.CLOSED, 'el socket con el servidor anterior sigue abierto');
+  // El servidor publicado omite ambas marcas. Comprobar además que cada una
+  // sea necesaria aunque la otra sí venga en el welcome.
+  for (const version of [{ fps: 1 }, { hp: 2 }]) {
+    const fake = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    const nc3 = new NetClient();
+    try {
+      await once(fake, 'listening');
+      fake.on('connection', ws => ws.on('message', () => ws.send(JSON.stringify({
+        t: 'welcome', id: 'p1', team: 'red', lobby: {}, ...version,
+      }))));
+      await assert.rejects(nc3.connect(`ws://127.0.0.1:${fake.address().port}`, 'NC', 0, 'join'),
+        { code: 'server-outdated' });
+      assert.equal(nc3.connected, false);
+    } finally {
+      nc3.close();
+      fake.close();
+    }
+  }
+  note('3 matriz (decisión 16): nuevo/nuevo → juega (crouch, n, ct); nuevo/ANTERIOR (9fc6f12 real) → server-outdated, socket cerrado, no entra; anterior/nuevo → rechazado (2a)');
 } finally {
   for (const p of peers) p.ws.close();
-  fakeOld?.close();
   oldServer?.kill();
   server.kill();
   if (oldDir) fs.rmSync(oldDir, { recursive: true, force: true });

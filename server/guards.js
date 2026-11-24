@@ -557,21 +557,24 @@ export function fireCadenceVerdict(entity, weapon, interval, now, meta = {}) {
     if (n > fireWindowCap(w, interval)) return why(entity, 'window');
   }
   const chain = entity.fireChain?.[weapon];
-  const fresh = !chain || now - chain.at > interval + FIRE_CHAIN_IDLE;
+  const scheduleNow = meta.scheduleNow ?? now;
+  const fresh = !chain || scheduleNow - chain.at > interval + FIRE_CHAIN_IDLE;
   const stall = Math.max(0, (entity.stallCredit ?? 0) - (now - (entity.stallAt ?? -Infinity)));
-  // cliente FPS: su reloj de cadencia ya absorbe el atasco (server.js
-  // advanceCadenceClock, banco = FIRE_STALL_CREDIT): no se suma otro crédito
-  const credit = entity.fps && !entity.bot ? FIRE_JITTER_CREDIT : Math.max(FIRE_JITTER_CREDIT, Math.min(FIRE_STALL_CREDIT, stall));
-  const vt = fresh ? now : Math.max(chain.vt + interval, now - credit);
-  return vt <= now + interval * FIRE_SLACK ? { vt } : why(entity, 'schedule');
+  // El reloj acotado ya absorbe el atasco de transporte. Sumar otro crédito
+  // aquí contaría dos veces el mismo retraso, tanto en humanos como en bots.
+  const bounded = meta.scheduleNow !== undefined || (entity.fps && !entity.bot);
+  const credit = bounded ? FIRE_JITTER_CREDIT : Math.max(FIRE_JITTER_CREDIT, Math.min(FIRE_STALL_CREDIT, stall));
+  const vt = fresh ? scheduleNow : Math.max(chain.vt + interval, scheduleNow - credit);
+  return vt <= scheduleNow + interval * FIRE_SLACK ? { vt } : why(entity, 'schedule');
 }
 export function fireCadenceAllows(entity, weapon, interval, now, meta) {
   return fireCadenceVerdict(entity, weapon, interval, now, meta) !== null;
 }
 export function commitFireCadence(entity, weapon, interval, now, meta = {}) {
-  const v = fireCadenceVerdict(entity, weapon, interval, now, meta) ?? { vt: now };
+  const scheduleNow = meta.scheduleNow ?? now;
+  const v = fireCadenceVerdict(entity, weapon, interval, now, meta) ?? { vt: scheduleNow };
   entity.fireChain ||= {};
-  entity.fireChain[weapon] = { vt: v.vt, at: now };
+  entity.fireChain[weapon] = { vt: v.vt, at: scheduleNow };
   entity.fireTimes ||= {};
   const times = (entity.fireTimes[weapon] ||= []);
   times.push(now);
@@ -595,7 +598,7 @@ export function commitFireCadence(entity, weapon, interval, now, meta = {}) {
 // ese crédito. Nunca se queda más de ese crédito por detrás del servidor.
 export const CADENCE_BANK = FIRE_STALL_CREDIT;
 export function advanceCadenceClock(me, ct, now) {
-  if (!me.fps || me.bot) return;
+  if (!me.fps && !me.bot) return;
   // el primer mensaje pudo llegar tarde (jitter): el banco arranca con el
   // crédito de atasco entero, como el de HEAD tras un atraso
   if (!Number.isFinite(me.cclk)) { me.cclk = now - CADENCE_BANK; me.cAt = now; me.cBank = CADENCE_BANK; me.cCt = ct; return; }

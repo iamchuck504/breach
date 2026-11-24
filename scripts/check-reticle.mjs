@@ -85,8 +85,7 @@ try {
     throw new Error('ADS movió o recoloreó la retícula ante una obstrucción del muzzle');
   }
 
-  // Sniper scoped: la cruz permanece centrada, pero el cover delante del cañón
-  // recibe el impacto. Ver el fondo desde cámara nunca concede penetración.
+  // Con la mira puesta, la bala debe impactar en el punto visible bajo la cruz.
   const sniperCentered = await page.evaluate(async () => {
     const G = window.BREACH, W = window.BREACH_WORLD, I = window.BREACH_INPUT;
     if (!G.weapons.hasWeapon('sniper')) G.weapons.giveSpecial('sniper');
@@ -102,32 +101,7 @@ try {
     G.player.cam.pitch = -0.04;
     for (const d of G.dummies.list) d.alive = false;
     I._mouseAim = true;
-    await window.__gwait(260);
-    // esperar a que el lerp de la cámara ADS se ASIENTE: el stub de abajo
-    // clasifica los rayos por cercanía a cameraOrigin (<0.12) y una cámara
-    // aún en tránsito hace que el tiro real nazca lejos del punto capturado
-    // (a fps altos el lerp exponencial sigue moviéndose cientos de ms)
-    {
-      // origen Y dirección: con solo el origen quieto, el pitch aún podía
-      // asentarse y la cruz quedaba ~30 px fuera del punto capturado
-      // (fallo intermitente ~1 de cada 5 corridas)
-      let last = window.BREACH_FP.aimRay();
-      last = { origin: last.origin.clone(), dir: last.dir.clone() };
-      // 3 FRAMES quietos seguidos (hasta 150 frames): en CI un frame dura
-      // cientos de ms y muestras por setTimeout caían dentro del mismo frame
-      for (let i = 0, still = 0; i < 150 && still < 3; i++) {
-        await new Promise((resolve) => requestAnimationFrame(() => resolve()));
-        const now2 = window.BREACH_FP.aimRay();
-        const quiet = now2.origin.distanceTo(last.origin) < 0.004 && now2.dir.angleTo(last.dir) < 0.0005;
-        still = quiet ? still + 1 : 0;
-        last = { origin: now2.origin.clone(), dir: now2.dir.clone() };
-      }
-    }
-
-    G.rig.root.updateWorldMatrix(true, true);
-    const muzzle = (window.BREACH_VM?.muzzleWorld?.(new window.THREE.Vector3()) ?? G.rig.muzzleWorld(new window.THREE.Vector3())).clone();
-    const ray = window.BREACH_FP.aimRay();
-    const cameraOrigin = ray.origin.clone();
+    let cameraOrigin = window.BREACH_FP.aimRay().origin;
     const farCollider = { id: 'far' }, nearCollider = { id: 'near' };
     const oldRaycastHit = W.raycastHit.bind(W);
     const oldRaycast = W.raycast.bind(W);
@@ -143,9 +117,19 @@ try {
         collider: fromCamera ? farCollider : nearCollider };
     };
     W.raycast = () => null;
-    await window.__gwait(80);
-
-    const guidePoint = cameraOrigin.clone().addScaledVector(ray.dir, 24);
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    // El HUD se actualiza antes de dibujar el arma del cuadro actual. Tras el
+    // cambio, comprobar también que el ocular del sniper sigue alineado.
+    const miraLista = () => {
+      const vm = window.BREACH_VM.vm;
+      return G.scopeActive && vm?.key === 'sniper' && vm.scopeIn01() >= 0.98;
+    };
+    const deadline = G.simClock + 3;
+    while (!miraLista() && G.simClock < deadline) await window.__gwait(1);
+    if (!miraLista()) throw new Error('el sniper no llegó a entrar en la mira');
+    const ray = window.BREACH_FP.aimRay();
+    cameraOrigin = ray.origin;
+    const guidePoint = ray.origin.clone().addScaledVector(ray.dir, 24);
     const projected = guidePoint.clone().project(window.BREACH_CAM);
     const expected = {
       x: (projected.x * 0.5 + 0.5) * innerWidth,
@@ -189,6 +173,7 @@ try {
       actual, expected,
       blocked: el.classList.contains('blocked'),
       fired: G.weapons.st.mag < magBefore,
+      scoped: G.lastShot?.scoped,
       reticleError: Math.hypot(actual.x - expected.x, actual.y - expected.y),
       centerOffset: Math.hypot(actual.x - innerWidth / 2, actual.y - innerHeight / 2),
       impactAtPromise: impact ? impact.distanceTo(guidePoint) < 0.25 : false,
@@ -196,8 +181,8 @@ try {
       rayLog,
     };
   });
-  if (sniperCentered.blocked || sniperCentered.centerOffset > 0.75 || !sniperCentered.fired ||
-      !sniperCentered.impactAtPromise) {
+  if (sniperCentered.blocked || sniperCentered.centerOffset > 0.75 || sniperCentered.reticleError > 0.75 ||
+      !sniperCentered.fired || !sniperCentered.scoped || !sniperCentered.impactAtPromise) {
     console.error('SNIPER GEARS ADS DEBUG', JSON.stringify(sniperCentered));
     throw new Error('el scope debe pegar exactamente el punto prometido por la cruz');
   }
