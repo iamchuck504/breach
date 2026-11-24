@@ -14,9 +14,12 @@ import { clearClip } from './lib-clip.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
 import { CHROME } from './lib-chrome.mjs';
+import { freePort } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 
 const server = spawn(process.execPath, [path.join(root, 'node_modules', 'vite', 'bin', 'vite.js'),
-  '--host', '127.0.0.1', '--port', '8801', '--strictPort'], { stdio: 'ignore' });
+  '--host', '127.0.0.1', '--port', String(FREE_PORT), '--strictPort'], { stdio: 'ignore' });
 await new Promise((r) => setTimeout(r, 900));
 
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
@@ -30,7 +33,7 @@ const check = (name, ok, extra = '') => {
   if (!ok) fails.push(name);
 };
 
-await page.goto('http://localhost:8801/?nolock=1', { waitUntil: 'networkidle' });
+await page.goto(`http://localhost:${FREE_PORT}/?nolock=1`, { waitUntil: 'networkidle' });
 await page.evaluate(() => document.getElementById('btn-enter')?.click());
 await page.waitForSelector('#splash.off', { state: 'attached' });
 await page.evaluate(() => document.getElementById('btn-practice').click());

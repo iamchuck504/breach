@@ -1,5 +1,5 @@
 import * as T from 'three';
-import {buildFrag,buildStun} from '../player/rig.js';
+import { createWorldWeapon } from '../game/world-weapon.js';
 
 // Vista de pickups y proyectiles de los prototipos de combate. Pool acotado,
 // geometría compartida y sin luces por proyectil.
@@ -28,8 +28,9 @@ export class PrototypeView {
  }
  _makeProjectile(kind){
   if(kind!=='frag')return new T.Mesh(this.geo,this.stun);
-  const root=new T.Group(),body=buildFrag(0xffb34e),beacon=new T.Mesh(this.geo,this.beacon);
-  body.scale.setScalar(FRAG_SCALE);root.add(body,beacon);
+  const root=new T.Group(), display=new T.Group(), body=createWorldWeapon('frag'), beacon=new T.Mesh(this.geo,this.beacon);
+  display.scale.setScalar(FRAG_SCALE);
+  display.add(body);root.add(display,beacon);
   root.userData={body,beacon};
   return root;
  }
@@ -38,7 +39,7 @@ export class PrototypeView {
   const keep=new Set();
   const show=(id,kind,p,scale=1)=>{
    keep.add(id);let mesh=this.items.get(id);
-   if(!mesh){mesh=kind==='frag'?buildFrag(0xffb34e):buildStun(0x67dfff);this.items.set(id,mesh);this.scene.add(mesh);}
+   if(!mesh){mesh=new T.Group();mesh.add(createWorldWeapon(kind));this.items.set(id,mesh);this.scene.add(mesh);}
    mesh.visible=true;mesh.position.set(p.x,p.y,p.z);mesh.scale.setScalar(scale);
   };
   if(snapshot?.active){

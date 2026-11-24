@@ -3,6 +3,7 @@
 // discrepar sobre paredes, vehículos, cover o barandas del helipuerto.
 import { HELIPAD, expandedCollisionBoxes, helipadSegments, rampHeight }
   from '../src/world/collision-layouts.js';
+import { eyeWorld } from '../src/combat/hit-pose.js';
 import {galleryHeight} from '../src/world/fortaleza-galleries.js';
 
 const ORIGIN_NUDGE = 0.055;
@@ -136,11 +137,11 @@ function pointInsideGeometry(layout, point) {
     ax + az <= g.helipad.diagonal;
 }
 
-function slabHit(axes, maxDist) {
+function slabHit(axes, maxDist, interior = false) {
   let near = -Infinity, far = Infinity;
   for (const a of axes) {
     if (Math.abs(a.d) < 1e-9) {
-      if (a.o < a.lo || a.o > a.hi) return null;
+      if (a.o < a.lo || a.o > a.hi || (interior && (a.o === a.lo || a.o === a.hi))) return null;
       continue;
     }
     let t1 = (a.lo - a.o) / a.d, t2 = (a.hi - a.o) / a.d;
@@ -148,19 +149,23 @@ function slabHit(axes, maxDist) {
     near = Math.max(near, t1); far = Math.min(far, t2);
     if (near > far) return null;
   }
+  if (interior) {
+    const start = Math.max(0, near);
+    return start < Math.min(maxDist, far) ? start : null;
+  }
   const t = near >= 0.0001 ? near : far;
   return Number.isFinite(t) && t >= 0.0001 && t <= maxDist ? t : null;
 }
 
-function boxHit(box, origin, dir, maxDist) {
+function boxHit(box, origin, dir, maxDist, interior = false) {
   return slabHit([
     { o: origin.x, d: dir.x, lo: box.minx, hi: box.maxx },
     { o: origin.y, d: dir.y, lo: box.minY??-0.1, hi: box.h },
     { o: origin.z, d: dir.z, lo: box.minz, hi: box.maxz },
-  ], maxDist);
+  ], maxDist, interior);
 }
 
-function segmentHit(segment, origin, dir, maxDist) {
+function segmentHit(segment, origin, dir, maxDist, interior = false) {
   const tx = segment.b.x - segment.a.x, tz = segment.b.z - segment.a.z;
   const len = Math.hypot(tx, tz); if (len < 0.001) return null;
   const ux = tx / len, uz = tz / len;
@@ -174,7 +179,7 @@ function segmentHit(segment, origin, dir, maxDist) {
       d: dir.x * segment.n.x + dir.z * segment.n.z,
       lo: -segment.half, hi: segment.half },
     { o: origin.y, d: dir.y, lo: -0.1, hi: segment.h },
-  ], maxDist);
+  ], maxDist, interior);
 }
 
 function helipadHit(zone, origin, dir, maxDist) {
@@ -229,6 +234,17 @@ export function mapLineBlocked(layout, from, to, targetMargin = TARGET_MARGIN) {
   };
   const maxDist = length - ORIGIN_NUDGE - Math.max(0, targetMargin);
   return firstMapIntersection(layout, origin, dir, maxDist) !== null;
+}
+
+// El anfitrión puede comprobar el mismo tramo usando el snapshot ya aceptado.
+export const BOT_ORIGIN_LAG = 0.3;
+export function botPoseAllowsOrigin(layout, p, o) {
+  const y = p.y || 0, rel = o[1] - y;
+  if (!(Math.hypot(o[0] - p.x, o[2] - p.z) <= 1.2 && rel >= 0.3 && rel <= 2.1)) return false;
+  const eye = eyeWorld({ st: p.st, aim: !!p.aim, ce: p.ce, cl: p.cl, pitch: p.p,
+    wep: p.w, sp: p.sp, ae: p.ae }, p.x, y, p.z, p.yaw || 0);
+  return !mapLineBlocked(layout, [p.x, y + 1.3, p.z], o, 0.02) &&
+    !mapLineBlocked(layout, eye, o, 0.02) && !mapLineBlocked(layout, o, eye, 0.02);
 }
 
 export function clipMapEndpoint(layout, from, to) {
@@ -306,4 +322,27 @@ export function projectileMapContact(layout, from, direction, maxDistance) {
     normal,
     surface,
   };
+}
+
+// Intervalo abierto dentro del sólido, sin adelantar los extremos. Un tramo
+// de milímetros que entra en el muro cuenta; rozar su cara superior no.
+export function mapPathBlocked(layout, a, b) {
+  const g = geometry(layout), origin = { x: a[0], y: a[1], z: a[2] };
+  const dir = { x: b[0] - a[0], y: b[1] - a[1], z: b[2] - a[2] };
+  if (g.boxes.some(box => !box.moveOnly && boxHit(box, origin, dir, 1, true) !== null) ||
+      g.segments.some(seg => segmentHit(seg, origin, dir, 1, true) !== null)) return true;
+  const zone = g.helipad;
+  if (!zone) return false;
+  const axis = (o, d, lo, hi) => ({ o, d, lo, hi });
+  const x = axis(origin.x, dir.x, -zone.edge, zone.edge);
+  const z = axis(origin.z, dir.z, -zone.edge, zone.edge);
+  const y = axis(origin.y, dir.y, -0.1, zone.height);
+  const diagonals = [-1, 1].map(sign => axis(x.o + sign*z.o, x.d + sign*z.d, -zone.diagonal, zone.diagonal));
+  if (slabHit([x, z, y, ...diagonals], 1, true) !== null) return true;
+  const slope = zone.height / zone.rampLength;
+  return [-1, 1].some(sign => slabHit([
+    axis(x.o, x.d, -zone.rampHalfWidth, zone.rampHalfWidth),
+    axis(sign*z.o, sign*z.d, zone.edge, zone.edge + zone.rampLength), y,
+    axis(y.o + slope*sign*z.o, y.d + slope*sign*z.d, -Infinity, zone.height + slope*zone.edge),
+  ], 1, true) !== null);
 }

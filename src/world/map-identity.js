@@ -1,4 +1,5 @@
 import * as T from 'three';
+import { FORT_GALLERY as G } from './fortaleza-galleries.js';
 
 // Attached relief, architectural graphics and floor markings only. Never adds
 // collision, cover, pickups, animated lights or another navigation surface.
@@ -40,12 +41,12 @@ export function addMapIdentity(world,layout){
     root.userData.zones=['COURT OF THE KEEP','ARMOURY','GUARD GALLERY'];
     // Preserve the central pillar's authored banner; reinforce it with the inlaid court ring.
     for(const s of [-1,1]){
-      // Identity belongs to the solid outer wall, never across firing windows.
-      sign(s<0?'ARMOURY':'GUARD GALLERY',s*25.565,4.42,0,-s*Math.PI/2,3,
+      // El desembarco está a 3 m. La placa apoya el dorso en la cara de la liza por encima del vano.
+      sign(s<0?'ARMOURY':'GUARD GALLERY',s*(G.outer+.4+.0295),G.height+G.liza.upperTop+.35,0,s*Math.PI/2,3,
         'KEEP / UPPER WALK','heritage');
       for(const z of [-5.2,5.2]){
         plaque('gallery-heraldic-banner',shield,s*25.575,4.45,z,1.18,1.8,-s*Math.PI/2);
-        box('banner-rail',s*25.57,5.39,z,.06,.06,1.3);
+        box('banner-rail',s*25.575,5.39,z,.06,.06,1.3);
         // Thin wall-mounted rack: decorative backing and equipment silhouettes.
         box('equipment-rack',s*25.575,3.83,z+s*2,.045,1.45,1.05);
         for(const u of [-.32,0,.32]){
@@ -54,7 +55,7 @@ export function addMapIdentity(world,layout){
         }
       }
       for(const end of [-1,1]){
-        // Ground entrance identifiers below the stairwell, on masonry outside the opening.
+        // Indicador de escalera sobre el tramo macizo que precede a la jamba.
         sign('UPPER WALK',s*20.95,2.1,end*14.5,-s*Math.PI/2,1.8,'STAIRS AT GATE','heritage');
       }
     }
@@ -63,7 +64,7 @@ export function addMapIdentity(world,layout){
       c.lineWidth=4;c.beginPath();c.arc(256,256,191,0,Math.PI*2);c.stroke();
       for(let i=0;i<8;i++){const a=i*Math.PI/4;c.beginPath();c.moveTo(256+Math.cos(a)*195,256+Math.sin(a)*195);c.lineTo(256+Math.cos(a)*216,256+Math.sin(a)*216);c.stroke();}
     });
-    plaque('courtyard-inlaid-medallion',paving,0,.018,0,5.4,5.4,0,true);
+    plaque('courtyard-inlaid-medallion',paving,0,.025,0,5.4,5.4,0,true);
   }else if(layout==='azoteas'){
     root.userData.zones=['LANDING DECK','AIR HANDLING','ROOF ACCESS'];
     const marking=graphic('landing-sector',c=>{
@@ -81,7 +82,8 @@ export function addMapIdentity(world,layout){
     const lamps=new T.MeshBasicMaterial({color:0x9cbbbb});
     for(let i=0;i<8;i++){
       const a=i*Math.PI/4+Math.PI/8;
-      box('deck-inset-marker',Math.cos(a)*5.05,1.106,Math.sin(a)*5.05,.18,.01,.18,lamps);
+      // La base apoya en la cubierta y la lente sobresale 8 mm de la pintura.
+      box('deck-inset-marker',Math.cos(a)*5.05,1.110,Math.sin(a)*5.05,.18,.02,.18,lamps);
     }
   }else{
     root.userData.zones=['POLICE CORDON','MOTOR WORKS','SERVICE ALLEY'];

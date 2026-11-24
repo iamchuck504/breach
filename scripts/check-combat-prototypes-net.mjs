@@ -1,15 +1,24 @@
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import WebSocket from 'ws';
-const wait=ms=>new Promise(r=>setTimeout(r,ms)),port=8857;
+import { eyeAt, freePort, launchAt } from './lib-test.mjs';
+import { withSamples } from './lib-fps-sample.mjs';
+// PRUEBAS (ronda 2 de RED): cada fire/rocket/nade/protoFire humano lleva su muestra `fs`
+// (n creciente, w = arma equipada) desde el último estado `s` de ese emisor
+const SAMPLED = withSamples((peer, m) => peer.ws.send(JSON.stringify(m)));
+
+// PRUEBAS (corrida 6, auditoría): salidas FPS = ojo + arma (launchAt), mirando +z (yaw π)
+const LA=(x,z)=>{const L=launchAt(x,0,z,Math.PI);return {o:L.o,d:L.d};};
+const FREE_PORT = await freePort();
+const wait=ms=>new Promise(r=>setTimeout(r,ms)),port=FREE_PORT;
 const server=spawn(process.execPath,['server/server.js'],{env:{...process.env,BREACH_FILL_BOTS: '0',PORT:String(port),INTRO_TIME:'0',COUNTDOWN_TIME:'0',NODE_ENV:'test',ALLOW_TEST_TELEPORTS:'1',BREACH_EXPERIMENTAL_STUN:'1'},stdio:['ignore','pipe','pipe']});
 let log='';server.stdout.on('data',d=>log+=d);server.stderr.on('data',d=>log+=d);
 class Peer{
- async open(name){this.history=[];this.ws=new WebSocket(`ws://127.0.0.1:${port}`);this.ws.on('message',s=>this.history.push(JSON.parse(s)));await new Promise((r,j)=>{this.ws.once('open',r);this.ws.once('error',j);});this.send({t:'join',action:name==='PROTO-A'?'create':'join',name,v:0});this.id=(await this.next(m=>m.t==='welcome')).id;}
- send(m){this.ws.send(JSON.stringify(m));}
+ async open(name){this.history=[];this.ws=new WebSocket(`ws://127.0.0.1:${port}`);this.ws.on('message',s=>this.history.push(JSON.parse(s)));await new Promise((r,j)=>{this.ws.once('open',r);this.ws.once('error',j);});this.send({t:'join',action:name==='PROTO-A'?'create':'join',name,v:0,hp:2,fps:1});this.id=(await this.next(m=>m.t==='welcome')).id;}
+ send(m){SAMPLED(this,m);}
  async next(pred,ms=4000){for(let i=0;i<ms/20;i++){const m=this.history.find(pred);if(m)return m;await wait(20);}throw Error(`timeout ${this.history.map(m=>m.t).slice(-15)}\n${log}`);}
  clear(){this.history=[];}
- state(x,z,w='smg'){this.send({t:'s',x,z,y:0,yaw:0,st:'idle',aim:0,p:0,w,am:4,ar:0,sp:0});}
+ state(x,z,w='smg',yaw=0){this.send({t:'s',x,z,y:0,yaw,st:'idle',aim:0,p:0,w,am:4,ar:0,sp:0});}
 }
 let a,b;
 try{
@@ -24,27 +33,30 @@ try{
  const claim=await a.next(m=>m.t==='protoInventory'&&m.kind==='frag');assert.equal(claim.count,2);
  await wait(100);assert.equal(a.history.filter(m=>m.t==='protoInventory'&&m.kind==='frag').length,1);
  const grenadier=claim.id===a.id?a:b;
- grenadier.state(frag.x,frag.z,'frag');await wait(100);
- grenadier.send({t:'protoFire',kind:'frag',o:[frag.x,1,frag.z],d:[0,0,1]});
+ grenadier.state(frag.x,frag.z,'frag',Math.PI);await wait(100);
+ grenadier.send({t:'protoFire',kind:'frag',...LA(frag.x,frag.z)});
  const boom=await a.next(m=>m.t==='protoEvent'&&m.kind==='explosion');
  const remoteBoom=await b.next(m=>m.t==='protoEvent'&&m.kind==='explosion');assert.deepEqual(boom.p,remoteBoom.p);
  assert.ok(a.history.some(m=>m.t==='protoInventory'&&m.id===claim.id&&m.kind==='frag'&&m.count===1));
  a.state(stun.x,stun.z);await wait(100);a.send({t:'protoClaim',id:stun.id,manual:true});await a.next(m=>m.t==='protoInventory'&&m.kind==='stun'&&m.id===a.id);
  await wait(5100);
- a.state(3,-4,'stun');b.state(3,4);await wait(100);a.clear();b.clear();
- a.send({t:'protoFire',kind:'stun',o:[3,1.1,-4],d:[0,0,1]});
+ a.state(3,-4,'stun',Math.PI);b.state(3,4);await wait(100);a.clear();b.clear();
+ a.send({t:'protoFire',kind:'stun',...LA(3,-4)});
  await a.next(m=>m.t==='protoEvent'&&m.kind==='stun'&&m.target===b.id);
  await b.next(m=>m.t==='protoEvent'&&m.kind==='stun'&&m.target===b.id);
- b.state(10,10,'pistol');b.send({t:'fire',w:'pistol',o:[3,1.1,4],p:[3,1.1,-4],d:[]});
+ b.state(10,10,'pistol');b.send({t:'fire',w:'pistol',o:eyeAt(3,0,4,0),p:[3,1.1,-4],d:[]});
  const correction=await b.next(m=>m.t==='correction'&&m.reason==='stun');assert.equal(correction.x,3);assert.equal(correction.z,4);
- await wait(1550);a.clear();a.send({t:'protoFire',kind:'stun',o:[3,1.1,-4],d:[0,0,1]});await wait(500);
+ await wait(1550);a.clear();a.send({t:'protoFire',kind:'stun',...LA(3,-4)});await wait(500);
  assert.equal(a.history.filter(m=>m.t==='protoEvent'&&m.kind==='stun').length,0,'stun refreshed');
  a.clear();const active=await a.next(m=>m.t==='protoState'&&m.states.some(s=>s.id===b.id&&s.remaining>0));
  assert.ok(active.states.find(s=>s.id===b.id).remaining<1.6);
  await wait(1100);a.clear();const ended=await a.next(m=>m.t==='protoState');assert.equal(ended.states.find(s=>s.id===b.id)?.remaining,0);assert.ok(ended.states.find(s=>s.id===b.id)?.immune>0);
- a.send({t:'protoFire',kind:'stun',o:[3,1.1,-4],d:[0,0,1]});await wait(500);assert.ok(!a.history.some(m=>m.t==='protoEvent'&&m.kind==='stun'));
- await wait(2200);a.state(0,-4,'stun');b.state(0,4);await wait(100);a.clear();
- a.send({t:'protoFire',kind:'stun',o:[0,1.1,-4],d:[0,0,1]});await wait(600);
- assert.ok(!a.history.some(m=>m.t==='protoEvent'&&m.kind==='stun'),'electric projectile crossed pillar');
+ a.send({t:'protoFire',kind:'stun',...LA(3,-4)});await wait(500);assert.ok(!a.history.some(m=>m.t==='protoEvent'&&m.kind==='stun'));
+ // PRUEBAS (corrida 6): con la salida a la altura del ojo el proyectil eléctrico ya no
+ // se prueba contra un pilar bajo sino contra el muro sur de la torre del homenaje
+ // (z −5…−4.2, el mismo que tapa el cohete en check-rocket-authority).
+ await wait(2200);a.state(0,-9,'stun',Math.PI);b.state(0,-1.5);await wait(100);a.clear();
+ a.send({t:'protoFire',kind:'stun',...LA(0,-9)});await wait(600);
+ assert.ok(!a.history.some(m=>m.t==='protoEvent'&&m.kind==='stun'),'electric projectile crossed the keep wall');
  console.log('Prototype multiplayer OK: competing/manual claims, grenade flight/fuse, authoritative stun, wall blocking, freeze, no refresh, immunity, both peers');
 }finally{a?.ws?.close();b?.ws?.close();server.kill();}

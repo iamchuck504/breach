@@ -5,7 +5,7 @@ import {CHROME} from './lib-chrome.mjs';
 const browser=await chromium.launch({executablePath:CHROME,headless:true});
 try{
  const page=await browser.newPage({viewport:{width:1100,height:800}});
- await page.goto('http://127.0.0.1:5200/?nolock=1');
+ await page.goto((process.env.BASE || 'http://127.0.0.1:5200') + '/?nolock=1');
  const result=await page.evaluate(async()=>{
   const T=await import('/node_modules/three/build/three.module.js');
   const {GLTFLoader}=await import('/node_modules/three/examples/jsm/loaders/GLTFLoader.js');

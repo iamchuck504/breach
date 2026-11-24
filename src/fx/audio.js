@@ -11,6 +11,7 @@
 import { Engine } from '../audio/engine.js';
 import { buildBank, SAMPLE_FILES } from '../audio/catalog.js';
 import { IR_OF_MAP } from '../audio/sfx-world.js';
+import { reloadTimeline } from '../combat/weapons.js';
 
 export const AUDIO_PROFILES = Object.freeze({
   footstep: Object.freeze({ near: 1.6, far: 26, rolloff: 0.16, farHz: 3200,
@@ -44,6 +45,7 @@ export const SPACE_PROFILES = Object.freeze({
 });
 
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
+const dbLin = (db) => Math.pow(10, db / 20);
 
 // Selección pura de referencia: permite verificar que spectator nunca vuelva
 // a heredar accidentalmente la posición del cadáver local.
@@ -115,7 +117,7 @@ export function footstepRelation(listenerTeam, sourceTeam) {
 const LOCAL_GAIN = { smg: 0.39, shotgun: 0.46, pistol: 0.42, sniper: 0.55 };
 const REMOTE_GAIN = { smg: 0.34, shotgun: 0.39, pistol: 0.36, sniper: 0.48 };
 const HEAVY = new Set(['shotgun', 'sniper', 'bazooka']);
-const STEP_OF = { stone: 'step_stone', metal: 'step_metal', concrete: 'step_concrete', glass: 'step_concrete' };
+const STEP_OF = { stone: 'step_stone', metal: 'step_metal', concrete: 'step_concrete', glass: 'step_concrete', earth: 'step_earth' };
 const IMPACT_OF = { metal: 'imp_metal', stone: 'imp_stone', glass: 'imp_glass' };
 // pasos: propio discreto, aliado atenuado y oscuro, enemigo presente y nítido
 const STEP_REL = Object.freeze({
@@ -123,8 +125,73 @@ const STEP_REL = Object.freeze({
   friend: Object.freeze({ volume: 0.55, cut: 2600, prio: 45 }),
   enemy: Object.freeze({ volume: 1.35, cut: 20000, prio: 86 }),
 });
-const STEP_KIND_VOL = { walk: 0.7, run: 0.92, roadie: 1.05, land: 1.1, jump: 0.6 };
+const STEP_KIND_VOL = { walk: 0.7, run: 0.92, roadie: 1.05, land: 1.1, jump: 0.6, crouch: 0.25 };
 const ROCKET_LOOPS = 3;
+
+// ---------- mezcla en primera persona (oído = ojo, arma a ~0.5 m) ----------
+// Números medidos con src/audio/offline.js (scripts/check-audio-fp.mjs).
+export const FP_MIX = Object.freeze({
+  // Disparo propio: el cuerpo (body, s) suena entero; después la cola del
+  // sample baja `db` dB con constante `tau`. Antes (oído en el pecho, sin
+  // recorte) la cola del propio disparo tapaba un paso enemigo a 10 m durante
+  // 240/810/900/1690/690 ms (subfusil/pistola/escopeta sin bombeo/
+  // francotirador/bazuca); ahora ~110/120/230/390/370 ms.
+  ownTail: Object.freeze({
+    smg: Object.freeze({ body: 0.06, db: 24, tau: 0.02 }),
+    pistol: Object.freeze({ body: 0.09, db: 30, tau: 0.03 }),
+    shotgun: Object.freeze({ body: 0.12, db: 28, tau: 0.035 }),
+    // el sample del francotirador es crack + eco de cañón casi plano durante
+    // 400 ms: se respeta el crack y el primer rebote, el eco largo se aparta
+    sniper: Object.freeze({ body: 0.17, db: 36, tau: 0.045 }),
+    bazooka: Object.freeze({ body: 0.18, db: 30, tau: 0.05 }),
+  }),
+  // envío a la sala de lo que nace en el propio cuerpo (antes 0.06–0.08):
+  // con la boca en la cara la sala es reflejo, no la mitad del disparo
+  ownShotSend: 0.03, ownHandlingSend: 0.02, ownStepSend: 0.08,
+  // ganancia extra del cuerpo del disparo propio (más cerca = más pegada)
+  ownShotBoostDb: 1.5,
+  // regla de duck por disparo propio (cadena lateral, en el facade):
+  // durante `hold` s tras cada disparo propio bajan MIS pasos/equipo y los
+  // pasos ALIADOS; el ambiente baja con engine.duck. Los pasos ENEMIGOS no
+  // se tocan nunca (información de amenaza).
+  ownFireDuck: Object.freeze({ hold: 0.28, ownStepsDb: 6, friendStepsDb: 4, ambDb: 4 }),
+  // explosión cercana: oído cerrado a minHz a 0 m, abierto del todo a nearM
+  blast: Object.freeze({ nearM: 14, minHz: 1300, maxHz: 9000, hold: 0.07, recover: 0.85, pressureM: 12 }),
+  // pasos propios desde la cabeza: más bajos y algo más oscuros que en
+  // tercera persona (los pies quedan 1.5 m por debajo del oído)
+  ownStep: Object.freeze({ volume: 0.66, cut: 4800 }),
+  // confirmación de impacto/baja: el propio disparo (dueño 'own') baja
+  // `db` dB durante `hold` s para que el chasquido asome sobre su cuerpo
+  hitDuck: Object.freeze({ db: 12, hold: 0.04, release: 0.08 }),
+});
+
+// Pieza de sonido de cada paso de recarga (evento reloadStep {weapon, name}).
+// La munición la cambia la lógica (weapons.js); aquí solo suena la mano.
+// Todo suena en el instante del evento salvo el bombeo final de la escopeta
+// (HANDLING_DELAYS: cuando el viewmodel mueve la corredera).
+export const RELOAD_PIECES = Object.freeze({
+  smg: Object.freeze({ magOut: 'mag_out', magIn: 'mag_in', boltRelease: 'rack' }),
+  pistol: Object.freeze({ magOut: 'mag_out_light', magIn: 'mag_in_light', slideRelease: 'slide_release', boltRelease: 'slide_release' }),
+  sniper: Object.freeze({ boltOpen: 'bolt_open', roundIn: 'round_in', boltClose: 'bolt_close' }),
+  bazooka: Object.freeze({ rocketIn: 'tube_slide', tubeLock: 'tube_lock' }),
+  stun: Object.freeze({ charge: 'stun_charge', ready: 'ready_chirp' }),
+  shotgun: Object.freeze({ shellIn: 'shell_in', pump: 'pump' }),
+});
+// nombres que un perfil nuevo pueda usar sin tabla propia
+const GENERIC_PIECE = Object.freeze({ magOut: 'mag_out', magIn: 'mag_in', boltRelease: 'rack', slideRelease: 'slide_release',
+  boltOpen: 'bolt_open', roundIn: 'round_in', boltClose: 'bolt_close', rocketIn: 'tube_slide', tubeLock: 'tube_lock',
+  shellIn: 'shell_in', pump: 'pump', charge: 'stun_charge', ready: 'ready_chirp' });
+// Retrasos alineados con el viewmodel (s desde el evento hasta el inicio del
+// sonido; su golpe principal cae 55 ms después). Los comprueba
+// scripts/check-audio-fp.mjs contra profiles/shotgun.js.
+export const HANDLING_DELAYS = Object.freeze({
+  pumpAfterShot: 0.224, // acompasa ambos topes del bombeo REAPER tras el tiro
+  pumpAfterReload: 0.275, // outro: corredera atrás a u 0.52 de 0.62 s
+});
+export function reloadPieceFor(weapon, step) {
+  return RELOAD_PIECES[weapon]?.[step] ?? GENERIC_PIECE[step] ?? null;
+}
+const LIGHT = new Set(['pistol', 'stun', 'frag', 'grenade', 'smoke']);
 
 export class Audio {
   constructor() {
@@ -164,6 +231,15 @@ export class Audio {
     this._pedestal = null;
     this._pedestalTick = 0;
     this._rocketSlots = new Array(ROCKET_LOOPS).fill(null);
+    this._rocketPrev = new Array(ROCKET_LOOPS).fill(null);
+    // primera persona
+    this._weapons = null;      // emisor de weapons.js (attachWeapons)
+    this._unsub = [];
+    this._lastOwnFire = -10;
+    this._deferred = [];       // piezas con retraso (bombeo): sobreviven a la pausa
+    this._paused = false;
+    this.ownWeaponGain = 1;    // ajuste ownWeaponVolume
+    this.hitSounds = true;     // ajuste hitSounds
     this._startRender();
   }
 
@@ -348,6 +424,11 @@ export class Audio {
   _now() {
     return this.ctx ? this.ctx.currentTime : 0;
   }
+
+  // Ajustes (src/core/settings.js, claves ownWeaponVolume y hitSounds;
+  // main los aplica al cargar y en onSettingChange)
+  setOwnWeaponVolume(v) { this.ownWeaponGain = Math.max(0, Math.min(1.5, Number.isFinite(+v) ? +v : 1)); }
+  setHitSounds(on) { this.hitSounds = on !== false; }
 
   toggleMute() {
     this.muted = !this.muted;
@@ -590,6 +671,7 @@ export class Audio {
       const s = slots[i];
       if (s && !(list && list.includes(s))) {
         slots[i] = null;
+        this._rocketPrev[i] = null;
         this.engine.loop('rocket_loop', `rocket${i}`)?.stop(0.12);
       }
     }
@@ -604,7 +686,22 @@ export class Audio {
       const l = this.engine.loop('rocket_loop', `rocket${i}`);
       if (!l || !(l.running || l.start(i * 0.37))) continue;
       const mix = this._spatial(r, 'gunshot');
-      l.set(mix.gain, 1, mix.cutoff, mix.pan, 0.03);
+      // Doppler (velocidad radial entre cuadros) y ráfaga al pasar cerca:
+      // el punto más cercano se detecta cuando la distancia deja de bajar
+      const now = this._now();
+      const pv = this._rocketPrev[i];
+      let rate = 1;
+      if (pv && pv.r === r && now > pv.t) {
+        const vr = (mix.distance - pv.d) / (now - pv.t);
+        rate = Math.max(0.82, Math.min(1.22, 343 / (343 + vr)));
+        if (pv.d < mix.distance && pv.approaching && pv.d < 4.5 && !pv.passed) {
+          this._play('rocket_pass', { volume: Math.pow(1 - pv.d / 4.5, 0.7), pan: mix.pan });
+          pv.passed = true;
+        }
+        pv.approaching = mix.distance < pv.d;
+        pv.d = mix.distance; pv.t = now;
+      } else this._rocketPrev[i] = { r, d: mix.distance, t: now, approaching: false, passed: false };
+      l.set(mix.gain, rate, mix.cutoff, mix.pan, 0.03);
     }
   }
 
@@ -715,20 +812,35 @@ export class Audio {
     let feet = opts.position ? { x: opts.position.x, y: (opts.position.y ?? 0) - 0.22, z: opts.position.z } : null;
     if (own) {
       const L = this._listenerPose();
-      feet = L ? { x: L.x, y: L.y - 1.15, z: L.z } : null;
+      // en primera persona el oyente es el ojo: main pasa feetY (suelo bajo
+      // el jugador); sin él, la altura de pecho de tercera persona
+      feet = L ? { x: L.x, y: L.feetY ?? L.y - 1.15, z: L.z } : null;
     }
     const rel = own ? 'own' : footstepRelation(this._listenerPose()?.team, opts.team);
     const R = STEP_REL[rel];
-    const name = kind === 'shuffle' ? 'step_scuff' : STEP_OF[this._surfaceUnder(feet)] ?? 'step_concrete';
-    const volume = (STEP_KIND_VOL[kind] ?? 1) * R.volume * (opts.gain ?? 1);
-    const base = { volume, cut: R.cut, prio: R.prio, pitch: kind === 'roadie' ? 0.93 : kind === 'land' ? 0.9 : 1 };
+    const name = kind === 'dodge' ? 'dodge_step' : kind === 'shuffle' ? 'step_scuff' : STEP_OF[this._surfaceUnder(feet)] ?? 'step_concrete';
+    // duck por disparo propio: mis pasos y los aliados bajan; los enemigos no
+    const D = FP_MIX.ownFireDuck;
+    const firing = this._now() - this._lastOwnFire < D.hold;
+    const duck = !firing ? 1 : own ? dbLin(-D.ownStepsDb) : rel === 'friend' ? dbLin(-D.friendStepsDb) : 1;
+    const ownK = own ? FP_MIX.ownStep.volume / STEP_REL.own.volume : 1;
+    const volume = (STEP_KIND_VOL[kind] ?? 1) * R.volume * ownK * duck * (opts.gain ?? 1);
+    // agachado: paso apoyado, más blando y oscuro (también el de los demás:
+    // moverse agachado es más sigiloso)
+    const crouch = kind === 'crouch';
+    const cut = Math.min(own ? FP_MIX.ownStep.cut : R.cut, crouch ? 3800 : 20000);
+    const base = { volume, cut, prio: R.prio, pitch: kind === 'roadie' ? 0.93 : kind === 'land' ? 0.9 : crouch ? 1.06 : 1 };
+    if (own) base.send = FP_MIX.ownStepSend;
+    if (opts.tag) base.tag = opts.tag;
     const ok = own ? this._play(name, base) : this._playAt(name, opts.position, 'footstep', base);
     if (!ok) return false;
     if (kind === 'roadie') {
-      const g = { volume: volume * 0.8, cut: R.cut, prio: R.prio - 5 };
-      if (own) this._play('gear', g); else this._playAt('gear', opts.position, 'footstep', g);
+      const g = { volume: volume * 0.8, cut: Math.min(R.cut, cut), prio: R.prio - 5 };
+      if (own) { g.send = FP_MIX.ownStepSend; this._play('gear', g); } else this._playAt('gear', opts.position, 'footstep', g);
     } else if (kind === 'land') {
-      const g = { volume: own ? 1 : volume, prio: R.prio };
+      // aterrizaje: variantes 0-1 ligeras, 2-3 pesadas según la caída
+      const heavy = (opts.speed ?? 6) >= 7.5;
+      const g = { volume: own ? 1 : volume, prio: R.prio, variant: (heavy ? 2 : 0) + ((Math.random() * 2) | 0) };
       if (own) this._play('land', g); else this._playAt('land', opts.position, 'footstep', g);
     }
     return true;
@@ -798,14 +910,22 @@ export class Audio {
     if (!this.engine) return false;
     const remote = !!options?.position;
     if (!remote) {
-      if (!this._play(`gun_${w}`, { volume: LOCAL_GAIN[w] })) return false;
-      if (w === 'smg') { this._play('mech_smg'); this._play('punch_light'); }
-      else if (w === 'pistol') { this._play('mech_pistol'); this._play('punch_light'); }
+      // Primera persona: cuerpo del sample + presión y chasquido de boca
+      // (near_*), cola recortada (FP_MIX.ownTail) y poca sala.
+      const k = this.ownWeaponGain * dbLin(FP_MIX.ownShotBoostDb);
+      const T = FP_MIX.ownTail[w];
+      const tail = T ? { after: T.body, db: T.db, tau: T.tau } : null;
+      const send = FP_MIX.ownShotSend;
+      if (!this._play(`gun_${w}`, { volume: LOCAL_GAIN[w] * k, tail, send, owner: 'own' })) return false;
+      this._noteOwnFire();
+      const lay = (name, v = 1) => this._play(name, { volume: v * this.ownWeaponGain, tail, send: FP_MIX.ownHandlingSend, owner: 'own' });
+      if (w === 'smg') { lay('mech_smg'); lay('punch_light'); lay('near_light'); }
+      else if (w === 'pistol') { lay('mech_pistol'); lay('punch_light'); lay('near_light', 0.9); }
       else if (w === 'shotgun') {
-        this._play('punch_heavy');
-        // bombeo tras el disparo (cadencia 95 rpm → ciclo de 0.63 s)
-        this._play('pump', { at: this._now() + 0.3, tag: 'pump' });
-      } else this._play('punch_heavy');
+        lay('punch_heavy'); lay('near_heavy');
+        // bombeo tras el disparo, cuando el viewmodel mueve la corredera
+        this._defer('pump', HANDLING_DELAYS.pumpAfterShot, { tag: 'pump', send: FP_MIX.ownHandlingSend });
+      } else { lay('punch_heavy'); lay('near_heavy', 1.1); }
       return true;
     }
     const mix = this._spatial(options.position, 'gunshot');
@@ -887,7 +1007,16 @@ export class Audio {
   // bazooka: golpe sordo del lanzamiento + chorro del cohete saliendo
   bazooka(options = null) {
     const remote = !!options?.position;
-    if (!remote && this._play('bazooka_fire', { volume: 1 })) { this._play('punch_heavy'); return; }
+    if (!remote) {
+      const T = FP_MIX.ownTail.bazooka;
+      const tail = { after: T.body, db: T.db, tau: T.tau };
+      if (this._play('bazooka_fire', { volume: this.ownWeaponGain, tail, send: FP_MIX.ownShotSend * 2, owner: 'own' })) {
+        this._noteOwnFire();
+        this._play('punch_heavy', { volume: this.ownWeaponGain });
+        this._play('near_heavy', { volume: this.ownWeaponGain });
+        return;
+      }
+    }
     if (remote) {
       const mix = this._spatial(options.position, 'gunshot');
       if (mix.gain <= 0.001 && this.bank.ready('bazooka_fire', 0)) return;
@@ -908,9 +1037,16 @@ export class Audio {
       const mix = this._spatial(options?.position, 'gunshot');
       if (mix.gain <= 0.001) return;
       const far = clamp01((mix.distance - 14) / 30);
+      // primera persona, de cerca: el oído se cierra un instante (corta el
+      // pico de agudos en vez de sumarlo) y llega la presión grave
+      const B = FP_MIX.blast;
+      const near = mix.occluded ? 0 : clamp01(1 - mix.distance / B.nearM);
+      if (near > 0) this.engine.earMuffle(B.minHz * Math.pow(B.maxHz / B.minHz, 1 - near), B.hold, B.recover * (0.5 + 0.5 * near));
       if (this._play('boom', { volume: (direct ? 1.1 : 1) * (1 - far * 0.7), mix })) {
         if (far > 0.05) this._play('boom_far', { volume: far, mix: { gain: Math.pow(mix.gain, 0.6), pan: mix.pan, cutoff: Math.min(mix.cutoff, 2000), occluded: mix.occluded } });
         if (direct) this._play('boom_direct', { mix });
+        const pr = clamp01(1 - mix.distance / B.pressureM);
+        if (pr > 0) this._play('boom_near', { volume: pr * (mix.occluded ? 0.6 : 1), pan: mix.pan * 0.5 });
         if (mix.distance < 30) this.engine.duck(6 * (1 - mix.distance / 30));
         return;
       }
@@ -986,55 +1122,203 @@ export class Audio {
     }
   }
 
-  // ---------- recarga, cambio, seco ----------
-  // Secuencia programada sobre la duración REAL de la recarga del arma; la
-  // pieza final suena en reloadDone, en el instante exacto en que el
-  // cargador queda lleno. Cancelar (melee, disparo, cambio) corta lo pendiente.
-  reload(wep = null, duration = 0) {
+  // ---------- manejo del arma propia: POR EVENTOS ----------
+  // attachWeapons(weapons) suscribe el facade al emisor de src/combat/
+  // weapons.js (CONTRATO §4). Cada reloadStep suena UNA vez en el instante
+  // en que la lógica lo emite (la misma que mueve la mano y cambia la
+  // munición): sonido, mano y cargador no pueden separarse. reloadCancel
+  // corta lo que suena y lo pendiente; en pausa la lógica no avanza, así que
+  // tampoco emite: solo el bombeo con retraso se guarda (reloadPause).
+  // Con el emisor enganchado, los métodos antiguos de línea de tiempo
+  // (reload/reloadDone/shellIn/swap/dry y throwNade sin posición) no hacen
+  // nada: main.js puede seguir llamándolos sin duplicar sonidos.
+  attachWeapons(weapons) {
+    if (!weapons?.on || this._weapons === weapons) return !!weapons?.on;
+    this.detachWeapons();
+    this._weapons = weapons;
+    const on = (ev, fn) => this._unsub.push(weapons.on(ev, (d) => { try { fn(d || {}); } catch (e) { audioFault(`ev:${ev}`, e); } }));
+    on('reloadStart', () => this._handling('cloth', { volume: 0.7 }));
+    on('reloadStep', (d) => this._reloadStep(d.weapon ?? weapons.cur, d.name));
+    on('reloadCancel', () => this._cancelReload());
+    on('reloadEnd', () => {});
+    on('swapStart', (d) => {
+      this._cancelReload();
+      this._dropDeferred('pump');
+      this.engine?.stopTag('pump', 0.04);
+      this._handling(LIGHT.has(d.from) ? 'holster_light' : 'holster_heavy', { tag: 'swap' });
+    });
+    on('swapMid', (d) => this._handling(LIGHT.has(d.weapon) ? 'draw_light' : 'draw_heavy', { tag: 'swap' }));
+    on('swapCancel', () => this.engine?.stopTag('swap', 0.05));
+    on('dry', () => this._handling('dry'));
+    on('meleeStart', () => this.meleeSwing());
+    on('meleeHit', (d) => {
+      if (d.connected || d.world) this.meleeImpact({ world: !!d.world });
+    });
+    on('throwStart', () => this._handling('nade_ready', { tag: 'throw' }));
+    on('throwRelease', () => this._play('throw', { send: FP_MIX.ownHandlingSend }));
+    // el aturdidor no es arrojadizo: su salida propia suena aquí (main no
+    // llama gun() para él y el evento de red 'launch' propio se ignora)
+    on('fire', (d) => { if (d.weapon === 'stun') this._play('stun_zap', { volume: 0.8, send: FP_MIX.ownHandlingSend, owner: 'own' }); });
+    return true;
+  }
+  detachWeapons() {
+    for (const u of this._unsub) { try { u?.(); } catch { /* ya suelto */ } }
+    this._unsub = [];
+    this._weapons = null;
+  }
+  get eventDriven() { return !!this._weapons; }
+
+  _handling(name, o = {}) {
+    return this._play(name, { send: FP_MIX.ownHandlingSend, ...o });
+  }
+  _reloadStep(weapon, step) {
+    const piece = reloadPieceFor(weapon, step);
+    if (!piece) { audioFault(`paso sin sonido ${weapon}/${step}`, new Error('sin pieza')); return false; }
+    if (weapon === 'shotgun' && step === 'pump') {
+      return this._defer('pump', HANDLING_DELAYS.pumpAfterReload, { tag: 'pump', send: FP_MIX.ownHandlingSend });
+    }
+    return this._handling(piece, { tag: 'reload' });
+  }
+  _cancelReload() {
+    this.engine?.stopTag('reload', 0.04);
+    this._dropDeferred('pump-reload');
+  }
+  _noteOwnFire() {
+    const now = this._now();
+    if (now - this._lastOwnFire > 0.12) this.engine?.duck(FP_MIX.ownFireDuck.ambDb, FP_MIX.ownFireDuck.hold, 0.35);
+    this._lastOwnFire = now;
+  }
+
+  // Pieza con retraso (bombeo): se programa en tiempo de audio y se recuerda
+  // para poder congelarla en pausa y reprogramar lo que le faltaba.
+  _defer(name, delay, o = {}) {
+    if (!this.engine) return false;
+    const at = this._now() + delay;
+    if (this._paused) { this._deferred.push({ name, left: delay, o, at: 0 }); return true; }
+    const ok = this._play(name, { ...o, at });
+    if (ok) this._deferred.push({ name, at, o, left: 0 });
+    this._pruneDeferred();
+    return ok;
+  }
+  _pruneDeferred() {
+    const now = this._now();
+    this._deferred = this._deferred.filter((d) => d.left > 0 || d.at > now);
+  }
+  _dropDeferred() {
+    this._deferred = [];
+  }
+
+  // ---------- respaldo por línea de tiempo (sin emisor) ----------
+  // Lo que había antes: secuencia programada sobre la duración REAL de la
+  // recarga, la pieza final en reloadDone. Se usa solo si main no llamó a
+  // attachWeapons (y para jugadores remotos: remoteReload).
+  // `progress` (0..1) reanuda una recarga ya empezada (fin de una pausa).
+  reload(wep = null, duration = 0, progress = 0) {
+    if (this._weapons) return;
     if (!wep || !(duration > 0) || !this.engine) {
-      if (!wep || !this.engine) this._tone('square', 700, 500, 0.07, 0.04);
+      if (!progress && (!wep || !this.engine)) this._tone('square', 700, 500, 0.07, 0.04);
       return;
     }
     this.reloadCancel();
     const t0 = this._now();
-    const T = (k) => ({ at: t0 + k * duration, tag: 'reload' });
+    const T = (k) => ({ at: t0 + (k - progress) * duration, tag: 'reload' });
+    const cue = (name, k) => k < progress || this._play(name, T(k));
     let ok = true;
-    if (wep === 'smg') ok = this._play('mag_out', T(0.15)) && this._play('mag_in', T(0.62));
-    else if (wep === 'pistol') ok = this._play('mag_out_light', T(0.12)) && this._play('mag_in_light', T(0.55));
-    else if (wep === 'sniper') ok = this._play('bolt_open', T(0.08)) && this._play('round_in', T(0.5));
-    else if (wep === 'bazooka') ok = this._play('tube_slide', T(0.25));
-    else if (wep === 'stun') ok = this._play('stun_charge', T(0.15));
-    // escopeta: cada cartucho suena al insertarse (shellIn), sin pieza inicial
-    if (!ok && wep !== 'shotgun') this._tone('square', 700, 500, 0.07, 0.04);
+    // mismos pasos que la lógica (weapons.js), salvo el final (reloadDone)
+    for (const st of reloadTimeline(wep)) {
+      if (st.t >= 1) continue;
+      const piece = reloadPieceFor(wep, st.step);
+      if (piece) ok = cue(piece, st.t) && ok;
+    }
+    if (!ok && wep !== 'shotgun' && !progress) this._tone('square', 700, 500, 0.07, 0.04);
   }
   reloadDone(wep = null) {
+    if (this._weapons) return;
     const piece = { smg: 'rack', pistol: 'slide_release', sniper: 'bolt_close', bazooka: 'tube_lock', stun: 'ready_chirp' }[wep];
-    if (wep === 'shotgun' && this._play('pump', { at: this._now() + 0.08, tag: 'pump' })) return;
+    if (wep === 'shotgun' && this._defer('pump', 0.08, { tag: 'pump' })) return;
     if (piece && this._play(piece)) return;
     this._tone('square', 900, 1200, 0.08, 0.05);
   }
   reloadCancel() {
     this.engine?.stopTag('reload', 0.04);
   }
+  // Pausa offline: lo ya programado a futuro (bombeo, piezas del respaldo)
+  // se corta y se guarda lo que le faltaba; al reanudar se reprograma igual.
+  // Con el emisor, las piezas de recarga no necesitan nada: la lógica está
+  // congelada y no emite hasta reanudar.
+  reloadPause() {
+    if (this._paused) return;
+    this._paused = true;
+    this.engine?.pauseTag('dodge', true);
+    this.engine?.pauseTag('melee', true);
+    const now = this._now();
+    if (!this._weapons) this.reloadCancel();
+    for (const d of this._deferred) if (d.at > now) { d.left = d.at - now; d.at = 0; }
+    this._deferred = this._deferred.filter((d) => d.left > 0);
+    if (this._deferred.length) this.engine?.stopTag('pump', 0.02);
+  }
+  reloadResume() {
+    if (!this._paused) return;
+    this._paused = false;
+    this.engine?.pauseTag('dodge', false);
+    this.engine?.pauseTag('melee', false);
+    const held = this._deferred;
+    this._deferred = [];
+    for (const d of held) if (d.left > 0) this._defer(d.name, d.left, d.o);
+  }
   shellIn() {
+    if (this._weapons) return;
     if (!this._play('shell_in')) this._tone('square', 900, 1200, 0.08, 0.05);
   }
   swap(target = null) {
+    if (this._weapons) return;
     this.reloadCancel();
     this.engine?.stopTag('pump', 0.04);
-    const light = target === 'pistol' || target === 'stun' || target === 'frag' || target === 'grenade';
+    this._dropDeferred();
+    const light = LIGHT.has(target);
     if (!this._play(light ? 'swap_light' : 'swap_heavy')) this._tone('square', 700, 500, 0.07, 0.04);
   }
   dry() {
+    if (this._weapons) return;
     if (!this._play('dry')) this._tone('square', 1800, 1500, 0.04, 0.02);
   }
 
+  // Recarga de OTRO jugador (no hay evento de red por paso): línea de
+  // tiempo de los mismos pasos (weapons.js) en su posición, baja y solo de
+  // cerca. Para main/remote.js: llamar cuando `rl` de un remoto pasa de 0 a
+  // >0 (progress = rl actual). Devuelve el número de piezas programadas.
+  remoteReload(wep, position, duration = 0, progress = 0, owner = '') {
+    if (!this.engine || !position || !(duration > 0)) return 0;
+    const mix = this._spatial(position, 'footstep');
+    if (mix.gain <= 0.001 || mix.distance > 18) return 0;
+    const t0 = this._now();
+    let n = 0;
+    const tag = `rreload:${owner}`;
+    this.engine.stopTag(tag, 0.03);
+    const steps = wep === 'shotgun' ? [] : reloadTimeline(wep);
+    for (const st of steps) {
+      if (st.t < progress) continue;
+      const piece = reloadPieceFor(wep, st.step);
+      if (piece && this._play(piece, { at: t0 + (st.t - progress) * duration, mix, volume: 0.7, prio: 70, tag })) n++;
+    }
+    return n;
+  }
+  remoteReloadCancel(owner = '') { this.engine?.stopTag(`rreload:${owner}`, 0.03); }
+
   // ---------- feedback de combate ----------
   hit(head = false) {
+    if (!this.hitSounds) return;
+    this._hitDuck();
     if (this._play(head ? 'hit_head' : 'hit_tick')) return;
     this._tone('sine', head ? 1500 : 1150, 900, 0.14, 0.045);
   }
+  _hitDuck() {
+    const D = FP_MIX.hitDuck;
+    this.engine?.duckVoices((v) => v.owner === 'own', D.db, D.hold, D.release);
+  }
   kill(head = false) {
+    if (!this.hitSounds) return;
+    this._hitDuck();
     if (this._play(head ? 'kill_head' : 'kill_confirm')) return;
     this._tone('sine', 500, 150, 0.3, 0.25); this._noiseShot(0.2, 0.2, 900, 200);
   }
@@ -1043,16 +1327,21 @@ export class Audio {
   hurt(options = null) {
     let src = options?.position ?? null;
     if (!src && this._threat && this._now() - this._threat.t < 0.7) src = this._threat;
-    let pan = 0;
+    let pan = 0, cut = 20000;
     const L = src ? this._listenerPose() : null;
     if (L) {
       const dx = src.x - L.x, dz = src.z - L.z;
       const d = Math.hypot(dx, dz) || 1;
       const right = L.right ?? { x: 1, z: 0 };
-      pan = ((dx * right.x + dz * right.z) / d) * 0.55;
+      // lateral → paneo (más marcado que en tercera persona: la cabeza es el
+      // oyente); detrás → más oscuro, delante → brillante (el estéreo no
+      // distingue delante/detrás, el timbre sí)
+      pan = ((dx * right.x + dz * right.z) / d) * 0.75;
+      const fwd = L.fwd ?? { x: right.z, z: -right.x }; // Three: derecha × arriba = −adelante
+      if (fwd) { const f = (dx * fwd.x + dz * fwd.z) / d; if (f < -0.25) cut = 1700 + (1 + f) * 2600; }
     }
     const amount = options?.amount ?? 20;
-    if (this._play('hurt', { pan, volume: Math.max(0.55, Math.min(1.3, 0.55 + amount / 40)) })) return;
+    if (this._play('hurt', { pan, cut, volume: Math.max(0.55, Math.min(1.2, 0.55 + amount / 45)) })) return;
     this._tone('sawtooth', 220, 90, 0.2, 0.12);
   }
   death() {
@@ -1079,11 +1368,32 @@ export class Audio {
 
   // ---------- movimiento ----------
   whoosh() { if (!this._play('whoosh')) this._noiseShot(0.22, 0.16, 500, 2400, 0.6); }
-  meleeSwing() { if (!this._play('melee_swing')) this.whoosh(); }
-  slide() { if (!this._play('slide')) this.whoosh(); }
+  meleeSwing(options = null) {
+    const pos = options?.position;
+    const mix = pos ? { tag: 'melee' } : { tag: 'melee', send: FP_MIX.ownHandlingSend, owner: 'own' };
+    if (!this._playAt('melee_swing', pos, 'footstep', mix)) {
+      const out = this._eventOutput(0.6, options, 'footstep', this.combatBus || this.master);
+      if (out) this._noiseShot(0.22, 0.16, 500, 2400, 0.6, out);
+    }
+  }
+  // deslizamiento (0.5 s): arranque, roce y frenada en un solo sonido del
+  // largo del gesto; saltar lo corta (jump) igual que corta el movimiento
+  slide() { if (!this._play('slide', { tag: 'slide', send: FP_MIX.ownStepSend })) this.whoosh(); }
+  slideEnd() { this.engine?.stopTag('slide', 0.08); }
+  dodgeStart(intensity = 1) {
+    if (intensity > 0 && !this._play('dodge_air', { volume: 0.95 * intensity, tag: 'dodge', send: FP_MIX.ownHandlingSend, owner: 'own' })) {
+      this._noiseShot(0.22 * intensity, 0.16, 500, 2400, 0.6);
+    }
+    this._handling('cloth', { volume: 0.58 * intensity, tag: 'dodge', owner: 'own' });
+    this.footstep('run', { gain: 0.85 * (0.6 + 0.4 * intensity), tag: 'dodge' });
+  }
+  dodgeEnd(intensity = 1) {
+    this.footstep('shuffle', { gain: 1.12 * (0.6 + 0.4 * intensity), tag: 'dodge' });
+  }
   dive() { if (!this._play('dive')) this.whoosh(); }
   mantle() {
-    if (this._play('mantle')) return;
+    this.engine?.stopTag('slide', 0.05);
+    if (this._play('mantle', { send: FP_MIX.ownStepSend })) return;
     this.footstep('jump', 0.9);
     this.whoosh();
   }
@@ -1096,14 +1406,20 @@ export class Audio {
     if (this._playAt('fuse_tick', options?.position, 'impact', {})) return;
     const out = this._eventOutput(0.22, options, 'impact', this.combatBus || this.master); if (out) this._tone('square', 1450, 1700, 0.08, 0.055, out);
   }
-  throwNade(options = null) { if (!this._playAt('throw', options?.position, 'impact', {})) this.whoosh(); }
+  // propio (sin posición): con el emisor enganchado ya sonó en throwRelease
+  throwNade(options = null) {
+    if (!options?.position && this._weapons) return;
+    if (!this._playAt('throw', options?.position, 'impact', {})) this.whoosh();
+  }
   // contacto con la cobertura (nombre heredado: thump)
   thump() {
     if (this._play('cover_hit')) return;
     this._tone('sine', 110, 55, 0.4, 0.11); this._noiseShot(0.12, 0.07, 500, 150);
   }
   meleeImpact(options = null, lethal = false) {
-    if (this._playAt('melee_hit', options?.position, 'impact', { volume: lethal ? 1.2 : 1, pitch: lethal ? 0.9 : 1 })) return;
+    const mix = { tag: 'melee', volume: options?.world ? 0.7 : 1, pitch: options?.world ? 1.12 : 1 };
+    if (!options?.position) { mix.send = FP_MIX.ownHandlingSend; mix.owner = 'own'; }
+    if (this._playAt('melee_hit', options?.position, 'impact', mix)) return;
     const out = this._eventOutput(lethal ? 0.78 : 0.66, options,
       'impact', this.combatBus || this.master);
     if (!out) return;
@@ -1114,10 +1430,18 @@ export class Audio {
     this._tone('triangle', 620, 190, 0.055, 0.055, out);
   }
   jump() {
+    this.engine?.stopTag('slide', 0.06);
     if (this._play('jump')) return;
     this.footstep('jump'); this._noiseShot(0.1, 0.09, 800, 2300, 0.6);
   }
-  land() { this.footstep('land'); }
+  // speed: velocidad de caída (m/s) si el llamador la tiene; ≥7.5 = pesado
+  land(speed = null) { this.footstep('land', speed != null ? { speed } : null); }
+  // agacharse / levantarse (bordes de player.crouched) e inclinarse (Q/E):
+  // tela corta, baja; nunca un golpe metálico
+  stance(kind = 'crouch') {
+    this._play('cloth', { volume: kind === 'stand' ? 0.75 : 0.9, pitch: kind === 'stand' ? 1.05 : 0.95, send: FP_MIX.ownStepSend });
+  }
+  lean() { this._play('cloth', { volume: 0.5, pitch: 1.1, send: FP_MIX.ownStepSend }); }
 
   // ---------- ronda, menú y lobby ----------
   win() {
@@ -1177,6 +1501,11 @@ export class Audio {
   _stopHandling() {
     this.engine?.stopTag('reload', 0.04);
     this.engine?.stopTag('pump', 0.04);
+    this.engine?.stopTag('swap', 0.04);
+    this.engine?.stopTag('throw', 0.04);
+    this.engine?.stopTag('slide', 0.04);
+    this.engine?.stopTag('dodge', 0.015);
+    this._dropDeferred();
   }
 
   // Acción de arma cancelada por el juego (aturdido, muerte por snapshot,

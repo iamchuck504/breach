@@ -12,6 +12,23 @@ float lkNoise(vec2 p) {
 float lkFbm(vec2 p) { float a = 0.5, s = 0.0; for (int i = 0; i < 4; i++) { s += a * lkNoise(p); p = p * 2.03 + 17.7; a *= 0.5; } return s; }
 `;
 
+// Solo para fragmentos: integra una raya periódica sobre la huella del píxel.
+// En la distancia converge a su cobertura media en vez de alternar claro/oscuro.
+export const FILTERED_DETAIL = /* glsl */`
+float lkStripeIntegral(float x, float duty) {
+  return floor(x)*duty + min(fract(x), duty);
+}
+float lkStripe(float phase, float duty) {
+  float w = max(fwidth(phase), 0.001);
+  float x = phase + duty*0.5;
+  return clamp((lkStripeIntegral(x+w*0.5,duty)-lkStripeIntegral(x-w*0.5,duty))/w,0.0,1.0);
+}
+float lkDetail(vec2 p) {
+  vec2 w = fwidth(p);
+  return mix(lkNoise(p), 0.5, smoothstep(0.25,1.0,max(w.x,w.y)));
+}
+`;
+
 // Viento: desplazamiento en mundo para algo anclado. `weight` 0 = anclado,
 // 1 = extremo libre; `phase` desfasa cada pieza. Usa uLookTime y uLookWind
 // (xz = dirección * fuerza, y = racha 0..1), que el contexto ya entrega.

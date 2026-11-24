@@ -6,8 +6,11 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
 import { CHROME } from './lib-chrome.mjs';
+import { freePort } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
-  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: '8801' }, stdio: 'ignore',
+  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: String(FREE_PORT) }, stdio: 'ignore',
 });
 await new Promise((resolve) => setTimeout(resolve, 900));
 
@@ -17,7 +20,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  await page.goto('http://localhost:8801/?nolock=1', { waitUntil: 'networkidle' });
+  await page.goto(`http://localhost:${FREE_PORT}/?nolock=1`, { waitUntil: 'networkidle' });
 
   const started = Date.now();
   await page.click('#btn-enter');

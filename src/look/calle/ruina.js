@@ -81,9 +81,33 @@ export function build(ctx) {
     return [cu + u0 / COLS, cv + v0 / ROWS, cu + u1 / COLS, cv + v1 / ROWS];
   };
   // centro c, ejes unitarios r (derecha) y u (arriba); normal = r × u
+  const stamps = [];
   const quad = (B, c, r, u, w, h, uv) => {
     const [a0, b0, a1, b1] = uv;
     const n = new THREE.Vector3().crossVectors(r, u).normalize();
+    if (B===blend || B===cut) {
+      // Dos impresiones del atlas pueden coincidir en la misma pared o losa.
+      // Solo apilamos las que comparten superficie e interior en proyección.
+      const dx=r.clone().multiplyScalar(w/2), dy=u.clone().multiplyScalar(h/2);
+      const depths=[];
+      for (const stamp of stamps) {
+        if (Math.abs(n.dot(stamp.n))<.999999) continue;
+        const delta=stamp.c.clone().sub(c);
+        const depth=n.dot(delta);
+        if (Math.abs(depth)>.04) continue;
+        const axes=[dx,dy,stamp.dx,stamp.dy];
+        const touches=axes.every(edge=>{
+          const axis=new THREE.Vector3().crossVectors(n,edge).normalize();
+          const reach=axes.reduce((sum,v)=>sum+Math.abs(axis.dot(v)),0);
+          return Math.abs(axis.dot(delta))<reach-.00001;
+        });
+        if(touches)depths.push(depth);
+      }
+      let offset=0;
+      for(const depth of depths.sort((a,b)=>a-b))if(Math.abs(offset-depth)<.003)offset=depth+.0035;
+      c=c.clone().addScaledVector(n,offset);
+      stamps.push({c,n,dx,dy});
+    }
     const P = (sx, sy) => c.clone().addScaledVector(r, sx * w / 2).addScaledVector(u, sy * h / 2);
     const vs = [[P(-1, -1), a0, b0], [P(1, -1), a1, b0], [P(1, 1), a1, b1], [P(-1, -1), a0, b0], [P(1, 1), a1, b1], [P(-1, 1), a0, b1]];
     for (const [p, s, t] of vs) { B.p.push(p.x, p.y, p.z); B.n.push(n.x, n.y, n.z); B.uv.push(s, t); }
@@ -331,20 +355,33 @@ export function build(ctx) {
   // ---------------------------------------------------------------- cinta
   // Floja, colgando a lo largo de la cara de las barreras que ya estaban
   // (nunca cruzando un paso), y algún trozo arrancado en el suelo.
-  const tapeUV = uvOf(CELLS.tape, 0, 0.4, 1, 0.6);
+  const tapeHeight = 0.07, tapeBottom = 0.4, tapeTop = 0.6;
+  // La celda es cuadrada: usamos todo su ancho y solo un quinto de su altura.
+  const period = tapeHeight / (tapeTop - tapeBottom);
+  const tapeStrip = (start, r, u, length, offset = 0) => {
+    for (let pos = 0; pos < length - 1e-8;) {
+      const cycles = (pos + offset) / period;
+      const u0 = Math.max(0, cycles - Math.floor(cycles + 1e-8));
+      const width = Math.min(length - pos, (1 - u0) * period);
+      const uv = uvOf(CELLS.tape, u0, tapeBottom, u0 + width / period, tapeTop);
+      quad(cut, start.clone().addScaledVector(r, pos + width / 2), r, u, width, tapeHeight, uv);
+      pos += width;
+    }
+  };
   const ribbon = (A, B, sag, n, segs = 10) => {
     const pts = [];
     for (let i = 0; i <= segs; i++) {
       const t = i / segs;
       pts.push(A.clone().lerp(B, t).add(new THREE.Vector3(0, -sag * 4 * t * (1 - t), 0)).addScaledVector(n, 0.025));
     }
+    let traveled = 0;
     for (let i = 0; i < segs; i++) {
       const a = pts[i], b = pts[i + 1];
       const r = b.clone().sub(a), len = r.length();
       r.normalize();
-      const u = new THREE.Vector3().crossVectors(n, r).normalize();
-      // la tira mira hacia fuera de la barrera
-      quad(cut, a.clone().add(b).multiplyScalar(0.5), r, u.dot(UP) < 0 ? u.negate() : u, len + 0.01, 0.07, tapeUV);
+      // Los tramos de una misma cinta comparten sus dos vértices del empalme.
+      tapeStrip(a, r, UP, len, traveled);
+      traveled += len;
     }
   };
   const barriers = [];
@@ -370,7 +407,8 @@ export function build(ctx) {
     const yaw = Math.atan2(-long.z, long.x) + (rng() - 0.5) * 0.6;
     if (groundY(g.x, g.z) >= 0 && !ctx.blocked(g.x, g.z, 0.05)) {
       const r = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
-      quad(cut, new THREE.Vector3(g.x, groundY(g.x, g.z) + 0.004, g.z), r, new THREE.Vector3(-r.z, 0, r.x).negate(), 1.2, 0.07, tapeUV);
+      const start = new THREE.Vector3(g.x, groundY(g.x, g.z) + 0.004, g.z).addScaledVector(r, -0.6);
+      tapeStrip(start, r, new THREE.Vector3(r.z, 0, -r.x), 1.2);
     }
   });
 
@@ -418,8 +456,10 @@ export function build(ctx) {
     const tilt = 0.62, w = 0.72, h = 0.46;
     const r = out.clone().negate().applyAxisAngle(along, -tilt), u = UP.clone().applyAxisAngle(along, -tilt);
     const center = pivot.clone().addScaledVector(r, w / 2).addScaledVector(u, -h / 2 - 0.08);
-    quad(sp, center, r, u, w, h, uvOf(CELLS.sign, 0.04, 0.12, 0.96, 0.88));
-    quad(sp, center, r.clone().negate(), u, w, h, uvOf(CELLS.sign, 0.04, 0.12, 0.96, 0.88)); // la otra cara
+    const normal = new THREE.Vector3().crossVectors(r,u).normalize();
+    // Anverso y reverso impresos sobre una placa de 6 mm.
+    quad(sp, center.clone().addScaledVector(normal,.003), r, u, w, h, uvOf(CELLS.sign, 0.04, 0.12, 0.96, 0.88));
+    quad(sp, center.clone().addScaledVector(normal,-.003), r.clone().negate(), u, w, h, uvOf(CELLS.sign, 0.04, 0.12, 0.96, 0.88)); // la otra cara
     // cadena: una tira fina del soporte a la esquina
     quad(sp, pivot.clone().addScaledVector(UP, -0.04), along, UP, 0.025, 0.1, uvOf(CELLS.sign, 0.02, 0.02, 0.1, 0.1));
     const ph = rng() * 6.28;

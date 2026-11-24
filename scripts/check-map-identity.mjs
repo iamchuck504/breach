@@ -6,7 +6,7 @@ const dir='artifacts/map-identity';await fs.mkdir(dir,{recursive:true});
 const browser=await chromium.launch({executablePath:CHROME,headless:true});
 try{
  const page=await browser.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
- await page.goto('http://127.0.0.1:5200/?nolock=1');
+ await page.goto((process.env.BASE || 'http://127.0.0.1:5200') + '/?nolock=1');
  const reports=await page.evaluate(async()=>{
   const T=await import('/node_modules/three/build/three.module.js');
   const {World}=await import('/src/world/world.js');
@@ -16,7 +16,7 @@ try{
   const renderer=new T.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});renderer.setSize(1280,720);
   renderer.shadowMap.enabled=true;renderer.shadowMap.type=T.PCFSoftShadowMap;
   const camera=new T.PerspectiveCamera(60,1280/720,.1,250);
-  const positions={fortaleza:[['keep',[4,2,-5],[0,1.6,0]],['armoury',[-23.1,4.6,-7],[-25.5,4.4,0]]],
+  const positions={fortaleza:[['keep',[4,2,-5],[0,1.6,0]],['armoury',[-29.9,1.6,4.56],[-26.06,5.6,0]]],
     azoteas:[['landing',[6,3,-17],[0,1.2,-7]],['access',[6,2,-25],[0,2,-31]]],
     calle2:[['cordon',[10.5,2,32],[9,2,42]],['service',[-24,2,-16],[-26,1,-10]]]};
   for(const layout of Object.keys(positions)){

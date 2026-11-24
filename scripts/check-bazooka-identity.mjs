@@ -12,7 +12,10 @@ import { Rockets } from '../src/game/special.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
 import { CHROME } from './lib-chrome.mjs';
-const PORT = '8817';
+import { freePort } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
+const PORT = FREE_PORT;
 const failures = [];
 const check = (name, ok, detail = '') => {
   console.log(`${ok ? 'OK ' : 'FAIL'} ${name}${detail ? ` — ${detail}` : ''}`);
@@ -99,7 +102,7 @@ check('impacto directo conserva efecto reforzado', effects.items.length >= 6,
 effects.update(3);
 
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
-  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT }, stdio: 'ignore',
+  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: String(PORT) }, stdio: 'ignore',
 });
 await new Promise((resolve) => setTimeout(resolve, 900));
 

@@ -204,13 +204,15 @@ export function filt(x, type, f, q = 0.707, sr = SR) {
   const s = new SVF(pv(f, 0), pv(q, 0), sr);
   const n = x.length;
   const dyn = typeof f !== 'number' || typeof q !== 'number';
+  // salida elegida una vez fuera del bucle (mismo resultado, sin rama por muestra)
+  const mode = type === 'lp' ? 0 : type === 'hp' ? 1 : 2;
   for (let i = 0; i < n; i++) {
     if (dyn && (i & 15) === 0) {
       const u = i / n;
       s.set(pv(f, u), pv(q, u));
     }
     s.tick(x[i]);
-    x[i] = type === 'lp' ? s.lp : type === 'hp' ? s.hp : s.bp * s.k;
+    x[i] = mode === 0 ? s.lp : mode === 1 ? s.hp : s.bp * s.k;
   }
   return x;
 }
@@ -320,28 +322,28 @@ export function tone(out, o) {
   let ph = o.phase ?? 0;
   let jit = 0;
   const pw = o.pw ?? 0.5;
+  // invariantes fuera del bucle: tone() se llama con formas muy distintas y
+  // leer `o.*` por muestra lo volvía polimórfico y lento (mismo resultado)
+  const fConst = typeof o.f === 'number' ? o.f : null;
+  // forma de onda como entero: comparar cadenas por muestra era lo más caro
+  const wcode = wave === 'sine' ? 0 : wave === 'saw' ? 1 : wave === 'square' || wave === 'pulse' ? 2 : 3;
+  const pww = wave === 'square' ? 0.5 : pw;
+  const fFn = o.f, vib = o.vib, env = o.env, jitK = o.jitter && o.rng ? o.jitter : 0, rng = o.rng;
   for (let i = 0; i < n; i++) {
     const t = i / SR;
-    let f = pv(o.f, i / n);
-    if (o.vib) f *= 1 + Math.sin(TAU * o.vib[0] * t) * o.vib[1];
-    if (o.jitter && o.rng) {
-      jit += (o.rng.n() - jit) * 0.002;
-      f *= 1 + jit * o.jitter * 20;
+    let f = fConst !== null ? fConst : fFn(i / n);
+    if (vib) f *= 1 + Math.sin(TAU * vib[0] * t) * vib[1];
+    if (jitK) {
+      jit += (rng.n() - jit) * 0.002;
+      f *= 1 + jit * jitK * 20;
     }
     const dt = f / SR;
     let v;
-    switch (wave) {
-      case 'sine': v = Math.sin(TAU * ph); break;
-      case 'saw': v = 2 * ph - 1 - blep(ph, dt); break;
-      case 'square':
-      case 'pulse': {
-        const w = wave === 'square' ? 0.5 : pw;
-        v = (ph < w ? 1 : -1) + blep(ph, dt) - blep((ph + 1 - w) % 1, dt);
-        break;
-      }
-      case 'tri': v = 1 - 4 * Math.abs(ph - 0.5); break;
-    }
-    const e = (o.env ? o.env(t) : 1) * (i > n - EDGE ? (n - i) / EDGE : 1);
+    if (wcode === 0) v = Math.sin(TAU * ph);
+    else if (wcode === 1) v = 2 * ph - 1 - blep(ph, dt);
+    else if (wcode === 2) v = (ph < pww ? 1 : -1) + blep(ph, dt) - blep((ph + 1 - pww) % 1, dt);
+    else v = 1 - 4 * Math.abs(ph - 0.5);
+    const e = (env ? env(t) : 1) * (i > n - EDGE ? (n - i) / EDGE : 1);
     out[s0 + i] += v * e * amp;
     ph += dt;
     if (ph >= 1) ph -= Math.floor(ph);
@@ -370,7 +372,9 @@ export function noise(out, r, o) {
   }
   if (o.type && o.f !== undefined) filt(tmp, o.type, o.f, o.q ?? (o.type === 'bp' ? 1 : 0.707));
   const amp = o.amp ?? 1;
-  for (let i = 0; i < n; i++) out[s0 + i] += tmp[i] * (o.env ? o.env(i / SR) : 1) * amp * (i > n - EDGE ? (n - i) / EDGE : 1);
+  const env = o.env;
+  if (env) for (let i = 0; i < n; i++) out[s0 + i] += tmp[i] * env(i / SR) * amp * (i > n - EDGE ? (n - i) / EDGE : 1);
+  else for (let i = 0; i < n; i++) out[s0 + i] += tmp[i] * 1 * amp * (i > n - EDGE ? (n - i) / EDGE : 1);
   return out;
 }
 
@@ -462,6 +466,86 @@ export function reverb(x, rt, damp = 0.4, size = 1, tail = 0) {
   return out;
 }
 
+/**
+ * Respuesta al impulso de ruido con forma (añadido para Breach): cola densa y
+ * sin modos, con decaimiento propio por octava (los agudos mueren mucho antes
+ * que los medios) y densidad de ecos que crece en los primeros ms. Sustituye
+ * al peine Freeverb para las colas de los mapas: sus retardos fijos dejaban
+ * picos estables (timbre metálico) y agudos que duraban casi lo mismo que los
+ * medios.
+ * rts: [[fc, rt60], ...] por octava; sec: duración total.
+ */
+export function noiseIR(r, rts, sec, o = {}) {
+  // Síntesis por tramos (STFT): cada tramo es ruido de fase aleatoria cuya
+  // magnitud por bin vale exp(-6.9·t/rt(f)). Así cada frecuencia decae con su
+  // propio rt60 exacto (un banco de pasa-banda filtraba los medios lentos
+  // dentro de los agudos y la cola aguda seguía durando casi lo mismo).
+  const n = len(sec);
+  const N = 1024, H = 256;
+  const lf = rts.map(([f]) => Math.log(f));
+  const rtAt = (f) => {
+    const l = Math.log(Math.max(20, f));
+    if (l <= lf[0]) return rts[0][1];
+    for (let i = 1; i < rts.length; i++) if (l <= lf[i]) {
+      const k = (l - lf[i - 1]) / (lf[i] - lf[i - 1]);
+      return rts[i - 1][1] * Math.pow(rts[i][1] / rts[i - 1][1], k);
+    }
+    return rts[rts.length - 1][1];
+  };
+  const rtBin = new Float64Array(N / 2 + 1);
+  for (let k = 0; k <= N / 2; k++) rtBin[k] = rtAt((k * SR) / N);
+  const win = new Float64Array(N);
+  for (let i = 0; i < N; i++) win[i] = 0.5 - 0.5 * Math.cos((TAU * i) / N);
+  const re = new Float64Array(N), im = new Float64Array(N);
+  const out = [];
+  for (let ch = 0; ch < 2; ch++) {
+    const y = new Float32Array(n + N);
+    for (let s0 = -N / 2; s0 < n; s0 += H) {
+      const t = Math.max(0, (s0 + N / 2) / SR);
+      re.fill(0); im.fill(0);
+      for (let k = 1; k < N / 2; k++) {
+        const m = Math.exp((-6.9078 * t) / rtBin[k]);
+        re[k] = r.n() * m; im[k] = r.n() * m;
+        re[N - k] = re[k]; im[N - k] = -im[k];
+      }
+      fftInPlace(re, im, true);
+      for (let i = 0; i < N; i++) {
+        const j = s0 + i;
+        if (j >= 0 && j < y.length) y[j] += re[i] * win[i];
+      }
+    }
+    const c = y.subarray(0, n).slice();
+    // densidad de ecos: crece en los primeros `build` s
+    const bu = o.build ?? 0.012;
+    for (let i = 0; i < n; i++) c[i] *= 1 - Math.exp(-i / (bu * SR));
+    out.push(c);
+  }
+  return out;
+}
+
+function fftInPlace(re, im, inv = false) {
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; }
+  }
+  for (let size = 2; size <= n; size <<= 1) {
+    const ang = ((inv ? 2 : -2) * Math.PI) / size;
+    const wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let i = 0; i < n; i += size) {
+      let cr = 1, ci = 0;
+      for (let k = 0; k < size / 2; k++) {
+        const a = i + k, b = a + size / 2;
+        const xr = re[b] * cr - im[b] * ci, xi = re[b] * ci + im[b] * cr;
+        re[b] = re[a] - xr; im[b] = im[a] - xi; re[a] += xr; im[a] += xi;
+        const t = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = t;
+      }
+    }
+  }
+}
+
 /** Mono dry + stereo wet. */
 export function withRoom(dry, wet, rt, damp = 0.45, size = 1, tail = rt) {
   const r = reverb(dry, rt, damp, size, tail);
@@ -494,6 +578,77 @@ export function loopify(src, loopSec, xf) {
     const k = i / m;
     out[i] = src[n + i] * Math.cos(k * Math.PI * 0.5) + src[i] * Math.sin(k * Math.PI * 0.5);
   }
+  return out;
+}
+
+/* ------------------------------------------- objetos (añadido para Breach) */
+// Un cargador, un cerrojo o una correa no tienen altura: son transientes de
+// banda ancha con un color metálico corto e inarmónico. Estas piezas evitan
+// el tono puro (tone/modes de pocos parciales sonaban a marimba o tambor).
+
+/**
+ * Racimo metálico: muchas resonancias muy cortas a frecuencias aleatorias
+ * (log-uniformes en [f0, f1]), decaimientos aleatorios en [t0, t1] s y
+ * arranques desfasados. Ningún parcial domina; no hay serie armónica.
+ */
+export function metal(out, r, at, o) {
+  const n = o.n ?? 18;
+  const lf0 = Math.log(o.f0), lf1 = Math.log(o.f1);
+  const list = [];
+  for (let i = 0; i < n; i++) {
+    const f = Math.exp(lf0 + (lf1 - lf0) * r.next());
+    list.push([f, r.range(o.t0, o.t1), r.range(0.35, 1) / Math.sqrt(n)]);
+  }
+  // arranques desfasados ≤ 1.5 ms: el contacto no es un punto
+  for (const m of list) modes(out, at + r.range(0, o.smear ?? 0.0015), [m], o.amp, r);
+  return out;
+}
+
+/** Pulso de presión grave sin altura (medio coseno de ~1/f): peso sin "nota". */
+export function pulse(out, at, f, amp) {
+  const s0 = Math.round(at * SR);
+  const w = Math.max(4, Math.round(SR / f));
+  for (let i = 0; i < w && s0 + i < out.length; i++) out[s0 + i] += amp * 0.5 * (1 - Math.cos((TAU * i) / w));
+  return out;
+}
+
+/**
+ * Contacto de un objeto duro: chasquido de ruido (1–3 ms), cuerpo de ruido
+ * rosa filtrado alrededor de `body` y, si `metal` > 0, un racimo metálico.
+ * o: { amp, bright, body, dec, metal, mf:[f0,f1], mt:[t0,t1], n, weight }
+ */
+export function knock(out, r, at, o) {
+  const a = o.amp ?? 1;
+  noise(out, r, { at, dur: 0.006, type: 'bp', f: o.bright ?? 2500, q: 0.7, amp: a * 0.9, env: (t) => ed(t, o.click ?? 0.0009) });
+  const dec = o.dec ?? 0.012;
+  noise(out, r, { at, dur: dec * 5, color: 'pink', type: 'bp', f: o.body ?? 600, q: 0.75, amp: a * 1.2, env: (t) => ad(t, 0.0006, dec) });
+  if (o.weight) pulse(out, at, o.weightF ?? 90, a * o.weight);
+  if (o.metal) {
+    const mf = o.mf ?? [1200, 5000];
+    const mt = o.mt ?? [0.002, 0.014];
+    metal(out, r, at, { n: o.n ?? 18, f0: mf[0], f1: mf[1], t0: mt[0], t1: mt[1], amp: a * o.metal });
+  }
+  return out;
+}
+
+/**
+ * Fricción (metal o polímero que desliza): ruido de banda ancha con barrido y
+ * textura granular irregular, Q bajo. o: { grain (0..1), q }
+ */
+export function scrape(out, r, at, dur, f0, f1, amp, o = {}) {
+  const x = new Float32Array(len(dur));
+  noise(x, r, { dur, amp: 1 });
+  bp(x, curve([[0, f0], [1, f1]]), o.q ?? 1.1);
+  const g = o.grain ?? 0.6;
+  let m = 0, grain = 0;
+  for (let i = 0; i < x.length; i++) {
+    m += (r.n() - m) * 0.015;
+    // granos: microcontactos irregulares a lo largo del recorrido
+    if (r.next() < 0.0035) grain = r.range(0.5, 1.6);
+    grain *= 0.994;
+    x[i] *= win(i / x.length, o.a ?? 0.12, o.rel ?? 0.35) * ((1 - g) * (0.6 + Math.abs(m) * 2.5) + g * grain);
+  }
+  mixInto(out, x, at, amp);
   return out;
 }
 

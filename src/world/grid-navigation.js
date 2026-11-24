@@ -15,6 +15,12 @@ const STEP_UP = 0.16;   // TUNING.move.maxStepUp
 const DROP = 1.25;      // caída que un bot acepta: un cover bajo, no una galería
 const BODY = 1.63;
 const DIRS = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
+// distancia de p al tramo a-b
+const segDist = (p, a, b) => {
+  const tx = b.x - a.x, tz = b.z - a.z, l2 = tx * tx + tz * tz;
+  const u = l2 > 1e-9 ? Math.max(0, Math.min(1, ((p.x - a.x) * tx + (p.z - a.z) * tz) / l2)) : 0;
+  return Math.hypot(p.x - (a.x + tx * u), p.z - (a.z + tz * u));
+};
 
 export class GridNavigation {
   constructor(source, { radius = 0.48 } = {}) {
@@ -54,8 +60,7 @@ export class GridNavigation {
     return this.buckets[j * this.bx + i];
   }
   // ¿cabe el cuerpo con los pies a la altura y?
-  blocked(x, z, y) {
-    const r = this.radius;
+  blocked(x, z, y, r = this.radius) {
     if (Math.abs(x) > this.fx - r || Math.abs(z) > this.fz - r) return true;
     const list = this._near(x, z);
     if (!list) return true;
@@ -75,6 +80,14 @@ export class GridNavigation {
       if (dx * dx + dz * dz < r * r) return true;
     }
     return false;
+  }
+  // ¿pasa un cuerpo delgado (0.12 m) en línea recta de a a b a la altura y?
+  _lineFree(ax, az, bx, bz, y) {
+    const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 0.1));
+    for (let i = 1; i <= n; i++) {
+      if (this.blocked(ax + (bx - ax) * i / n, az + (bz - az) * i / n, y, 0.12)) return false;
+    }
+    return true;
   }
   // misma regla que World.groundHeight, con el radio real del cuerpo
   ground(x, z, y) {
@@ -165,9 +178,27 @@ export class GridNavigation {
     }
   }
   // celda transitable más cercana a p (hasta 4 m)
-  _snap(p) {
+  // Con y: solo celdas de ESE piso (un bot empujado contra el costado de una
+  // rampa está a y=0 aunque la celda de encima esté a 0.4: desde ahí la
+  // ruta no puede empezar en la rampa).
+  _snap(p, y) {
     const [ci, cj] = this._cell(p.x, p.z);
     let best = -1, bestD = Infinity;
+    if (y !== undefined) {
+      for (let ring = 0; ring <= 4 && best < 0; ring++) {
+        for (let j = cj - ring; j <= cj + ring; j++) for (let i = ci - ring; i <= ci + ring; i++) {
+          if (Math.max(Math.abs(i - ci), Math.abs(j - cj)) !== ring) continue;
+          if (i < 0 || j < 0 || i >= this.nx || j >= this.nz) continue;
+          const k = j * this.nx + i, h = this.height[k];
+          if (Number.isNaN(h) || Math.abs(h - y) > 0.22) continue;
+          const c = this._centre(i, j), d = (c.x - p.x) ** 2 + (c.z - p.z) ** 2;
+          // la celda más cercana puede estar al otro lado de un muro delgado:
+          // desde ahí la ruta empujaría al bot contra el muro
+          if (d < bestD && this._lineFree(p.x, p.z, c.x, c.z, h)) { bestD = d; best = k; }
+        }
+      }
+      if (best >= 0) return best;
+    }
     for (let ring = 0; ring <= 8 && best < 0; ring++) {
       for (let j = cj - ring; j <= cj + ring; j++) for (let i = ci - ring; i <= ci + ring; i++) {
         if (Math.max(Math.abs(i - ci), Math.abs(j - cj)) !== ring) continue;
@@ -193,15 +224,23 @@ export class GridNavigation {
     const y = this.height[j * this.nx + i];
     return !Number.isNaN(y) && !this.blocked(p.x, p.z, this.ground(p.x, p.z, y));
   }
-  nearest(p) {
-    const k = this._snap(p);
+  // ¿cabe el cuerpo de pie en p a la altura y (celda alcanzada, mismo piso)?
+  // Más barato que clear(): sirve para sondear pasos cortos de movimiento local.
+  standable(p, y) {
+    const [i, j] = this._cell(p.x, p.z);
+    if (i < 0 || j < 0 || i >= this.nx || j >= this.nz) return false;
+    const h = this.height[j * this.nx + i];
+    return !Number.isNaN(h) && Math.abs(h - y) < 0.22 && !this.blocked(p.x, p.z, h);
+  }
+  nearest(p, y) {
+    const k = this._snap(p, y);
     if (k < 0) return null;
     const i = k % this.nx;
     return this._centre(i, (k - i) / this.nx);
   }
   // ¿se puede ir andando en línea recta de a a b?
-  clear(a, b) {
-    const k = this._snap(a);
+  clear(a, b, ay) {
+    const k = this._snap(a, ay);
     if (k < 0) return false;
     const y0 = this.ground(a.x, a.z, this.height[k]);
     const y = this.walk(a.x, a.z, y0, b.x, b.z);
@@ -209,8 +248,8 @@ export class GridNavigation {
     const kb = this._snap(b);
     return kb >= 0 && Math.abs(this.height[kb] - y) < 0.6;
   }
-  path(from, goal) {
-    const start = this._snap(from), end = this._snap(goal);
+  path(from, goal, fromY) {
+    const start = this._snap(from, fromY), end = this._snap(goal);
     if (start < 0 || end < 0) return [];
     const nx = this.nx, n = nx * this.nz;
     const g = this._g ?? (this._g = new Float32Array(n)), came = this._came ?? (this._came = new Int32Array(n));
@@ -250,28 +289,60 @@ export class GridNavigation {
     while (i < pts.length) {
       let far = i;
       for (let step = Math.min(pts.length - 1, i + 24); step > i; step--) {
-        if (this.clear(at, pts[step])) { far = step; break; }
+        if (this.clear(at, pts[step], at === from ? fromY : undefined)) { far = step; break; }
       }
       out.push(pts[far]); at = pts[far]; i = far + 1;
     }
     return out;
   }
+  // Siguiente punto de la ruta de owner hacia goal. La ruta se sigue punto a
+  // punto sin volver a comprobar cada cuadro que el tramo desde la posición
+  // exacta sea recto y holgado: junto a una esquina esa comprobación (radio
+  // 0.48 frente a los 0.38 del cuerpo) fallaba un cuadro sí y otro no, y el
+  // bot alternaba entre la ruta y el rodeo a ciegas sin moverse del sitio.
+  // Se rehace solo si el destino cambió o si el bot quedó lejos de su tramo.
   next(from, goal, owner) {
+    if (!goal) return null;
+    const fy = owner?.y;
     let saved = this.cache.get(owner);
-    let stale = !saved || this.distance(saved.goal, goal) > 1.5 || !saved.path.length;
-    // Empujado fuera de la ruta (otro cuerpo, un borde): se recalcula desde
-    // donde está. Si ni así hay tramo recto, se espera unos cuadros antes de
-    // volver a buscar, para no lanzar una búsqueda por cuadro.
-    if (!stale && !this.clear(from, saved.path[0])) {
-      if (saved.wait > 0) saved.wait--; else stale = true;
-    }
+    // un blanco que se mueve (persecución) tolera 1.5 m antes de rehacer la
+    // ruta; un destino fijo nuevo, aunque esté cerca del anterior, no: su ruta
+    // (y si es parcial) es otra
+    const tol = goal.id !== undefined ? 1.5 : 0.25;
+    let stale = !saved || this.distance(saved.goal, goal) > tol || !saved.path.length;
+    if (!stale && segDist(from, saved.prev, saved.path[0]) > 1.6) stale = true;
     if (stale) {
-      const path = this.path(from, goal);
-      saved = { goal: { x: goal.x, z: goal.z }, path, wait: path.length && this.clear(from, path[0]) ? 0 : 12 };
+      const path = this.path(from, goal, fy);
+      // ruta PARCIAL: el destino cae donde no cabe un cuerpo y la ruta acaba
+      // en la celda más cercana. Quien la sigue debe saber que no llegará.
+      const end = path[path.length - 1];
+      const partial = !end || this.distance(end, goal) > 1.2;
+      const g = saved?.goal ?? { x: 0, z: 0 };
+      g.x = goal.x; g.z = goal.z;
+      const prev = saved?.prev ?? { x: 0, z: 0 };
+      prev.x = from.x; prev.z = from.z;
+      saved = { goal: g, prev, path, partial };
       this.cache.set(owner, saved);
     }
-    while (saved.path.length > 1 && this.distance(from, saved.path[0]) < 0.8 && this.clear(from, saved.path[1])) saved.path.shift();
+    // Pasar al siguiente punto al llegar a él (quien sigue la ruta no se pasa
+    // del punto: ver reach en botmatch), o antes si el tramo siguiente ya es
+    // recto desde aquí. Saltarse una esquina sin haber llegado metía al bot
+    // en diagonal contra ella.
+    while (saved.path.length > 1) {
+      const d = this.distance(from, saved.path[0]);
+      if (d < 0.15 || (d < 1.5 && this.clear(from, saved.path[1], fy))) {
+        const p = saved.path.shift();
+        saved.prev.x = p.x; saved.prev.z = p.z;
+      } else break;
+    }
     return saved.path[0] ?? null;
+  }
+  // ¿la ruta en curso de owner termina lejos de su destino y ya llegó a su
+  // último punto? (destino inalcanzable: hay que elegir otro)
+  stranded(owner, from) {
+    const saved = this.cache.get(owner);
+    return !!saved && saved.partial && saved.path.length <= 1 &&
+      (!saved.path.length || this.distance(from, saved.path[0]) < 0.6);
   }
   // longitud de la ruta andando (para análisis de tiempos de llegada)
   routeLength(from, goal) {

@@ -15,16 +15,19 @@ const root = path.join(__dirname, '..');
 // resuelve solo throttlea rAF a ~3/s y rompe los timings del harness).
 // CHROME_PATH sigue permitiendo un override explícito en CI.
 import { CHROME } from './lib-chrome.mjs';
+import { actionKeys, freePort } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 const launchOptions = CHROME ? { executablePath: CHROME } : {};
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
-  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: '8784' }, stdio: 'ignore',
+  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: String(FREE_PORT) }, stdio: 'ignore',
 });
 await new Promise((r) => setTimeout(r, 900));
 const browser = await chromium.launch({ ...launchOptions, headless: true });
 const page = await browser.newPage({ viewport: { width: 960, height: 540 } });
 const problems = [];
 page.on('pageerror', (e) => problems.push('PAGEERROR: ' + e.message));
-await page.goto('http://localhost:8784/?nolock=1', { waitUntil: 'networkidle' });
+await page.goto(`http://localhost:${FREE_PORT}/?nolock=1`, { waitUntil: 'networkidle' });
 await page.evaluate(() => document.getElementById('btn-enter')?.click());
 await page.waitForSelector('#splash.off', { state: 'attached' });
 await page.evaluate(() => document.getElementById('btn-practice').click());
@@ -106,10 +109,12 @@ const flush = async (tag) => {
 };
 const key = async (k, ms) => { await page.keyboard.down(k); await page.waitForTimeout(ms); await page.keyboard.up(k); };
 
+const { evade, jump } = await actionKeys(page, 'evade', 'jump');
+
 // ---- FASE 1: spam de evade en campo abierto (20 pulsaciones rápidas) ----
 await page.evaluate(() => { window.__tp(0, -10); window.__mon.evades = 0; window.__mon.diveRestarts = 0; });
 await page.keyboard.down('s');
-for (let i = 0; i < 20; i++) { await page.keyboard.press('Space'); await page.waitForTimeout(90); }
+for (let i = 0; i < 20; i++) { await page.keyboard.press(evade); await page.waitForTimeout(90); }
 await page.keyboard.up('s');
 const spam = await page.evaluate(() => window.__mon.evades);
 const diveRestarts = await page.evaluate(() => window.__mon.diveRestarts);
@@ -125,7 +130,7 @@ await flush('spam');
 // ---- FASE 2: mantener presionado (edge-triggered: 1 sola) ----
 await page.evaluate(() => { window.__tp(0, -10); window.__mon.evades = 0; });
 await page.keyboard.down('s');
-await key('Space', 1500);
+await key(evade, 1500);
 await page.keyboard.up('s');
 const held = await page.evaluate(() => window.__mon.evades);
 if (held > 1) problems.push(`HOLD: mantener evade produjo ${held} evasiones`);
@@ -136,7 +141,7 @@ await page.evaluate(() => { window.__tp(0, -8); window.__mon.evades = 0; });
 for (let i = 0; i < 6; i++) {
   const k = i % 2 ? 'a' : 'd';
   await page.keyboard.down(k);
-  await page.keyboard.press('Space');
+  await page.keyboard.press(evade);
   await page.waitForTimeout(240);
   await page.keyboard.up(k);
 }
@@ -146,11 +151,11 @@ await flush('opuestas');
 await page.evaluate(() => window.__tp(-4.5, -14, Math.PI));
 for (let i = 0; i < 8; i++) {
   await page.keyboard.down('w');
-  await page.keyboard.press('Space');
+  await page.keyboard.press(evade);
   await page.waitForTimeout(320);
   await page.keyboard.up('w');
   await page.keyboard.down('s');
-  await page.keyboard.press('Space');
+  await page.keyboard.press(evade);
   await page.waitForTimeout(320);
   await page.keyboard.up('s');
 }
@@ -289,7 +294,7 @@ const gotoLowFace = async () => {
   await page.waitForTimeout(250);
   let st = '';
   for (let i = 0; i < 3 && st !== 'cover'; i++) {
-    await page.keyboard.press('Space');
+    await page.keyboard.press(evade);
     await page.waitForTimeout(300);
     st = await page.evaluate(() => window.BREACH.player.state);
   }
@@ -307,7 +312,7 @@ await dieIn('roadie', async () => {
   return async () => { await page.keyboard.up('Shift'); await page.keyboard.up('w'); };
 }, 'roadie');
 await dieIn('dive', async () => {
-  await page.keyboard.down('s'); await page.keyboard.press('Space');
+  await page.keyboard.down('s'); await page.keyboard.press(evade);
   await page.waitForTimeout(120);
   return async () => page.keyboard.up('s');
 }, 'dive');
@@ -315,7 +320,7 @@ await dieIn('cover', async () => { await gotoLowFace(); }, 'cover_low');
 await dieIn('mantle', async () => {
   await gotoLowFace();
   await page.keyboard.down('w');
-  await page.keyboard.press('Space'); // mantle
+  await page.keyboard.press(jump); // mantle
   await page.waitForTimeout(160);     // matar a MITAD del vault
   return async () => page.keyboard.up('w');
 }, 'mantle');

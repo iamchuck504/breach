@@ -1,6 +1,7 @@
 // Smoke test headless: carga el juego, entra a práctica, simula movimiento,
 // evade y disparo, y captura screenshots. Reporta errores de consola/página.
 // Uso: node scripts/smoke.mjs  (requiere dist/ y server corriendo, o levanta el suyo)
+import { actionKeys } from './lib-test.mjs';
 import { chromium } from 'playwright-core';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -78,10 +79,14 @@ try {
   });
   await page.waitForTimeout(400);
   const padOn = await page.evaluate(() => window.BREACH_INPUT.pad.connected);
-  // a campo abierto (fuera de cover) para medir movimiento libre
+  // a campo abierto (fuera de cover) para medir movimiento libre. Desde maps
+  // v3 (f0b9959) la torre del homenaje ocupa el centro: en (0,-6) mirando a +z
+  // el muro quedaba a ~0,6 m y el stick "movía" 0,41 m contra un umbral de 0,4.
+  // Carril despejado medido: (0,-12) hacia -x, >4 m libres en 1 s.
   await page.evaluate(() => {
     const P = window.BREACH.player;
-    P.cover = null; P.state = 'run'; P.pos.x = 0; P.pos.z = -6;
+    P.cover = null; P.state = 'run'; P.pos.x = 0; P.pos.z = -12;
+    P.cam.yaw = Math.PI / 2; P.yaw = Math.PI / 2; P.vel.x = 0; P.vel.z = 0;
   });
   await page.waitForTimeout(150);
   const p0 = await page.evaluate(() => ({ x: window.BREACH.player.pos.x, z: window.BREACH.player.pos.z }));
@@ -97,58 +102,76 @@ try {
   }));
   console.log('PAD:', JSON.stringify({ connected: padOn, moved: +moved.toFixed(2), ...padCtx }));
   if (!padOn) errors.push('PAD: no detectado');
-  if (moved < 0.4) errors.push('PAD: el stick no movió al jugador (moved=' + moved.toFixed(2) + ')');
+  // 1 s de stick a fondo (run ~4,8 m/s) en carril libre: >= 2,5 m
+  if (moved < 2.5) errors.push('PAD: el stick no movió al jugador (moved=' + moved.toFixed(2) + ')');
   if (padCtx.padId !== 'FakePad') errors.push('PAD: adoptó el pad fantasma en vez del activo (' + padCtx.padId + ')');
   await page.evaluate(() => { window.__pad.axes[1] = 0; });
 
-  // ---- salto normal (F) y vuelta de gato contra el pilar central ----
+  const { jump, evade } = await actionKeys(page, 'jump', 'evade');
+  // ---- salto normal y vuelta de gato contra el pilar central ----
   await page.evaluate(() => {
     const P = window.BREACH.player;
     P.cover = null; P.state = 'idle'; P.pos.x = 0; P.pos.z = -6;
   });
-  await page.keyboard.press('f');
+  await page.keyboard.press(jump);
   await page.waitForTimeout(230);
   const jumpY = await page.evaluate(() => +window.BREACH.player.y.toFixed(2));
   console.log('JUMP:', JSON.stringify({ y: jumpY }));
   if (jumpY < 0.25) errors.push('JUMP: no despegó (y=' + jumpY + ')');
   await page.waitForTimeout(900); // aterrizar
 
-  // Matrix kick: saltar HACIA la pared y en el aire volver a presionar salto
-  await page.evaluate(() => {
-    const P = window.BREACH.player;
-    P.cover = null; P.state = 'idle'; P.pos.x = 0; P.pos.z = -1.45;
-    P.cam.yaw = Math.PI; P.yaw = Math.PI; // de cara al pilar central
+  // Matrix kick: saltar HACIA la pared y en el aire volver a presionar salto.
+  // El pilar central 1,8×1,8 (cara en z=-0,9) desapareció con la torre del
+  // homenaje de maps v3 (f0b9959): en (0,-1,45) ya no hay pared delante y el
+  // test fallaba con st=idle. Ahora: muro interior sur de la torre (HIGH 3 m,
+  // cara z=-4,2, normal +z), de frente → backflip (eje x) alejándose a +z.
+  const kickWall = await page.evaluate(() => {
+    const P = window.BREACH.player, W = window.BREACH_WORLD;
+    P.cover = null; P.state = 'idle'; P.pos.x = 0; P.pos.z = -3.6; P.y = 0;
+    P.cam.yaw = 0; P.yaw = 0; P.vel.x = 0; P.vel.z = 0; // de cara a -z, al muro
+    // precondición: la pared existe y es apta para el wall kick
+    const w = W.findCover(P.pos, { x: 0, z: -1 }, 0.95, 0.4, 0.3, 0);
+    return w ? { h: w.face.h, nz: w.face.n.z } : null;
   });
+  if (!kickWall || kickWall.h < 1.4 || kickWall.nz < 0.9) {
+    errors.push('WALLJUMP: precondición — sin pared HIGH frente a (0,-3.6) (' + JSON.stringify(kickWall) + '); ¿cambió el mapa?');
+  }
   await page.waitForTimeout(80);
-  await page.keyboard.press('f');      // salto normal
+  await page.keyboard.press(jump);      // salto normal
   await page.waitForTimeout(200);      // subiendo…
-  await page.keyboard.press('f');      // patada de pared en el aire
+  await page.keyboard.press(jump);      // patada de pared en el aire
   await page.waitForTimeout(160);
   const flip = await page.evaluate(() => ({
     st: window.BREACH.player.state,
+    axis: window.BREACH.player.flip?.axis,
     y: +window.BREACH.player.y.toFixed(2),
     z: +window.BREACH.player.pos.z.toFixed(2),
   }));
   console.log('WALLJUMP:', JSON.stringify(flip));
   await page.screenshot({ path: path.join(root, 'scripts', 'shot-flip.png') });
   if (flip.st !== 'flip') errors.push('WALLJUMP: no entró en flip (st=' + flip.st + ')');
-  if (flip.z > -1.5) errors.push('WALLJUMP: no se alejó de la pared (z=' + flip.z + ')');
-  // disparar EN EL AIRE durante el flip
+  // de frente (sin velocidad lateral) el kick es backflip: eje x
+  if (flip.axis !== 'x') errors.push('WALLJUMP: de frente debería ser backflip (eje x), dio ' + flip.axis);
+  // wallPush 3,8 m/s alejándose: a los 160 ms ya va >= 0,4 m hacia +z
+  if (flip.z < -3.2) errors.push('WALLJUMP: no se alejó de la pared (z=' + flip.z + ')');
+  // disparar EN EL AIRE durante el flip (comprobando que SIGUE en flip al tirar)
   const ammoBefore = await page.evaluate(() => window.BREACH.weapons.st.mag);
   await page.mouse.down();
   await page.waitForTimeout(180);
+  const stFiring = await page.evaluate(() => window.BREACH.player.state);
   await page.mouse.up();
   const ammoAfter = await page.evaluate(() => window.BREACH.weapons.st.mag);
-  console.log('AIRFIRE:', JSON.stringify({ before: ammoBefore, after: ammoAfter }));
+  console.log('AIRFIRE:', JSON.stringify({ before: ammoBefore, after: ammoAfter, st: stFiring }));
+  if (stFiring !== 'flip') errors.push('AIRFIRE: el disparo no ocurrió durante el flip (st=' + stFiring + ')');
   if (ammoAfter >= ammoBefore) errors.push('AIRFIRE: no disparó durante el flip');
   await page.waitForTimeout(800); // aterrizar antes de seguir
 
   // doble salto: salto + dirección + salto = vuelta hacia esa dirección
   await page.evaluate(() => { const P = window.BREACH.player; P.pos.x = 0; P.pos.z = -6; });
-  await page.keyboard.press('f');
+  await page.keyboard.press(jump);
   await page.waitForTimeout(180);
   await page.keyboard.down('d');
-  await page.keyboard.press('f');
+  await page.keyboard.press(jump);
   await page.waitForTimeout(100);
   const dj = await page.evaluate(() => ({
     st: window.BREACH.player.state,
@@ -161,7 +184,7 @@ try {
   if (dj.axis !== 'z') errors.push('DOUBLEJUMP: stick derecha debería dar giro lateral, dio ' + dj.axis);
   await page.waitForTimeout(800);
 
-  // ---- MANTLE: cubierto tras un bloque BAJO + adelante+evadir = subirse ----
+  // ---- MANTLE: cubierto tras un bloque BAJO + adelante+salto = subirse ----
   await page.evaluate(() => {
     const G = window.BREACH, W = window.BREACH_WORLD;
     // cara LOW mirando a -z (el jugador se cubre desde el sur): buscar una
@@ -177,7 +200,7 @@ try {
   // de transición del test anterior)
   let inCover = '';
   for (let i = 0; i < 3 && inCover !== 'cover'; i++) {
-    await page.keyboard.press('Space');
+    await page.keyboard.press(evade);
     await page.waitForTimeout(320);
     inCover = await page.evaluate(() => window.BREACH.player.state);
   }
@@ -185,7 +208,7 @@ try {
   await page.waitForTimeout(150);
   let midMantle = '';
   for (let i = 0; i < 3 && midMantle !== 'mantle'; i++) {
-    await page.keyboard.press('Space'); // + evadir = mantle
+    await page.keyboard.press(jump); // saltar hacia el bloque
     await page.waitForTimeout(180);
     midMantle = await page.evaluate(() => window.BREACH.player.state);
   }
@@ -215,7 +238,7 @@ try {
   await page.waitForTimeout(250);
   let edgeCover = '';
   for (let i = 0; i < 3 && edgeCover !== 'cover'; i++) {
-    await page.keyboard.press('Space');
+    await page.keyboard.press(evade);
     await page.waitForTimeout(300);
     edgeCover = await page.evaluate(() => window.BREACH.player.state);
   }
@@ -246,15 +269,15 @@ try {
   });
   await page.keyboard.down('s'); // alejándose de coberturas (dive al vacío)
   await page.waitForTimeout(80);
-  await page.keyboard.press('Space');
+  await page.keyboard.press(evade);
   await page.waitForTimeout(40);
   const firstState = await page.evaluate(() => window.BREACH.player.state);
   await page.waitForTimeout(40);
-  await page.keyboard.press('Space'); // durante el dive: no debe reiniciarlo
+  await page.keyboard.press(evade); // durante el dive: no debe reiniciarlo
   await page.waitForTimeout(80);
   const activeState = await page.evaluate(() => window.BREACH.player.state);
   await page.waitForTimeout(240); // >0.36s total: ya recuperó control
-  await page.keyboard.press('Space');
+  await page.keyboard.press(evade);
   await page.waitForTimeout(80);
   const immediateReady = await page.evaluate(() => window.BREACH.player.state);
   await page.keyboard.up('s');
@@ -376,7 +399,7 @@ try {
   await page.keyboard.down('Shift');
   await page.keyboard.down('w');
   await page.waitForTimeout(400);
-  await page.keyboard.press('f');
+  await page.keyboard.press(jump);
   await page.waitForTimeout(120);
   const rjAmmo0 = await page.evaluate(() => window.BREACH.weapons.st.mag);
   await page.mouse.down();
@@ -390,6 +413,8 @@ try {
   await page.keyboard.up('Shift');
   console.log('ROADIEJUMP-FIRE:', JSON.stringify({ antes: rjAmmo0, despues: rj.mag, y: rj.y }));
   if (rj.mag >= rjAmmo0) errors.push('ROADIEJUMP-FIRE: no disparó en el aire tras saltar desde roadie');
+  // sin esto el bloque pasaba aunque el salto no despegara (disparo en suelo)
+  if (!(rj.y > 0.25)) errors.push('ROADIEJUMP-FIRE: no estaba en el aire al disparar (y=' + rj.y + ')');
   await page.waitForTimeout(600);
 
   // ---- menú de pausa + panel de controles ----
@@ -414,13 +439,22 @@ try {
   await page.screenshot({ path: path.join(root, 'scripts', 'shot-options.png') });
   await page.evaluate(() => document.getElementById('btn-opt-controls').click());
   await page.waitForTimeout(200);
-  const ctrls = await page.evaluate(() => ({
-    kbRows: document.getElementById('kb-rows').children.length,
-    padRows: document.getElementById('pad-rows').children.length,
-  }));
-  console.log('CONTROLS:', JSON.stringify(ctrls));
-  // v3: teclado suma melee + armas 1-4 (15); el pad cambia swap por melee (9)
-  if (ctrls.kbRows !== 15 || ctrls.padRows !== 9) errors.push('CONTROLS: filas esperadas 15/9, got ' + ctrls.kbRows + '/' + ctrls.padRows);
+  const ctrls = await page.evaluate(() => {
+    const acts = (id) => [...document.querySelectorAll('#' + id + ' .bind-btn')]
+      .map((b) => b.dataset.navKey.split(':').pop());
+    return { kb: acts('kb-rows'), pad: acts('pad-rows') };
+  });
+  console.log('CONTROLS:', JSON.stringify({ kbRows: ctrls.kb.length, padRows: ctrls.pad.length }));
+  // v3: teclado suma melee + armas 1-4; 0132428 (17-nov) añadió "recoger arma"
+  // (E) como acción propia → 16. El pad sigue en 9 (armas en el d-pad, recoger
+  // comparte el botón de evadir). Se comparan las ACCIONES en orden, no el conteo.
+  const KB_EXPECTED = ['forward', 'back', 'left', 'right', 'sprint', 'evade', 'jump', 'melee',
+    'reload', 'swap', 'pickup', 'slot1', 'slot2', 'slot3', 'slot4', 'score'];
+  const PAD_EXPECTED = ['sprint', 'evade', 'jump', 'melee', 'aim', 'fire', 'reload', 'score', 'pause'];
+  if (ctrls.kb.join() !== KB_EXPECTED.join() || ctrls.pad.join() !== PAD_EXPECTED.join()) {
+    errors.push('CONTROLS: acciones esperadas kb ' + KB_EXPECTED.length + '/pad ' + PAD_EXPECTED.length +
+      ', got kb [' + ctrls.kb.join() + '] pad [' + ctrls.pad.join() + ']');
+  }
   await page.screenshot({ path: path.join(root, 'scripts', 'shot-controls.png') });
   // volver: controles → opciones (audio/idioma accesibles) → menú principal
   await page.evaluate(() => document.getElementById('btn-back').click());
@@ -445,6 +479,8 @@ try {
     playerState: window.BREACH.player?.state,
   }));
   console.log('STATE:', JSON.stringify(state));
+  // antes solo se imprimía: reanudar debe devolver HUD visible y menú cerrado
+  if (!state.hudOn || !state.menuOff) errors.push('STATE: reanudar no volvió al juego (' + JSON.stringify(state) + ')');
 
   // ---- modo VS BOTS: mapa arena, 7 bots, vidas 15/15, scoreboard con Tab ----
   await page.keyboard.press('Escape');
@@ -452,6 +488,9 @@ try {
   // btn-bots abre el LOBBY local; la partida arranca con su botón de inicio
   await page.evaluate(() => document.getElementById('btn-bots').click());
   await page.waitForTimeout(600);
+  // mapa elegido en el lobby local, leído ANTES de iniciar: la partida debe
+  // construirse sobre ese mapa y no sobre el que quedó cargado de la práctica
+  const lobbyMap = await page.evaluate(() => window.BREACH.lobby?.settings?.map ?? null);
   await page.evaluate(() => document.getElementById('btn-lobby-start').click());
   // despliegue (intro + countdown): esperar a que los controles se liberen
   await page.waitForFunction(
@@ -465,10 +504,14 @@ try {
     livesR: window.BREACH.botMatch.livesOf('red'),
     livesB: window.BREACH.botMatch.livesOf('blue'),
     timer: Math.round(window.BREACH.botMatch.timer),
-    layout: window.BREACH.player ? document.title && 'arena' : '?',
+    // (antes 'layout' devolvía siempre la cadena fija 'arena': no medía nada;
+    // ahora se compara con el mapa elegido en el lobby)
+    layout: window.BREACH_WORLD.layout,
   }));
-  console.log('BOTS:', JSON.stringify(bots));
+  console.log('BOTS:', JSON.stringify({ ...bots, lobbyMap }));
   if (bots.mode !== 'bots' || bots.bots !== 7) errors.push('BOTS: modo/bots mal (' + JSON.stringify(bots) + ')');
+  if (!lobbyMap) errors.push('BOTS: precondición — el lobby local no expuso el mapa elegido');
+  else if (bots.layout !== lobbyMap) errors.push('BOTS: la partida cargó ' + bots.layout + ' pero el lobby eligió ' + lobbyMap);
   if (bots.livesR !== 15 || bots.livesB > 15) errors.push('BOTS: vidas iniciales mal (' + bots.livesR + '/' + bots.livesB + ')');
   // protección de spawn: activa al nacer, se conserva al disparar
   const prot0 = await page.evaluate(() => +window.BREACH.spawnProt.toFixed(1));
@@ -482,17 +525,24 @@ try {
   console.log('PROT:', JSON.stringify({ alNacer: prot0, trasDisparar: afterFire.prot }));
   if (!(afterFire.prot > 0)) errors.push('PROT: se perdió al disparar');
 
-  // caja de munición: recarga todo y se consume
-  await page.evaluate(() => {
-    const P = window.BREACH.player;
-    P.pos.x = 7; P.pos.z = 0; P.cover = null; P.state = 'idle';
+  // caja de munición: recarga todo y se consume. Las cajas ya no están en
+  // ±7,0 (CRATE_POS por defecto): cada mapa trae las suyas en MAP_RUNTIME
+  // desde maps v2 (9b5e5cf) y en Fortaleza v3 van a ±33,0 (f0b9959). Se lee
+  // la posición real de la caja 0 en vez de fijarla.
+  const crate0 = await page.evaluate(() => {
+    const P = window.BREACH.player, c = window.BREACH.crates.crates[0];
+    P.pos.x = c.x; P.pos.z = c.z; P.y = 0; P.cover = null; P.state = 'idle';
+    P.vel.x = 0; P.vel.z = 0;
+    return { x: c.x, z: c.z, up: c.up };
   });
   await page.waitForTimeout(400);
   const crate = await page.evaluate(() => ({
     mag: window.BREACH.weapons.st.mag,
     up: window.BREACH.crates.crates[0].up,
   }));
-  console.log('CRATE:', JSON.stringify({ antesMag: afterFire.mag, despuesMag: crate.mag, up: crate.up }));
+  console.log('CRATE:', JSON.stringify({ en: crate0, antesMag: afterFire.mag, despuesMag: crate.mag, up: crate.up }));
+  if (!crate0.up) errors.push('CRATE: precondición — la caja 0 no estaba disponible');
+  if (!(afterFire.mag < 50)) errors.push('CRATE: precondición — el cargador ya estaba lleno (' + afterFire.mag + '), no mide la recarga');
   if (crate.mag !== 50 || crate.up) errors.push('CRATE: no recargó/consumió (' + JSON.stringify(crate) + ')');
 
   // observar la IA: conductas (cover/rush/salto/escopeta) + que nadie se atasque

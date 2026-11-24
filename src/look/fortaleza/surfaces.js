@@ -66,10 +66,19 @@ uniform sampler2D uLkMacro;
 float lkMacro(vec2 p) { return texture2D(uLkMacro, p).r; }
 float lkMid(vec2 p) { return texture2D(uLkMacro, p).g; }
 `;
+// La huella procede de coordenadas continuas, antes de floor/fract y de las bifurcaciones.
+const FILTER = /* glsl */`
+float lkDetail(vec2 footprint) {
+  return 1.0 - smoothstep(0.35, 1.0, max(footprint.x, footprint.y));
+}
+float lkFineNoise(vec2 p, vec2 footprint) {
+  return mix(0.5, lkNoise(p), lkDetail(footprint));
+}
+`;
 const STONE_F = /* glsl */`
 varying vec3 vLkPos; varying vec3 vLkN;
 uniform vec3 uLkBase, uLkLight, uLkWarm, uLkGrey, uLkCope, uLkPlinth, uLkMortar, uLkDamp, uLkMoss, uLkLichen;
-${NOISE}${MACRO}
+${NOISE}${MACRO}${FILTER}
 vec3 lkBump = vec3(0.0);
 `;
 const BUMP_N = /* glsl */`
@@ -88,7 +97,7 @@ const MASONRY = {
   fragment: /* glsl */`
 {
   vec3 N = normalize(vLkN);
-  bool top = N.y > 0.62;
+  bool top = abs(N.y) > 0.62;
   vec3 T = top ? vec3(1.0, 0.0, 0.0) : normalize(cross(N, vec3(0.0, 1.0, 0.0)));
   vec3 B = top ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
   float u = vLkBox.x, v = vLkBox.y, W = max(vLkBox.z, 0.05), H = max(vLkBox.w, 0.05);
@@ -96,7 +105,8 @@ const MASONRY = {
   float tone = clamp(dot(diffuseColor.rgb, vec3(0.3333)) / (top ? 0.66 : 0.52), 0.62, 1.22);
   vec2 wp = vec2(dot(vLkPos, T), top ? vLkPos.z : vLkPos.y * 1.3);
   float macro = lkMacro(wp * 0.031 + 0.37), spot = lkMid(wp * 0.11 + seed * 0.13);
-  float grain = lkNoise(vec2(u, v) * 9.0 + seed) * 0.6 + lkNoise(vec2(u, v) * 23.0 + seed) * 0.4;
+  vec2 footprint = fwidth(vec2(u, v));
+  float grain = lkFineNoise(vec2(u, v) * 9.0 + seed, footprint * 9.0) * 0.6 + lkFineNoise(vec2(u, v) * 23.0 + seed, footprint * 23.0) * 0.4;
   vec3 col; float edge, su, sv, mossK;
   if (!top) {
     float cope = min(0.24, H * 0.3);
@@ -154,17 +164,18 @@ const MASONRY = {
     sv = (gf.y < 0.5 ? -1.0 : 1.0) * (1.0 - smoothstep(0.0, 0.045, dv));
   }
   // labra: rayas de cincel a lo largo de la hilada y picaduras sueltas
-  float tool = lkNoise(vec2(u * 2.6, v * 41.0) + seed * 5.0);
-  float pit = smoothstep(0.80, 0.92, lkNoise(vec2(u, v) * 33.0 + seed * 9.0));
+  float tool = lkFineNoise(vec2(u * 2.6, v * 41.0) + seed * 5.0, footprint * vec2(2.6, 41.0));
+  float pit = smoothstep(0.80, 0.92, lkFineNoise(vec2(u, v) * 33.0 + seed * 9.0, footprint * 33.0));
   col *= mix(0.86, 1.10, macro) * mix(0.88, 1.09, grain) * mix(0.965, 1.03, tool) * (1.0 - pit * 0.09);
-  float mortar = 1.0 - smoothstep(0.014, 0.034, edge);
+  float aa = max(0.010, 0.5 * max(footprint.x, footprint.y));
+  float mortar = (1.0 - smoothstep(0.024 - aa, 0.024 + aa, edge)) * min(1.0, 0.024 / aa);
   col = mix(col, uLkMortar, mortar * 0.9);
   col *= mix(0.80, 1.0, smoothstep(0.0, 0.085, edge));
   col = mix(col, uLkMoss * (0.7 + 0.5 * grain), clamp(mossK * (0.5 + mortar * 0.7), 0.0, 0.85));
   float lichen = smoothstep(0.66, 0.82, spot) * smoothstep(0.45, 0.7, grain);
   col = mix(col, uLkLichen, lichen * 0.32);
   diffuseColor.rgb = col * tone;
-  lkBump = (T * su + B * sv) * 0.85 * (1.0 - mortar * 0.6) + (T * (grain - 0.5) + B * (tool - 0.5)) * 0.22;
+  lkBump = (T * su + B * sv) * lkDetail(footprint / 0.10) * 0.85 * (1.0 - mortar * 0.6) + (T * (grain - 0.5) + B * (tool - 0.5)) * 0.22;
 }`,
   normal: BUMP_N,
 };
@@ -185,11 +196,12 @@ const dressed = (tint) => ({
   vec2 p = vec2(dot(vLkPos, T), top ? vLkPos.z : vLkPos.y * 1.3);
   float tone = dot(diffuseColor.rgb, vec3(0.3333));
   float macro = lkMacro(p * 0.031 + 0.37), mid = lkMid(p * 0.10 + 0.11);
-  float grain = lkNoise(p * 9.0) * 0.6 + lkNoise(p * 23.0) * 0.4;
+  vec2 footprint = fwidth(p);
+  float grain = lkFineNoise(p * 9.0, footprint * 9.0) * 0.6 + lkFineNoise(p * 23.0, footprint * 23.0) * 0.4;
   vec3 col = ${tint === 1 ? 'mix(uLkCope, uLkLight, mid * 0.6)' : tint === 2 ? 'uLkMortar * 0.8' : 'mix(uLkBase, uLkLight, smoothstep(0.3, 0.75, mid) * 0.5)'};
   ${tint === 0 ? 'col = mix(col, uLkWarm, smoothstep(0.62, 0.78, lkMid(p * 0.047 + 0.23)) * 0.4); col = mix(col, uLkGrey, smoothstep(0.66, 0.8, lkMacro(p * 0.041 + 0.51)) * 0.35);' : ''}
-  float tool = lkNoise(vec2(p.x * 2.6, p.y * 41.0));
-  float pit = smoothstep(0.80, 0.92, lkNoise(p * 33.0 + 7.0));
+  float tool = lkFineNoise(p * vec2(2.6, 41.0), footprint * vec2(2.6, 41.0));
+  float pit = smoothstep(0.80, 0.92, lkFineNoise(p * 33.0 + 7.0, footprint * 33.0));
   col *= mix(0.86, 1.10, macro) * mix(0.88, 1.09, grain) * mix(0.965, 1.03, tool) * (1.0 - pit * 0.08);
   if (!top) col = mix(col, uLkDamp, (1.0 - smoothstep(0.0, 0.7, vLkPos.y + (macro - 0.5) * 0.5)) * 0.38);
   float mossK = top ? smoothstep(0.60, 0.84, macro) * 0.45 : (1.0 - smoothstep(0.0, 0.85, vLkPos.y + (macro - 0.5) * 1.0)) * smoothstep(0.32, 0.62, macro);
@@ -208,7 +220,7 @@ const TILES = {
   fragmentPars: /* glsl */`
 varying vec3 vLkPos; varying vec3 vLkN;
 uniform vec3 uLkTile, uLkTileDark, uLkTileOld, uLkMoss, uLkLichen;
-${NOISE}${MACRO}`,
+${NOISE}${MACRO}${FILTER}`,
   fragment: /* glsl */`
 {
   vec3 N = normalize(vLkN);
@@ -234,13 +246,15 @@ ${NOISE}${MACRO}`,
 const WOOD = {
   vertexPars: VARY_V,
   vertex: WORLD_V,
-  fragmentPars: `varying vec3 vLkPos; varying vec3 vLkN;${NOISE}`,
+  fragmentPars: `varying vec3 vLkPos; varying vec3 vLkN;${NOISE}${FILTER}`,
   fragment: /* glsl */`
 {
   vec3 N = normalize(vLkN);
   vec3 T = abs(N.y) > 0.62 ? vec3(1.0, 0.0, 0.0) : normalize(cross(N, vec3(0.0, 1.0, 0.0)) + vec3(1e-4, 0.0, 0.0));
   vec2 p = vec2(dot(vLkPos, T), abs(N.y) > 0.62 ? vLkPos.z : vLkPos.y);
-  float vein = lkNoise(vec2(p.x * 1.3, p.y * 17.0)) * 0.65 + lkNoise(vec2(p.x * 4.0, p.y * 43.0)) * 0.35;
+  vec2 footprint = fwidth(p);
+  float vein = lkFineNoise(p * vec2(1.3, 17.0), footprint * vec2(1.3, 17.0)) * 0.65
+    + lkFineNoise(p * vec2(4.0, 43.0), footprint * vec2(4.0, 43.0)) * 0.35;
   diffuseColor.rgb *= mix(0.72, 1.18, vein);
 }`,
 };
@@ -256,57 +270,76 @@ const GROUND = (courtX, courtZ, design) => ({
 varying vec3 vLkPos; varying vec3 vLkN;
 uniform vec3 uLkWarm, uLkGrey, uLkMortar, uLkMoss, uLkFlag, uLkFlagWarm;
 uniform vec3 uLkGrass, uLkGrassDeep, uLkGrassDry, uLkDirt, uLkEarth;
-${NOISE}${MACRO}
+${NOISE}${MACRO}${FILTER}
 vec3 lkBump = vec3(0.0);
-float lkRough = -1.0;`,
+float lkRough = -1.0;
+vec3 lkPaving(vec2 p, float setts, vec2 footprint, float macro, float mid, float grain, float pit, out vec3 bump) {
+  float rh = mix(0.64, 0.30, setts);
+  float rowF = p.y / rh, row = floor(rowF), fv = fract(rowF);
+  float bw = mix(0.62 + 0.55 * lkHash11(row * 7.13), 0.30, setts);
+  float cu = p.x / bw + lkHash11(row * 3.71) * 5.0 + setts * mod(row, 2.0) * 0.5, fu = fract(cu);
+  vec2 cell = vec2(floor(cu), row);
+  float h1 = lkHash21(cell), h2 = lkHash21(cell + 23.0), h3 = lkHash21(cell + 57.0);
+  float du = min(fu, 1.0 - fu) * bw, dv = min(fv, 1.0 - fv) * rh;
+  float edge = min(du, dv);
+  // la misma caliza de los muros; el adoquín, canto más oscuro y gastado
+  vec3 stone = mix(uLkFlag, uLkFlagWarm, smoothstep(0.2, 0.8, h1));
+  stone = mix(stone, uLkWarm, step(0.86, h2) * 0.30);
+  stone = mix(stone, uLkGrey, step(0.88, h3) * 0.35);
+  stone = mix(stone, mix(uLkGrey, uLkWarm, h1 * 0.6) * 0.80, setts * 0.85);
+  stone *= (0.86 + 0.24 * h2) * mix(0.84, 1.10, macro) * mix(0.88, 1.08, grain) * (1.0 - pit * 0.14);
+  vec2 aa = max(0.5 * footprint, vec2(0.012));
+  vec2 jointAxis = (1.0 - smoothstep(vec2(0.024) - aa, vec2(0.024) + aa, vec2(du, dv))) * min(vec2(1.0), 0.024 / aa);
+  jointAxis = mix(jointAxis, 0.048 / vec2(bw, rh), smoothstep(vec2(0.35), vec2(1.0), footprint / vec2(bw, rh)));
+  float joint = max(jointAxis.x, jointAxis.y);
+  stone = mix(stone, uLkMortar, joint * 0.8);
+  float relief = 1.0 - smoothstep(0.024, 0.12, max(footprint.x, footprint.y));
+  stone *= 1.0 - 0.12 * relief * (1.0 - smoothstep(0.0, 0.09, edge));
+  // hierba que sale de las juntas, a manchas
+  float weeds = smoothstep(0.52, 0.72, mid) * smoothstep(0.42, 0.62, macro);
+  vec3 col = mix(stone, uLkMoss * (0.42 + 0.3 * grain), clamp(weeds * (0.10 + joint * 0.55), 0.0, 0.7));
+  bump = (vec3(1.0, 0.0, 0.0) * (fu < 0.5 ? -1.0 : 1.0) * (1.0 - smoothstep(0.0, 0.06, du)) + vec3(0.0, 0.0, 1.0) * (fv < 0.5 ? -1.0 : 1.0) * (1.0 - smoothstep(0.0, 0.06, dv))) * 0.6 * (1.0 - joint * 0.5)
+    + vec3(grain - 0.5, 0.0, mid - 0.5) * 0.10;
+  bump *= relief;
+  return col;
+}`,
   fragment: /* glsl */`
 {
   vec2 p = vLkPos.xz;
   // las lecturas de textura van antes de bifurcar (dentro, sus derivadas no están definidas)
   float macro = lkMacro(p * 0.014 + 0.05), mid = lkMid(p * 0.09 + 0.37);
   float worn = lkMid(p * 0.05 + 0.31), meadow = lkMacro(p * 0.03 + 0.71);
-  float grain = lkNoise(p * 9.0) * 0.6 + lkNoise(p * 27.0) * 0.4;
+  vec2 footprint = fwidth(p);
+  float grain = lkFineNoise(p * 9.0, footprint * 9.0) * 0.6 + lkFineNoise(p * 27.0, footprint * 27.0) * 0.4;
   float tone = dot(diffuseColor.rgb, vec3(0.3333));
   vec3 col;
   // dentro del patio viejo, losa; fuera, tierra (la muralla tapa la costura)
   if (abs(p.x) < ${courtX.toFixed(2)} && abs(p.y) < ${courtZ.toFixed(2)}) {
     // Dibujo del patio: una calzada de adoquín de puerta a puerta por el eje
     // y un anillo alrededor de la torre del homenaje. El resto, losa grande.
-    float setts = ${design ? 'max(1.0 - smoothstep(0.40, 0.50, abs(length(p) - 9.3)), (1.0 - smoothstep(1.62, 1.75, abs(p.x))) * step(5.6, abs(p.y)))' : '0.0'};
-    float rh = mix(0.64, 0.30, setts);
-    float rowF = p.y / rh, row = floor(rowF), fv = fract(rowF);
-    float bw = mix(0.62 + 0.55 * lkHash11(row * 7.13), 0.30, setts);
-    float cu = p.x / bw + lkHash11(row * 3.71) * 5.0 + setts * mod(row, 2.0) * 0.5, fu = fract(cu);
-    vec2 cell = vec2(floor(cu), row);
-    float h1 = lkHash21(cell), h2 = lkHash21(cell + 23.0), h3 = lkHash21(cell + 57.0);
-    float du = min(fu, 1.0 - fu) * bw, dv = min(fv, 1.0 - fv) * rh;
-    float edge = min(du, dv);
-    // la misma caliza de los muros; el adoquín, canto más oscuro y gastado
-    vec3 stone = mix(uLkFlag, uLkFlagWarm, smoothstep(0.2, 0.8, h1));
-    stone = mix(stone, uLkWarm, step(0.86, h2) * 0.30);
-    stone = mix(stone, uLkGrey, step(0.88, h3) * 0.35);
-    stone = mix(stone, mix(uLkGrey, uLkWarm, h1 * 0.6) * 0.80, setts * 0.85);
-    float pit = smoothstep(0.80, 0.92, lkNoise(p * 31.0));
-    stone *= (0.86 + 0.24 * h2) * mix(0.84, 1.10, macro) * mix(0.88, 1.08, grain) * (1.0 - pit * 0.14);
-    float joint = 1.0 - smoothstep(0.012, 0.036, edge);
-    stone = mix(stone, uLkMortar, joint * 0.8);
-    stone *= mix(0.88, 1.0, smoothstep(0.0, 0.09, edge));
-    // hierba que sale de las juntas, a manchas
-    float weeds = smoothstep(0.52, 0.72, mid) * smoothstep(0.42, 0.62, macro);
-    col = mix(stone, uLkMoss * (0.42 + 0.3 * grain), clamp(weeds * (0.10 + joint * 0.55), 0.0, 0.7));
-    lkBump = (vec3(1.0, 0.0, 0.0) * (fu < 0.5 ? -1.0 : 1.0) * (1.0 - smoothstep(0.0, 0.06, du)) + vec3(0.0, 0.0, 1.0) * (fv < 0.5 ? -1.0 : 1.0) * (1.0 - smoothstep(0.0, 0.06, dv))) * 0.6 * (1.0 - joint * 0.5)
-      + vec3(grain - 0.5, 0.0, mid - 0.5) * 0.10;
+    float border = min(abs(length(p) - 9.3) - 0.45, max(abs(p.x) - 1.685, 5.6 - abs(p.y)));
+    float aa = clamp(0.5 * max(footprint.x, footprint.y), 0.001, 0.012);
+    float setts = ${design ? '1.0 - smoothstep(-aa, aa, border)' : '0.0'};
+    float pit = smoothstep(0.80, 0.92, lkFineNoise(p * 31.0, footprint * 31.0));
+    // Cada aparejo conserva su paso; solo la transición evalúa los dos.
+    if (setts < 1.0) col = lkPaving(p, 0.0, footprint, macro, mid, grain, pit, lkBump);
+    if (setts > 0.0) {
+      vec3 bump;
+      vec3 cobbles = lkPaving(p, 1.0, footprint, macro, mid, grain, pit, bump);
+      if (setts >= 1.0) { col = cobbles; lkBump = bump; }
+      else { col = mix(col, cobbles, setts); lkBump = mix(lkBump, bump, setts); }
+    }
     lkRough = 0.82;
   } else {
     // tierra apisonada de un patio de armas: ocre y pardo, con grava suelta
     vec3 earth = mix(uLkEarth, uLkDirt, smoothstep(0.3, 0.7, mid)) * mix(0.84, 1.08, grain);
     vec2 pc = floor(p * 9.0), pf = fract(p * 9.0) - 0.5 - (lkHash22(pc) - 0.5) * 0.3;
     float pebble = step(0.90, lkHash21(pc)) * (1.0 - smoothstep(0.16, 0.30, length(pf))) * step(0.4, lkNoise(p * 2.0));
-    earth = mix(earth, uLkGrey * 0.9, pebble * 0.28);
+    earth = mix(earth, uLkGrey * 0.9, pebble * lkDetail(footprint * 9.0) * 0.28);
     // hierba: tres verdes apagados, a manchas donde no pisa nadie
     vec3 grass = mix(uLkGrassDeep, uLkGrass, smoothstep(0.25, 0.7, mid));
     grass = mix(grass, uLkGrassDry, smoothstep(0.50, 0.85, macro) * 0.6);
-    float blades = lkNoise(vec2(p.x * 1.4 + p.y * 0.8, (p.y - p.x * 0.6) * 13.0)) * 0.6 + lkNoise(p * 17.0) * 0.4;
+    float blades = lkFineNoise(vec2(p.x * 1.4 + p.y * 0.8, (p.y - p.x * 0.6) * 13.0), vec2(dot(footprint, vec2(1.4, 0.8)), dot(footprint, vec2(7.8, 13.0)))) * 0.6 + lkFineNoise(p * 17.0, footprint * 17.0) * 0.4;
     grass *= mix(0.78, 1.12, blades) * mix(0.9, 1.06, grain);
     // camino de ronda: el anillo por donde pasan carros y caballos
     float ring = min(abs(abs(p.x) - ${((courtX + 39.6) / 2).toFixed(2)}), abs(abs(p.y) - ${((courtZ + 35.6) / 2).toFixed(2)}));
@@ -332,7 +365,7 @@ const MEADOW = {
   fragmentPars: /* glsl */`
 varying vec3 vLkPos; varying vec3 vLkN;
 uniform vec3 uLkGrass, uLkGrassDeep, uLkGrassDry, uLkDirt;
-${NOISE}${MACRO}`,
+${NOISE}${MACRO}${FILTER}`,
   fragment: /* glsl */`
 {
   vec2 p = vLkPos.xz;
@@ -495,7 +528,8 @@ function restyle(ctx, U) {
       const basicFlat = src.isMeshBasicMaterial && !src.map && !src.transparent;
       const lambertFlat = src.isMeshLambertMaterial && !src.map;
       // Blender: kit del castillo y galerías
-      if (/^Limestone$|Aged fortress limestone/.test(name)) stone(own(o, src), 0, 0.92);
+      if (owner === 'maps-v2' && name === 'fortress-stair-stone') stone(own(o, src), 0, 0.92);
+      else if (/^Limestone$|Aged fortress limestone/.test(name)) stone(own(o, src), 0, 0.92);
       else if (/Carved pale stone|Dressed window stone|Honed limestone/.test(name)) stone(own(o, src), 1, 1.0);
       else if (/Recessed mortar/.test(name)) stone(own(o, src), 2, 0.9);
       else if (/Weathered terracotta/.test(name)) tiles(own(o, src));

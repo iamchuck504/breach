@@ -23,6 +23,81 @@ export const QUALITY = Object.freeze({
   ultra:  { post: true,  msaa: 4, bloom: 5, ao: 12, softShadows: true,  shadowEvery: 1, budget: Infinity },
 });
 const AO_STRENGTH = 0.75, AO_RADIUS = 0.7;
+
+// ARMA EN PRIMERA PERSONA (viewmodel): misma escena y misma pasada que el
+// mapa (recibe su luz, sombra, bloom, curva y gradación), pero su material
+// proyecta con un FOV propio fijo y escribe la profundidad comprimida en
+// [0, VIEWMODEL_DEPTH] de la ventana: nunca se mete en una pared ni la tapa
+// el mundo. El mundo, con el plano cercano de 0.03 m, solo cae en ese rango
+// a menos de 0.1 mm del plano: en la práctica, nunca. La oclusión ambiental
+// ignora ese rango (ni halo alrededor del arma ni sombra del arma sobre el
+// mapa). VISTA patchea su material con `patchViewModelMaterial` (o hace lo
+// mismo a mano con estos uniformes); la cadena los actualiza cada cuadro.
+export const VIEWMODEL_DEPTH = 0.0015;
+export const VIEWMODEL_FOV = 50;
+export const viewModelUniforms = Object.freeze({
+  uVMProj: { value: new THREE.Matrix4() },
+  uVMDepth: { value: VIEWMODEL_DEPTH },
+});
+const vmState = { fov: VIEWMODEL_FOV, aspect: 0, near: 0.01, far: 20 };
+// FOV vertical del arma (ajuste `fovWeapon`); null = el de siempre.
+export function setViewModelFov(fov) {
+  vmState.fov = Number.isFinite(fov) ? Math.max(40, Math.min(80, fov)) : VIEWMODEL_FOV;
+  vmState.aspect = 0; // fuerza recalcular
+}
+export const viewModelFov = () => vmState.fov;
+// Proyección del arma con el aspecto de la cámara del juego.
+export function updateViewModelProjection(camera) {
+  const aspect = camera.aspect || 1;
+  if (aspect === vmState.aspect && vmState.built === vmState.fov) return;
+  vmState.aspect = aspect; vmState.built = vmState.fov;
+  const top = vmState.near * Math.tan(vmState.fov * Math.PI / 360);
+  viewModelUniforms.uVMProj.value.makePerspective(-top * aspect, top * aspect, top, -top, vmState.near, vmState.far);
+}
+// Conserva el acabado antes de añadir la proyección exclusiva de la cámara.
+const worldFinishes = new WeakMap();
+export function applyViewModelWorldFinish(source, target) {
+  Object.assign(target, worldFinishes.get(source));
+}
+
+// Proyección propia y profundidad comprimida del modelo en primera persona.
+export function patchViewModelMaterial(material) {
+  worldFinishes.set(material, {
+    onBeforeCompile: material.onBeforeCompile,
+    customProgramCacheKey: material.customProgramCacheKey,
+  });
+  const prev = material.onBeforeCompile;
+  material.onBeforeCompile = (shader, renderer) => {
+    prev?.call(material, shader, renderer);
+    shader.uniforms.uVMProj = viewModelUniforms.uVMProj;
+    shader.uniforms.uVMDepth = viewModelUniforms.uVMDepth;
+    shader.vertexShader = 'uniform mat4 uVMProj; uniform float uVMDepth;\n' + shader.vertexShader.replace(
+      '#include <project_vertex>',
+      `#include <project_vertex>
+gl_Position = uVMProj * mvPosition;
+gl_Position.z = (-1.0 + 2.0 * uVMDepth * clamp(gl_Position.z / gl_Position.w * 0.5 + 0.5, 0.0, 1.0)) * gl_Position.w;`);
+    // A 40 cm, comprimir otra vez el z de perspectiva (near=1 cm) dejaba
+    // ~0.64 mm por nivel D24. Los tornillos y las tiras del original tienen
+    // relieves menores. d/(d+0.5) da ~0.064 mm en ese mismo rango reservado.
+    // Evaluar por fragmento conserva el orden en caras largas y solapadas.
+    shader.fragmentShader = 'uniform float uVMDepth;\n' + shader.fragmentShader.replace(
+      '#include <logdepthbuf_fragment>',
+      '#include <logdepthbuf_fragment>\ngl_FragDepth = uVMDepth / (1.0 + 0.5 * gl_FragCoord.w);');
+  };
+  const key = material.customProgramCacheKey?.bind(material);
+  material.customProgramCacheKey = () => (key ? key() : '') + '|vm2';
+  material.userData.viewModel = true;
+  return material;
+}
+// Un punto del arma (en espacio de vista) → el punto del MUNDO que, con la
+// proyección del juego, cae en el mismo píxel a la misma profundidad. Para
+// que el fogonazo y la traza (dibujados con la cámara del juego) nazcan
+// donde se VE la boca del arma.
+export function viewModelToMainView(v, camera) {
+  const k = Math.tan((camera.fov || 72) * Math.PI / 360) / Math.tan(vmState.fov * Math.PI / 360);
+  v.x *= k; v.y *= k;
+  return v;
+}
 const SHAFT_STEPS = 12, SHAFT_REACH = 46;
 
 // Gradación por ambiente. tint* multiplican en espacio de pantalla: sombras
@@ -89,7 +164,7 @@ void main() {
 // intercalado) y el desenfoque posterior lo promedia.
 const AO = /* glsl */`
 uniform sampler2D tDepth; uniform mat4 uProj, uInvProj; uniform vec2 uTexel;
-uniform float uRadius, uNear, uFar;
+uniform float uRadius, uNear, uFar, uVMDepth;
 uniform sampler2D tShadow; uniform mat4 uShadowMatrix, uCamWorld; uniform vec3 uSunView; uniform float uShafts;
 varying vec2 vUv;
 #include <packing>
@@ -117,6 +192,9 @@ vec3 viewPos(vec2 uv) {
 float ign(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
 void main() {
   float d = texture2D(tDepth, vUv).x;
+  // arma en primera persona: ni recibe ni da oclusión; g = 0 la saca del
+  // desenfoque y de la ampliación bilateral de los píxeles del mapa
+  if (d < uVMDepth) { gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0); return; }
   vec3 P = viewPos(vUv);
   float beam = uShafts > 0.0 ? shafts(P, ign(gl_FragCoord.xy + 17.0)) : 0.0;
   if (d >= 0.99999) { gl_FragColor = vec4(1.0, uFar, beam, 1.0); return; }
@@ -137,7 +215,9 @@ void main() {
     vec3 S = P + dir * uRadius * mix(0.25, 1.0, f) + N * bias;
     vec4 c = uProj * vec4(S, 1.0);
     vec2 uv = c.xy / c.w * 0.5 + 0.5;
-    float sz = viewZ(texture2D(tDepth, uv).x);
+    float sd = texture2D(tDepth, uv).x;
+    if (sd < uVMDepth) continue; // el arma no ocluye el mundo
+    float sz = viewZ(sd);
     float range = smoothstep(0.0, 1.0, uRadius / max(abs(P.z - sz), 1e-3));
     occ += step(S.z + bias, sz) * range;
   }
@@ -157,9 +237,36 @@ void main() {
   }
   gl_FragColor = vec4(sum / wsum, c.g, beam / wsum, 1.0);
 }`;
+// Pase periférico: el centro sale intacto. Solo existe una lectura extra
+// de la escena completa cuando la fase de la esquiva pide desenfoque.
+const DODGE_PASS = /* glsl */`
+uniform sampler2D tMap;
+uniform vec4 uDash;
+uniform float uAspect, uDirect, uDip;
+varying vec2 vUv;
+void main() {
+  vec2 p = (vUv - 0.5) * vec2(uAspect, 1.0);
+  float edge = smoothstep(0.16, 0.73, length(p));
+  // Al movernos a la derecha, el decorado corre a la izquierda: la
+  // muestra desplazada a la izquierda deja su estela a la derecha.
+  vec2 flow = (vec2(-0.017 * uDash.x, 0.) + p * uDash.y * 0.034) / vec2(uAspect, 1.);
+  vec2 delta = flow * edge * uDash.z;
+  vec2 uv = vUv - vec2(0., 0.008 * uDip * edge);
+  vec3 c = texture2D(tMap, uv).rgb * 0.5;
+  for (int i=1; i<=3; ++i) c += texture2D(tMap, uv + delta * (float(i) / 3.)).rgb * (5.-float(i))/18.;
+  if (uDirect > 0.5) c = mix(12.92*c, 1.055*pow(c,vec3(1./2.4))-0.055, step(0.0031308,c));
+  // El punto de fuga sale del encuadre en un paso lateral. En avance o
+  // retroceso vuelve al centro y las puntas recorren el radio en sentidos opuestos.
+  float angle = atan(p.y, p.x - 1.6*uDash.x + 0.00001);
+  float streak = pow(0.5 + 0.5*cos(103.*angle + 3.*sin(17.*angle)), 18.);
+  float tip = smoothstep(0.43, 0.86, length(p) - 0.12*uDash.y*uDash.w + 0.09*sin(31.*angle));
+  c = c * (1.-0.19*edge*uDash.z) + 0.085*streak*tip*uDash.z;
+  gl_FragColor = vec4(c,1.);
+}`;
+
 const FINAL = /* glsl */`
 uniform sampler2D tScene; uniform sampler2D tBloom; uniform sampler2D tAO; uniform sampler2D tDepth;
-uniform float uAO, uNear, uFar; uniform vec2 uAOTexel; uniform vec3 uShaftColor;
+uniform float uAO, uNear, uFar, uVMDepth; uniform vec2 uAOTexel; uniform vec3 uShaftColor;
 uniform float uPivot, uBloom, uBloomScale, uExposure, uContrast, uSaturation, uVignette, uAspect;
 uniform vec3 uShadows, uHighs;
 varying vec2 vUv;
@@ -176,7 +283,7 @@ vec3 neutral(vec3 c) {
 float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 void main() {
   vec3 c = texture2D(tScene, vUv).rgb;
-  if (uAO > 0.0) {
+  if (uAO > 0.0 && texture2D(tDepth, vUv).x >= uVMDepth) {
     // ampliación bilateral: cada muestra de media resolución pesa según lo
     // cerca que esté en profundidad de este píxel (no mancha las siluetas)
     float z = -uNear * uFar / ((uFar - uNear) * texture2D(tDepth, vUv).x - uFar);
@@ -236,12 +343,14 @@ export class ImagePipeline {
       vertexShader: VERT, fragmentShader, uniforms, depthTest: false, depthWrite: false, toneMapped: false,
     });
     const tex = () => ({ value: null }), texel = () => ({ value: new THREE.Vector2() });
+    this.mDodge = mat(DODGE_PASS, { tMap: tex(), uDash: { value: new THREE.Vector4() },
+      uAspect: { value: 1 }, uDirect: { value: 0 }, uDip: { value: 0 } });
     this.mPre = mat(PREFILTER, { tMap: tex(), uTexel: texel(), uThreshold: { value: 1 } });
     this.mDown = mat(DOWN, { tMap: tex(), uTexel: texel() });
     this.mUp = mat(UP, { tMap: tex(), tAdd: tex(), uTexel: texel() });
     this.mAO = mat(AO, {
       tDepth: tex(), uTexel: texel(), uProj: { value: new THREE.Matrix4() }, uInvProj: { value: new THREE.Matrix4() },
-      uRadius: { value: AO_RADIUS }, uNear: { value: 0.1 }, uFar: { value: 200 },
+      uRadius: { value: AO_RADIUS }, uNear: { value: 0.1 }, uFar: { value: 200 }, uVMDepth: viewModelUniforms.uVMDepth,
       tShadow: tex(), uShadowMatrix: { value: new THREE.Matrix4() }, uCamWorld: { value: new THREE.Matrix4() },
       uSunView: { value: new THREE.Vector3() }, uShafts: { value: 0 },
     });
@@ -250,7 +359,7 @@ export class ImagePipeline {
     this.mAOBlur = mat(AO_BLUR, { tMap: tex(), uTexel: texel() });
     this.aoRT = null; this.aoBlurRT = null;
     this.mFinal = mat(FINAL, {
-      tScene: tex(), tBloom: tex(), tAO: tex(), tDepth: tex(), uAO: { value: 0 }, uNear: { value: 0.1 }, uFar: { value: 200 },
+      tScene: tex(), tBloom: tex(), tAO: tex(), tDepth: tex(), uAO: { value: 0 }, uNear: { value: 0.1 }, uFar: { value: 200 }, uVMDepth: viewModelUniforms.uVMDepth,
       uAOTexel: texel(), uShaftColor: { value: new THREE.Vector3() }, uBloom: { value: 0 }, uBloomScale: { value: 1 }, uPivot: { value: 0.4 }, uExposure: { value: 1 }, uContrast: { value: 0 },
       uSaturation: { value: 1 }, uVignette: { value: 0 }, uAspect: { value: 1 },
       uShadows: { value: new THREE.Vector3(1, 1, 1) }, uHighs: { value: new THREE.Vector3(1, 1, 1) },
@@ -290,6 +399,7 @@ export class ImagePipeline {
   }
 
   _dispose() {
+    this.dodgeRT?.dispose(); this.dodgeRT = null;
     this.sceneRT?.dispose(); this.sceneRT = null;
     for (const rt of [...this.down, ...this.up]) rt.dispose();
     this.down = []; this.up = [];
@@ -346,9 +456,30 @@ export class ImagePipeline {
   // grade: gradación propia (la del look del mapa); sin ella, la de la tabla.
   render(scene, camera, gradeName, grade = null) {
     const r = this.renderer;
-    if (!this.active) { r.setRenderTarget(null); r.render(scene, camera); return; }
+    // el arma en primera persona proyecta con el aspecto de ESTA cámara
+    if (camera.isPerspectiveCamera) updateViewModelProjection(camera);
+    const dash = camera.userData.dodgeFX;
+    const drawDash = dash && dash.blur > 0.001;
+    if (!this.active && !drawDash) { r.setRenderTarget(null); r.render(scene, camera); return; }
     try {
-      this._ensure();
+      if (this.active) this._ensure();
+      let output = null;
+      if (drawDash) {
+        const size = r.getDrawingBufferSize(this._dashSize ??= new THREE.Vector2());
+        output = this.dodgeRT ??= new THREE.WebGLRenderTarget(size.x, size.y);
+        output.setSize(size.x, size.y);
+        const u = this.mDodge.uniforms;
+        u.tMap.value = output.texture;
+        u.uAspect.value = camera.aspect;
+        u.uDash.value.set(dash.side, dash.front, dash.blur, dash.u);
+        u.uDirect.value = this.active ? 0 : 1;
+        u.uDip.value = dash.dip;
+      }
+      if (!this.active) {
+        r.setRenderTarget(output); r.render(scene, camera);
+        this._pass(this.mDodge, null);
+        return;
+      }
       const g = grade || GRADES[gradeName] || GRADES.default;
       r.setRenderTarget(this.sceneRT);
       r.render(scene, camera);
@@ -418,7 +549,8 @@ export class ImagePipeline {
       u.uAspect.value = this.size.x / Math.max(1, this.size.y);
       u.uShadows.value.fromArray(g.shadows);
       u.uHighs.value.fromArray(g.highs);
-      this._pass(this.mFinal, null);
+      this._pass(this.mFinal, output);
+      if (drawDash) this._pass(this.mDodge, null);
     } catch (err) {
       // Nunca dejar al jugador sin imagen: se vuelve al render directo.
       console.warn('[render] cadena de imagen desactivada:', err);

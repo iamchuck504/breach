@@ -196,7 +196,21 @@ function lobbyGraph(scope) {
   return graph;
 }
 
+// Páginas de ajustes (settings-ui.js): una lista vertical en orden de lectura;
+// izquierda/derecha cambian el valor de sliders y selectores (ver move()).
+function settingsPageGraph(scope) {
+  const graph = navMap();
+  const rows = queryAll(scope, '.set-sections input, .set-sections select');
+  const reset = query(scope, '[data-reset-page]');
+  const back = scope.dataset.navBack ? query(scope, '#' + scope.dataset.navBack) : null;
+  linkLine(graph, [...rows, reset], 'down');
+  if (reset && back) link(graph, reset, 'right', back);
+  if (back && rows.length) setRoute(graph, back, 'up', rows.at(-1));
+  return graph;
+}
+
 function navigationGraph(scope) {
+  if (scope.classList?.contains('settings-page')) return settingsPageGraph(scope);
   if (scope.id === 'main-card') return mainGraph(scope);
   if (scope.id === 'controls-card') return controlsGraph(scope);
   if (scope.id === 'char-card') return characterGraph(scope);
@@ -222,6 +236,15 @@ export class MenuControllerNavigator {
     this.lastMoveAt = 0;
     this.lastMoveDirection = null;
     this.lastMoveSource = null;
+    // Flecha descartada por venir espejada de un D-pad/stick (Steam Input):
+    // el paso queda "debido" hasta que el poll del pad lo vea. Con cuadros
+    // largos (CI sin GPU, ~700 ms) la pulsación entera cabía entre dos polls:
+    // el pad nunca veía el flanco, la flecha ya se había descartado y el gesto
+    // se perdía. Si el pad ya no muestra la dirección y no la movió, la flecha
+    // paga el paso — exactamente uno, sea cual sea el orden de los eventos.
+    this.owedStep = null;
+    this._pad = null;
+    this._pollAt = 0; this._pollGap = 16; // duración real del último cuadro (ms)
 
     document.addEventListener('pointermove', (e) => this._pointerMove(e), { passive: true });
     document.addEventListener('mousedown', () => this.setMode('keyboard'), { passive: true });
@@ -247,6 +270,22 @@ export class MenuControllerNavigator {
     const magnitude = Math.hypot(pad.moveX || 0, pad.moveZ || 0);
     const padActivity = pad.connected && (pad.justPressed.size || magnitude >= .67);
     if (padActivity) this.setMode('controller');
+    this._pad = pad;
+    const t = performance.now();
+    if (this._pollAt) this._pollGap = t - this._pollAt;
+    this._pollAt = t;
+    if (this.owedStep) {
+      const dir = this.owedStep;
+      const button = { up: PAD.UP, down: PAD.DOWN, left: PAD.LEFT, right: PAD.RIGHT }[dir];
+      // el pad la ve ahora (flanco o mantenida): la maneja su propio camino
+      if (pad.justPressed.has(button) || pad.pressed.has(button) || this._padDirectionHeld(dir)) {
+        this.owedStep = null;
+      } else if (!suspended) {
+        this.owedStep = null;
+        this.setMode('controller');
+        this.move(dir, 'gamepad');
+      }
+    }
     this.prompts.classList.add('on');
     if (suspended || !pad.connected || this.mode !== 'controller') {
       this._ensureFocus(false);
@@ -301,6 +340,16 @@ export class MenuControllerNavigator {
 
   back() {
     if (!this.active()) return false;
+    // Una tarjeta puede declarar su propio "atrás" (data-nav-back = id del
+    // botón): las páginas de ajustes vuelven al hub sin pasar por main.js.
+    const scope = this._scope();
+    const own = scope?.dataset?.navBack && document.getElementById(scope.dataset.navBack);
+    if (own && visible(own)) {
+      own.click();
+      this.onMove?.();
+      queueMicrotask(() => this._ensureFocus(this.mode === 'controller', true));
+      return true;
+    }
     const handled = this.onBack?.() !== false;
     if (handled) {
       this.onMove?.();
@@ -329,8 +378,10 @@ export class MenuControllerNavigator {
     // Steam Input y algunos drivers presentan el mismo D-pad/stick como
     // Gamepad API + flecha de teclado. La segunda señal del mismo gesto no
     // puede mover el foco otra vez.
+    // La ventana cubre al menos un cuadro y medio: con cuadros de 700 ms la
+    // flecha espejada puede llegar mucho después del poll que ya movió.
     if (source !== this.lastMoveSource && direction === this.lastMoveDirection &&
-        now - this.lastMoveAt < 90) return;
+        now - this.lastMoveAt < Math.max(90, this._pollGap * 1.5)) return;
     this.lastMoveAt = now;
     this.lastMoveDirection = direction;
     this.lastMoveSource = source;
@@ -457,7 +508,13 @@ export class MenuControllerNavigator {
     if (e.repeat) return;
     const map = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' };
     const direction = map[e.key];
-    if (direction && this._padDirectionHeld(direction)) { e.preventDefault(); return; }
+    if (direction && this._padDirectionHeld(direction)) {
+      e.preventDefault();
+      // solo si el poll aún no vio ese D-pad abajo (si ya lo vio, ya movió)
+      const button = { up: PAD.UP, down: PAD.DOWN, left: PAD.LEFT, right: PAD.RIGHT }[direction];
+      if (!this._pad?.pressed?.has(button) && !(this.stickLatched && this.stickDir === direction)) this.owedStep = direction;
+      return;
+    }
     this.setMode('keyboard');
     if (e.target?.matches?.('input:not([type="range"]), select')) return;
     if (direction) {

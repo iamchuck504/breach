@@ -11,13 +11,16 @@ import { clearClip } from './lib-clip.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
 import { CHROME } from './lib-chrome.mjs';
+import { freePort } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 
 // Este sanity valida los builders fuente, no una copia posiblemente antigua
 // o bloqueada de dist/. Mantenerlo sobre Vite evita aprobar visuales/física
 // de una build distinta a la rama que se está revisando.
 const server = spawn(process.execPath, [
   path.join(root, 'node_modules', 'vite', 'bin', 'vite.js'),
-  '--host', '127.0.0.1', '--port', '8792', '--strictPort',
+  '--host', '127.0.0.1', '--port', String(FREE_PORT), '--strictPort',
 ], { env: { ...process.env }, stdio: 'ignore' });
 await new Promise((r) => setTimeout(r, 900));
 
@@ -33,7 +36,7 @@ const check = (name, ok, extra = '') => {
 };
 
 const MAPS = ['fortaleza', 'azoteas', 'calle', 'calle2', 'metro', 'prision', 'pueblo'];
-await page.goto('http://localhost:8792/?nolock=1', { waitUntil: 'networkidle' });
+await page.goto(`http://localhost:${FREE_PORT}/?nolock=1`, { waitUntil: 'networkidle' });
 await page.evaluate(() => document.getElementById('btn-enter')?.click());
 await page.waitForSelector('#splash.off', { state: 'attached' });
 

@@ -4,24 +4,34 @@
 // relleno) y vs bots local. Sirve dist/: correr `npm run build` antes.
 import { chromium } from 'playwright-core';
 import { spawn } from 'node:child_process';
+import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { clearClip } from './lib-clip.mjs';
 import { CHROME } from './lib-chrome.mjs';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const PORT = 8816;
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// puerto libre: copias de la suite en paralelo no comparten servidor
+const PORT = await new Promise((resolve, reject) => {
+  const srv = net.createServer(); srv.once('error', reject);
+  srv.listen(0, '127.0.0.1', () => { const { port } = srv.address(); srv.close(() => resolve(port)); });
+});
 const env = { ...process.env, PORT: String(PORT), INTRO_TIME: '2', COUNTDOWN_TIME: '1', NODE_ENV: 'test' };
 delete env.BREACH_FILL_BOTS;
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], { cwd: root, env, stdio: 'ignore' });
-await wait(750);
+for (let i = 0; i < 300; i++) { // listo cuando responde, no tras una espera fija
+  try { if ((await fetch(`http://127.0.0.1:${PORT}/`)).ok) break; } catch { /* arrancando */ }
+  await wait(100);
+}
 
 const fails = [];
 const check = (name, ok, extra = '') => {
   console.log(`${ok ? 'OK ' : 'FAIL'} ${name}${extra ? ` — ${extra}` : ''}`);
   if (!ok) fails.push(name);
 };
+// En tiempo de JUEGO (dt por cuadro acotado a 0.1 s, como main.js), no de
+// pared: en un runner lento los cuadros duran más, pero el juego no avanza más.
 const MAX_DELAY_MS = 350;
 
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
@@ -29,7 +39,11 @@ let pageErrors = 0;
 async function open() {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   page.on('pageerror', (e) => { pageErrors++; console.log('PAGEERROR:', e.message); });
-  await page.goto(`http://127.0.0.1:${PORT}/?nolock=1`, { waitUntil: 'networkidle' });
+  page.setDefaultTimeout(300000);
+  // THROTTLE=12: CPU 12× más lenta (CDP) para comprobar que nada depende del reloj de pared
+  const rate = Number(process.env.THROTTLE) || 0;
+  if (rate > 1) await (await page.context().newCDPSession(page)).send('Emulation.setCPUThrottlingRate', { rate });
+  await page.goto(`http://127.0.0.1:${PORT}/?nolock=1`, { waitUntil: 'networkidle', timeout: 300000 });
   await page.evaluate(() => document.getElementById('btn-enter')?.click());
   await page.waitForSelector('#splash.off', { state: 'attached' });
   return page;
@@ -38,7 +52,7 @@ async function open() {
 // primer desplazamiento real del jugador.
 const armProbe = (page, mode) => page.evaluate((mode) => {
   const G = window.BREACH;
-  const probe = window.__probe = { unlockedAt: null, movedAt: null, corrections: 0, start: null, frames: 0, worstFrame: 0 };
+  const probe = window.__probe = { unlockedAt: null, movedAt: null, corrections: 0, start: null, frames: 0, worstFrame: 0, sim: 0 };
   const locked = () => (mode === 'online' ? G.onlinePhase !== 'playing' : G.botMatch?.controlsLocked?.() !== false);
   if (G.net?.handlers?.correction) {
     const original = G.net.handlers.correction;
@@ -46,25 +60,28 @@ const armProbe = (page, mode) => page.evaluate((mode) => {
   }
   let last = performance.now();
   const tick = (t) => {
-    if (probe.unlockedAt !== null) { probe.frames++; probe.worstFrame = Math.max(probe.worstFrame, t - last); }
+    if (probe.unlockedAt !== null) {
+      probe.frames++; probe.worstFrame = Math.max(probe.worstFrame, t - last);
+      probe.sim += Math.max(0, Math.min(100, t - last)); // ms de juego
+    }
     last = t;
     if (G.player && G.mode === mode) {
       if (probe.unlockedAt === null && !locked()) {
-        probe.unlockedAt = t; probe.start = { x: G.player.pos.x, z: G.player.pos.z };
+        probe.unlockedAt = t; probe.sim = 0; probe.start = { x: G.player.pos.x, z: G.player.pos.z };
       } else if (probe.unlockedAt !== null && probe.movedAt === null &&
-          Math.hypot(G.player.pos.x - probe.start.x, G.player.pos.z - probe.start.z) > 0.3) probe.movedAt = t;
+          Math.hypot(G.player.pos.x - probe.start.x, G.player.pos.z - probe.start.z) > 0.3) probe.movedAt = probe.sim;
     }
-    if (probe.movedAt === null || t - probe.movedAt < 1500) requestAnimationFrame(tick);
+    if (probe.movedAt === null ? probe.sim < 6000 : probe.sim - probe.movedAt < 1500) requestAnimationFrame(tick);
     else probe.done = true;
   };
   requestAnimationFrame(tick);
 }, mode);
 const readProbe = async (page) => {
   await page.waitForFunction(() => window.__probe?.done || (window.__probe?.unlockedAt !== null &&
-    performance.now() - window.__probe.unlockedAt > 6000), null, { timeout: 40000 });
+    window.__probe.sim > 6000), null, { timeout: 300000 });
   return page.evaluate(() => {
     const p = window.__probe;
-    return { delayMs: p.movedAt === null ? null : Math.round(p.movedAt - p.unlockedAt),
+    return { delayMs: p.movedAt === null ? null : Math.round(p.movedAt), // ms de juego
       corrections: p.corrections, worstFrameMs: Math.round(p.worstFrame), frames: p.frames };
   });
 };
@@ -80,9 +97,9 @@ try {
   await a.waitForFunction(() => {
     const b = document.getElementById('btn-lobby-start');
     return window.BREACH?.lobby?.hostId && !document.getElementById('lobby-card').classList.contains('off') && !b.disabled;
-  }, null, { timeout: 10000 });
+  }, null, { timeout: 300000 });
   await a.evaluate(() => document.getElementById('btn-lobby-start').click());
-  await a.waitForFunction(() => window.BREACH?.mode === 'online', null, { timeout: 45000 });
+  await a.waitForFunction(() => window.BREACH?.mode === 'online', null, { timeout: 300000 });
   await armProbe(a, 'online');
   await a.keyboard.down('KeyW'); // mantenida desde la presentación
   const online = await readProbe(a);
@@ -99,9 +116,9 @@ try {
   await b.waitForFunction(() => {
     const s = document.getElementById('btn-lobby-start');
     return window.BREACH?.lobby && !document.getElementById('lobby-card').classList.contains('off') && !s.disabled;
-  }, null, { timeout: 10000 });
+  }, null, { timeout: 300000 });
   await b.evaluate(() => document.getElementById('btn-lobby-start').click());
-  await b.waitForFunction(() => window.BREACH?.mode === 'bots' && window.BREACH?.botMatch, null, { timeout: 15000 });
+  await b.waitForFunction(() => window.BREACH?.mode === 'bots' && window.BREACH?.botMatch, null, { timeout: 300000 });
   await armProbe(b, 'bots');
   await b.keyboard.down('KeyW');
   const local = await readProbe(b);
@@ -127,11 +144,16 @@ try {
   await c.waitForFunction(() => {
     const s = document.getElementById('btn-lobby-start');
     return window.BREACH?.lobby && !document.getElementById('lobby-card').classList.contains('off') && !s.disabled;
-  }, null, { timeout: 10000 });
+  }, null, { timeout: 300000 });
   await c.evaluate(() => document.getElementById('btn-lobby-start').click());
-  await c.waitForFunction(() => window.BREACH?.mode === 'bots' && window.BREACH?.botMatch, null, { timeout: 15000 });
-  await c.keyboard.down('KeyW'); // mantenida SIN captura: hoy por hoy no cuenta todavía
-  await c.waitForFunction(() => window.BREACH.botMatch.controlsLocked() === false, null, { timeout: 30000 });
+  await c.waitForFunction(() => window.BREACH?.mode === 'bots' && window.BREACH?.botMatch, null, { timeout: 300000 });
+  // mantenida SIN captura, con el auto-repeat de un teclado real: una tecla
+  // solo se importa al llegar la captura si sigue viva (keydown/repeat en
+  // los últimos 2 s); una sin repeat es un keyup perdido y ya no camina sola
+  await c.keyboard.down('KeyW');
+  for (let i = 0; i < 600 && await c.evaluate(() => window.BREACH.botMatch.controlsLocked()); i++) {
+    await wait(50); await c.keyboard.down('KeyW'); // repeat: true
+  }
   const grant = await c.evaluate(async () => {
     const G = window.BREACH, I = window.BREACH_INPUT;
     const requestsBeforeStart = window.__lock.requests;
@@ -139,11 +161,13 @@ try {
     // el navegador concede la captura (la pedida durante la cuenta regresiva)
     Object.defineProperty(document, 'pointerLockElement', { get: () => I.canvas, configurable: true });
     document.dispatchEvent(new Event('pointerlockchange'));
-    const t0 = performance.now();
+    // ms de JUEGO (dt acotado a 0.1 s por cuadro, como main.js)
+    let sim = 0, last = await new Promise((r) => requestAnimationFrame(r));
     let movedMs = null;
-    while (performance.now() - t0 < 2500 && movedMs === null) {
-      await new Promise((r) => requestAnimationFrame(r));
-      if (Math.hypot(G.player.pos.x - start.x, G.player.pos.z - start.z) > 0.3) movedMs = Math.round(performance.now() - t0);
+    while (sim < 2500 && movedMs === null) {
+      const t = await new Promise((r) => requestAnimationFrame(r));
+      sim += Math.max(0, Math.min(100, t - last)); last = t;
+      if (Math.hypot(G.player.pos.x - start.x, G.player.pos.z - start.z) > 0.3) movedMs = Math.round(sim);
     }
     delete document.pointerLockElement;
     document.dispatchEvent(new Event('pointerlockchange'));

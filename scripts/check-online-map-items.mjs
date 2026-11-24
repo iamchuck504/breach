@@ -6,9 +6,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
 import { MAPS, MAP_RUNTIME } from '../src/game/lobby-rules.js';
+import { freePort } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const port = 8799;
+const port = FREE_PORT;
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
   env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: String(port), INTRO_TIME: '0', COUNTDOWN_TIME: '0',
     NODE_ENV: 'test', ALLOW_TEST_TELEPORTS: '1' },
@@ -46,7 +49,7 @@ try {
   for (const map of MAPS) {
     const ws = new WebSocket(`ws://127.0.0.1:${port}`);
     await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
-    const welcome = await sendAndWait(ws, { t: 'join', action: 'create', name: `QA-${map}` }, (m) => m.t === 'welcome');
+    const welcome = await sendAndWait(ws, { t: 'join', action: 'create', name: `QA-${map}`, v: 0, hp: 2, fps: 1 }, (m) => m.t === 'welcome');
     await sendAndWait(ws, { t: 'lobbyBotAdd', team: 'blue' },
       (m) => m.t === 'lobby' && m.bots?.some((b) => b.team === 'blue'));
     await sendAndWait(ws, { t: 'lobbySettings', settings: { map } },
@@ -101,7 +104,7 @@ try {
   // puede reclamar en su nombre, pero no conservar una copia para sí mismo.
   const ws = new WebSocket(`ws://127.0.0.1:${port}`);
   await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
-  await sendAndWait(ws, { t: 'join', action: 'create', name: 'QA-BOT' }, (m) => m.t === 'welcome');
+  await sendAndWait(ws, { t: 'join', action: 'create', name: 'QA-BOT', v: 0, hp: 2, fps: 1 }, (m) => m.t === 'welcome');
   const botLobby = await sendAndWait(ws, { t: 'lobbyBotAdd', team: 'blue' },
     (m) => m.t === 'lobby' && m.bots?.length);
   const botId = botLobby.bots[0].id;

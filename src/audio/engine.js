@@ -12,6 +12,7 @@
 import { SR as SR_BANK } from './dsp.js';
 
 export const MAX_VOICES = 32;
+export const EAR_OPEN_HZ = 20000;
 
 const dbToLin = (db) => Math.pow(10, db / 20);
 
@@ -25,6 +26,7 @@ class Voice {
   prio = 0;
   owner = '';
   tag = '';
+  base = 0;
   constructor(ctx, spaceIn) {
     this.f = ctx.createBiquadFilter();
     this.f.type = 'lowpass';
@@ -133,6 +135,14 @@ export class Engine {
       this.convolver = null;
     }
     this.pre = G();
+    // Oído (primera persona): paso bajo común a combate, mundo, ambiente y
+    // sala. Una explosión cercana lo cierra un instante y vuelve solo
+    // (earMuffle): pesa en graves sin pico doloroso de agudos. La interfaz
+    // (confirmación de impacto) no pasa por aquí: sigue legible.
+    this.ear = ctx.createBiquadFilter();
+    this.ear.type = 'lowpass';
+    this.ear.frequency.value = EAR_OPEN_HZ;
+    this.ear.Q.value = -3; // Butterworth (Q en dB en el paso bajo de WebAudio): sin realce en el corte
     // Pegamento del bus de combate: mismos parámetros que el compresor que
     // Breach ya tenía (varias armas a la vez no saturan; pasos y UI quedan fuera).
     this.combatComp = ctx.createDynamicsCompressor();
@@ -152,16 +162,17 @@ export class Engine {
     this.clip = ctx.createWaveShaper();
     this.clip.curve = softClipCurve();
     this.master = G();
-    this.combat.connect(this.combatComp).connect(this.pre);
-    this.world.connect(this.pre);
+    this.ear.connect(this.pre);
+    this.combat.connect(this.combatComp).connect(this.ear);
+    this.world.connect(this.ear);
     this.ui.connect(this.pre);
-    this.amb.connect(this.ambDuck).connect(this.pre);
+    this.amb.connect(this.ambDuck).connect(this.ear);
     this.music.connect(this.musicDuck).connect(this.pre);
     if (this.convolver) this.spaceIn.connect(this.convolver).connect(this.spaceOut);
-    this.spaceOut.connect(this.pre);
+    this.spaceOut.connect(this.ear);
     this.pre.connect(this.comp).connect(this.clipIn).connect(this.clip).connect(this.master).connect(dest);
     for (let i = 0; i < MAX_VOICES; i++) this.voices.push(new Voice(ctx, this.spaceIn));
-    this.persistentNodes = 22 + MAX_VOICES * 4;
+    this.persistentNodes = 23 + MAX_VOICES * 4;
     this.space = null;
   }
 
@@ -219,6 +230,25 @@ export class Engine {
     }
   }
 
+  /**
+   * Oído cerrado por una explosión cercana: el corte baja a `hz` ya, se
+   * sostiene `hold` s y vuelve a abierto con una rampa exponencial de
+   * `recover` s (lineal en octavas). Una segunda explosión más débil no abre
+   * un oído que ya está más cerrado.
+   */
+  earMuffle(hz, hold = 0.08, recover = 0.9) {
+    const t = this.ctx.currentTime;
+    const f = this.ear.frequency;
+    const cur = f.value;
+    const target = Math.max(200, Math.min(EAR_OPEN_HZ, Math.min(hz, cur < EAR_OPEN_HZ * 0.98 ? cur : hz)));
+    f.cancelScheduledValues(t);
+    f.setValueAtTime(target, t);
+    f.setValueAtTime(target, t + hold);
+    f.exponentialRampToValueAtTime(EAR_OPEN_HZ, t + hold + recover);
+    this.earUntil = t + hold + recover;
+    return target;
+  }
+
   isActive(v, now) {
     return !!v.def && now < v.end;
   }
@@ -232,7 +262,10 @@ export class Engine {
 
   /**
    * o: { mix:{gain,pan,cut,occluded}, volume, pitch, at, pan, variant, tag,
-   *      owner, force, send, cut, prio }. Devuelve la voz o null (no listo/cap/culled).
+   *      owner, force, send, cut, prio, tail }. Devuelve la voz o null (no listo/cap/culled).
+   * tail: { after, db, tau } — recorte de cola: pasado `after` s del inicio,
+   * la voz baja `db` dB con constante `tau` (disparo propio en primera
+   * persona: cuerpo intacto, cola que deja oír pasos enseguida).
    */
   play(name, o = {}) {
     const def = this.bank.defs.get(name);
@@ -315,6 +348,11 @@ export class Engine {
     const rate = (o.pitch ?? 1) * (1 + (Math.random() * 2 - 1) * def.pitchVar);
     src.playbackRate.value = rate;
     const env = ctx.createGain();
+    if (o.tail && o.tail.db > 0) {
+      const ta = at + Math.max(0, o.tail.after);
+      env.gain.setValueAtTime(1, ta);
+      env.gain.setTargetAtTime(dbToLin(-o.tail.db), ta, Math.max(0.005, o.tail.tau ?? 0.04));
+    }
     src.connect(env).connect(slot.f);
     this.nodeLive += 2;
     src.onended = () => {
@@ -331,6 +369,7 @@ export class Engine {
     const gp = slot.g.gain;
     gp.cancelScheduledValues(now);
     gp.setValueAtTime(base, now);
+    slot.base = base;
     const send = (o.send ?? def.send) * base;
     slot.s.gain.cancelScheduledValues(now);
     slot.s.gain.setValueAtTime(send, now);
@@ -373,6 +412,7 @@ export class Engine {
     v.end = 0;
     v.owner = '';
     v.tag = '';
+    v.pausedVoice = null;
   }
 
   stopWhere(pred, fade = 0.03) {
@@ -380,6 +420,44 @@ export class Engine {
     let n = 0;
     for (const v of this.voices) if (this.isActive(v, now) && pred(v)) { this.release(v, fade); n++; }
     return n;
+  }
+
+  /** Baja un instante las voces que cumplan `pred` (−db, sostiene `hold`, vuelve en `release`). */
+  duckVoices(pred, db, hold = 0.05, release = 0.08) {
+    const now = this.ctx.currentTime;
+    const k = dbToLin(-Math.abs(db));
+    let n = 0;
+    for (const v of this.voices) {
+      if (!this.isActive(v, now) || !pred(v)) continue;
+      const g = v.g.gain;
+      g.cancelScheduledValues(now);
+      g.setValueAtTime(v.base, now);
+      g.setTargetAtTime(v.base * k, now, 0.002);
+      g.setTargetAtTime(v.base, now + hold, release / 3);
+      n++;
+    }
+    return n;
+  }
+
+  // Congela el cursor de una muestra ya emitida y conserva su variante y
+  // mezcla. Al reanudar no se emite otra pisada ni se reinicia el silbido.
+  pauseTag(tag, paused) {
+    const now = this.ctx.currentTime;
+    for (const v of this.voices) {
+      if (v.tag !== tag || !v.src || !this.isActive(v, now)) continue;
+      const rate = v.src.playbackRate;
+      if (paused && !v.pausedVoice) {
+        v.pausedVoice = { rate: rate.value, left: v.end - now };
+        rate.setValueAtTime(0, now);
+        v.env.gain.setValueAtTime(0, now);
+        v.end = Infinity;
+      } else if (!paused && v.pausedVoice) {
+        rate.setValueAtTime(v.pausedVoice.rate, now);
+        v.env.gain.setValueAtTime(1, now);
+        v.end = now + v.pausedVoice.left;
+        v.pausedVoice = null;
+      }
+    }
   }
 
   stopTag(tag, fade = 0.03) {

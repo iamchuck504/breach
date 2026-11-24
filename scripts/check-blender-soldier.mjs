@@ -9,7 +9,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 850 } });
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
-  await page.goto('http://127.0.0.1:5200/?soldier=blender&nolock=1');
+  await page.goto((process.env.BASE || 'http://127.0.0.1:5200') + '/?soldier=blender&nolock=1');
   await page.evaluate(() => document.getElementById('btn-enter')?.click());
   await page.waitForSelector('#splash.off', { state: 'attached' });
   await page.evaluate(() => document.getElementById('btn-practice').click());
@@ -33,14 +33,18 @@ try {
     let maxOrigin = 0, maxDirection = 0, maxVisualMuzzle=0;
     const visualGrips=[];
     let maxPoseError=0;
+    // Las piernas se resuelven contra la suela MEDIDA de cada avatar (la bota
+    // del modelo Blender es más alta: rig.js _groundLegs) y difieren a
+    // propósito; check-soldier-feet comprueba que ambos pisan el suelo.
     const joints=r=>[r.root,r.hips,r.torso,r.head,r.aimRig,
-      r.armR.shoulder,r.armR.elbow,r.armR.hand,r.armL.shoulder,r.armL.elbow,r.armL.hand,
-      r.legR.hip,r.legR.knee,r.legL.hip,r.legL.knee];
+      r.armR.shoulder,r.armR.elbow,r.armR.hand,r.armL.shoulder,r.armL.elbow,r.armL.hand];
     const oldJoints=joints(reference),newJoints=joints(candidate);
     const a = new THREE.Vector3(), b = new THREE.Vector3();
     const states = ['idle','run','roadie','cover_low','cover_high','blind_over',
       'blind_high_left','blind_high_right','blind_low_left','blind_low_right',
-      'dive','slide','jump','mantle','melee','dead','idle'];
+      'dive','slide','jump','mantle','melee','dead','idle',
+      // PRUEBAS (corrida 6): posturas FPS que ven los demás (agachado con inclinación y asomo)
+      'crouch','idle'];
     const random=Math.random;
     Math.random=()=>.5; // Identical ragdoll impulses for the two rigs.
     for (const weapon of ['smg','shotgun','pistol','sniper','bazooka','grenade']) {
@@ -55,7 +59,8 @@ try {
       for (const state of states) for (const aim of [false,true]) {
         for (let f=0;f<30;f++) {
           const p={state,aim,speed:state==='run'?.5:0,aimPitch:.25,aimYawErr:.1,
-            coverLean:state==='cover_high'?.5:0,coverKind:'wall',firing:false};
+            coverLean:state==='cover_high'?.5:state==='crouch'?.6:0,coverKind:'wall',firing:false,
+            ...(state==='crouch'?{coverAimExposure:aim?1:f/60}:{})};
           reference.update(1/60,p);candidate.update(1/60,p);
           maxOrigin=Math.max(maxOrigin,reference.muzzleWorld(a).distanceTo(candidate.muzzleWorld(b)));
           maxDirection=Math.max(maxDirection,reference.gunForward(a).distanceTo(candidate.gunForward(b)));
@@ -118,7 +123,7 @@ try {
   delete report.poses;
   const failedPage=await browser.newPage();
   await failedPage.route('**/soldier-blender-body.glb',route=>route.abort());
-  await failedPage.goto('http://127.0.0.1:5200/?soldier=blender&nolock=1');
+  await failedPage.goto((process.env.BASE || 'http://127.0.0.1:5200') + '/?soldier=blender&nolock=1');
   const fallback=await failedPage.evaluate(async()=>{
     const THREE=await import('/node_modules/three/build/three.module.js');
     const {Rig}=await import('/src/player/rig.js');

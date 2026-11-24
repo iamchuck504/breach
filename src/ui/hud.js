@@ -2,6 +2,10 @@ import { t, getLanguage } from '../core/i18n.js';
 import { TUNING } from '../config/tuning.js';
 import { weaponIconMarkup, feedIconMarkup, HEAD_GLYPH } from './weapon-icons.js';
 import {BINDS,keyLabel} from '../core/bindings.js';
+import { SETTINGS, onSettingChange } from '../core/settings.js';
+import { Reticle } from './reticle.js';
+import { Markers } from './markers.js';
+import { reticleZoneRadius, fitScale, protectWeaponBody, zoneInPixels, rectHitsCircle, rectsOverlap } from './hud-layout.js';
 
 function setText(el, value) {
   const text = value == null ? '' : String(value);
@@ -38,7 +42,9 @@ const wheelArrows = ['▶', '◀', '▼', '▲'];
 // (es información), solo pierde escala/desplazamiento.
 const reducedMotionQuery = typeof matchMedia === 'function'
   ? matchMedia('(prefers-reduced-motion: reduce)') : null;
-const reducedMotion = () => !!reducedMotionQuery?.matches;
+// El ajuste del juego (reduceMotion) cuenta igual que la preferencia del sistema.
+let reduceMotionSetting = false;
+const reducedMotion = () => reduceMotionSetting || !!reducedMotionQuery?.matches;
 const now = () => performance.now();
 
 // Rangos del marcador de impacto: en la misma ráfaga, una baja nunca queda
@@ -72,6 +78,10 @@ const PULSES = {
   'pip-in': { kf: [{ transform: 'scaleX(.2)', opacity: 0.3 }, { transform: 'scaleX(1.25)', opacity: 1, offset: 0.6 }, { transform: 'none' }],
     opt: { duration: 460, easing: 'ease-out' } },
   'kill-in': { kf: [{ opacity: 0, transform: 'translate(-50%, 8px) scale(.94)' }, { opacity: 1, transform: 'translate(-50%, 0) scale(1)' }],
+    opt: { duration: 200, easing: 'cubic-bezier(.2,.8,.2,1)' } },
+  // primera persona: la línea cuelga a la izquierda de la mira (su transform es
+  // la escala del HUD), así que entra con `translate`, que se compone encima
+  'kill-in-fp': { kf: [{ opacity: 0, translate: '0 6px' }, { opacity: 1, translate: '0 0' }],
     opt: { duration: 200, easing: 'cubic-bezier(.2,.8,.2,1)' } },
 };
 
@@ -115,7 +125,32 @@ export class HUD {
       dmgDir: document.getElementById('dmg-dir'),
       hurtFlash: document.getElementById('hurt-flash'),
       killLine: document.getElementById('kill-confirm'),
+      // primera persona (body.fp): retícula por arma, vitales, marcadores
+      fpReticle: document.getElementById('reticle'),
+      statusDock: document.getElementById('status-dock'),
+      vitals: document.getElementById('vitals'),
+      hpVal: document.getElementById('hp-val'),
+      hpFill: document.getElementById('hp-fill'),
+      stance: document.getElementById('stance'),
+      markers: document.getElementById('markers'),
     };
+    this.ret = this.el.fpReticle ? new Reticle(this.el.fpReticle) : null;
+    this.marks = this.el.markers ? new Markers(this.el.markers) : null;
+    this._legacyCalls = 99;
+    this._fovDeg = 72;
+    this._hp = -1;
+    this._stanceKey = '';
+    this.setWeaponZone(null);
+    new ResizeObserver(() => { this._restingDock = null; }).observe(this.el.statusDock);
+    this._onResize = () => { this._restingDock = null; this._applyFit(); };
+    addEventListener('resize', this._onResize);
+    this._applyFit();
+    // Ajustes del jugador (escala, retícula, movimiento reducido): se aplican
+    // al crear el HUD y en cada cambio, sin pasar por main.js.
+    this.applySettings(SETTINGS);
+    onSettingChange(() => this.applySettings(SETTINGS));
+    // handle de depuración y capturas (como window.BREACH_*): el primero manda
+    if (typeof window !== 'undefined') window.BREACH_HUD ??= this;
     // feedback de combate: estado mínimo, cero asignaciones por cuadro
     this._hitKind = null;
     this._hitAt = -1e9;
@@ -157,7 +192,7 @@ export class HUD {
 
   show(on) {
     setClass(this.el.hud, 'on', on);
-    if (!on) { this.hideWeaponWheel(true); this.pickupPrompt(''); this.clearFeedback(); }
+    if (!on) { this.hideWeaponWheel(true); this.pickupPrompt(''); this.clearFeedback(); this.markers(null); }
   }
   showMenu(on) { setClass(this.el.menu, 'off', !on); }
 
@@ -212,7 +247,7 @@ export class HUD {
     if (!this._pickupPrompt) {
       this._pickupPrompt = document.createElement('div');
       this._pickupPrompt.id = 'pickup-prompt';
-      document.body.appendChild(this._pickupPrompt);
+      document.getElementById('hud-notices').appendChild(this._pickupPrompt);
     }
     setText(this._pickupPrompt, text);
     if (this._pickupPrompt.hidden !== !text) this._pickupPrompt.hidden = !text;
@@ -256,6 +291,8 @@ export class HUD {
     const ammoChanged = !weaponChanged && this._lastMag !== undefined && this._lastMag !== w.st.mag;
     if (weaponChanged) this._pulse(this.el.weapon, 'weapon-change');
     if (ammoChanged) this._pulse(this.el.weapon, 'ammo-change');
+    // un disparo (el cargador baja sin recarga): pulso breve de la retícula
+    if (ammoChanged && w.st.mag < this._lastMag && !w.reloading) this.ret?.kick(reducedMotion());
     if (this.el.weapon.dataset.weapon !== w.cur) this.el.weapon.dataset.weapon = w.cur;
     if (this.el.wepIcon?.dataset.weapon !== w.cur) {
       this.el.wepIcon.dataset.weapon = w.cur;
@@ -270,7 +307,7 @@ export class HUD {
     setClass(this.el.weapon, 'reloading', w.reloading);
     setClass(this.el.weapon, 'empty-ammo', w.st.mag <= 0 && w.st.reserve <= 0);
     setClass(this.el.weapon, 'needs-reload', w.st.mag <= 0 && w.st.reserve > 0);
-    setClass(this.el.weapon, 'low-ammo', !w.reloading &&
+    setClass(this.el.weapon, 'low-ammo', !w.reloading && w.st.mag < w.def.mag &&
       w.st.mag <= Math.max(2, Math.ceil(w.def.mag * 0.2)));
     this._lastWep = w.cur;
     this._lastMag = w.st.mag;
@@ -307,7 +344,10 @@ export class HUD {
         k.textContent = i + 1;
         const label = document.createElement('span');
         label.className = 'w';
-        chip.append(k, label);
+        chip.append(k);
+        const weapon = w.slots[i];
+        if (TUNING.weapons[weapon]) chip.insertAdjacentHTML('beforeend', weaponIconMarkup(weapon, 'slot-glyph'));
+        chip.append(label);
         this.el.wepSlots.append(chip);
       }
     }
@@ -413,6 +453,7 @@ export class HUD {
     const root = this.el.matchFlow;
     // intro/fin de ronda/fin de partida: nada del combate anterior queda pegado
     if (!!view !== !!this._flowOn) { this._flowOn = !!view; if (view) this.clearFeedback(); }
+    setClass(this.el.hud, 'presenting', !!view);
     if (!view) {
       if (root.className) root.className = '';
       clearChildren(root);
@@ -523,6 +564,15 @@ export class HUD {
       setClass(this.el.vignette, 'low', low);
       setClass(this.el.hud, 'low-hp', low);
     }
+    // Vitales (primera persona): número y barra, escritos solo al cambiar.
+    const pts = Math.ceil(hp * (TUNING.combat?.hp ?? 100));
+    if (pts !== this._hp && this.el.vitals) {
+      this._hp = pts;
+      setText(this.el.hpVal, pts);
+      setStyle(this.el.hpFill, 'transform', `scaleX(${hp.toFixed(3)})`);
+      setClass(this.el.vitals, 'low', low);
+      setClass(this.el.vitals, 'hurt', hp < 0.99);
+    }
   }
 
   // kind: 'body' | 'head' | 'kill'. Varias llamadas en la misma ráfaga
@@ -589,10 +639,11 @@ export class HUD {
   // ox/oz: posición del jugador. El rumbo se mide desde él (no desde la
   // cámara de hombro: un atacante entre cámara y jugador daría un arco
   // frontal para un tiro por la espalda) y se orienta con el yaw de cámara.
-  feedback(dt, camera, ox = null, oz = null) {
+  feedback(dt, camera, ox = null, oz = null, dead = false) {
     if (!this._dmg.length) return;
     let e = null;
     for (const d of this._dmg) {
+      if (dead) d.age = DMG_LIFE;
       if (d.age >= DMG_LIFE) {
         if (d.lastOp !== 0) { d.lastOp = 0; d.node.style.opacity = '0'; }
         continue;
@@ -651,14 +702,31 @@ export class HUD {
       (this._streak > 1 ? `<span class="kc-streak">×${this._streak}</span>` : '');
     setClass(el, 'head', !!head);
     setClass(el, 'on', true);
-    this._pulse(el, 'kill-in');
+    this._pulse(el, document.body.classList.contains('fp') ? 'kill-in-fp' : 'kill-in');
     clearTimeout(this._killT);
     this._killT = setTimeout(() => setClass(el, 'on', false), KILL_LINE_MS);
   }
 
-  // ADS usa el centro óptico. Hip/blindfire recibe la proyección física del
-  // barrel porque su cañón puede estar fuera de esa línea central.
+  // Dos firmas:
+  //  - Primera persona (CONTRATO §7): reticle({ weapon, spreadDeg, aim, hit,
+  //    show, blocked, fovDeg }) — dispersión real del arma (semiángulo, °).
+  //    reticle(null) la oculta.
+  //  - Tercera persona (la de siempre): reticle(aiming, barrelXY, aimInfo).
+  //    ADS usa el centro óptico; hip recibe la proyección física del cañón.
   reticle(aiming, barrelXY, aimInfo = null) {
+    if (aiming === null || (aiming && typeof aiming === 'object')) {
+      this._legacyCalls = 0;
+      this._reticleFp(aiming || { show: false });
+      return;
+    }
+    // Llamada antigua con body.fp puesto y nadie usando la nueva (por cuadros:
+    // dos llamadas antiguas seguidas sin una nueva): alimenta la retícula FPS
+    // con la dispersión base del arma (cadera / apuntando).
+    if (this.ret && document.body.classList.contains('fp') && ++this._legacyCalls > 2) {
+      const def = TUNING.weapons[this._lastWep];
+      this._reticleFp({ weapon: this._lastWep, spreadDeg: aiming ? def?.spreadAim : def?.spreadHip,
+        aim: aiming ? 1 : 0, show: !!(aiming || barrelXY) });
+    }
     setClass(this.el.crosshair, 'aim', aiming);
     // ADS siempre usa el mismo estado óptico: el daño viaja por el eje de la
     // cámara, así que la cruz nunca necesita avisar de una obstrucción ni
@@ -681,14 +749,178 @@ export class HUD {
     }
   }
 
+  _reticleFp(o) {
+    if (!this.ret) return;
+    const fp = document.body.classList.contains('fp');
+    setClass(this.el.hud, 'ret-fp', fp);
+    if (o.fovDeg > 0) this._fovDeg = o.fovDeg;
+    const weapon = o.weapon ?? this._lastWep;
+    const h = innerHeight;
+    this.ret.draw({
+      weapon, def: TUNING.weapons[weapon], spreadDeg: o.spreadDeg ?? TUNING.weapons[weapon]?.spreadHip ?? 2,
+      aim: o.aim ?? 0, aligned: !!o.aligned, show: fp && o.show !== false, blocked: !!o.blocked,
+      fovDeg: this._fovDeg, height: h, maxGap: reticleZoneRadius(h), dodging: o.dodging,
+    });
+    // el marcador de impacto nace en el centro óptico (el disparo sale del ojo)
+    this._aimX = null; this._aimY = null;
+    if (o.hit) this.hitmarker(o.hit === true ? 'body' : o.hit);
+  }
+
+  // Postura del jugador: crouch 0..1 (o booleano), lean -1..1. Glifo en los
+  // vitales: en primera persona no te ves, y agacharse en "alternar" se olvida.
+  stance({ crouch = 0, lean = 0, dodgeCd = 0 } = {}) {
+    const cd = this._dodgeBar ??= document.getElementById('dodge-cooldown');
+    if (cd) {
+      cd.hidden = dodgeCd <= 0;
+      if (!cd.hidden) {
+        cd.value = 1 - dodgeCd / (TUNING.dodge.duration + TUNING.dodge.cooldown);
+        setAttribute(cd, 'aria-label', t('binding.evade'));
+      }
+    }
+    const st = this.el.stance;
+    if (!st) return;
+    const c = Math.round(Math.max(0, Math.min(1, +crouch || 0)) * 4) / 4;
+    const l = Math.round(Math.max(-1, Math.min(1, +lean || 0)) * 4) / 4;
+    const key = c + ':' + l;
+    if (key === this._stanceKey) return;
+    this._stanceKey = key;
+    st.style.setProperty('--st-crouch', String(c));
+    st.style.setProperty('--st-lean', String(l));
+    st.dataset.pose = c >= 0.5 ? 'crouch' : 'stand';
+    st.dataset.lean = l < -0.2 ? 'left' : l > 0.2 ? 'right' : 'none';
+    setAttribute(st, 'aria-label', t(c >= 0.5 ? 'hud.stanceCrouch' : 'hud.stanceStand') +
+      (l < -0.2 ? ' · ' + t('hud.leanLeft') : l > 0.2 ? ' · ' + t('hud.leanRight') : ''));
+  }
+
+  // Escala del HUD (ajuste hudScale, 0.75–1.5). La retícula no se escala:
+  // su tamaño es la dispersión real; su grosor tiene su propio ajuste.
+  setScale(v) {
+    const k = Math.max(0.75, Math.min(1.5, Number(v) || 1));
+    if (this._scale === k) return;
+    this._scale = k;
+    document.documentElement.style.setProperty('--hud-scale', String(k));
+    this._applyFit();
+  }
+
+  // La manga puede pasar detrás del estado. Solo el cuerpo reserva espacio.
+  setWeaponZone(zone) {
+    this.weaponZone = zone;
+    const body = zoneInPixels(zone?.body, innerWidth, innerHeight);
+    const protect = body && protectWeaponBody(innerWidth, innerHeight, this._scale);
+    const narrow = innerWidth / innerHeight <= 4 / 3;
+    const left = body && (protect || narrow) ? Math.floor(body.left) : innerWidth;
+    const top = protect ? Math.floor(body.top) : innerHeight;
+    const style = this.el.hud.style;
+    if (left !== this._weaponLeft) {
+      this._weaponLeft = left;
+      style.setProperty('--wz-x0', left + 'px');
+    }
+    if (top !== this._weaponTop) {
+      this._weaponTop = top;
+      style.setProperty('--wz-y0', top + 'px');
+    }
+    // En reposo, los márgenes izquierdo e inferior del estado son iguales.
+    // Así se puede recuperar su posición inferior incluso si estaba subido.
+    if (!this._restingDock) {
+      const dock = this.el.statusDock.getBoundingClientRect();
+      const bottom = innerHeight - dock.left;
+      this._restingDock = { left: dock.left, right: dock.right, top: bottom - dock.height, bottom };
+      style.setProperty('--dock-clearance', Math.ceil(dock.left + dock.height) + 'px');
+    }
+    this._raisedStatus = !!(protect && rectsOverlap(body, this._restingDock));
+    setClass(this.el.hud, 'raised-status', this._raisedStatus);
+    setClass(this.el.hud, 'high-weapon', protect && top < innerHeight * 0.30);
+    setClass(this.el.hud, 'model-behind', body && !protect);
+  }
+
+  // Marcadores de jugadores (ver markers.js para las reglas de visibilidad).
+  // `markers(null)` también significa "la cámara no es la de los ojos"
+  // (muerte, espectador, presentación): se retiran el bloque de estado y la
+  // retícula, que no pertenecen a una vista en tercera persona.
+  markers(list, camera = null) {
+    this.marks?.update(list, camera, innerWidth, innerHeight);
+    setClass(this.el.hud, 'tp-view', !list);
+  }
+
+  // Ajustes que el HUD aplica por sí mismo (src/core/settings.js).
+  applySettings(s = SETTINGS) {
+    if (!s) return;
+    this.setScale(s.hudScale ?? 1);
+    this.ret?.setOptions({ visible: s.reticleVisible ?? true, color: s.reticleColor ?? 'white', size: s.reticleSize ?? 1 });
+    if (this.ret) this.ret.state.gap = -1; // redibuja con el tamaño nuevo
+    reduceMotionSetting = !!s.reduceMotion;
+    document.documentElement.classList.toggle('reduce-motion', reduceMotionSetting);
+    document.documentElement.classList.toggle('hud-contrast', !!s.hudContrast);
+  }
+
+  _applyFit() {
+    const fit = fitScale(innerWidth, innerHeight);
+    const k = (this._scale ?? 1) * fit;
+    if (k === this._k) return;
+    this._k = k;
+    this._restingDock = null;
+    document.documentElement.style.setProperty('--hud-k', String(k));
+  }
+
   // El scope conserva siempre su cruz óptica central y su color base.
-  sniperScope(on) {
+  // Relevo con el arma: `in01` (scopeIn01 del viewmodel; `opacity` se acepta
+  // como sinónimo) 0 = el arma subiendo … 1 = el ojo en la lente. El anillo
+  // del overlay crece con él hasta el 92 % de media altura, el mismo radio que
+  // la lente del modelo al llegar, y aparece en el último tramo; en medio, un
+  // tinte de lente tenue. Al salir (soltar, cambio, recarga, melee, muerte)
+  // se desvanece en 140 ms en vez de desaparecer.
+  sniperScope(on, opts = null) {
     const root = this.el.sniperScope;
     const reticle = this.el.scopeReticle;
     if (!root || !reticle) return;
+    const raw = opts?.in01 ?? opts?.opacity;
+    const k = on ? Math.max(0, Math.min(1, Number.isFinite(raw) ? raw : 1)) : 0;
+    const kq = Math.round(k * 50) / 50;
+    if (on) {
+      clearTimeout(this._scopeLeaveT);
+      setClass(root, 'leaving', false);
+      if (this._scopeK !== kq) {
+        this._scopeK = kq;
+        const e = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+        root.style.setProperty('--scope-op', e(0.55, 0.98, kq).toFixed(3));
+        // lo que cae dentro de la lente se retira con el mismo valor
+        document.documentElement.style.setProperty('--scope-hide', e(0.55, 0.98, kq).toFixed(3));
+        root.style.setProperty('--scope-s', (0.78 + 0.22 * e(0, 1, kq)).toFixed(3));
+        root.style.setProperty('--scope-tint', (kq >= 1 ? 0 : Math.sin(Math.PI * kq) * 0.9).toFixed(3));
+      }
+    } else if (root.classList.contains('on')) {
+      // salida: mismo camino al revés, corto (sin quedarse pegado)
+      this._scopeK = -1;
+      if (!reducedMotion()) {
+        setClass(root, 'leaving', true);
+        root.style.setProperty('--scope-op', '0');
+        root.style.setProperty('--scope-tint', '0');
+        document.documentElement.classList.add('scope-leaving');
+        setTimeout(() => document.documentElement.classList.remove('scope-leaving'), 140);
+        clearTimeout(this._scopeLeaveT);
+        this._scopeLeaveT = setTimeout(() => setClass(root, 'leaving', false), 140);
+      }
+    }
+    setClass(root, 'ocular', !!(on && opts?.ocular));
+    setClass(root, 'handover', on && kq < 1);
     setClass(root, 'on', !!on);
     setAttribute(root, 'aria-hidden', on ? 'false' : 'true');
-    setClass(this.el.hud, 'scoped', !!on);
+    // "scoped" (oculta retícula y confirmación de baja) solo con el ojo en la lente
+    setClass(this.el.hud, 'scoped', !!on && kq >= 1);
+    const html = document.documentElement;
+    if (!on) html.style.setProperty('--scope-hide', '0');
+    if (on && (!html.classList.contains('scope-on') || this._scopeW !== innerWidth ||
+        this._scopeH !== innerHeight || this._scopeScale !== this._k || this._scopeRaised !== this._raisedStatus)) {
+      this._scopeRaised = this._raisedStatus;
+      this._scopeW = innerWidth; this._scopeH = innerHeight; this._scopeScale = this._k;
+      // el bloque de estado solo se retira si de verdad toca la lente (a
+      // escala grande o ventanas casi cuadradas); si no, sigue a la vista
+      const dock = document.getElementById('status-dock')?.getBoundingClientRect();
+      const r = 0.46 * Math.min(innerWidth, innerHeight);
+      html.classList.toggle('scope-dock', !!dock && dock.width > 0 &&
+        rectHitsCircle(dock, innerWidth / 2, innerHeight / 2, r));
+    }
+    html.classList.toggle('scope-on', !!on);
     setClass(reticle, 'out-range', false);
     setStyle(reticle, 'left', '50%');
     setStyle(reticle, 'top', '50%');
@@ -745,6 +977,9 @@ export class HUD {
   }
 
   hint(text, ms = 1600) {
+    // Un texto que nombra una acción lleva {button}: si quien llama no lo
+    // rellenó, va la tecla asignada AHORA a interactuar (nunca una letra fija).
+    if (typeof text === 'string' && text.includes('{button}')) text = text.replaceAll('{button}', keyLabel(BINDS.kb.pickup));
     setText(this.el.hint, text);
     setClass(this.el.hint, 'on', true);
     clearTimeout(this._hintT);

@@ -4,20 +4,20 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>BREACH</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2317181c'/%3E%3Ccircle cx='16' cy='16' r='8' fill='none' stroke='%23ff8a3d' stroke-width='3'/%3E%3Ccircle cx='16' cy='16' r='2.5' fill='%23ff8a3d'/%3E%3C/svg%3E" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2317181c'/%3E%3Ccircle cx='16' cy='16' r='8' fill='none' stroke='%23f2ae3d' stroke-width='3'/%3E%3Ccircle cx='16' cy='16' r='2.5' fill='%23f2ae3d'/%3E%3C/svg%3E" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800;900&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
 <style>
   :root {
-    --bg: #080a0d;
-    --panel: #171b21ee;
-    --line: #353c45;
-    --text: #f4f0e7;
-    --dim: #969ea8;
-    --accent: #ff7a2f;
-    --red: #d94f3f;
-    --blue: #4f8de0;
+    --bg: #0b0c0e;
+    --panel: #101215ee;
+    --line: #33373d;
+    --text: #f2f0eb;
+    --dim: #b2b6bb;
+    --accent: #f2ae3d;
+    --red: #e8402f;
+    --blue: #2f7fe8;
     --cjk: "Noto Sans CJK JP", "Noto Sans JP", "Yu Gothic UI", "Hiragino Kaku Gothic ProN", "Microsoft YaHei UI", "PingFang SC", sans-serif;
     --mono: "Geist Mono", var(--cjk), ui-monospace, monospace;
     --sans: "Geist", var(--cjk), system-ui, sans-serif;
@@ -36,7 +36,7 @@
     --hud-bg: rgba(10,13,17,.88);
     --hud-bg-soft: rgba(17,22,28,.78);
     --hud-line: rgba(151,163,176,.24);
-    --hud-line-hot: rgba(255,122,47,.72);
+    --hud-line-hot: rgba(242,174,61,.72);
   }
   #hud { position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity .3s; }
   #hud.on { opacity: 1; }
@@ -78,7 +78,7 @@
     min-height: 69px; font-family: var(--mono); overflow: visible;
     clip-path: polygon(8px 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%, 0 8px); }
   #score::before { content: ""; position: absolute; left: 50%; top: 0; width: 34px; height: 2px;
-    transform: translateX(-50%); background: var(--accent); box-shadow: 0 0 12px rgba(255,122,47,.38); }
+    transform: translateX(-50%); background: var(--accent); box-shadow: 0 0 12px rgba(242,174,61,.38); }
   #score .t { position: relative; display: flex; flex-direction: column; justify-content: center;
     gap: 2px; padding: 8px 13px; }
   #score .t.red-team { align-items: flex-start; border-right: 1px solid var(--hud-line); }
@@ -127,8 +127,8 @@
   #weapon .res-value { margin-top: 2px; color: #d9dde0; font-size: 17px; font-weight: 600; }
   #weapon .reload { margin-top: 6px; font-size: 11px; color: var(--accent); letter-spacing: .1em;
     min-height: 12px; text-transform: uppercase; }
-  #weapon.low-ammo .mag { color: #ff9b59; }
-  #weapon.low-ammo #wep-bar .fill, #weapon.low-ammo #wep-bar .seg.on { background: #ff9b59; }
+  #weapon.low-ammo .mag { color: #f2ae3d; }
+  #weapon.low-ammo #wep-bar .fill, #weapon.low-ammo #wep-bar .seg.on { background: #f2ae3d; }
   #weapon.low-ammo:not(.reloading) .mag { animation: lowammo 1.25s ease-in-out infinite; }
   @keyframes lowammo { 50% { opacity: .65; } }
   /* barra de munición compacta por segmentos */
@@ -176,11 +176,11 @@
   .wheel-sector.left .wheel-icon, .wheel-sector.right .wheel-icon { width: 95%; }
   .wheel-sector .wheel-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap; font-size: 10px; letter-spacing: .04em; color: #d8dde0; }
-  .wheel-sector .wheel-meta { font-size: 12px; font-weight: 700; letter-spacing: .03em; color: #dde5ec; }
+  .wheel-sector .wheel-meta { font-size: 12px; font-weight: 700; letter-spacing: .03em; color: #e4e6e8; }
   .wheel-sector .wheel-key { position: absolute; z-index: 2; color: #7f8a93; font-size: 8px;
     letter-spacing: .08em; }
   .wheel-sector .wheel-key { top: 4px; left: 8px; }
-  .wheel-sector.selected { color: #fff3e9; background: var(--accent); filter: drop-shadow(0 0 14px rgba(255,122,47,.32)); }
+  .wheel-sector.selected { color: #fff3e9; background: var(--accent); filter: drop-shadow(0 0 14px rgba(242,174,61,.32)); }
   .wheel-sector.selected::before { --sector-bg: rgba(78,42,23,.94); }
   .wheel-sector.selected .wheel-label, .wheel-sector.selected .wheel-key { color: #fff; }
   .wheel-sector.selected .wheel-meta { color: #ffc49e; }
@@ -191,11 +191,11 @@
   .wheel-sector.needs-reload .wheel-meta { color: #ffe3a0; }
   .wheel-sector.unavailable { opacity: .25; filter: none; }
   #pickup-prompt { position: fixed; left: 50%; bottom: 24%; transform: translateX(-50%); z-index: 20;
-    padding: 12px 18px; color: #fff; background: rgba(12,18,24,.94); border: 1px solid #dca267;
+    padding: 12px 18px; color: #fff; background: rgba(12,18,24,.94); border: 1px solid #f2ae3d;
     font: 600 15px sans-serif; pointer-events: none; border-radius: 5px; }
   .wheel-core { position: absolute; left: 50%; top: 50%; width: 17%; aspect-ratio: 1;
-    transform: translate(-50%,-50%) rotate(45deg); border: 1px solid rgba(255,122,47,.72);
-    background: rgba(9,12,15,.95); box-shadow: 0 0 18px rgba(255,122,47,.14); }
+    transform: translate(-50%,-50%) rotate(45deg); border: 1px solid rgba(242,174,61,.72);
+    background: rgba(9,12,15,.95); box-shadow: 0 0 18px rgba(242,174,61,.14); }
   .wheel-core::before, .wheel-core::after { content: ""; position: absolute; background: var(--accent); opacity: .72; }
   .wheel-core::before { left: 22%; right: 22%; height: 2px; top: calc(50% - 1px); }
   .wheel-core::after { top: 22%; bottom: 22%; width: 2px; left: calc(50% - 1px); }
@@ -259,7 +259,7 @@
   .sb-row { position: relative; display: grid; grid-template-columns: minmax(90px,1fr) 34px 34px 48px;
     gap: 9px; align-items: center; font-family: var(--mono); font-size: 14px; padding: 8px;
     border-bottom: 1px solid rgba(151,163,176,.1); }
-  .sb-row.me { color: #ffb17d; background: rgba(255,122,47,.09); }
+  .sb-row.me { color: #ffd79a; background: rgba(242,174,61,.09); }
   .sb-row.me::before { content: ""; position: absolute; left: 0; top: 5px; bottom: 5px; width: 2px; background: var(--accent); }
   .sb-row span:not(:first-child) { text-align: right; }
   .sb-row.sb-cols-head { color: var(--dim); font-size: 10px; letter-spacing: .09em; padding-top: 2px; }
@@ -274,7 +274,7 @@
     background: radial-gradient(circle at 50% 46%, rgba(19,24,30,.56), rgba(6,8,11,.74)); }
   .mf-card { position: relative; width: min(690px, 94vw); color: var(--text); font-family: var(--mono); }
   .mf-card::before { content: ""; position: absolute; left: 0; top: 0; width: 74px; height: 2px;
-    background: var(--accent); box-shadow: 0 0 14px rgba(255,122,47,.45); }
+    background: var(--accent); box-shadow: 0 0 14px rgba(242,174,61,.45); }
   .mf-kicker { padding-top: 18px; color: var(--accent); font-size: 12px; font-weight: 600;
     letter-spacing: .24em; text-transform: uppercase; }
   .mf-title { margin-top: 9px; font-family: var(--sans); font-size: clamp(42px, 7vw, 78px);
@@ -292,13 +292,13 @@
     padding: 5px 4px; color: #d7dbdf; border-bottom: 1px solid rgba(151,163,176,.08);
     font-size: 12px; letter-spacing: .04em; }
   .mf-player.roster { grid-template-columns: 1fr auto; }
-  .mf-player.me { color: #ffb17d; background: rgba(255,122,47,.08); }
+  .mf-player.me { color: #ffd79a; background: rgba(242,174,61,.08); }
   .mf-player span:not(:first-child) { text-align: right; color: var(--dim); }
   .mf-progress { width: min(430px, 72vw); height: 3px; margin-top: 22px; background: rgba(151,163,176,.18); }
   .mf-progress span { display: block; height: 100%; background: var(--accent); transition: width .12s linear; }
   .mf-wait { margin-top: 9px; color: var(--dim); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; }
   .mf-count { font-family: var(--mono); font-size: clamp(112px, 22vw, 210px); line-height: .75;
-    font-weight: 500; color: var(--accent); text-shadow: 0 0 46px rgba(255,122,47,.2);
+    font-weight: 500; color: var(--accent); text-shadow: 0 0 46px rgba(242,174,61,.2);
     animation: mfcount .32s ease-out; }
   .mf-count-label { margin-top: 25px; text-align: center; color: #e8e5df; font-size: 14px;
     letter-spacing: .28em; text-transform: uppercase; }
@@ -316,7 +316,7 @@
   .mf-stat-head { color: var(--dim); font-size: 9px; }
   .mf-mvp { display: grid; grid-template-columns: minmax(180px, .8fr) minmax(260px, 1.2fr); gap: 28px; align-items: center; }
   .mf-portrait { display: grid; place-items: center; min-height: 300px; overflow: hidden;
-    background: radial-gradient(circle at 50% 38%, rgba(255,122,47,.15), transparent 55%), rgba(10,13,17,.75);
+    background: radial-gradient(circle at 50% 38%, rgba(242,174,61,.15), transparent 55%), rgba(10,13,17,.75);
     border: 1px solid var(--hud-line); }
   .mf-portrait img { width: min(240px, 100%); max-height: 320px; object-fit: contain; }
   .mf-mvp-stats { display: flex; gap: 8px; margin-top: 22px; }
@@ -360,7 +360,7 @@
   #splash { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center;
     overflow: hidden; background:
       linear-gradient(90deg, rgba(217,79,63,.12), transparent 34% 66%, rgba(79,141,224,.12)),
-      radial-gradient(circle at 50% 42%, rgba(255,122,47,.12), transparent 28%), #080a0d; }
+      radial-gradient(circle at 50% 42%, rgba(242,174,61,.12), transparent 28%), #080a0d; }
   #splash.off { display: none; }
   #splash::before, #menu::before { content: ""; position: absolute; inset: 0; pointer-events: none;
     background-image: linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
@@ -369,7 +369,7 @@
   #splash::after, #menu::after { content: ""; position: absolute; left: 43%; top: -20%;
     width: 3px; height: 150%; transform: rotate(16deg); pointer-events: none;
     background: linear-gradient(transparent, var(--accent) 24% 76%, transparent);
-    box-shadow: 0 0 24px rgba(255,122,47,.55); opacity: .58; }
+    box-shadow: 0 0 24px rgba(242,174,61,.55); opacity: .58; }
   .splash-content { position: relative; z-index: 1; text-align: center; }
   .splash-logo { font-family: var(--mono); font-size: clamp(55px, 11vw, 110px); font-weight: 600;
     letter-spacing: .22em; margin-left: .22em; }
@@ -384,7 +384,7 @@
      usar gamepad para que nunca compita con hover o cursor virtual. */
   .using-controller .menu-nav-focus {
     border-color: #fff !important;
-    box-shadow: inset 0 0 0 1px #fff, 0 0 0 2px var(--accent), 0 0 24px rgba(255,122,47,.28) !important;
+    box-shadow: inset 0 0 0 1px #fff, 0 0 0 2px var(--accent), 0 0 24px rgba(242,174,61,.28) !important;
     filter: brightness(1.12);
   }
   .using-controller button.menu-nav-focus { transform: translateX(4px); }
@@ -404,17 +404,17 @@
   .menu-prompt { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
   .menu-prompt b { min-width: 22px; padding: 4px 6px; border: 1px solid #59616b;
     color: var(--text); text-align: center; font-weight: 600; }
-  .using-controller #menu-prompts { border-color: rgba(255,122,47,.35); }
-  .using-controller .menu-prompt:first-child b { color: #160d07; border-color: var(--accent); background: var(--accent); }
+  .using-controller #menu-prompts { border-color: rgba(242,174,61,.35); }
+  .using-controller .menu-prompt:first-child b { color: #1a1206; border-color: var(--accent); background: var(--accent); }
 
   #menu { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
     overflow: auto; padding: 24px; background:
-      radial-gradient(circle at 81% 30%, rgba(255,166,73,.13), transparent 25%),
+      radial-gradient(circle at 81% 30%, rgba(242,174,61,.13), transparent 25%),
       linear-gradient(0deg, rgba(8,10,13,.84), transparent 38%),
       linear-gradient(108deg, rgba(8,10,13,.97) 0 27%, rgba(8,10,13,.76) 48%, rgba(8,10,13,.42) 72%, rgba(8,10,13,.72));
     z-index: 10; }
   #menu.in-match-bg { background:
-      radial-gradient(circle at 78% 35%, rgba(255,122,47,.14), transparent 28%),
+      radial-gradient(circle at 78% 35%, rgba(242,174,61,.14), transparent 28%),
       linear-gradient(115deg, rgba(8,10,13,.98) 0 38%, rgba(8,10,13,.75) 66%, rgba(8,10,13,.94)); }
   #menu.off { display: none; }
   .menu-card { position: relative; z-index: 1; width: min(900px, calc(100vw - 48px));
@@ -434,7 +434,7 @@
   .lobby-team.red { border-top: 2px solid var(--red); } .lobby-team.blue { border-top: 2px solid var(--blue); }
   .lobby-team-head, .lobby-settings-head { display: flex; justify-content: space-between; align-items: center;
     min-height: 45px; padding: 10px 13px; border-bottom: 1px solid var(--line); font: 600 11px/1 var(--mono); letter-spacing: .13em; }
-  .lobby-team.red .lobby-team-head { color: #ef8175; } .lobby-team.blue .lobby-team-head { color: #78aaf0; }
+  .lobby-team.red .lobby-team-head { color: #f4705f; } .lobby-team.blue .lobby-team-head { color: #68a3f2; }
   .lobby-slots { padding: 8px; }
   .lobby-slot { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; min-height: 48px;
     padding: 7px 9px; border-bottom: 1px solid rgba(151,163,176,.12); font-family: var(--mono); }
@@ -442,7 +442,7 @@
   .lobby-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
   .lobby-badges { display: flex; gap: 5px; margin-top: 4px; }
   .lobby-badge { padding: 2px 5px; border: 1px solid rgba(151,163,176,.22); color: var(--dim); font-size: 8px; letter-spacing: .08em; }
-  .lobby-badge.host { color: var(--accent); border-color: rgba(255,122,47,.38); }
+  .lobby-badge.host { color: var(--accent); border-color: rgba(242,174,61,.38); }
   .lobby-slot-actions { display: flex; gap: 4px; }
   .lobby-mini { border: 1px solid var(--line); background: #11161c; color: #cbd0d5; padding: 5px 7px; cursor: pointer;
     font: 600 9px/1 var(--mono); letter-spacing: .06em; }
@@ -455,7 +455,7 @@
     background: #0c1015; color: var(--text); font: 500 11px/1 var(--mono); }
   .lobby-field select:disabled { opacity: .66; }
   .lobby-validation { min-height: 38px; padding: 9px 11px; border-left: 2px solid var(--accent);
-    background: rgba(255,122,47,.07); color: #e7b18e; font: 500 10px/1.35 var(--mono); }
+    background: rgba(242,174,61,.07); color: #f6d79e; font: 500 10px/1.35 var(--mono); }
   .lobby-validation.ok { border-color: #5fbb83; color: #91d0a7; background: rgba(95,187,131,.06); }
   .lobby-actions { display: grid; grid-template-columns: 1fr 2fr; gap: 9px; margin-top: 14px; }
   .lobby-actions .btn { min-height: 48px; }
@@ -468,7 +468,7 @@
     text-transform: uppercase; }
   .menu-grid { display: grid; grid-template-columns: minmax(280px,.9fr) minmax(330px,1.1fr);
     gap: 30px; align-items: center; }
-  .menu-kicker { color: #ffad73; font-family: var(--mono); font-size: 10px;
+  .menu-kicker { color: #f2ae3d; font-family: var(--mono); font-size: 10px;
     letter-spacing: .14em; text-transform: uppercase; margin-bottom: 9px; }
   .menu-title { font-size: clamp(38px,5vw,58px); line-height: .94; letter-spacing: -.045em;
     font-weight: 600; margin-bottom: 22px; }
@@ -480,8 +480,8 @@
     clip-path: polygon(0 0, calc(100% - 11px) 0, 100% 11px, 100% 100%, 0 100%); }
   .btn:hover { border-color: #59616b; background: #20262d; color: var(--text); }
   .btn.primary { min-height: 68px; background: var(--accent); border-color: var(--accent);
-    color: #160d07; font-size: 13.5px; }
-  .btn.primary:hover { background: #ff9154; color: #160d07; }
+    color: #1a1206; font-size: 13.5px; }
+  .btn.primary:hover { background: #ffc15e; color: #1a1206; }
   #main-card.in-match #btn-bots { min-height: 54px; background: rgba(23,27,33,.94);
     border-color: var(--line); color: var(--text); font-size: 11.5px; }
   #main-card.in-match #btn-bots:hover { border-color: #59616b; background: #20262d; }
@@ -491,9 +491,9 @@
   .btn-copy { flex: 1; text-align: left; }
   .btn-copy small { display: block; margin-top: 5px; color: var(--dim); font-size: 9px;
     letter-spacing: .07em; text-transform: none; }
-  .btn.primary .btn-copy small { color: #683115; }
+  .btn.primary .btn-copy small { color: #5a3d0c; }
   .btn-num { color: var(--dim); font-size: 9px; }
-  .btn.primary .btn-num { color: #683115; }
+  .btn.primary .btn-num { color: #5a3d0c; }
   #btn-resume { margin-bottom: 8px; }
   .pause-actions { display: none; gap: 8px; }
   #main-card.in-match { width: min(520px, calc(100vw - 48px)); }
@@ -525,7 +525,7 @@
      que ninguna quede colgando sola en una segunda fila */
   .utility-row { display: grid; grid-template-columns: repeat(2,1fr); gap: 7px; margin-top: 14px; }
   .utility-row .btn { min-height: 42px; padding: 0 8px; justify-content: center; font-size: 8.5px; }
-  #net-status { font-family: var(--mono); font-size: 10px; color: #ffad73;
+  #net-status { font-family: var(--mono); font-size: 10px; color: #f2ae3d;
     letter-spacing: .08em; margin-top: 10px; min-height: 14px; }
   .menu-note { display: flex; justify-content: space-between; gap: 18px; margin-top: 18px;
     padding-top: 14px; border-top: 1px solid var(--line); color: var(--dim);
@@ -542,7 +542,7 @@
   .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
   .col { background: rgba(17,20,25,.95); padding: 15px 16px; }
   .col-title { font-family: var(--mono); font-size: 10px; letter-spacing: .18em;
-    color: #ffad73; text-transform: uppercase; margin-bottom: 9px;
+    color: #f2ae3d; text-transform: uppercase; margin-bottom: 9px;
     border-bottom: 1px solid var(--line); padding-bottom: 7px; }
   .bind-row { display: flex; align-items: center; justify-content: space-between;
     gap: 12px; margin-bottom: 5px; font-size: 11px; color: #c8cdd2; }
@@ -582,9 +582,9 @@
     gap: 7px; font-family: var(--mono); font-size: 9px; font-weight: 500;
     letter-spacing: .08em; color: var(--dim); text-transform: uppercase; transition: all .12s; }
   .char-slot img { display: block; width: 100%; max-width: 126px; height: auto;
-    aspect-ratio: 11 / 14; object-fit: contain; background: radial-gradient(circle at 50% 36%, rgba(255,122,47,.13), transparent 52%); }
+    aspect-ratio: 11 / 14; object-fit: contain; background: radial-gradient(circle at 50% 36%, rgba(242,174,61,.13), transparent 52%); }
   .char-slot:hover, .char-slot.vhover { border-color: var(--accent); color: var(--accent); }
-  .char-slot.sel { border-color: var(--accent); color: #ffad73; background: rgba(255,122,47,.1); }
+  .char-slot.sel { border-color: var(--accent); color: #f2ae3d; background: rgba(242,174,61,.1); }
   #btn-char-back { width: auto; min-width: 180px; justify-content: center; margin: 14px 0 0 auto; }
 
   @media (max-height: 620px) {
@@ -640,6 +640,7 @@
   }
 </style>
 <link rel="stylesheet" href="/src/ui/visual-system.css" />
+<link rel="stylesheet" href="/src/ui/fp-hud.css" />
 </head>
 <body>
 <canvas id="game"></canvas>
@@ -662,6 +663,9 @@
       </svg>
     </div>
   </div>
+  <!-- primera persona: retícula por arma (src/ui/reticle.js) y marcadores -->
+  <div id="reticle" class="ret-host" data-kind="auto"></div>
+  <div id="markers" aria-hidden="true"></div>
   <div id="barrel-dot">
     <svg width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="none" stroke="#ff8a3d" stroke-width="1.3" opacity=".9"/><circle cx="7" cy="7" r="1.2" fill="#ff8a3d"/></svg>
   </div>
@@ -673,7 +677,10 @@
     <div class="dmg-arc"><svg viewBox="-100 -100 200 200"><path class="arc" d="M-31.5 -77.9 A84 84 0 0 1 31.5 -77.9"/><path class="chev" d="M0 -98 L9 -88.5 L0 -91.5 L-9 -88.5 Z"/></svg></div>
   </div>
   <div id="hitmarker" data-k="body" aria-hidden="true"><i></i><i></i><i></i><i></i><b></b></div>
-  <div id="kill-confirm" aria-live="polite"></div>
+  <div id="hud-notices">
+    <div id="kill-confirm" aria-live="polite"></div>
+    <div id="context-hint"></div>
+  </div>
   <div id="score" class="hud-panel">
     <span class="t red-team">
       <span class="team-name"><span class="chip" style="background:var(--red);color:var(--red)"></span><span data-i18n="hud.red">RED</span></span>
@@ -694,7 +701,20 @@
     </div>
   </div>
   <div id="match-flow" aria-live="polite"></div>
+  <div id="skip-cue" data-i18n="flow.skipHint">PRESS ANY KEY TO SKIP</div>
+  <div id="lock-prompt" role="status"><span data-i18n="msg.clickToPlay">CLICK TO PLAY</span></div>
   <div id="spectator" aria-live="polite"></div>
+  <div id="status-dock">
+  <div id="vitals" class="hud-panel" role="status">
+    <div class="vt-top">
+      <span class="vt-label" data-i18n="hud.health">HEALTH</span>
+      <svg id="stance" class="stance" viewBox="0 0 20 30" role="img" aria-label="STANDING" data-pose="stand" data-lean="none">
+        <g class="st-body"><circle cx="10" cy="5" r="3.2"/><path d="M10 9.5V19M10 19l-4 9M10 19l4 9M10 12l-5 4M10 12l5 4"/></g>
+      </svg>
+    </div>
+    <div class="vt-value"><span id="hp-val">100</span><progress id="dodge-cooldown" max="1" value="1" hidden></progress></div>
+    <div class="vt-bar"><span id="hp-fill"></span></div>
+  </div>
   <div id="weapon" class="hud-panel" data-weapon="smg">
     <div class="weapon-head">
       <div class="weapon-icon" id="weapon-icon-current" aria-hidden="true"></div>
@@ -704,6 +724,7 @@
     <div id="wep-bar"></div>
     <div class="slots" id="wep-slots"></div>
     <div class="reload" id="wep-msg"></div>
+  </div>
   </div>
   <div id="weapon-wheel" aria-hidden="true">
     <div class="wheel-sector up" data-slot="3">
@@ -726,7 +747,6 @@
   </div>
   <div id="feed"></div>
   <div id="center-msg"></div>
-  <div id="context-hint"></div>
   <button id="btn-pause" class="hud-panel" title="Pause" data-i18n-title="common.pause">
     <svg width="13" height="14" viewBox="0 0 13 14" fill="currentColor"><rect x="1" y="1" width="4" height="12" rx="1"/><rect x="8" y="1" width="4" height="12" rx="1"/></svg>
   </button>
@@ -796,7 +816,7 @@
       </aside>
     </div>
     <div class="menu-note">
-      <span><b>WASD</b> <span data-i18n="menu.move">MOVE</span> · <b>Shift</b> <span data-i18n="menu.run">RUN</span> · <b>Space</b> <span data-i18n="menu.coverEvade">COVER / EVADE</span></span>
+      <span><b>WASD</b> <span data-i18n="menu.move">MOVE</span> · <b>Shift</b> <span data-i18n="menu.run">RUN</span> · <b>C</b> <span data-i18n="binding.crouch">CROUCH</span> · <b>Space</b> <span data-i18n="binding.jump">JUMP</span></span>
       <span><b>Esc / MENU</b> <span data-i18n="menu.pauseHint">PAUSE</span></span>
     </div>
   </div>
@@ -862,10 +882,13 @@
     <div class="menu-kicker" data-i18n="menu.optionsKicker">GAME CONFIGURATION</div>
     <h1 class="menu-title" data-i18n="menu.options">OPTIONS</h1>
     <div class="options-list">
-      <button class="btn" id="btn-opt-audio" data-nav-default><span data-i18n="menu.audio">AUDIO</span><span class="btn-num">01</span></button>
-      <button class="btn" id="btn-opt-video"><span data-i18n="menu.video">VIDEO</span><span class="btn-num">02</span></button>
-      <button class="btn" id="btn-opt-language"><span data-i18n="menu.language">LANGUAGE</span><span class="btn-num">03</span></button>
-      <button class="btn" id="btn-opt-controls"><span data-i18n="menu.controlsTitle">CONTROLS</span><span class="btn-num">04</span></button>
+      <button class="btn" id="btn-opt-controls" data-nav-default><span data-i18n="menu.controlsTitle">CONTROLS</span><span class="btn-num">01</span></button>
+      <button class="btn" id="btn-opt-aim"><span data-i18n="settings.pageAim">MOUSE &amp; AIM</span><span class="btn-num">02</span></button>
+      <button class="btn" id="btn-opt-comfort"><span data-i18n="settings.pageComfort">CAMERA &amp; COMFORT</span><span class="btn-num">03</span></button>
+      <button class="btn" id="btn-opt-hud"><span data-i18n="settings.pageHud">HUD &amp; RETICLE</span><span class="btn-num">04</span></button>
+      <button class="btn" id="btn-opt-audio"><span data-i18n="menu.audio">AUDIO</span><span class="btn-num">05</span></button>
+      <button class="btn" id="btn-opt-video"><span data-i18n="menu.video">VIDEO</span><span class="btn-num">06</span></button>
+      <button class="btn" id="btn-opt-language"><span data-i18n="menu.language">LANGUAGE</span><span class="btn-num">07</span></button>
     </div>
     <div class="control-actions">
       <button class="btn primary" id="btn-options-back" data-i18n="common.back">BACK</button>
@@ -879,6 +902,7 @@
     <div class="settings-grid">
       <div class="slider-row"><label for="sl-vol" data-i18n="menu.volumeMute">VOLUME (M TO MUTE)</label><span class="val" id="sl-vol-v"></span><input type="range" id="sl-vol" min="0" max="1" step="0.05" data-nav-default /></div>
     </div>
+    <div class="set-sections audio-extra"></div>
     <div class="control-actions">
       <button class="btn primary" id="btn-audio-back" data-i18n="common.back">BACK</button>
     </div>
@@ -922,14 +946,50 @@
     </div>
   </div>
 
+  <div class="menu-card settings-page" id="aim-card" data-nav-back="btn-aim-back" data-page="aim">
+    <div class="menu-top"><div class="logo">BRE<em>A</em>CH</div><div class="tag" data-i18n="common.localSave">LOCAL SAVE</div></div>
+    <div class="menu-kicker" data-i18n="menu.options">OPTIONS</div>
+    <h1 class="menu-title" data-i18n="settings.pageAim">MOUSE &amp; AIM</h1>
+    <div class="set-sections"></div>
+    <div class="control-actions">
+      <button class="btn" data-reset-page data-i18n="settings.resetPage">RESET PAGE</button>
+      <button class="btn primary" id="btn-aim-back" data-i18n="common.back">BACK</button>
+    </div>
+  </div>
+
+  <div class="menu-card settings-page" id="comfort-card" data-nav-back="btn-comfort-back" data-page="comfort">
+    <div class="menu-top"><div class="logo">BRE<em>A</em>CH</div><div class="tag" data-i18n="common.localSave">LOCAL SAVE</div></div>
+    <div class="menu-kicker" data-i18n="menu.options">OPTIONS</div>
+    <h1 class="menu-title" data-i18n="settings.pageComfort">CAMERA &amp; COMFORT</h1>
+    <div class="set-sections"></div>
+    <div class="control-actions">
+      <button class="btn" data-reset-page data-i18n="settings.resetPage">RESET PAGE</button>
+      <button class="btn primary" id="btn-comfort-back" data-i18n="common.back">BACK</button>
+    </div>
+  </div>
+
+  <div class="menu-card settings-page" id="hudopts-card" data-nav-back="btn-hudopts-back" data-page="hud">
+    <div class="menu-top"><div class="logo">BRE<em>A</em>CH</div><div class="tag" data-i18n="common.localSave">LOCAL SAVE</div></div>
+    <div class="menu-kicker" data-i18n="menu.options">OPTIONS</div>
+    <h1 class="menu-title" data-i18n="settings.pageHud">HUD &amp; RETICLE</h1>
+    <div class="set-hud-layout">
+      <div class="set-sections"></div>
+      <figure class="ret-preview" aria-hidden="true"><div class="ret-preview-view"><div id="reticle-preview" class="ret-host on" data-kind="auto"></div></div><figcaption data-i18n="settings.preview">PREVIEW</figcaption></figure>
+    </div>
+    <div class="control-actions">
+      <button class="btn" data-reset-page data-i18n="settings.resetPage">RESET PAGE</button>
+      <button class="btn primary" id="btn-hudopts-back" data-i18n="common.back">BACK</button>
+    </div>
+  </div>
+
   <div class="menu-card" id="controls-card">
     <div class="menu-top"><div class="logo">BRE<em>A</em>CH</div><div class="tag" data-i18n="common.localSave">LOCAL SAVE</div></div>
     <div class="menu-kicker" data-i18n="menu.inputDevices">KEYBOARD AND CONTROLLER</div>
     <h1 class="menu-title" data-i18n="menu.controlsTitle">CONTROLS</h1>
     <div class="tag" data-i18n="menu.rebindHint">SELECT A BINDING, THEN PRESS A KEY OR BUTTON</div>
     <div class="cols">
-      <div class="col"><div class="col-title" data-i18n="menu.keyboard">KEYBOARD</div><div id="kb-rows"></div></div>
-      <div class="col"><div class="col-title" data-i18n="menu.controller">CONTROLLER</div><div id="pad-rows"></div><div id="pad-status" data-i18n="menu.noController">NO CONTROLLER DETECTED</div></div>
+      <div class="col"><div class="col-title" data-i18n="settings.keyboardMouse">KEYBOARD &amp; MOUSE</div><div id="kb-rows"></div><div class="bind-note" id="kb-conflicts" role="status"></div></div>
+      <div class="col"><div class="col-title" data-i18n="menu.controller">CONTROLLER</div><div id="pad-rows"></div><div class="bind-note" id="pad-conflicts" role="status"></div><div id="pad-status" data-i18n="menu.noController">NO CONTROLLER DETECTED</div></div>
     </div>
     <div class="tag" data-i18n="menu.dpadWeapons">D-PAD: ↑ GRENADE · ↓ PISTOL · ← SHOTGUN · → SMG</div>
     <div class="settings-grid">
@@ -956,5 +1016,7 @@
 </div>
 
 <script type="module" src="/src/main.js"></script>
+<!-- páginas de ajustes FPS (se montan solas; ver run6/ganchos/hud.md) -->
+<script type="module" src="/src/ui/settings-ui.js"></script>
 </body>
 </html>

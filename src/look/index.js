@@ -72,7 +72,7 @@ function readFlags() {
   return { enabled: look !== 'classic' && look !== 'off', life: life == null ? null : life.split(',').filter(Boolean) };
 }
 
-function mulberry(seed) {
+export function mulberry(seed) {
   let a = seed >>> 0;
   return () => {
     a = (a + 0x6d2b79f5) >>> 0;

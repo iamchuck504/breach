@@ -28,16 +28,34 @@ weapons.state.sniper.mag = 0; weapons.state.sniper.reserve = 0;
 weapons.refill();
 assert.equal(weapons.state.sniper.mag + weapons.state.sniper.reserve, 0);
 assert.equal(canReplaceDrop(weapons.slots, 'sniper'), false);
-const world = { resolveCircle() {}, groundHeight: () => 0, findCover: () => null };
-const cam = { yaw: 0, pitch: 0, flatForward: () => ({ x: 0, z: -1 }), flatRight: () => ({ x: 1, z: 0 }) };
-const p = new Controller(world, cam);
-assert.equal(p._tryEvade({ x: 0, z: -1 }, 5), 'dive');
-assert.equal(p.cover, null);
-const face = { a: { x: -2, z: -3 }, b: { x: 2, z: -3 }, n: { x: 0, z: 1 }, h: 2 };
-world.findCover = () => ({ target: { x: 0, z: -2.6 }, face, dist: 3 });
-p.evadeCooldown = 0;
-assert.equal(p._tryEvade({ x: 0, z: -1 }, 5), 'slide');
-p.evadeCooldown = 0;
-world.resolveCircle = probe => { probe.x += 0.4; };
-assert.equal(p._tryEvade({ x: 0, z: -1 }, 5), 'dive');
-console.log('PASS: global wave boundaries, partial ammo conservation, special exclusion, manual replacement and reachable-cover selection.');
+// PRUEBAS (corrida 6, FPS): evadir (slide a cobertura / dive) se retiró del
+// jugador. Su garantía, "nunca comprometerse con un destino inalcanzable", pasa
+// a trepar (solo LOW): antes de empezar la animación debe haber espacio sobre
+// el borde y suelo de aterrizaje a la altura del bloque.
+{
+  const LOW = 1.1;
+  const face = { a: { x: -2, z: -1 }, b: { x: 2, z: -1 }, n: { x: 0, z: 1 }, h: LOW, kind: 'low' };
+  const mk = ({ blocked = false, landing = LOW } = {}) => {
+    const world = {
+      resolveCircle() {}, findCover: () => null,
+      groundHeight: (q) => (q.z < -1 && q.z > -3 ? landing : 0),
+      raycast: () => (blocked ? { t: 0.3 } : null),
+    };
+    const cam = { yaw: 0, pitch: 0, flatForward: () => ({ x: 0, z: -1 }), flatRight: () => ({ x: 1, z: 0 }) };
+    const p = new Controller(world, cam);
+    p.respawn({ x: 0, z: -0.5, yaw: 0 });
+    return p;
+  };
+  const ok = mk();
+  assert.equal(ok._tryMantle(face, face.n), true, 'trepar un LOW libre debe empezar');
+  assert.equal(ok.state, 'mantle');
+  assert.ok(Math.abs(ok.mantle.ty - LOW) < 1e-6 && ok.mantle.tz2 < -1, 'aterriza sobre el bloque');
+  const blocked = mk({ blocked: true });
+  assert.equal(blocked._tryMantle(face, face.n), false, 'trepó con algo encima del borde');
+  assert.notEqual(blocked.state, 'mantle');
+  const drop = mk({ landing: 0 });
+  assert.equal(drop._tryMantle(face, face.n), false, 'trepó a un aterrizaje que no está a la altura del bloque');
+  const mid = { ...face, h: 1.9, kind: 'mid' };
+  assert.equal(mk({ landing: 1.9 })._tryMantle(mid, mid.n), false, 'trepó un MID (solo LOW)');
+}
+console.log('PASS: global wave boundaries, partial ammo conservation, special exclusion, manual replacement and mantle only onto a reachable LOW.');

@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';import fs from 'node:fs/promises';
 import {spawn} from 'node:child_process';import {chromium} from 'playwright-core';import {CHROME} from './lib-chrome.mjs';
-const server=spawn(process.execPath,['node_modules/vite/bin/vite.js','--host','127.0.0.1','--port','8845'],{stdio:'ignore'});
+import { freePort } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
+const server=spawn(process.execPath,['node_modules/vite/bin/vite.js','--host','127.0.0.1','--port',String(FREE_PORT)],{stdio:'ignore'});
 await new Promise(r=>setTimeout(r,1000));const browser=await chromium.launch({executablePath:CHROME,headless:true});
 const dir='artifacts/visual-ux/ui';await fs.mkdir(dir,{recursive:true});
 try{
  const page=await browser.newPage({viewport:{width:1280,height:720}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
- await page.goto('http://127.0.0.1:8845/?nolock=1');await page.screenshot({path:`${dir}/splash.png`});
+ await page.goto(`http://127.0.0.1:${FREE_PORT}/?nolock=1`);await page.screenshot({path:`${dir}/splash.png`});
  await page.locator('#btn-enter').click();await page.waitForSelector('#splash.off',{state:'attached'});
  await page.screenshot({path:`${dir}/main.png`});
  // Exercise implemented navigation before the localisation layout matrix.

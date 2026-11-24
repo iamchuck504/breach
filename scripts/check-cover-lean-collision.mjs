@@ -20,54 +20,18 @@ physical.resolveCircle(p, PLAYER_R, 0, current);
 assert(Math.hypot(p.x + 0.20, p.z - 1) > 0.1,
   'ignorar la cara actual no debe atravesar un obstáculo adyacente');
 
-// Contrato del controller: en cover pasa la identidad exacta de su cara al
-// resolver, tanto sin input como durante el lean ADS de una esquina.
-const calls = [];
-const collider = { minx: 0, maxx: 1, minz: 0, maxz: 4, h: 3 };
-const world = {
-  resolveCircle(point, radius, y, ignored) {
-    calls.push({ point: { ...point }, radius, y, ignored });
-    if (ignored !== collider) point.x += 0.12; // simula la corrección conflictiva
-  },
-  groundHeight() { return 0; },
-  raycast() { return null; },
-  findCover() { return null; },
-};
-const camera = {
-  yaw: Math.PI / 2,
-  pitch: 0,
-  flatForward() { return { x: -1, z: 0 }; },
-  flatRight() { return { x: 0, z: 1 }; },
-};
-const player = new Controller(world, camera);
-player.state = 'cover';
-player.cover = {
-  a: { x: 0, z: 0 }, b: { x: 0, z: 4 }, n: { x: -1, z: 0 },
-  h: 3, kind: 'high', collider,
-};
-player.pos = { x: -PLAYER_R, z: 0.20 };
-const input = {
-  moveVec: () => ({ x: 0, z: 0 }),
-  aimHeld: true,
-  sprintHeld: false,
-  jumpPressed: false,
-  meleePressed: false,
-  evadePressed: false,
-};
-player.update(1 / 60, input, false);
-assert.equal(calls.length, 1, 'cover debe resolver colisión una vez por frame');
-assert.equal(calls[0].ignored, collider,
-  'controller debe omitir únicamente el collider de su cover actual');
-assert(player.pos.x < -0.30,
-  'la resolución no debe inyectar una corrección lateral sobre la pose de cover');
-
-// Geometría real de Calle: bus, camión y Jersey. Además del contrato unitario,
-// comprobamos que las orillas usadas en el mapa converjan y no alternen entre
-// la posición analítica del cover y el empuje circular del mismo objeto.
+// PRUEBAS (corrida 6, FPS): el "contrato del controller en cover" (identidad
+// del collider de la cara, sin corrección lateral sobre la pose pegada) se
+// retiró con la cobertura pegada; su garantía (inclinarse no mete la cabeza ni
+// empuja el cuerpo) vive en check-fps-movement. La parte de geometría REAL se
+// traslada: agachado/de pie, apuntando e inclinado en las orillas reales del
+// bus, el camión y la Jersey de calle2, la posición converge sin temblor.
+// Geometría real de calle2 (mapa que se juega): bus, camión y Jersey.
 const calleWorld = Object.create(World.prototype);
-calleWorld.colliders = expandedCollisionBoxes('calle');
+calleWorld.colliders = expandedCollisionBoxes('calle2');
 calleWorld.segmentColliders = [];
 calleWorld.surfaceZones = [];
+calleWorld.faces = []; // solo colisión de cajas: el empuje de fachada lo prueban facade-walking/storefront-cover
 calleWorld.groundHeight = () => 0;
 calleWorld.raycast = () => null;
 
@@ -79,7 +43,7 @@ const findCollider = (label, x, z, w, d) => {
     return Math.abs(p.x - x) < 0.01 && Math.abs(p.z - z) < 0.01 &&
       Math.abs(size.w - w) < 0.01 && Math.abs(size.d - d) < 0.01;
   });
-  assert(found, `${label}: falta collider esperado en Calle`);
+  assert(found, `${label}: falta collider esperado en calle2`);
   return found;
 };
 
@@ -91,14 +55,6 @@ const actualCases = [
   { label: 'Jersey', collider: findCollider('Jersey', -6.1, -33.4, 2.4, 0.9), axis: 'x' },
 ];
 
-const steadyInput = {
-  moveVec: () => ({ x: 0, z: 0 }),
-  aimHeld: true,
-  sprintHeld: false,
-  jumpPressed: false,
-  meleePressed: false,
-  evadePressed: false,
-};
 
 for (const test of actualCases) {
   const c = test.collider;
@@ -115,25 +71,45 @@ for (const test of actualCases) {
   const len = Math.hypot(tx, tz), ux = tx / len, uz = tz / len;
 
   for (const edge of ['A', 'B']) {
-    const actor = new Controller(calleWorld, camera);
-    actor.state = 'cover';
-    actor.cover = face;
-    const initialU = edge === 'A' ? PLAYER_R * 0.75 : len - PLAYER_R * 0.75;
-    actor.pos = {
-      x: face.a.x + ux * initialU + face.n.x * PLAYER_R,
-      z: face.a.z + uz * initialU + face.n.z * PLAYER_R,
-    };
-    const samples = [];
-    for (let frame = 0; frame < 90; frame++) {
-      actor.update(1 / 60, steadyInput, false);
-      if (frame >= 75) samples.push({ ...actor.pos });
+    for (const crouch of [true, false]) {
+      // mirando a la cara, inclinado hacia fuera de la orilla
+      const yaw = Math.atan2(face.n.x, face.n.z);
+      const camera = {
+        yaw, pitch: 0,
+        flatForward() { return { x: -Math.sin(this.yaw), z: -Math.cos(this.yaw) }; },
+        flatRight() { return { x: Math.cos(this.yaw), z: -Math.sin(this.yaw) }; },
+      };
+      const actor = new Controller(calleWorld, camera);
+      const initialU = edge === 'A' ? PLAYER_R * 0.75 : len - PLAYER_R * 0.75;
+      actor.respawn({
+        x: face.a.x + ux * initialU + face.n.x * (PLAYER_R + 0.02),
+        z: face.a.z + uz * initialU + face.n.z * (PLAYER_R + 0.02), yaw,
+      });
+      // lado de la orilla en el marco de la vista: A = izquierda (−1) o derecha
+      const right = camera.flatRight();
+      const side = Math.sign((ux * right.x + uz * right.z) * (edge === 'A' ? -1 : 1)) || 1;
+      const input = {
+        moveVec: () => ({ x: 0, z: 0 }), aimHeld: true, sprintHeld: false, jumpPressed: false,
+        meleePressed: false, crouchHeld: crouch, crouchPressed: false, leanAxis: side,
+      };
+      const samples = [];
+      for (let frame = 0; frame < 90; frame++) {
+        actor.update(1 / 60, input, false);
+        if (frame >= 75) samples.push({ ...actor.pos, lean: actor.lean });
+      }
+      const span = Math.max(...samples.map((s) => s.x)) - Math.min(...samples.map((s) => s.x)) +
+        Math.max(...samples.map((s) => s.z)) - Math.min(...samples.map((s) => s.z));
+      const leanSpan = Math.max(...samples.map((s) => s.lean)) - Math.min(...samples.map((s) => s.lean));
+      const tag = `${test.label} orilla ${edge} ${crouch ? 'agachado' : 'de pie'}`;
+      assert(span < 0.001, `${tag}: la posición no converge (span ${span.toFixed(4)})`);
+      assert(leanSpan < 0.001, `${tag}: la inclinación tiembla (span ${leanSpan.toFixed(4)})`);
+      assert.equal(actor.state, crouch ? 'crouch' : 'idle', `${tag}: estado ${actor.state} sin intención`);
+      // nunca dentro del collider del objeto
+      const q = actor.pos, cl = c;
+      const dx = Math.max(cl.minx - q.x, 0, q.x - cl.maxx), dz = Math.max(cl.minz - q.z, 0, q.z - cl.maxz);
+      assert(Math.hypot(dx, dz) >= PLAYER_R - 0.01, `${tag}: el cuerpo entró en el collider`);
     }
-    const span = Math.max(...samples.map((s) => s.x)) - Math.min(...samples.map((s) => s.x)) +
-      Math.max(...samples.map((s) => s.z)) - Math.min(...samples.map((s) => s.z));
-    assert(span < 0.001,
-      `${test.label} orilla ${edge}: la pose no converge (span ${span.toFixed(4)})`);
-    assert.equal(actor.state, 'cover', `${test.label} orilla ${edge}: salió de cover sin intención`);
   }
 }
 
-console.log('COVER LEAN COLLISION OK · bus/camión/Jersey estables · obstáculos adyacentes activos');
+console.log('COVER LEAN COLLISION OK · bus/camión/Jersey de calle2 estables agachado/de pie inclinado · obstáculos adyacentes activos');

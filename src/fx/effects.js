@@ -274,6 +274,10 @@ const P = {
   // golpe de material: sale rápido por la normal y se frena (la "nube" del impacto)
   impactBurst: pre({ cell: T.SMOKE, variants: 4, life: [0.35, 0.6], size: [0.24, 0.34], grow: 2.8, speed: [1.6, 3.6], cone: 0.45, alpha: 1, grav: 0.2, drag: 7, spin: 1.5, fin: 0.04, fout: 0.3, floor: true }),
   dustPuff: pre({ cell: T.DUST, variants: 2, life: [0.5, 0.9], size: [0.18, 0.28], grow: 3, speed: [0.6, 2.4], cone: 0.8, alpha: 0.8, grav: 0.2, drag: 3.5, spin: 0.8, fin: 0.06, fout: 0.3, floor: true }),
+  dodgeTrail: pre({ cell: T.SMOKE, variants: 4, life: [0.18, 0.20], size: [0.19, 0.23], grow: 0.85,
+    stretch: 0.58, drag: 4, col: C.woodDust, alpha: 0.55, fin: 0.04, fout: 0.28 }),
+  dodgeDust: pre({ cell: T.DUST, variants: 2, life: [0.20, 0.25], size: [0.23, 0.28], grow: 1.55,
+    col: C.stone, alpha: 0.72, grav: -2.0, drag: 2.5, fin: 0.04, fout: 0.27, floor: true }),
   dustStep: pre({ cell: T.DUST, variants: 2, life: [0.35, 0.6], size: [0.12, 0.18], grow: 3, speed: [0.4, 1.4], cone: 1.3, alpha: 0.4, grav: 0.1, drag: 4, spin: 0.6, fin: 0.06, fout: 0.3, floor: true }),
   dustBig: pre({ cell: T.SMOKE, variants: 4, life: [0.8, 1.3], size: [0.35, 0.6], grow: 3, speed: [1, 4], cone: 1.2, alpha: 0.55, grav: 0.3, drag: 2.4, spin: 0.4, fin: 0.06, fout: 0.3, floor: true }),
   shard: pre({ cell: T.SHARD, life: [0.4, 0.7], size: [0.05, 0.09], grow: 0.9, speed: [2, 5], cone: 0.9, up: 0.5, col: C.glass, bright: 1.4, alpha: 0.95, m: 0.35, hot: 2.2, grav: -14, drag: 0.5, spin: 14, fin: 0.01, fout: 0.6, floor: true }),
@@ -307,6 +311,17 @@ const CASING_CAP = 48;
 const RING_CAP = 48;
 const TRACER_SLOTS = 32; // cada slot = bala + haz (2 instancias)
 const FLASH_SLOTS = 16; // por pool (normal y pesado)
+// Ventana de expulsión del arma en primera persona del jugador local: la
+// registra el viewmodel (src/view/fp/game-adapter.js) y devuelve
+// { pos, dir } o null. Se usa para los fogonazos LOCALES (llamada con `dir`
+// y sin `to`) cuando main no pasa `opts.eject` explícito.
+let localEject = null;
+export function setLocalEjectSource(fn) { localEject = typeof fn === 'function' ? fn : null; }
+// Expulsión fuera del disparo (la escopeta expulsa al bombear): el arma la
+// pide; la saca la siguiente actualización desde su ventana de expulsión.
+const pendingEject = [];
+export function requestLocalEject(weapon = 'shotgun') { if (pendingEject.length < 4) pendingEject.push(weapon); }
+
 export const FX_TIERS = Object.freeze({
   off: { q: 0.7, sprites: 1500, debris: 140, casings: 24 },
   low: { q: 0.7, sprites: 1500, debris: 140, casings: 24 },
@@ -680,10 +695,17 @@ export class Effects {
   muzzleFlash(pos, big = false, opts = null) {
     const weapon = opts?.weapon && FLASH[opts.weapon] ? opts.weapon : (big ? 'shotgun' : 'smg');
     const F = FLASH[weapon];
+    // tiro del jugador en primera persona: casquillo desde la ventana del
+    // arma y luz más contenida (a 30 cm quemaba antebrazo y guante)
+    if (opts && !opts.eject && opts.dir && !opts.to && localEject) {
+      const e = localEject();
+      if (e) opts = { ...opts, eject: e };
+    }
+    const fp = !!opts?.eject?.pos;
     this._reset();
     this._muzzleLight.position.copy(pos);
     this._muzzleLight.color.setHex(weapon === 'stun' ? 0xbfe8ff : 0xffb35c);
-    this._muzzleLightPeak = F.light;
+    this._muzzleLightPeak = F.light * (fp ? 0.015 : 1);
     this._muzzleLight.intensity = this._muzzleLightPeak;
     this._muzzleLightT = 0.055;
 
@@ -696,8 +718,30 @@ export class Effects {
     if (dir.lengthSq() < 1e-6) dir.set(0, 0, -1);
     dir.normalize();
 
-    const scale = 0.85 + Math.random() * 0.3;
-    if (weapon === 'bazooka') {
+    // primera persona: el fogonazo nace JUSTO delante de la boca (si no, el
+    // propio cañón del arma, que se dibuja delante de todo, lo tapa) y a la
+    // escala del arma vista a medio metro, breve
+    let scale = 0.85 + Math.random() * 0.3;
+    if (fp) {
+      pos = this._v4.copy(pos).addScaledVector(opts.eject.barrel ?? dir, 0.09);
+      // en ADS la boca queda detrás del cajón: el fogonazo asoma alrededor
+      scale *= 0.42 + 0.55 * Math.min(1, Math.max(0, opts.eject.aim ?? 0));
+    }
+    if (weapon === 'bazooka' && fp) {
+      // primera persona: fogonazo a la escala del arma en la boca; el rebufo
+      // sale por la cola del tubo (detrás del ojo): solo humo hacia los lados,
+      // nada delante de la cámara (antes: un polígono claro sobre el tubo)
+      this._flashMesh(F, pos, dir, scale * 0.8, 1);
+      const bb = opts.eject.backblast;
+      if (bb) {
+        this._v3.crossVectors(dir, UP);
+        if (this._v3.lengthSq() < 1e-4) this._v3.set(1, 0, 0);
+        this._v3.normalize();
+        this._emit(P.smokeMuzzle, F.smoke, bb, this._v3, 1.6, 2.2);
+        this._v3.negate();
+        this._emit(P.smokeMuzzle, F.smoke, bb, this._v3, 1.6, 2.2);
+      }
+    } else if (weapon === 'bazooka') {
       // boca: fogonazo corto; atrás del tubo: back-blast largo y humo
       this._flashMesh(F, pos, dir, scale * 0.8, 1);
       this._v2.copy(pos).addScaledVector(dir, -1.05);
@@ -732,7 +776,20 @@ export class Effects {
       this._emit(P.smokeMuzzle, F.smoke, this._v2, dir, 1, weapon === 'sniper' || weapon === 'shotgun' ? 1.4 : 1);
     }
     // casquillo expulsado a la derecha del arma
-    if (F.casing) {
+    if (F.casing && fp && opts.eject.noCasing) {
+      // el arma expulsa en otro momento (cerrojo, bombeo): requestLocalEject
+    } else if (F.casing && fp) {
+      // primera persona: sale de la ventana de expulsión del arma propia,
+      // a tamaño real (9 mm: Ø 1 cm × 2 cm; el de francotirador más largo).
+      // El tamaño de siempre es para leerse a distancia en tercera persona.
+      const e = opts.eject.pos, ed = opts.eject.dir ?? this._v3.crossVectors(dir, UP).normalize();
+      const s = weapon === 'sniper' ? 1.4 : weapon === 'pistol' ? 0.95 : 1;
+      const sp = 1.5 + Math.random() * 0.9;
+      this.casings.spawn(e.x, e.y, e.z,
+        ed.x * sp - dir.x * 0.3, ed.y * sp + 1.1 + Math.random() * 0.6, ed.z * sp - dir.z * 0.3,
+        0.0105 * s, 0.0105 * s, 0.021 * s * (weapon === 'sniper' ? 1.7 : 1), C.brass.r, C.brass.g, C.brass.b, 0.15, 1.4,
+        this._ground(e.x, e.z, e.y), 0.45, 0);
+    } else if (F.casing) {
       this._v3.crossVectors(dir, UP);
       if (this._v3.lengthSq() > 1e-4) {
         this._v3.normalize();
@@ -1021,20 +1078,52 @@ export class Effects {
     this._reset();
   }
 
-  meleeImpact(pos, teamColor, direction = null) {
-    // Contacto compacto: destello cálido + chispas del color de la víctima +
-    // golpe de polvo. Menor que una explosión y sin decal de bala.
+  // Destello, polvo y aro de kickHit (CRASHTERRA, fx/index.ts). En Breach la
+  // placa del soldado suelta chispas de equipo y la pared desprende esquirlas.
+  _kickDust(pos, direction) {
     this._reset();
-    const col = this._teamRGB(teamColor) || C.neutral;
-    const dir = direction && Number.isFinite(direction.x) ? this._v2.set(direction.x, direction.y ?? 0, direction.z) : null;
-    if (dir && dir.lengthSq() > 1e-4) dir.normalize();
     this.FLOOR = this._ground(pos.x, pos.z, pos.y - 0.5);
-    this._emit(P.flareWhite, 1, pos, null, 0, 1.4, -1, true);
-    this.TINT = col;
-    this._emit(P.sparkTeam, 12, pos, dir, 1, 1, 1.0);
-    this._emit(P.teamPuff, 3, pos, dir, 1.2, 1.1, 1.0);
-    this.TINT = null;
-    this._emit(P.armorPuff, 3, pos, dir, 1.4, 1.1);
+    this._emit(P.flareWhite, 1, pos, null, 0, 0.6, -1, true);
+    this.TINT = this._themeDust();
+    this._emit(P.dustPuff, 7, pos, direction, 1.8, 1.1, 1);
+    if (pos.y - this.FLOOR < 2.5) {
+      const floor = this._v1.set(pos.x, this.FLOOR + 0.08, pos.z);
+      this._ring(floor, UP, 0.1, 0.8, 0.05, this.TINT, 1.4, 0.75, 0.3, 0.18, 0.2, 0.8);
+    }
+  }
+
+  meleeImpact(pos, teamColor, direction = null) {
+    this._kickDust(pos, direction);
+    this.TINT = this._teamRGB(teamColor) || C.neutral;
+    this._emit(P.sparkTeam, 12, pos, direction, 1, 1, 1);
+    this._emit(P.teamPuff, 3, pos, direction, 1.2, 1.1, 1);
+    this._reset();
+  }
+
+  meleeWorld(pos, normal) {
+    this._kickDust(pos, normal);
+    this._chunks(this.debris, pos, normal, 0.7, 4, 3, 7, 0.07, 0.6, this.TINT, 0, 1.6);
+    this._emit(P.chip, 6, pos, normal, 1.4, 1);
+    this._reset();
+  }
+
+  dodgeCue(kind, x, y, z, dx, dz) {
+    this._reset();
+    if (kind === 'trail') {
+      // El trazo sale detrás del muslo y se estrecha al disiparse.
+      this._sprite(P.dodgeTrail, x - 0.32 * dx, y + 0.57, z - 0.32 * dz, -1.2 * dx, 0.10, -1.2 * dz, 1);
+    } else {
+      this.FLOOR = y;
+      this.TINT = this._themeDust();
+      // La suela echa polvo hacia atrás al salir y hacia delante al frenar.
+      // El abanico también asoma a los lados de la bota vista de perfil.
+      const sign = kind === 'start' ? -1 : 1;
+      for (let i = -1; i <= 1; i++) {
+        this._sprite(P.dodgeDust, x + 0.22 * sign * dx - 0.09 * i * dz, y + 0.10,
+          z + 0.22 * sign * dz + 0.09 * i * dx,
+          sign * dx - 1.5 * i * dz, 0.75, sign * dz + 1.5 * i * dx, 1);
+      }
+    }
     this._reset();
   }
 
@@ -1179,6 +1268,17 @@ export class Effects {
     }
     this._updateTrails(dt);
     this.debris.update(dt, this._floorAt, this._hitWall);
+    while (pendingEject.length) {
+      const weapon = pendingEject.shift(), e = localEject?.();
+      if (!e?.pos) continue;
+      // cartucho de escopeta: vaina roja de Ø 2 cm × 6.5 cm, hacia la derecha y arriba
+      const p = e.pos, d = e.dir, sp = 1.3 + Math.random() * 0.6;
+      const big = weapon === 'shotgun', long = weapon === 'sniper';
+      this.casings.spawn(p.x, p.y, p.z, d.x * sp, d.y * sp + 1.0 + Math.random() * 0.5, d.z * sp,
+        big ? 0.02 : long ? 0.013 : 0.0105, big ? 0.02 : long ? 0.013 : 0.0105, big ? 0.065 : long ? 0.045 : 0.021,
+        big ? 0.5 : C.brass.r, big ? 0.07 : C.brass.g, big ? 0.05 : C.brass.b, 0.05, 1.6,
+        this._ground(p.x, p.z, p.y), 0.4, 0);
+    }
     this.casings.update(dt, this._floorAt, null);
     // restos: solo hasta el slot vivo más alto; 0 en reposo
     this.debris.mesh.count = this.debris.hi + 1;

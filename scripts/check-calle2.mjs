@@ -40,7 +40,7 @@ const browser=await chromium.launch({executablePath:CHROME,headless:true});
 try{
   const page=await browser.newPage({viewport:{width:1600,height:1100}});
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
-  await page.goto('http://127.0.0.1:5200/?nolock=1',{waitUntil:'networkidle'});
+  await page.goto((process.env.BASE || 'http://127.0.0.1:5200') + '/?nolock=1',{waitUntil:'networkidle'});
   const report=await page.evaluate(async()=>{
     const T=await import('/node_modules/three/build/three.module.js');
     const {World}=await import('/src/world/world.js');
@@ -197,7 +197,8 @@ try{
         // Exercise production bot steering and actual circle collision, not
         // only the planned path, at the normal navigation/body radius.
         // con altura: la ruta puede pasar por encima del remolque o del andén
-        const bot={world,pos:{...from},recovery:null,y:0};
+        // con el prototipo de Bot: _steer usa sus helpers (_stepOut, _localStep...)
+        const bot=Object.assign(Object.create(Bot.prototype),{world,pos:{...from},recovery:null,y:0});
         for(let f=0;f<2400&&Math.hypot(bot.pos.x-goal.x,bot.pos.z-goal.z)>.25;f++){
           const d=Math.hypot(goal.x-bot.pos.x,goal.z-bot.pos.z);
           let steer;

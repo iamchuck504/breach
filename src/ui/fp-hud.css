@@ -1,0 +1,293 @@
+/* BREACH / HUD de primera persona. Composición bajo body.fp (puesta siempre
+   que se juega); espectador, cámara de muerte y presentación siguen usando
+   las reglas de index.html y visual-system.css.
+
+   Reglas de la composición (cada elemento tiene un sitio por un motivo):
+   - El CENTRO es de la retícula: un círculo de radio max(52px, 9vh) sin nada
+     más que la retícula, el marcador de impacto y los arcos de daño.
+   - Abajo a la DERECHA está el arma (viewmodel): nada del HUD se pone ahí.
+     --wz-x0 marca el cuerpo en la postura actual. La manga puede pasar bajo el estado.
+   - Abajo a la IZQUIERDA vive el estado propio: vida + postura y arma +
+     munición + ranuras, un bloque compacto que se lee de un vistazo.
+   - Debajo de la retícula, a su IZQUIERDA, la "columna de avisos": baja
+     confirmada, recoger e interactuar. Cerca de los ojos y lejos del arma;
+     su borde derecho coincide con la línea de mira.
+   - Arriba: marcador y tiempo en el centro, bajas a la derecha.
+   Colores: neutro + un ámbar; rojo/azul solo para equipos. */
+
+:root {
+  --safe: clamp(12px, 2.2vmin, 28px);
+  --hud-k: 1;
+  --ret-zone: max(52px, 9vh);
+  --wz-x0: 100vw;
+  --wz-y0: 100vh;
+}
+
+/* ---------- fuera de primera persona: el bloque nuevo no existe ---------- */
+#status-dock { display: contents; }
+#vitals { display: none; }
+#reticle, #markers { display: none; }
+
+/* ---------- retícula FPS ---------- */
+body.fp #markers { display: block; position: fixed; inset: 0; pointer-events: none; z-index: 2; }
+body.fp #reticle { position: fixed; left: 50%; top: 50%; width: 0; height: 0; z-index: 3; pointer-events: none; }
+body.fp #reticle.on { display: block; }
+.ret-host svg { position: absolute; left: -160px; top: -160px; overflow: visible; display: block;
+  filter: drop-shadow(0 0 1px #000d) drop-shadow(0 0 1px #000a); }
+.ret-host .rk { display: none; transition: opacity .08s linear; }
+.ret-host[data-kind=auto] .rk-auto, .ret-host[data-kind=precise] .rk-precise, .ret-host[data-kind=pattern] .rk-pattern,
+.ret-host[data-kind=marksman] .rk-marksman, .ret-host[data-kind=launcher] .rk-launcher, .ret-host[data-kind=thrown] .rk-thrown { display: inline; }
+.ret-host line, .ret-host .ring, .ret-host .bracket { fill: none; stroke: var(--ret-color, #f4f3ee); stroke-width: var(--ret-w, 1.6); stroke-linecap: round; }
+.ret-host .ring.thin { stroke-width: calc(var(--ret-w, 1.6) * .6); opacity: .55; }
+.ret-host .dot { fill: var(--ret-color, #f4f3ee); }
+.ret-host .blocked { display: none; fill: none; stroke: var(--ret-color, #f4f3ee); stroke-width: 1.6; }
+/* ADS: las miras del arma hacen el trabajo; queda un punto tenue. El cono de
+   la escopeta sigue visible (los perdigones se abren igual apuntando). */
+.ret-host.ads .rk-auto, .ret-host.ads .rk-precise, .ret-host.ads .rk-marksman, .ret-host.ads .rk-launcher { opacity: 0; }
+.ret-host.ads .rk-pattern { opacity: .55; }
+.ret-host.ads.aligned .dot { opacity: .5; }
+/* obstrucción: el arma no puede disparar donde mira (si el juego lo informa) */
+.ret-host.blocked .rk, .ret-host.blocked .dot { opacity: .3; }
+.ret-host.blocked .blocked { display: inline; }
+body.fp #hud.ret-fp #crosshair, body.fp #hud.ret-fp #barrel-dot { display: none !important; }
+#hud.spectating #reticle, #hud.scoped #reticle, #hud.spectating #markers { display: none !important; }
+
+/* ---------- marcadores de jugadores ---------- */
+.mk { position: absolute; left: 0; top: 0; width: 0; height: 0; display: none; will-change: transform; }
+.mk.on { display: block; }
+.mk-name { position: absolute; left: 0; bottom: 11px; transform: translateX(-50%); white-space: nowrap;
+  font: 600 11px/1.2 var(--sans); letter-spacing: .03em; text-shadow: 0 1px 2px #000, 0 0 1px #000; }
+.mk-chev { position: absolute; left: -5px; top: -9px; width: 10px; height: 7px;
+  clip-path: polygon(0 0, 100% 0, 50% 100%); background: currentColor; filter: drop-shadow(0 1px 1px #000); }
+.mk.blue { color: var(--blue-ink); } .mk.red { color: var(--red-ink); }
+.mk.occ { opacity: .45; } .mk.occ .mk-chev { background: none; outline: 1.5px solid currentColor; outline-offset: -2px; }
+.mk.far .mk-name { display: none; }
+.mk.foe .mk-chev { left: -4px; top: -10px; width: 8px; height: 8px; clip-path: none; background: none; outline: 1.5px solid currentColor; transform: rotate(45deg); }
+.mk.foe .mk-name { bottom: 4px; }
+
+/* ---------- bloque de estado: vida + arma (abajo a la izquierda) ---------- */
+body.fp #hud { --dock-zoom: calc(var(--hud-k) * var(--ui-zoom, 1)); }
+body.fp #status-dock { display: flex; align-items: stretch; gap: 6px; position: fixed; left: var(--safe); bottom: var(--safe);
+  z-index: 1; zoom: var(--dock-zoom); transition: opacity .2s; }
+body.fp #hud.raised-status #status-dock { bottom: auto;
+  top: min((var(--safe) + 45px) / var(--hud-k), var(--safe) + (var(--wz-y0) - var(--dock-clearance) - 2px) / var(--dock-zoom)); }
+html:is(.scope-on, .scope-leaving):not(.scope-dock) body.fp #status-dock { z-index: 3; }
+body.fp #status-dock { --hud-bg: #0c0e11f5; }
+html.hud-contrast body.fp #status-dock { --hud-bg: #07080af7; }
+body.fp #status-dock > .hud-panel { position: relative; left: auto; right: auto; top: auto; bottom: auto; zoom: 1; transform: none; }
+body.fp #vitals { display: grid; grid-template-rows: auto auto auto; align-self: flex-end; width: 100px; padding: 9px 11px 10px; font-family: var(--mono); }
+.vt-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.vt-label { font: 600 10px/1.2 var(--sans); letter-spacing: .06em; color: var(--muted); text-transform: uppercase;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vt-value { display: flex; align-items: flex-end; font-size: 32px; font-weight: 600; line-height: 1; letter-spacing: -.04em; padding-top: 4px; }
+.vt-bar { height: 4px; margin-top: 7px; background: #ffffff1f; border-radius: 1px; overflow: hidden; }
+#hp-fill { display: block; height: 100%; background: #ecebe6; transform-origin: left center; transition: transform .18s ease-out; }
+#vitals.hurt #hp-fill { background: #ecebe6; }
+#vitals.low { border-color: var(--danger); }
+#vitals.low .vt-value { color: #ffa49a; }
+#vitals.low #hp-fill { background: var(--danger); }
+/* postura: el muñeco se encoge al agacharse y se inclina con el lean */
+.stance { width: 13px; height: 20px; flex: 0 0 auto; overflow: visible; }
+.stance .st-body { fill: none; stroke: #d6d9dc; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+  transform-box: view-box; transform-origin: 10px 29px;
+  transform: rotate(calc(var(--st-lean, 0) * 14deg)) scaleY(calc(1 - var(--st-crouch, 0) * .38)); transition: transform .12s ease-out; }
+.stance circle { fill: #d6d9dc; stroke: none; }
+.stance[data-pose=crouch] .st-body, .stance:not([data-lean=none]) .st-body { stroke: var(--accent); }
+.stance[data-pose=crouch] circle, .stance:not([data-lean=none]) circle { fill: var(--accent); }
+
+body.fp #weapon { width: 258px; min-height: 0; padding: 9px 11px 10px; text-align: left; overflow: visible;
+  display: grid; grid-template-columns: 1fr auto; grid-template-areas: "head head" "ammo msg" "bar bar" "slots slots"; column-gap: 8px; }
+body.fp #weapon .weapon-head { grid-area: head; display: flex; flex-direction: row-reverse; justify-content: space-between; align-items: center;
+  gap: 8px; padding-bottom: 5px; border-bottom: 1px solid var(--hud-line); }
+body.fp #weapon .weapon-icon { width: 62px; height: 22px; flex: 0 0 62px; }
+body.fp #weapon .weapon-kicker { display: none; }
+body.fp #weapon .name { flex: 1; min-width: 0; font: 600 11px/1.25 var(--sans); letter-spacing: .03em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body.fp #weapon .ammo { grid-area: ammo; justify-content: flex-start; align-items: baseline; gap: 5px; margin-top: 5px; }
+body.fp #weapon .mag { font-size: 32px; line-height: 1; }
+body.fp #weapon .res { flex-direction: row; align-items: baseline; min-width: 0; padding-left: 0; border-left: 0; }
+body.fp #weapon .res-label { display: none; }
+body.fp #weapon .res-value { margin: 0; font-size: 15px; color: var(--dim); }
+body.fp #weapon .res-value::before { content: "/"; margin-right: 4px; color: var(--muted); }
+body.fp #wep-msg { grid-area: msg; align-self: end; margin: 0 0 3px; min-height: 0; font: 600 10px/1.2 var(--sans); letter-spacing: .06em; text-align: right; }
+body.fp #wep-bar { grid-area: bar; margin-top: 6px; height: 4px; }
+body.fp #weapon .slots { grid-area: slots; justify-content: flex-start; margin-top: 7px; gap: 3px; flex-wrap: wrap; }
+body.fp #weapon .slots { flex-wrap: nowrap; }
+body.fp #weapon .slots .slot { padding: 3px 4px; font-size: 9.5px; white-space: nowrap; }
+body.fp #weapon .slots .slot.dry { opacity: 1; color: var(--dim); border-style: dashed; }
+body.fp #weapon.empty-ammo { background-color: #251311f5; }
+body.fp #hud.spectating #status-dock { opacity: 0; }
+body.fp #hud.low-hp #weapon { box-shadow: 0 6px 20px #0006; }
+
+/* ---------- arriba: marcador, rondas, bajas ---------- */
+body.fp #score { top: var(--safe); zoom: calc(var(--ui-zoom, 1) * var(--hud-k)); }
+#round-pips:empty { display: none; }
+body.fp #round-pips { top: calc(var(--safe) + 77px); zoom: calc(var(--ui-zoom, 1) * var(--hud-k)); }
+body.fp #feed { top: var(--safe); right: var(--safe); max-width: calc(50vw / (var(--hud-k) * var(--ui-zoom, 1)) - 155px - var(--safe)); zoom: calc(var(--ui-zoom, 1) * var(--hud-k)); }
+body.fp #feed .row { max-width: 100%; }
+body.fp #btn-pause { top: var(--safe); left: var(--safe); }
+body.fp #btn-fs { top: var(--safe); left: calc(var(--safe) + 50px); }
+
+/* ---------- avisos importantes: arriba del centro, fuera de la zona de la retícula ---------- */
+body.fp #center-msg {
+  --msg-top: max(21vh, (var(--safe) + 90px) * var(--hud-k) * var(--ui-zoom, 1));
+  top: var(--msg-top); zoom: 1; transition-property: opacity; transform-origin: 50% 0; max-width: 86vw;
+  transform: translateX(-50%) scale(var(--hud-k))
+    translateY(min(0px, (var(--wz-y0) - var(--msg-top) - 2px) / var(--hud-k) - 100%));
+}
+body.fp #center-msg.big { --msg-top: 16vh; }
+/* La recarga alta deja una sola línea entre las rondas y el arma. */
+body.fp #hud.high-weapon #center-msg:not(.big) .sub { display: inline; margin: 0 0 0 .8em; }
+
+/* Los avisos comparten una columna. Al crecer el estado, suben por la
+   izquierda de la retícula y el texto de recoger puede ocupar varias líneas. */
+#hud-notices { display: contents; }
+body.fp #hud-notices {
+  --edge: min(50vw - var(--ret-zone) - 8px, var(--wz-x0) - 10px);
+  position: fixed; right: calc(100vw - var(--edge)); z-index: 4;
+  bottom: max(var(--dock-clearance, 0px) + 4px, 50vh - var(--ret-zone) - 116px * var(--hud-k));
+  width: calc((var(--edge) - var(--safe)) / var(--hud-k));
+  display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
+  transform: scale(var(--hud-k)); transform-origin: 100% 100%;
+}
+body.fp #kill-confirm, body.fp #pickup-prompt, body.fp #context-hint {
+  position: static; max-width: 100%; zoom: 1; transform: none; text-align: right; }
+body.fp #kill-confirm { justify-content: flex-end; flex-wrap: wrap; padding: 4px 10px 4px 12px;
+  background: linear-gradient(90deg, #0c0e1100, #0c0e11c7 22%); border-right: 2px solid #ff5cb8; }
+body.fp #kill-confirm.head { border-right-color: #ffd23f; }
+body.fp #pickup-prompt { padding: 9px 12px; font: 500 13px/1.4 var(--sans);
+  border: 1px solid var(--line-hi); border-right: 2px solid var(--accent); border-radius: 4px 0 0 4px; background: #0c0e11ee; text-wrap: balance; }
+body.fp #context-hint { order: 1; border-left: 0; border-right: 2px solid var(--line-hi);
+  border-radius: 4px 0 0 4px; font-size: 12px; }
+body.fp #kill-confirm:not(.on), body.fp #context-hint:not(.on) { display: none; }
+
+/* En 4:3 la mira puede dejar una columna estrecha. Reservarla para los
+   textos de interacción y mostrar la baja al otro lado de la retícula. */
+@media (max-aspect-ratio: 4/3) {
+  body.fp #hud-notices {
+    --edge: min(50vw - var(--ret-zone) - 8px, var(--wz-x0) - 4px);
+    width: calc((var(--edge) - 4px) / var(--hud-k));
+    overflow-wrap: anywhere;
+  }
+  body.fp #kill-confirm {
+    position: absolute; top: auto; left: auto; bottom: 0;
+    right: calc((var(--edge) - 100vw + var(--safe)) / var(--hud-k));
+    width: max-content; max-width: calc((50vw - var(--ret-zone) - 8px - var(--safe)) / var(--hud-k));
+  }
+}
+
+/* Cuando se permite pasar detrás de las tarjetas, también los avisos
+   conservan un fondo oscuro frente al metal claro y al guante. */
+body.fp #hud.model-behind :is(#kill-confirm, #context-hint, #center-msg) { background: #0c0e11f5; }
+
+/* ---------- daño: informa sin cegar ---------- */
+body.fp #vignette { background: radial-gradient(ellipse closest-side at center, transparent 74%, #5c0a2a4d 94%, #3a0420a6 122%, #2a0218d9 145%); }
+body.fp #vignette::after { background: radial-gradient(ellipse closest-side at center, transparent 78%, #ff3f8a2e 94%, #a0124a99 120%, #6a0a33cc 145%); }
+body.fp #vignette.low::after { opacity: .7; }
+body.fp .dmg-arc { width: clamp(200px, 30vmin, 340px); }
+body.fp .dmg-arc .arc { stroke-width: 6; }
+
+/* ---------- espectador: ocupa el sitio del estado propio ---------- */
+body.fp #spectator { left: var(--safe); bottom: var(--safe); right: auto; min-width: 0; max-width: min(420px, calc(100vw - 2 * var(--safe)));
+  transform: translateY(8px); text-align: left; zoom: calc(var(--ui-zoom, 1) * var(--hud-k)); }
+body.fp #spectator.on { transform: none; }
+body.fp .spec-card { padding: 10px 14px 11px; border-top: 1px solid var(--line); border-left: 2px solid var(--accent); }
+body.fp .spec-kicker { font: 600 10px/1.3 var(--sans); letter-spacing: .08em; color: var(--muted); text-transform: uppercase; }
+body.fp .spec-name { margin-top: 2px; font: 600 20px/1.25 var(--sans); }
+body.fp .spec-meta { justify-content: flex-start; gap: 4px 14px; margin-top: 6px; font-size: 12px; }
+
+/* ---------- contraste alto (ajuste) ---------- */
+html.hud-contrast #hud { --hud-bg: #07080af7; --hud-line: #ffffff40; }
+html.hud-contrast .hud-panel, html.hud-contrast #feed .row, html.hud-contrast .spec-card { background: #07080af7; border-color: #ffffff47; }
+html.hud-contrast .vt-label, html.hud-contrast #weapon .res-value, html.hud-contrast .spec-meta { color: #e4e6e8; }
+html.hud-contrast .ret-host svg { filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 1px #000) drop-shadow(0 0 2px #000); }
+html.hud-contrast .mk-name { text-shadow: 0 0 2px #000, 0 0 2px #000, 0 1px 3px #000; }
+
+/* ---------- movimiento reducido (ajuste del juego, igual que la preferencia del sistema) ---------- */
+html.reduce-motion *, html.reduce-motion *::before, html.reduce-motion *::after {
+  animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+
+/* ---------- páginas de ajustes ---------- */
+#aim-card, #comfort-card, #hudopts-card { display: none; width: min(1060px, 100%); }
+#comfort-card { width: min(760px, 100%); }
+.set-sections { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; align-items: start; }
+.set-section { min-width: 0; padding: 14px 16px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--inset); }
+.set-section h2 { margin: 0 0 4px; padding-bottom: 8px; border-bottom: 1px solid var(--line); font: 600 13px/1.4 var(--sans); letter-spacing: .05em; color: var(--text); }
+.set-section .set-note { margin: 6px 0 4px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.set-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px 12px; padding: 10px 0; border-bottom: 1px solid #ffffff0a; }
+.set-row:last-child { border-bottom: 0; }
+.set-row > label, .set-row > .set-label { font: 500 13px/1.4 var(--sans); color: var(--dim); }
+.set-row .set-val { font: 500 12px/1.4 var(--mono); color: var(--text); min-width: 52px; text-align: right; font-variant-numeric: tabular-nums; }
+.set-row input[type=range] { grid-column: 1 / -1; width: 100%; }
+.set-row select { min-height: 36px; padding: 6px 10px; border-radius: 4px; border: 1px solid var(--line-hi); background: #050607d9; color: var(--text); font: 500 13px/1.4 var(--sans); }
+.set-row.readonly .set-val { color: var(--muted); }
+.set-hud-layout { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 14px; align-items: start; }
+.ret-preview { margin: 0; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; background: var(--inset); }
+/* fondo del preview: cielo claro arriba y piedra oscura abajo (la retícula se lee en ambos) */
+.ret-preview-view { position: relative; height: 180px; background: linear-gradient(#9fb4c6 0 50%, #3b3d40 50% 100%); }
+#reticle-preview { position: absolute; left: 50%; top: 50%; width: 0; height: 0; }
+.ret-preview figcaption { padding: 8px 10px; font: 600 11px/1.3 var(--sans); letter-spacing: .06em; color: var(--muted); }
+/* controles: conflictos y teclas sin asignar */
+.bind-btn.conflict { border-color: var(--danger); color: #ffb3a9; }
+.bind-btn.unbound { color: var(--muted); border-style: dashed; }
+.bind-note { min-height: 0; margin-top: 8px; font: 500 12px/1.5 var(--sans); color: #ffb3a9; }
+.bind-note:empty { display: none; }
+@media (max-width: 760px) {
+  .set-hud-layout { grid-template-columns: 1fr; }
+  .ret-preview-view { height: 120px; }
+}
+.bind-note { white-space: pre-line; }
+
+/* hub de Opciones: las cuatro páginas de juego en 2×2 y audio/vídeo/idioma
+   en una fila de tres (nada queda colgando solo en una fila) */
+#options-card .options-list { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+#options-card .options-list .btn { grid-column: span 3; min-height: 66px; }
+#options-card .options-list #btn-opt-audio, #options-card .options-list #btn-opt-video, #options-card .options-list #btn-opt-language { grid-column: span 2; min-height: 54px; }
+@media (max-width: 480px) { #options-card .options-list .btn, #options-card .options-list #btn-opt-audio, #options-card .options-list #btn-opt-video, #options-card .options-list #btn-opt-language { grid-column: 1 / -1; } }
+
+/* Vista en tercera persona (cámara de muerte, espectador, presentación): el
+   bloque de estado, la retícula y los marcadores son de la vista de los ojos. */
+body.fp #hud.tp-view #status-dock, body.fp #hud.presenting #status-dock, body.fp #hud.spectating #status-dock,
+body.fp #hud.tp-view #reticle, body.fp #hud.presenting #reticle,
+body.fp #hud.tp-view #pickup-prompt, body.fp #hud.presenting #kill-confirm { display: none !important; }
+
+/* cono más ancho que la zona central: forma del arma fuera, círculo fino al radio real */
+.ret-host .wide-ring { display: none; fill: none; stroke: var(--ret-color, #f4f3ee); stroke-width: calc(var(--ret-w, 1.6) * .7); stroke-dasharray: 3 5; opacity: .7; }
+.ret-host.wide .wide-ring { display: inline; }
+.ret-host.wide .rk { display: none !important; }
+
+/* ---------- scope del sniper: relevo con la lente del modelo ----------
+   El anillo es el de la lente al llegar (92 % de media altura); --scope-s lo
+   hace crecer con el arma, --scope-op lo funde en el último tramo y
+   --scope-tint tiñe la lente durante el relevo (los fija hud.sniperScope). */
+#sniper-scope { --scope-r: calc(46vmin * var(--scope-s, 1)); background: none; }
+#sniper-scope::before { left: 0; top: 0; width: 100%; height: 100%; transform: none; border: 0; border-radius: 0; box-shadow: none;
+  background: radial-gradient(circle at 50% 50%, rgba(11,17,21,.04) 0 calc(var(--scope-r) - .45vmin),
+    rgba(196,211,218,.34) calc(var(--scope-r) - .45vmin) calc(var(--scope-r) - .25vmin),
+    rgba(5,8,11,.88) var(--scope-r), rgba(2,4,6,.985) calc(var(--scope-r) + 1vmin) 100%);
+  opacity: var(--scope-op, 1); }
+/* El fondo exterior ya está detrás del fusil en la escena. El HUD sólo
+   añade el canto del cristal y la cruz sobre la zona de visión. */
+#sniper-scope.ocular::before {
+  background: radial-gradient(circle at center, transparent calc(var(--scope-r) - .45vmin),
+    rgba(196,211,218,.34) calc(var(--scope-r) - .25vmin), transparent var(--scope-r));
+}
+#sniper-scope::after { content: ""; position: absolute; inset: 0; pointer-events: none; opacity: var(--scope-tint, 0);
+  background: radial-gradient(circle at 50% 50%, rgba(150,196,190,.14) 0, rgba(60,104,116,.24) calc(var(--scope-r) * .92), transparent var(--scope-r)); }
+#scope-reticle { opacity: var(--scope-op, 1); }
+body.fp #sniper-scope.on { animation: none; }
+#sniper-scope.leaving { display: block; }
+#sniper-scope.leaving::before, #sniper-scope.leaving::after, #sniper-scope.leaving #scope-reticle { transition: opacity .14s ease-in; }
+
+/* Con el ojo en la lente, lo que cae dentro del círculo (marcador, rondas,
+   bajas, avisos, botones) se retira con el mismo in01 del scope. `filter`
+   multiplica con la opacidad propia de cada elemento (no enciende lo oculto). */
+html.scope-on #score, html.scope-on #round-pips, html.scope-on #feed, html.scope-on #center-msg,
+html.scope-on #context-hint, html.scope-on #pickup-prompt, html.scope-on #kill-confirm,
+html.scope-on #btn-pause, html.scope-on #btn-fs, html.scope-on.scope-dock #status-dock,
+html.scope-leaving #score, html.scope-leaving #round-pips, html.scope-leaving #feed, html.scope-leaving #center-msg,
+html.scope-leaving #context-hint, html.scope-leaving #pickup-prompt, html.scope-leaving #kill-confirm,
+html.scope-leaving #btn-pause, html.scope-leaving #btn-fs, html.scope-leaving.scope-dock #status-dock {
+  filter: opacity(calc(1 - var(--scope-hide, 0))); }
+html.scope-leaving #score, html.scope-leaving #round-pips, html.scope-leaving #feed, html.scope-leaving #center-msg,
+html.scope-leaving #context-hint, html.scope-leaving #pickup-prompt, html.scope-leaving #kill-confirm,
+html.scope-leaving #btn-pause, html.scope-leaving #btn-fs, html.scope-leaving #status-dock { transition: filter .14s ease-in; }

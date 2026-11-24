@@ -21,6 +21,47 @@ export const TUNING = {
     groundStickDown: 0.24,// sigue pendientes descendentes sin microcaídas
     groundPitchLerp: 12,  // adaptación visual del cuerpo a la pendiente
   },
+  // JUGADOR EN PRIMERA PERSONA (DECISIONES §1-2). Los bots siguen con
+  // move/evade/cover/jump de abajo hasta su etapa; el servidor y el rig de
+  // los demás leen move.* para normalizar velocidades.
+  dodge: { duration: 0.30, cooldown: 0.60, maxSpeed: 17, endSpeed: 5 },
+  fp: {
+    runSpeed: 4.8,
+    sprintSpeed: 7.0,     // antes 7.6: en primera persona se lee mejor
+    crouchSpeed: 2.3,
+    adsMul: 0.45,         // ADS de pie: 2.16 m/s
+    crouchAdsMul: 0.7,    // ADS agachado: 1.6 m/s
+    sprintMinForward: 0.5,// el sprint exige ir claramente hacia delante
+    yawLockDeg: 1440,     // el cuerpo sigue a la vista (giro máximo por segundo)
+    // alturas (DECISIONES §1): ojo 1.48/0.82, casco 1.74/1.08
+    eyeStand: 1.48, eyeCrouch: 0.82,
+    headStand: 1.74, headCrouch: 1.08,
+    standClear: 1.64,     // techo mínimo sobre los pies para poder levantarse
+    crouchClear: 1.1,     // altura del cuerpo agachado contra techos
+    crouchTime: 0.18,     // s de transición de pie ↔ agachado
+    // inclinación: desplazamiento lateral máximo de la cabeza ±0.24 m
+    leanOffset: 0.24,
+    leanTime: 0.16,       // s de 0 a inclinación plena
+    leanClearance: 0.24,  // radio de la esfera de cabeza (0.22) + 2 cm: el casco no entra en la pared
+    // asomo: agachado a ≤ peekRange de una cara LOW, apuntar te levanta
+    peekRange: 0.9,       // m desde el borde del cuerpo hasta la cara
+    peekKeepRange: 1.15,  // histéresis: se conserva la cara hasta aquí
+    peekRise: 0.2,        // s de 0 a 1
+    peekFall: 0.15,       // s de 1 a 0
+    // deslizamiento desde sprint
+    slideTime: 0.5,
+    slideMaxSpeed: 8,     // ≤ 8 m/s, decreciente
+    slideBoost: 1.0,      // m/s añadidos a la velocidad de entrada (con el tope)
+    slideEndFrac: 0.42,   // velocidad final = inicial × esto
+    slideMinSpeed: 5.6,   // velocidad mínima para que agacharse se convierta en slide
+    slideCooldown: 0.6,
+    slideSteer: 2.5,      // rad/s de corrección de rumbo con el stick
+    // trepar SOLO coberturas LOW, con salto hacia ellas
+    mantleReach: 0.75,    // m desde el borde del cuerpo hasta la cara
+    mantleMinH: 0.5, mantleMaxH: 1.4,
+    tackleTopSpeed: 11,   // tope del placaje (antes 17)
+    sprintFireDefault: 0.2,
+  },
   evade: {
     diveSpeed: 8.2,       // dash/roll sin cobertura
     diveTime: 0.36,
@@ -129,7 +170,7 @@ export const TUNING = {
       nameKey: 'weapon.smg', rpm: 620, dmg: 10, headMult: 1.6,
       mag: 50, reserve: 150, reloadTime: 1.9,
       spreadAim: 0.9, spreadHip: 3.4, spreadBlind: 5.2,   // grados
-      recoil: 0.35, range: 80, pellets: 1, auto: true,
+      recoil: 0.35, range: 80, pellets: 1, auto: true, sprintToFire: 0.15,
       // Conserva daño pleno en las distancias normales de combate y cae de
       // forma leve hasta 8 dmg en la sightline extrema del mapa más grande.
       falloffStart: 35, falloffEnd: 80, falloffMin: 0.8,
@@ -138,7 +179,7 @@ export const TUNING = {
       nameKey: 'weapon.shotgun', rpm: 95, dmg: 13, headMult: 1.0,
       mag: 8, reserve: 24, reloadTime: 0.46, perShell: true,
       spreadAim: 4.6, spreadHip: 6.4, spreadBlind: 8.0,
-      recoil: 1.6, range: 24, pellets: 8, auto: false,
+      recoil: 1.6, range: 24, pellets: 8, auto: false, sprintToFire: 0.22,
       falloffStart: 6, falloffEnd: 19,  // dmg pleno hasta start, 0 en end
       gibRange: 4.2,                    // one-shot gib si mata dentro de este rango
     },
@@ -146,7 +187,7 @@ export const TUNING = {
       nameKey: 'weapon.pistol', rpm: 260, dmg: 22, headMult: 2.0,
       mag: 12, reserve: 48, reloadTime: 1.35,
       spreadAim: 0.7, spreadHip: 2.4, spreadBlind: 4.2,
-      recoil: 0.55, range: 60, pellets: 1, auto: false,
+      recoil: 0.55, range: 60, pellets: 1, auto: false, sprintToFire: 0.15,
       oneHand: true,
     },
     stun: {
@@ -182,7 +223,7 @@ export const TUNING = {
       // Dentro del scope, retícula y trayectoria son exactamente el mismo
       // rayo. Hip/blindfire conservan la imprecisión propia del power weapon.
       spreadAim: 0, spreadHip: 5.2, spreadBlind: 7.0,
-      recoil: 2.4, range: 130, pellets: 1, auto: false,
+      recoil: 2.4, range: 130, pellets: 1, auto: false, sprintToFire: 0.3,
       special: true,
       // mira telescópica: zoom real al apuntar (vs 41 normal). La cámara ya
       // escala la sensibilidad por FOV, así que el pulso fino sale solo.
@@ -192,7 +233,7 @@ export const TUNING = {
       nameKey: 'weapon.bazooka', rpm: 28, dmg: 115, headMult: 1,
       mag: 1, reserve: 2, reloadTime: 2.3,
       spreadAim: 0.4, spreadHip: 1.8, spreadBlind: 3.0,
-      recoil: 2.8, range: 110, pellets: 1, auto: false,
+      recoil: 2.8, range: 110, pellets: 1, auto: false, sprintToFire: 0.3,
       special: true, projectile: true,
       projSpeed: 26, splashRadius: 4.2, blastCore:.8,directDamage:180,selfDamage:.85,
     },

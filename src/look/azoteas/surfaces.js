@@ -8,7 +8,7 @@
 // Regla de valor de noche: remates y bordes de cobertura CLAROS, cuerpos de
 // valor medio, piso medio-oscuro y de poco contraste.
 import * as THREE from 'three';
-import { NOISE, patch } from '../glsl.js';
+import { FILTERED_DETAIL, NOISE, patch } from '../glsl.js';
 import { collisionBoxesFor } from '../../world/collision-layouts.js';
 import { SPILL, SPILL_GLSL, spillUniforms, flicker } from './signage.js';
 
@@ -130,7 +130,7 @@ varying vec4 vLkBox; varying vec2 vLkMeta;
 varying vec3 vLkPos; varying vec3 vLkN;
 uniform vec3 uLkCope, uLkStain, uLkSeam, uLkSteelDark, uLkSteel, uLkHazard, uLkWarm;
 uniform vec3 uLkTopAc, uLkTopVent, uLkTopHut, uLkTopDeck;
-${NOISE}${MACRO}${SPILL_GLSL}
+${NOISE}${FILTERED_DETAIL}${MACRO}${SPILL_GLSL}
 vec3 lkBump = vec3(0.0);
 vec3 lkGlow = vec3(0.0);
 float lkRough = -1.0;`,
@@ -142,7 +142,7 @@ float lkRough = -1.0;`,
   float seed = vLkMeta.x * 91.0;
   vec2 wp = vLkPos.xz;
   float macro = lkMacro(wp * 0.04 + 0.21), mid = lkMid(wp * 0.13 + seed * 0.1);
-  float grain = lkNoise(wp * 7.0 + seed) * 0.6 + lkNoise(wp * 19.0) * 0.4;
+  float grain = lkDetail(wp * 7.0 + seed) * 0.6 + lkDetail(wp * 19.0) * 0.4;
   float bd = min(min(u, W - u), min(v, D - v));
   float band = min(0.15, min(W, D) * 0.2);
   bool glass = rb > 3.0;
@@ -151,41 +151,39 @@ float lkRough = -1.0;`,
   float edgePaint = 0.0;
   if (kind < 0.5) {
     // enfriadora: tapa de chapa esmaltada en paneles atornillados
-    float s = fract(u / 1.2);
     col = uLkTopAc * (0.93 + 0.08 * mid);
-    col = mix(col, uLkSeam, (1.0 - smoothstep(0.0, 0.025, min(s, 1.0 - s) * 1.2)) * 0.55);
+    col = mix(col, uLkSeam, lkStripe(u/1.2,.021) * 0.55);
     lkRough = 0.5;
   } else if (kind < 1.5) {
     // ducto: galvanizado con costuras cada 1.2 m y algo de "flor" del zinc
-    float s = fract(u / 1.2);
     col = uLkTopVent * (0.88 + 0.12 * lkHash11(floor(u / 1.2) + seed)) * (0.95 + 0.08 * grain);
-    col = mix(col, uLkSeam, (1.0 - smoothstep(0.0, 0.03, min(s, 1.0 - s) * 1.2)) * 0.8);
+    col = mix(col, uLkSeam, lkStripe(u/1.2,.025) * 0.8);
     lkRough = 0.42;
   } else if (kind < 2.5) {
     // caseta: grava de lastre sobre la losa, en manchas
-    float peb = lkNoise(wp * 13.0 + seed) * 0.5 + lkNoise(wp * 31.0) * 0.5;
+    float peb = lkDetail(wp * 13.0 + seed) * 0.5 + lkDetail(wp * 31.0) * 0.5;
     col = uLkTopHut * (0.8 + 0.3 * peb) * (0.94 + 0.1 * mid);
     lkRough = 0.95;
     lkBump += vec3(peb - 0.5, 0.0, grain - 0.5) * 0.25;
   } else if (kind < 3.5) {
     // muro / pretil: albardilla de concreto prefabricado en piezas de 1 m
-    float j = fract(max(u, v) / 1.0);
+    float joint = lkStripe(max(u, v), .012);
     col = uLkCope * (0.86 + 0.12 * mid) * (0.95 + 0.05 * grain);
-    col *= 1.0 - (1.0 - smoothstep(0.0, 0.012, min(j, 1.0 - j))) * 0.3;
+    col *= 1.0 - joint * 0.3;
     lkRough = 0.9;
   } else if (kind < 4.5) {
     // entreplanta: chapa estriada de acero; borde pintado de seguridad
     vec2 g = fract(wp * 2.6);
     float stud = 1.0 - smoothstep(0.08, 0.16, abs(g.x - g.y * 0.6 - 0.2));
     col = uLkTopDeck * (0.9 + 0.1 * mid);
+    stud = mix(stud, .24, smoothstep(.18, .85, 2.6*max(fwidth(wp.x),fwidth(wp.y))));
     col = mix(col, col * 1.3, stud * 0.35);
     edgePaint = 1.0;
     lkRough = 0.55;
   } else {
     // claraboya: vidrio armado en retícula; abajo hay oficinas con la luz
     // de guardia encendida (blanco cálido, tenue)
-    vec2 g = fract(vec2(u, v) / 0.6);
-    float bar = 1.0 - smoothstep(0.04, 0.08, min(min(g.x, 1.0 - g.x), min(g.y, 1.0 - g.y)));
+    float bar = max(lkStripe(u/.6,.12),lkStripe(v/.6,.12));
     col = mix(uLkSteelDark * 0.6, uLkSteel, bar);
     lkGlow = uLkWarm * (1.0 - bar) * (0.012 + 0.02 * mid);
     lkRough = 0.15;
@@ -195,7 +193,7 @@ float lkRough = -1.0;`,
   col = mix(col, uLkCope * (0.95 + 0.08 * grain), cope * step(kind, 4.5) * (kind > 2.5 && kind < 3.5 ? 0.4 : 1.0));
   // franja de seguridad amarilla solo en el borde de las entreplantas
   float stripe = (1.0 - smoothstep(0.1, 0.12, bd)) * edgePaint;
-  float hatch = step(0.5, fract((u + v) * 2.2));
+  float hatch = lkStripe((u+v)*2.2+.25, .5);
   col = mix(col, mix(uLkHazard, uLkSteelDark, hatch * 0.85), stripe * 0.9);
   // mugre de lluvia en el centro de la tapa, nunca en el borde
   col *= mix(0.9, 1.05, macro) * mix(0.95, 1.04, grain);
@@ -219,7 +217,7 @@ const SIDES = {
 varying vec4 vLkBox; varying vec2 vLkMeta;
 varying vec3 vLkPos; varying vec3 vLkN;
 uniform vec3 uLkBody, uLkDark, uLkCope, uLkPlinth, uLkStain, uLkSteel, uLkSteelDark, uLkSteelLight, uLkWarm;
-${NOISE}${MACRO}${SPILL_GLSL}
+${NOISE}${FILTERED_DETAIL}${MACRO}${SPILL_GLSL}
 vec3 lkBump = vec3(0.0);
 vec3 lkGlow = vec3(0.0);`,
   fragment: /* glsl */`
@@ -232,14 +230,14 @@ vec3 lkGlow = vec3(0.0);`,
   vec3 T = normalize(cross(N, vec3(0.0, 1.0, 0.0)) + vec3(1e-4, 0.0, 0.0));
   vec2 wp = vec2(dot(vLkPos, T), vLkPos.y);
   float macro = lkMacro(wp * 0.035 + 0.43), mid = lkMid(wp * 0.11 + seed * 0.07);
-  float grain = lkNoise(wp * 8.0 + seed) * 0.6 + lkNoise(wp * 23.0) * 0.4;
+  float grain = lkDetail(wp * 8.0 + seed) * 0.6 + lkDetail(wp * 23.0) * 0.4;
   vec3 col;
   if (rb > 3.0) {
     if (H > 2.0) {
       // pabellón de vidrio: montantes de aluminio y paños oscuros que
       // reflejan el cielo; alguno deja ver la luz de guardia de adentro
       vec2 g = vec2(u / 1.25, (v - 0.25) / 1.4), gf = fract(g);
-      float bar = 1.0 - smoothstep(0.035, 0.06, min(min(gf.x, 1.0 - gf.x) * 1.25, min(gf.y, 1.0 - gf.y) * 1.4));
+      float bar = max(lkStripe(g.x,.095/1.25),lkStripe(g.y,.095/1.4));
       float hp = lkHash21(floor(g) + seed);
       col = mix(vec3(0.05, 0.06, 0.075), uLkSteelLight, bar);
       float sheen = smoothstep(0.82, 0.95, fract((u + v) * 0.35 + hp)) * 0.3;
@@ -255,7 +253,7 @@ vec3 lkGlow = vec3(0.0);`,
     vec2 pg = vec2(u / pw, v / 1.2), pf = fract(pg);
     float h1 = lkHash21(floor(pg) + seed);
     col = mix(uLkBody, uLkDark, 0.3 + 0.3 * h1) * (0.92 + 0.1 * mid);
-    float joint = 1.0 - smoothstep(0.006, 0.02, min(min(pf.x, 1.0 - pf.x) * pw, min(pf.y, 1.0 - pf.y) * 1.2));
+    float joint = max(lkStripe(pg.x,.026/pw), lkStripe(pg.y,.026/1.2));
     vec2 tie = abs(fract(vec2(u / pw * 2.0, v / 0.6)) - 0.5);
     float hole = 1.0 - smoothstep(0.03, 0.05, length(tie * vec2(pw * 0.5, 0.6)));
     col *= 1.0 - joint * 0.3 - hole * 0.35;
@@ -264,7 +262,7 @@ vec3 lkGlow = vec3(0.0);`,
     col = mix(col, uLkCope * (0.9 + 0.08 * grain), cope);
     col = mix(col, uLkPlinth, (1.0 - smoothstep(0.22, 0.26, v)) * 0.85);
     // chorreo de lluvia bajo la albardilla
-    float streak = smoothstep(0.55, 0.85, lkNoise(vec2(u * 3.1, v * 0.25) + seed)) * smoothstep(H * 0.3, H, v) * (1.0 - cope);
+    float streak = smoothstep(0.55, 0.85, lkDetail(vec2(u * 3.1, v * 0.25) + seed)) * smoothstep(H * 0.3, H, v) * (1.0 - cope);
     col = mix(col, uLkStain, streak * 0.35);
     lkBump = T * (grain - 0.5) * 0.2 + vec3(0.0, 1.0, 0.0) * (1.0 - smoothstep(0.0, 0.02, abs(H - v - 0.15))) * 0.6;
   }
@@ -293,7 +291,7 @@ const SKIN = {
 varying vec4 vLkFace;
 varying vec3 vLkPos; varying vec3 vLkN;
 uniform vec3 uLkStain, uLkCope, uLkSeam;
-${NOISE}${MACRO}${SPILL_GLSL}
+${NOISE}${FILTERED_DETAIL}${MACRO}${SPILL_GLSL}
 vec3 lkBump = vec3(0.0);
 vec3 lkGlow = vec3(0.0);`,
   fragment: /* glsl */`
@@ -303,23 +301,24 @@ vec3 lkGlow = vec3(0.0);`,
   vec3 T = normalize(cross(N, vec3(0.0, 1.0, 0.0)) + vec3(1e-4, 0.0, 0.0));
   vec2 wp = vec2(dot(vLkPos, T), vLkPos.y);
   float macro = lkMacro(wp * 0.05 + 0.17), mid = lkMid(wp * 0.15 + 0.6);
-  float grain = lkNoise(wp * 9.0) * 0.6 + lkNoise(wp * 27.0) * 0.4;
+  float grain = lkDetail(wp * 9.0) * 0.6 + lkDetail(wp * 27.0) * 0.4;
   vec3 col = diffuseColor.rgb;
   // chapa ondulada: costillas cada 12 cm
-  float rib = 0.5 + 0.5 * sin(u * 52.36);
+  float resolved = 1.0 - smoothstep(0.25, 1.0, fwidth(u) / 0.12);
+  float rib = 0.5 + 0.5 * sin(u * 52.36) * resolved;
   col *= 0.9 + 0.1 * rib;
   float seamK = step(1.5, H) * (1.0 - smoothstep(0.012, 0.03, abs(v - H * 0.5)));
   col = mix(col, uLkSeam, seamK * 0.7);
   // óxido y polvo al pie, chorreo desde arriba, cantos gastados más claros
   float foot = 1.0 - smoothstep(0.0, 0.4 + macro * 0.3, v);
   col = mix(col, uLkStain, foot * 0.4);
-  float streak = smoothstep(0.6, 0.9, lkNoise(vec2(u * 2.3, v * 0.2) + 3.0)) * smoothstep(H * 0.2, H, v);
+  float streak = smoothstep(0.6, 0.9, lkDetail(vec2(u * 2.3, v * 0.2) + 3.0)) * smoothstep(H * 0.2, H, v);
   col = mix(col, uLkStain, streak * 0.2);
   float wear = 1.0 - smoothstep(0.0, 0.07, min(u, W - u) + (grain - 0.5) * 0.04);
   col = mix(col, uLkCope, wear * 0.3);
   col *= mix(0.9, 1.06, macro) * mix(0.95, 1.04, grain);
   diffuseColor.rgb = col;
-  lkBump = T * cos(u * 52.36) * 0.35 + vec3(0.0, 1.0, 0.0) * seamK * 0.4;
+  lkBump = T * cos(u * 52.36) * 0.35 * resolved + vec3(0.0, 1.0, 0.0) * seamK * 0.4;
 }`,
   normal: BUMP_N,
   emissive: SPILL_E,
@@ -335,7 +334,7 @@ const FLOOR = (mainX) => ({
   fragmentPars: /* glsl */`
 varying vec3 vLkPos; varying vec3 vLkN;
 uniform vec3 uLkMembrane, uLkPaver, uLkJoint, uLkWest, uLkEast, uLkGravel, uLkStain;
-${NOISE}${MACRO}${SPILL_GLSL}
+${NOISE}${FILTERED_DETAIL}${MACRO}${SPILL_GLSL}
 vec3 lkBump = vec3(0.0);
 vec3 lkGlow = vec3(0.0);
 float lkWet = 0.0;`,
@@ -344,25 +343,24 @@ float lkWet = 0.0;`,
   vec2 p = vLkPos.xz;
   float macro = lkMacro(p * 0.017 + 0.11), mid = lkMid(p * 0.07 + 0.53);
   float pool = lkMid(p * 0.045 + 0.61) * 0.6 + macro * 0.4;
-  float grain = lkNoise(p * 6.0) * 0.6 + lkNoise(p * 21.0) * 0.4;
+  float grain = lkDetail(p * 6.0) * 0.6 + lkDetail(p * 21.0) * 0.4;
   vec3 col;
   if (abs(p.x) < ${mainX.toFixed(2)}) {
     vec2 g = p / 1.2, gf = fract(g), cell = floor(g);
     float h1 = lkHash21(cell), h2 = lkHash21(cell + 13.0);
-    float edge = min(min(gf.x, 1.0 - gf.x), min(gf.y, 1.0 - gf.y)) * 1.2;
     col = mix(uLkMembrane, uLkPaver, 0.6 + 0.3 * h1) * (0.96 + 0.06 * h2);
-    float joint = 1.0 - smoothstep(0.01, 0.03, edge);
+    float joint = max(lkStripe(g.x, .033), lkStripe(g.y, .033));
     col = mix(col, uLkJoint, joint * 0.6);
     lkBump = (vec3(gf.x < 0.5 ? -1.0 : 1.0, 0.0, 0.0) * (1.0 - smoothstep(0.0, 0.04, min(gf.x, 1.0 - gf.x) * 1.2))
-            + vec3(0.0, 0.0, gf.y < 0.5 ? -1.0 : 1.0) * (1.0 - smoothstep(0.0, 0.04, min(gf.y, 1.0 - gf.y) * 1.2))) * 0.45;
+            + vec3(0.0, 0.0, gf.y < 0.5 ? -1.0 : 1.0) * (1.0 - smoothstep(0.0, 0.04, min(gf.y, 1.0 - gf.y) * 1.2))) * 0.45 * (1.0-smoothstep(.02,.14,max(fwidth(p.x),fwidth(p.y))));
   } else {
     // membrana de rollos a lo largo de z, con grava suelta encima
     float r = fract(p.x / 1.0);
     vec3 roofC = p.x < 0.0 ? uLkWest : uLkEast;
     col = roofC * (0.94 + 0.06 * lkHash11(floor(p.x)));
-    float lap = 1.0 - smoothstep(0.0, 0.03, min(r, 1.0 - r));
+    float lap = lkStripe(p.x, .03);
     col *= 1.0 - lap * 0.2;
-    float peb = lkNoise(p * 9.0) * 0.55 + lkNoise(p * 23.0) * 0.45;
+    float peb = lkDetail(p * 9.0) * 0.55 + lkDetail(p * 23.0) * 0.45;
     col = mix(col, uLkGravel, smoothstep(0.4, 0.85, peb) * 0.3);
     lkBump = vec3(1.0, 0.0, 0.0) * lap * (r < 0.5 ? -0.5 : 0.5) + vec3(peb - 0.5, 0.0, grain - 0.5) * 0.3;
   }
@@ -400,7 +398,7 @@ export const FACADE = (roofHex, far) => ({
 varying vec3 vLkPos; varying float vLkLot;
 uniform vec3 uLkWinWarm, uLkWinCool, uLkWinTv, uLkWinGlass, uLkMoonDir;
 uniform float uLookTime;
-${NOISE}${SPILL_GLSL}`,
+${NOISE}${FILTERED_DETAIL}${SPILL_GLSL}`,
   fragment: /* glsl */`
 {
   vec3 N = normalize(cross(dFdx(vLkPos), dFdy(vLkPos)) + vec3(0.0, 1e-5, 0.0));
@@ -478,7 +476,7 @@ const STREET = {
 varying vec3 vLkPos;
 uniform vec3 uLkStreet, uLkAmber, uLkWarm;
 uniform float uLookTime;
-${NOISE}
+${NOISE}${FILTERED_DETAIL}
 // un coche por celda de 24 m (si toca): lat = desvío del eje del carril,
 // s = distancia a lo largo del sentido de marcha (ya con el tiempo)
 vec3 lkCar(float lat, float s, float seed, inout float body) {
@@ -504,7 +502,7 @@ vec3 lkCar(float lat, float s, float seed, inout float body) {
   float side = max(avenue * step(-3.0, dAv) * (1.0 - street), street * step(-3.0, dSt) * (1.0 - avenue));
   float alley = step(32.3, ax) * step(ax, 36.9) * step(az, 40.8);
   float yard = step(36.9, ax) * step(ax, 53.2) * step(26.8, az) * step(az, 40.8);
-  float grain = lkNoise(p * 0.7) * 0.5 + 0.75;
+  float grain = lkDetail(p * 0.7) * 0.5 + 0.75;
   vec3 asphalt = uLkStreet * grain;
   vec3 col = asphalt * 0.8;                                      // patios interiores
   col = mix(col, asphalt, max(road, max(alley, yard)));
@@ -554,7 +552,8 @@ const PUDDLE = {
   fragment: /* glsl */`
 {
   vec3 sp = lkSpill(vLkPos, vec3(0.0, 1.0, 0.0), 0.0);
-  diffuseColor.rgb = vec3(0.012, 0.016, 0.03) + sp * 1.2;
+  float grazing = 1.0 - clamp(normalize(cameraPosition - vLkPos).y, 0.0, 1.0);
+  diffuseColor.rgb = mix(vec3(.010, .016, .028), vec3(.068, .092, .145), grazing * grazing) + sp * 1.2;
 }`,
 };
 
@@ -563,12 +562,12 @@ const PUDDLE = {
 const WORN = {
   vertexPars: VARY_V,
   vertex: WORLD_V,
-  fragmentPars: `varying vec3 vLkPos; varying vec3 vLkN; uniform vec3 uLkStain; vec3 lkGlow = vec3(0.0);${NOISE}${MACRO}${SPILL_GLSL}`,
+  fragmentPars: `varying vec3 vLkPos; varying vec3 vLkN; uniform vec3 uLkStain; vec3 lkGlow = vec3(0.0);${NOISE}${FILTERED_DETAIL}${MACRO}${SPILL_GLSL}`,
   fragment: /* glsl */`
 {
   vec3 N = normalize(vLkN);
   vec2 p = abs(N.y) > 0.6 ? vLkPos.xz : vec2(vLkPos.x + vLkPos.z, vLkPos.y);
-  float macro = lkMacro(p * 0.06 + 0.3), grain = lkNoise(p * 11.0);
+  float macro = lkMacro(p * 0.06 + 0.3), grain = lkDetail(p * 11.0);
   vec3 col = diffuseColor.rgb * mix(0.88, 1.06, macro) * mix(0.94, 1.05, grain);
   col = mix(col, uLkStain, smoothstep(0.62, 0.9, macro) * 0.22);
   diffuseColor.rgb = col;
@@ -674,7 +673,7 @@ function restyle(ctx, U) {
     // luces de borde de la azotea (una malla, color por instancia): las
     // turquesas de los flancos pasan a lámparas de borde ámbar tenues; las
     // de las bases conservan el color de su equipo
-    if (o.isInstancedMesh && o.instanceColor && mats[0]?.isMeshBasicMaterial && mats[0].vertexColors) {
+    if (o.name === 'azoteas-edge-lights' && o.isInstancedMesh && o.instanceColor) {
       const c = new THREE.Color(), amber = new THREE.Color(P.lamp.amber).multiplyScalar(0.7);
       for (let i = 0; i < o.count; i++) {
         o.getColorAt(i, c);
@@ -725,9 +724,9 @@ function restyle(ctx, U) {
         m.color.setHex(0xffffff);
         patch(m, { ...STREET, uniforms: uni, key: 'az2-street' });
       }
-      else if (basic && isNear(hex, 0x15273a) && src.transparent) {
+      else if (o.name === 'azoteas-puddles') {
         const m = done(own(o, src));
-        m.color.setHex(0xffffff); m.opacity = 0.62;
+        m.color.setHex(0xffffff);
         patch(m, { ...PUDDLE, uniforms: uni, key: 'az2-puddle' });
       }
       else if (basic && (isNear(hex, 0x111826) || isNear(hex, 0x0d121b))) done(own(o, src)).color.setHex(0x0f1116);

@@ -12,9 +12,12 @@ import { clearClip } from './lib-clip.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
 import { CHROME } from './lib-chrome.mjs';
+import { actionKeys, freePort, untilGame, waitGame } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
-  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: '8797' }, stdio: 'ignore',
+  env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: String(FREE_PORT) }, stdio: 'ignore',
 });
 await new Promise((r) => setTimeout(r, 900));
 
@@ -30,10 +33,10 @@ const check = (name, ok, extra = '') => {
 };
 
 // ============ FASE 1: PRÁCTICA (fortaleza) — armas y humo ============
-await page.goto('http://localhost:8797/?nolock=1', { waitUntil: 'networkidle' });
+await page.goto(`http://localhost:${FREE_PORT}/?nolock=1`, { waitUntil: 'networkidle' });
 await page.evaluate(() => { window.BREACH.mapChoice = 'fortaleza'; });
 await page.evaluate(() => document.getElementById('btn-practice').click());
-await page.waitForTimeout(1500);
+await page.waitForFunction(() => window.BREACH?.mode === 'practice' && window.BREACH.player && window.BREACH.weapons);
 await page.evaluate(() => {
   window.__tp = (x, z, yaw = Math.PI) => {
     const p = window.BREACH.player;
@@ -49,27 +52,29 @@ await page.evaluate(() => {
   const G = window.BREACH;
   G.weapons.startSwap('pistol');
 });
-await page.waitForTimeout(700);
-await page.evaluate(() => {
-  const G = window.BREACH;
-  G.weapons.st.mag = 4; // forzar recarga con sentido
+// Preparar el cargador de la pistola equipada y dar cada orden en el
+// cuadro que cumple su precondición, incluso si la simulación va despacio.
+const requestedReload = await untilGame(page, () => {
+  const w = window.BREACH.weapons;
+  if (w.cur !== 'pistol' || w.swapping) return false;
+  w.st.mag = 4;
   window.BREACH_INPUT.reloadPressed = true;
-});
-await page.waitForTimeout(150);
-await page.evaluate(() => { window.BREACH_INPUT.meleePressed = true; });
-await page.waitForTimeout(500);
+  return true;
+}, 2);
+const kicked = requestedReload && await untilGame(page, () => {
+  if (!window.BREACH.weapons.reloading) return false;
+  window.BREACH_INPUT.meleePressed = true;
+  return true;
+}, 1);
+const interrupted = kicked && await untilGame(page, () =>
+  window.BREACH.player.state === 'melee' && !window.BREACH.weapons.reloading, 1);
+await waitGame(page, 2.1);
 let s = await page.evaluate(() => ({
-  st: window.BREACH.player.state,
-  reloading: window.BREACH.weapons.reloading,
-  cur: window.BREACH.weapons.cur,
-}));
-await page.waitForTimeout(1600);
-s = await page.evaluate(() => ({
   mag: window.BREACH.weapons.st.mag, cur: window.BREACH.weapons.cur,
   st: window.BREACH.player.state,
 }));
 check('melee durante recarga: conserva munición y recupera control',
-  s.mag === 4 && s.cur === 'pistol' && (s.st === 'idle' || s.st === 'run'), JSON.stringify(s));
+  interrupted && s.mag === 4 && s.cur === 'pistol' && (s.st === 'idle' || s.st === 'run'), JSON.stringify(s));
 
 // --- melee DURANTE cambio de arma: sin estados rotos
 await page.evaluate(() => {
@@ -106,7 +111,8 @@ check('melee sale justo después de disparar', sawMelee);
 // --- pulsaciones repetidas: nunca reinician un gesto activo. Al recuperar
 // control sí puede volver a atacar inmediatamente (sin cooldown largo).
 const spamRes = await page.evaluate(async () => {
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   let entries = 0, was = '';
   const t0 = performance.now();
   while (performance.now() - t0 < 1500) {
@@ -124,7 +130,8 @@ check('melee no se reinicia activo y permite ritmo intencional (≤4 en 1.5s)',
 // --- melee NO atraviesa un muro MID: dummy pegado detrás del muro de base
 const wallMelee = await page.evaluate(async () => {
   const G = window.BREACH, W = window.BREACH_WORLD;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   // muro MID de base en (-8.5,-16) 5x1 h1.9 — jugador al sur, dummy al norte
   const d = G.dummies.list.find((x) => x.alive);
   if (!d) return { why: 'sin dummy' };
@@ -139,21 +146,24 @@ const wallMelee = await page.evaluate(async () => {
 check('melee bloqueado por muro MID', !!wallMelee.hp0 && wallMelee.hp1 === wallMelee.hp0,
   JSON.stringify(wallMelee));
 
-// --- pistola: blindfire desde cobertura gasta munición
+// --- pistola: agachado tras LOW y asomado (ADS) gasta munición. PRUEBAS (corrida
+// 6): antes era blindfire desde la cobertura pegada (retirada); la garantía de
+// que se puede disparar desde la postura de cobertura pasa al asomo FPS.
 const blindPistol = await page.evaluate(async () => {
   const G = window.BREACH, W = window.BREACH_WORLD;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   G.weapons.startSwap('pistol');
   await wait(700);
-  // cara BAJA y ANCHA (≥2 m): la primera que cumplía h/normal es un poste de
-  // 0.8 m en el que evadir hace dive, no cover
+  // cara BAJA y ANCHA (≥2 m)
   const f = W.faces.find((c) => c.h <= 1.2 && c.n.z < -0.9 &&
     Math.hypot(c.b.x - c.a.x, c.b.z - c.a.z) >= 2);
   const mx = (f.a.x + f.b.x) / 2, mz = (f.a.z + f.b.z) / 2;
-  window.__tp(mx, mz - 1.0, Math.PI);
-  window.BREACH_INPUT.evadePressed = true;
+  window.__tp(mx, mz - 0.7, Math.PI);
+  window.BREACH_INPUT.keys.add('KeyC'); // agacharse (mantener)
+  window.BREACH_INPUT._mouseAim = true;  // apuntar: asomo sobre la cara LOW
   await wait(700);
-  const inCover = G.player.state;
+  const inCover = G.player.state, peek = +G.player.peek.toFixed(2);
   const mag0 = G.weapons.st.mag;
   for (let i = 0; i < 4; i++) {
     window.BREACH_INPUT.firePressed = true;
@@ -163,20 +173,24 @@ const blindPistol = await page.evaluate(async () => {
     await wait(200);
   }
   await wait(400);
-  return { inCover, mag0, mag1: G.weapons.st.mag, cur: G.weapons.cur };
+  window.BREACH_INPUT._mouseAim = false;
+  return { inCover, peek, mag0, mag1: G.weapons.st.mag, cur: G.weapons.cur };
 });
-check('pistola dispara en blindfire desde cover',
-  blindPistol.inCover === 'cover' && blindPistol.mag1 < blindPistol.mag0, JSON.stringify(blindPistol));
+check('pistola dispara asomada sobre LOW',
+  blindPistol.inCover === 'crouch' && blindPistol.peek > 0.9 && blindPistol.mag1 < blindPistol.mag0, JSON.stringify(blindPistol));
 
-// --- selección de arma DENTRO de cobertura
+// --- selección de arma agachado tras la cobertura
 const coverSwap = await page.evaluate(async () => {
   const G = window.BREACH;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   window.BREACH_INPUT.slotPressed = 1; // escopeta
   await wait(800);
-  return { st: G.player.state, cur: G.weapons.cur };
+  const out = { st: G.player.state, cur: G.weapons.cur };
+  window.BREACH_INPUT.keys.delete('KeyC');
+  return out;
 });
-check('cambio de arma dentro de cover', coverSwap.st === 'cover' && coverSwap.cur === 'shotgun',
+check('cambio de arma agachado tras la cobertura', coverSwap.st === 'crouch' && coverSwap.cur === 'shotgun',
   JSON.stringify(coverSwap));
 
 // --- pistola: muzzle sano (posición finita adelante del pecho)
@@ -203,7 +217,8 @@ check('muzzle de pistola sano', muzzle.finite && muzzle.dy > 0.5 && muzzle.dy < 
 // con munición ya disponible o cambiar de arma.
 const plainReload = await page.evaluate(async () => {
   const G = window.BREACH;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   window.__tp(0, -10);
   G.weapons.startSwap('smg');
   await wait(700);
@@ -228,68 +243,15 @@ check('recarga normal: segundo toque no altera el gesto ni conserva mecánica ac
   !plainReload.hasActiveApi && !plainReload.hasBonus && !plainReload.hasJamState,
   JSON.stringify(plainReload));
 
-// --- SWAT TURN: en cover, correr alejándose con otra cobertura enfrente
-// cruza el hueco; sin cobertura enfrente sale corriendo normal
-const swat = await page.evaluate(async () => {
-  const G = window.BREACH, W = window.BREACH_WORLD;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-  const I = window.BREACH_INPUT;
-  const p = G.player;
-  // buscar dos caras enfrentadas a menos de 5.5m (pasillo)
-  let pair = null;
-  for (const f of W.faces) {
-    if (f.h > 2.6 || (f.baseY ?? 0) > 0) continue; // a ras de suelo: no barandas en altura
-    const mx = (f.a.x + f.b.x) / 2, mz = (f.a.z + f.b.z) / 2;
-    for (const g of W.faces) {
-      if (g === f || g.h > 2.6 || (g.baseY ?? 0) > 0) continue;
-      const gx = (g.a.x + g.b.x) / 2, gz = (g.a.z + g.b.z) / 2;
-      const d = Math.hypot(gx - mx, gz - mz);
-      if (d < 2.5 || d > 5.2) continue;
-      // enfrentadas: la normal de g apunta hacia f
-      const nx = (mx - gx) / d, nz = (mz - gz) / d;
-      // bien enfrentadas, no en diagonal: el cruce va de cara a cara
-      if (g.n.x * nx + g.n.z * nz > 0.96 && f.n.x * -nx + f.n.z * -nz > 0.96) {
-        pair = { f, mx, mz, gx, gz, d };
-        break;
-      }
-    }
-    if (pair) break;
-  }
-  if (!pair) return { why: 'sin pasillo con coberturas enfrentadas' };
-  // pegarse a la cara f mirando hacia ella
-  p.pos.x = pair.mx + pair.f.n.x * 0.8; p.pos.z = pair.mz + pair.f.n.z * 0.8;
-  p.y = 0; p.vel.x = 0; p.vel.z = 0; p.state = 'idle'; p.cover = null;
-  p.cam.yaw = Math.atan2(-(pair.mx - p.pos.x), -(pair.mz - p.pos.z));
-  p.yaw = p.cam.yaw;
-  I.evadePressed = true;
-  await wait(700);
-  const inCover = p.state;
-  // correr ALEJÁNDOSE (hacia la cobertura opuesta)
-  // diagnóstico: ¿ve el motor la cobertura de enfrente desde aquí?
-  const outDir = { x: -pair.f.n.x, z: -pair.f.n.z };
-  const seen = W.findCover(p.pos, outDir, 5.6, 0.38, 0.5);
-  const dbg = {
-    cd: +p.evadeCooldown.toFixed(2), rec: +(p.evadeRecovery ?? 0).toFixed(2),
-    found: seen ? +seen.dist.toFixed(2) : null, gap: +pair.d.toFixed(2),
-    at: [+pair.mx.toFixed(1), +pair.mz.toFixed(1), +pair.gx.toFixed(1), +pair.gz.toFixed(1)],
-  };
-  I.keys.add('ShiftLeft');
-  I.keys.add('KeyS');
-  await wait(500);
-  const mid = p.state;
-  I.keys.delete('KeyS');
-  I.keys.delete('ShiftLeft');
-  await wait(900);
-  return { inCover, mid, end: p.state, cover: !!p.cover, dbg };
-});
-check('swat turn: cruzar a la cobertura de enfrente',
-  swat.why || swat.mid === 'slide' || swat.cover === true || swat.end === 'cover',
-  JSON.stringify(swat));
+// --- SWAT TURN retirado (PRUEBAS, corrida 6): la maniobra entre coberturas se
+// retiró con la cobertura pegada; el deslizamiento desde sprint (su sustituto)
+// lo prueba check-fps-movement (velocidad, duración, salida agachado).
 
 // --- humo contra una pared: el bote rebota, no se incrusta
 const wallNade = await page.evaluate(async () => {
   const S = window.BREACH_SMOKE, W = window.BREACH_WORLD;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   S.clear();
   // lanzar de frente contra el muro perimetral oeste
   S.throwNade({ x: -19.5, y: 1.4, z: -10 }, { x: -12, y: 2, z: 0 });
@@ -309,7 +271,8 @@ check('bote de humo rebota en la pared (no se incrusta)',
 // --- varias nubes simultáneas + limpieza total
 const multiSmoke = await page.evaluate(async () => {
   const S = window.BREACH_SMOKE;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   S.clear();
   const sceneBefore = window.BREACH_SMOKE.scene.children.length;
   for (let i = 0; i < 5; i++) {
@@ -328,9 +291,10 @@ check('5 nubes simultáneas y limpieza total',
   JSON.stringify(multiSmoke));
 
 // --- especiales: cancelar el hold y pasar por encima NO recoge
-const holdTest = await page.evaluate(async () => {
+const holdTest = await page.evaluate(async (pickup) => {
   const G = window.BREACH, S = window.BREACH_SPECIALS;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   if (!S.active) return { why: 'sin pedestal' };
   const a = S.active;
   // pasar corriendo por encima sin sostener evadir
@@ -342,27 +306,28 @@ const holdTest = await page.evaluate(async () => {
   const afterPass = !!S.active;
   // hold parcial y soltar
   window.__tp(a.x + 0.6, a.z);
-  I.keys.add('Space');
+  I.keys.add(pickup);
   await wait(300);
-  I.keys.delete('Space');
+  I.keys.delete(pickup);
   await wait(200);
   const afterPartial = !!S.active;
   const holdT = S.holdT;
   return { afterPass, afterPartial, holdT: +holdT.toFixed(2), wep: S.active?.wep };
-});
+}, (await actionKeys(page, 'pickup')).pickup);
 check('pasar por encima NO recoge la especial', holdTest.afterPass === true, JSON.stringify(holdTest));
 check('hold cancelado no recoge y resetea', holdTest.afterPartial === true && holdTest.holdT === 0,
   JSON.stringify(holdTest));
 
 // --- sniper a 0 de munición: chip "dry" en el HUD y sin refill de caja
-const dryTest = await page.evaluate(async () => {
+const dryTest = await page.evaluate(async (pickup) => {
   const G = window.BREACH, S = window.BREACH_SPECIALS;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   const a = S.active;
   window.__tp(a.x + 0.6, a.z);
-  window.BREACH_INPUT.keys.add('Space');
+  window.BREACH_INPUT.keys.add(pickup);
   await wait(1000);
-  window.BREACH_INPUT.keys.delete('Space');
+  window.BREACH_INPUT.keys.delete(pickup);
   if (G.weapons.cur !== 'sniper') return { why: 'no tomó el sniper' };
   G.weapons.state.sniper.mag = 0;
   G.weapons.state.sniper.reserve = 0;
@@ -375,18 +340,19 @@ const dryTest = await page.evaluate(async () => {
     dry: chip?.classList.contains('dry') ?? false,
     slots: G.weapons.slots.join(','),
   };
-});
+}, (await actionKeys(page, 'pickup')).pickup);
 check('sniper en 0: sin refill de caja y chip DRY', dryTest.mag === 0 && dryTest.res === 0 && dryTest.dry,
   JSON.stringify(dryTest));
 
 // ============ FASE 2: PRÁCTICA (azoteas) — humo en rampas ============
-await page.goto('http://localhost:8797/?nolock=1', { waitUntil: 'networkidle' });
+await page.goto(`http://localhost:${FREE_PORT}/?nolock=1`, { waitUntil: 'networkidle' });
 await page.evaluate(() => { window.BREACH.mapChoice = 'azoteas'; });
 await page.evaluate(() => document.getElementById('btn-practice').click());
 await page.waitForTimeout(1800);
 const rampNade = await page.evaluate(async () => {
   const S = window.BREACH_SMOKE, W = window.BREACH_WORLD;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   // rampa del helipuerto: lanzar hacia el pad central desde fuera
   S.throwNade({ x: 0, y: 1.3, z: -11 }, { x: 0, y: 3, z: 8 });
   await wait(2600);
@@ -397,7 +363,7 @@ const rampNade = await page.evaluate(async () => {
 check('humo aterriza sobre rampa/helipuerto sin hundirse', !!rampNade.ok, JSON.stringify(rampNade));
 
 // ============ FASE 3: VS BOTS — muerte, drops, cohete, multitud, rondas ====
-await page.goto('http://localhost:8797/?nolock=1', { waitUntil: 'networkidle' });
+await page.goto(`http://localhost:${FREE_PORT}/?nolock=1`, { waitUntil: 'networkidle' });
 await page.evaluate(() => { window.BREACH.mapChoice = 'fortaleza'; });
 await page.evaluate(() => document.getElementById('btn-enter')?.click());
 await page.waitForSelector('#splash.off', { state: 'attached' });
@@ -421,7 +387,8 @@ await page.evaluate(() => {
 // --- cohete a QUEMARROPA: explota y hay autodaño real
 const pointBlank = await page.evaluate(async () => {
   const G = window.BREACH, R = window.BREACH_ROCKETS;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   G.weapons.giveSpecial('bazooka');
   window.__tp(0, -19.4, 0); // a ~1.5m del escudo de spawn, mirando -z (al muro)
   G.player.cam.pitch = 0;
@@ -440,7 +407,8 @@ check('cohete a quemarropa: explota y hace AUTODAÑO',
 // restaura el loadout de fábrica
 const deathSpecial = await page.evaluate(async () => {
   const G = window.BREACH;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   // asegurar bazooka en mano, CARGADA (el tiro anterior la dejó recargando)
   if (!G.weapons.hasWeapon('bazooka')) G.weapons.giveSpecial('bazooka');
   G.weapons.startSwap('bazooka');
@@ -498,7 +466,8 @@ check('respawn restaura el loadout de fábrica',
 
 const recoveredSpecial = await page.evaluate(async () => {
   const G = window.BREACH;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   const drop = [...G.drops.drops.values()].find((d) => d.wep === 'bazooka');
   if (!drop) return { why: 'drop expirado antes de recogerlo' };
   window.__tp(drop.x, drop.z);
@@ -519,7 +488,8 @@ check('otro jugador/respawn puede recuperar la especial caída',
 // --- multitud en espacio chico: separación sin atascos ni fugas
 const crowd = await page.evaluate(async () => {
   const G = window.BREACH, M = G.botMatch;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   const bots = M.bots.filter((b) => b.alive).slice(0, 4);
   window.__tp(15, -18); // v3: (4,-1.6) cae ahora en el muro de la torre del homenaje
   for (const b of bots) { b.pos.x = 15; b.pos.z = -18; }
@@ -541,7 +511,8 @@ check('multitud apilada se separa suave (sin fugas ni NaN)',
 // --- fin de ronda: matar todas las vidas azules → R2 con pedestal BAZOOKA
 const roundFlip = await page.evaluate(async () => {
   const G = window.BREACH, M = G.botMatch;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // espera en TIEMPO DE JUEGO (G.simClock), no de reloj (PRUEBAS: el CI va ~13× más lento)
+  const wait = (ms) => new Promise((r) => { const end = (window.BREACH?.simClock ?? 0) + ms / 1000, t0 = performance.now(); const f = () => ((window.BREACH?.simClock ?? 0) >= end || performance.now() - t0 > 120000 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
   // humo activo cruzando la transición (probar limpieza/estado)
   window.BREACH_SMOKE.throwNade({ x: 0, y: 1.2, z: 5 }, { x: 0, y: 0, z: 0 });
   M.pool.blue = 0;

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Breach · Banco de la mano</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; }
+    body { background: radial-gradient(ellipse at 42% 36%, #c5ccd0, #89959c); }
+    canvas { display: block; width: 100%; height: 100%; }
+    #error { position: absolute; top: 1rem; left: 1rem; color: #311; font: 1rem system-ui; }
+  </style>
+</head>
+<body>
+  <canvas aria-label="Vista de la mano articulada de Breach"></canvas>
+  <output id="error" role="alert"></output>
+  <script type="module" src="./hand/bench.js"></script>
+</body>
+</html>

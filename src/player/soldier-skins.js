@@ -29,6 +29,32 @@ const maskBlack=new THREE.MeshStandardMaterial({name:'skin matte black',color:0x
   roughness:1,metalness:0});
 maskBlack.userData.shared=true;
 
+// Shoulder shells share the same joint-local dimensions in both views.
+// Recruit uses the authored segmented GLB. The other skins replace that shell.
+export function visitShoulderShells(variant, side, emit) {
+  const shell = (size, [x,y,z], slot = 'team', roll = 0, shape = box) =>
+    emit(shape, size, [x * side,y,z], roll * side, slot);
+  switch (variant) {
+    case 1:
+      shell([.29,.19,.33],[.035,.075,-.015]);
+      shell([.30,.045,.35],[.035,.18,-.015],'metal');
+      break;
+    case 2:
+      shell([.25,.115,.29],[.045,.09,-.015],'team',-.20);
+      shell([.21,.035,.23],[.045,.152,-.015],'armor',-.20);
+      break;
+    case 3:
+      shell([.32,.17,.35],[.04,.10,-.015]);
+      shell([.29,.085,.31],[.055,-.015,-.01],'armor');
+      shell([.25,.04,.27],[.045,.194,-.015],'metal');
+      break;
+    case 4:
+      shell([.29,.20,.07],[.04,.06,-.14],'team',-.22,shield);
+      shell([.23,.11,.24],[.04,.10,.015],'armor',-.22);
+      break;
+  }
+}
+
 /** Details are attached to existing joints; no bone, socket or scale changes. */
 export function attachSkinDetails(rig){
   const v=rig.variant,skin=SOLDIER_SKINS[v];
@@ -62,11 +88,6 @@ export function attachSkinDetails(rig){
     glass.rotation.x=Math.PI/2;
     const core=detail(rig.head,name+' sensor',[r*coreRatio,.01,r*coreRatio],[x,y,z-r*.43],light,disc);
     core.rotation.x=Math.PI/2;
-  };
-  const shoulder=(side,size,pos,mat=team,angle=0)=>{
-    const arm=side===1?rig.armR:rig.armL;
-    const o=detail(arm.shoulder,'shoulder shell',size,[pos[0]*side,pos[1],pos[2]],mat);
-    o.rotation.z=angle*side;return o;
   };
   const fastener=(x,y,z)=>{
     const o=detail(rig.head,'recessed fastener',[.010,.006,.010],[x,y,z],metal,disc);
@@ -119,10 +140,7 @@ export function attachSkinDetails(rig){
     plate('chin seam',[.19,.009,.008],[0,.073,-.328],dark);
     detail(rig.torso,'chest guard',[.29,.085,.022],[0,.565,-.287],armor);
     for(let i=0;i<3;i++)detail(rig.torso,'rank bar',[.032,.044,.009],[-.05+i*.05,.565,-.303],team);
-    for(const side of [-1,1]){
-      shoulder(side,[.29,.19,.33],[.035,.075,-.015]);
-      shoulder(side,[.30,.045,.35],[.035,.18,-.015],metal);
-    }
+
   }else if(v===2){
     // Scout: low flight helmet and conspicuous asymmetric rangefinder.
     plate('flight shell',[.53,.29,.45],[0,.285,-.01],armor);
@@ -157,10 +175,7 @@ export function attachSkinDetails(rig){
     detail(rig.torso,'radio indicator',[.045,.013,.01],[.21,.575,-.3],light);
     detail(rig.torso,'field case',[.15,.11,.04],[-.19,.23,-.245],armor);
     detail(rig.torso,'case latch',[.035,.028,.012],[-.19,.23,-.27],metal);
-    for(const side of [-1,1]){
-      shoulder(side,[.25,.115,.29],[.045,.09,-.015],team,-.20);
-      shoulder(side,[.21,.035,.23],[.045,.152,-.015],armor,-.20);
-    }
+
   }else if(v===3){
     // Heavy: squat, softened triangular shell and three round recessed eyes.
     detail(rig.head,'soft triangular helmet',[.70,.385,.43],[0,.275,-.005],armor,triangle);
@@ -178,11 +193,7 @@ export function attachSkinDetails(rig){
     }
     for(let i=0;i<3;i++)detail(rig.torso,'breastplate rib',[.30,.022,.022],[0,.51+i*.038,-.289],metal);
     for(const x of [-.23,.23])detail(rig.torso,'reinforcement lock',[.045,.08,.024],[x,.58,-.272],team);
-    for(const side of [-1,1]){
-      shoulder(side,[.32,.17,.35],[.04,.10,-.015],team);
-      shoulder(side,[.29,.085,.31],[.055,-.015,-.01],armor);
-      shoulder(side,[.25,.04,.27],[.045,.194,-.015],metal);
-    }
+
   }else{
     // Ghost: tapered full-face shell, uninterrupted slit and pointed jaw.
     plate('rear helmet',[.50,.32,.41],[0,.265,.015],armor);
@@ -218,11 +229,15 @@ export function attachSkinDetails(rig){
       const slash=detail(rig.torso,'unit slash',[.015,.064,.008],[x,.54,-.305],ivory);slash.rotation.z=-.35;
     }
     detail(rig.torso,'identification band',[.10,.023,.014],[.21,.61,-.269],team);
-    for(const side of [-1,1]){
-      const o=detail((side===1?rig.armR:rig.armL).shoulder,'tapered shoulder',
-        [.29,.20,.07],[side*.04,.06,-.14],team,shield);o.rotation.z=side*-.22;
-      shoulder(side,[.23,.11,.24],[.04,.10,.015],armor,-.22);
-    }
+
+  }
+  for (const side of [-1,1]) {
+    const arm = side === 1 ? rig.armR : rig.armL;
+    visitShoulderShells(v, side, (geometry, size, pos, roll, slot) => {
+      const name = geometry === shield ? 'tapered shoulder' : 'shoulder shell';
+      const piece = detail(arm.shoulder, name, size, pos, { armor, metal, team }[slot], geometry);
+      piece.rotation.z = roll;
+    });
   }
   // Back-side identity remains readable behind a shouldered weapon.
   for(let i=0;i<=v;i++)detail(rig.torso,'dorsal unit stripe',[.028,.06,.012],[-.15+i*.042,.59,.425],team);

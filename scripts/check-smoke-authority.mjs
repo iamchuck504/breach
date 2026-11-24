@@ -4,9 +4,17 @@ import WebSocket from 'ws';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { freePort, launchAt } from './lib-test.mjs';
+import { withSamples } from './lib-fps-sample.mjs';
+// PRUEBAS (ronda 2 de RED): cada fire/rocket/nade/protoFire humano lleva su muestra `fs`
+// (n creciente, w = arma equipada) desde el último estado `s` de ese emisor
+const SAMPLED = withSamples((peer, m) => peer.ws.send(JSON.stringify(m)));
+
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const PORT = 8812;
+const PORT = FREE_PORT;
 const URL = `ws://127.0.0.1:${PORT}`;
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -27,7 +35,7 @@ class Peer {
       this.ws.once('open', resolve); this.ws.once('error', reject);
     });
   }
-  send(msg) { this.ws.send(JSON.stringify(msg)); }
+  send(msg) { SAMPLED(this, msg); }
   next(type, predicate = () => true, timeout = 4000) {
     return new Promise((resolve, reject) => {
       const waiter = { type, predicate, resolve, timer: null };
@@ -66,11 +74,11 @@ const check = (name, ok, extra = '') => {
 try {
   await a.open();
   let p = a.next('welcome');
-  a.send({ t: 'join', action: 'create', name: 'ALFA', v: 0 });
+  a.send({ t: 'join', action: 'create', name: 'ALFA', v: 0, hp: 2, fps: 1 });
   await p;
   await b.open();
   p = b.next('welcome');
-  b.send({ t: 'join', action: 'join', name: 'BRAVO', v: 0 });
+  b.send({ t: 'join', action: 'join', name: 'BRAVO', v: 0, hp: 2, fps: 1 });
   const bw = await p;
   await Promise.all([a.next('start'), b.next('start')].map((promise, i) => {
     if (i === 0) a.send({ t: 'lobbyStart' });
@@ -82,7 +90,7 @@ try {
   const cid = 'client-smoke-1';
   const ackP = b.next('nadeAck', (m) => m.cid === cid);
   const remoteP = a.next('nade', (m) => m.id === bw.id);
-  b.send({ t: 'nade', cid, o: [10, 1.2, 10], v: [-5, 4, -6] });
+  b.send({ t: 'nade', cid, o: launchAt(10, 0, 10, 0).o /* salida FPS: ojo + arma */, v: [-5, 4, -6] });
   const [ack, remote] = await Promise.all([ackP, remoteP]);
   check('ack y réplica comparten id autoritativo',
     typeof ack.nid === 'string' && ack.nid === remote.nid,

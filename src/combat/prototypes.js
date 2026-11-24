@@ -52,7 +52,7 @@ export class CombatPrototypes {
   if(p.count===0)p.ready=this.time+45;
   this.inventory(id,{kind:p.kind,count:p.kind==='frag'?s.frag:s.stunAmmo});return true;
  }
- fire(id,kind,origin,direction){
+ fire(id,kind,origin,direction,cid=null){
   const actor=this.actors().find(a=>a.id===id),s=this.state(id);
   if(!this.active||!actor?.alive||this.stunned(id)||!['frag','stun'].includes(kind)||s.cooldown>this.time||this.projectiles.length>=48)return false;
   if(!origin||!direction||![origin.x,origin.y,origin.z,direction.x,direction.y,direction.z].every(Number.isFinite))return false;
@@ -66,7 +66,7 @@ export class CombatPrototypes {
   if(kind==='frag')s.frag--;else s.stunAmmo--;
   s.cooldown=this.time+60/def.rpm;
   this.inventory(id,{kind,count:kind==='frag'?s.frag:s.stunAmmo});
-  this.event({kind:'launch',weapon:kind,owner:id,p:{...origin}});return true;
+  this.event({kind:'launch',weapon:kind,owner:id,p:{...origin},...(cid ? {cid} : {})});return true;
  }
  applyStun(actor){
   const s=this.state(actor.id),d=TUNING.weapons.stun;

@@ -17,14 +17,59 @@ function wedgeGeometry(w, len, h) {
   const tris = [
     'a', 'g', 'i', 'a', 'i', 'b', // rampa
     'g', 'e', 'f', 'g', 'f', 'i', // rellano
-    'd', 'c', 'f', 'd', 'f', 'e', // respaldo
+    // La plataforma y el piso cierran el respaldo y la base.
     'a', 'd', 'e', 'a', 'e', 'g', // costado -x
     'b', 'f', 'c', 'b', 'i', 'f', // costado +x
-    'a', 'b', 'c', 'a', 'c', 'd', // base
   ];
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(tris.flatMap((k) => v[k]), 3));
   g.computeVertexNormals();
+  return g;
+}
+
+// Perfil de peldaños centrado sobre la pendiente de colisión. Cada huella
+// queda a menos de media contrahuella del suelo que pisa el personaje.
+function stairGeometry(w, len, h, edging = false) {
+  const run = len - RAMP_LANDING, steps = Math.ceil(h / 0.16);
+  // El ribete sigue cada huella y contrahuella, con 5 mm de resalto.
+  if (edging) {
+    const vertices = [];
+    const quad = (z0, y0, z1, y1) => {
+      const x = w / 2;
+      vertices.push(-x,y0,z0, -x,y1,z1, x,y1,z1, -x,y0,z0, x,y1,z1, x,y0,z0);
+    };
+    let previous = 0;
+    for (let i = 0; i <= steps; i++) {
+      const y = i === steps ? h : h * (i + 0.5) / steps;
+      const z = run * i / steps - len / 2 - 0.005;
+      const end = i === steps ? len / 2 : run * (i + 1) / steps - len / 2 - 0.005;
+      quad(z, previous, z, y + 0.005);
+      quad(z, y + 0.005, end, y + 0.005);
+      previous = y + 0.005;
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+    g.computeVertexNormals();
+    return g;
+  }
+  const profile = new THREE.Shape();
+  profile.moveTo(0, 0);
+  for (let i = 0; i < steps; i++) {
+    const y = h * (i + 0.5) / steps;
+    profile.lineTo(run * i / steps, y);
+    profile.lineTo(run * (i + 1) / steps, y);
+  }
+  profile.lineTo(run, h);
+  profile.lineTo(len, h);
+  profile.lineTo(len, 0);
+  profile.closePath();
+  const g = new THREE.ExtrudeGeometry(profile, { depth: w, bevelEnabled: false })
+    .rotateY(-Math.PI / 2).translate(w / 2, 0, -len / 2);
+  // Solo la escalera de Fortaleza se apoya sobre el terreno contra una losa.
+  // La testa del rellano y el suelo ya cierran estos dos planos.
+  const n = g.attributes.normal;
+  g.clearGroups();
+  g.setIndex(Array.from({length:n.count},(_,i)=>i).filter(i => n.getZ(i)<.999 && n.getY(i)>-.999));
   return g;
 }
 
@@ -100,7 +145,10 @@ export function decorateMapV2(world, layout) {
   for (const r of rampsFor(layout)) {
     const alongZ = r.axis === 'z';
     const len = alongZ ? r.d : r.w, wide = alongZ ? r.w : r.d;
-    const mesh = add(new THREE.Mesh(wedgeGeometry(wide, len, r.h), lookMat(r.kind, 'ramp')), 'v2-ramp');
+    const geometry = r.kind === 'stair' ? stairGeometry : wedgeGeometry;
+    const material = lookMat(r.kind, 'ramp');
+    if (r.kind === 'stair') material.name = 'fortress-stair-stone';
+    const mesh = add(new THREE.Mesh(geometry(r.kind === 'mezzanine' ? wide-.014 : wide, len, r.h), material), 'v2-ramp');
     mesh.position.set(r.x, 0, r.z);
     // la cuña sube hacia +z local: se gira hacia el eje y sentido de la rampa
     mesh.rotation.y = alongZ ? (r.dir > 0 ? 0 : Math.PI) : (r.dir > 0 ? Math.PI / 2 : -Math.PI / 2);
@@ -108,12 +156,14 @@ export function decorateMapV2(world, layout) {
     const slopeLen = len - RAMP_LANDING;
     const slope = Math.atan2(r.h, slopeLen), run = Math.hypot(slopeLen, r.h);
     for (const s of [-1, 1]) {
-      const strip = add(new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.02, run), lookMat(r.kind, 'edge')), 'v2-ramp-edge');
+      const stepped = r.kind === 'stair';
+      const edge = stepped ? stairGeometry(0.09, len, r.h, true) : new THREE.BoxGeometry(0.09, 0.02, run);
+      const strip = add(new THREE.Mesh(edge, lookMat(r.kind, 'edge')), 'v2-ramp-edge');
       strip.castShadow = false;
       const holder = new THREE.Group();
       holder.position.copy(mesh.position); holder.rotation.y = mesh.rotation.y;
-      strip.position.set(s * (wide / 2 - 0.06), r.h / 2 + 0.012, -RAMP_LANDING / 2);
-      strip.rotation.x = -slope;
+      strip.position.set(s * (wide / 2 - 0.06), stepped ? 0 : r.h / 2 + 0.018, stepped ? 0 : -RAMP_LANDING / 2);
+      strip.rotation.x = stepped ? 0 : -slope;
       holder.add(strip); root.add(holder);
     }
   }
@@ -128,8 +178,8 @@ export function decorateMapV2(world, layout) {
       // piso de rejilla y franja de seguridad en el perímetro
       cube('v2-deck-floor', x, d.h + 0.012, z, d.w - 0.5, 0.024, d.d - 0.5, grate).castShadow = false;
       for (const s of [-1, 1]) {
-        cube('v2-deck-stripe', x, d.h + 0.026, z + s * (d.d / 2 - 0.42), d.w - 0.9, 0.012, 0.12, hazard).castShadow = false;
-        cube('v2-deck-stripe', x + s * (d.w / 2 - 0.42), d.h + 0.026, z, 0.12, 0.012, d.d - 0.9, hazard).castShadow = false;
+        cube('v2-deck-stripe', x, d.h + 0.034, z + s * (d.d / 2 - 0.42), d.w - 0.9, 0.012, 0.12, hazard).castShadow = false;
+        cube('v2-deck-stripe', x + s * (d.w / 2 - 0.42), d.h + 0.034, z, 0.12, 0.012, d.d - 0.96, hazard).castShadow = false;
       }
       // pasamanos sobre la baranda maciza y balizas en las esquinas: se
       // reconoce la plataforma de lejos sin tapar a quien está arriba
@@ -139,8 +189,8 @@ export function decorateMapV2(world, layout) {
       }
       // puertas de servicio en el cuerpo: es un cuarto técnico, no un cubo
       for (const sx of [-1, 1]) {
-        cube('v2-deck-door', x + sx * (d.w / 2 + 0.012), 0.92, z, 0.03, 1.72, 0.9, std(0x3b4650, { metalness: 0.4 })).castShadow = false;
-        cube('v2-deck-louver', x + sx * (d.w / 2 + 0.014), 1.2, z + 1.9, 0.03, 0.7, 1.2, std(0x2c343c, { metalness: 0.5 })).castShadow = false;
+        cube('v2-deck-door', x + sx * (d.w / 2 + 0.027), 0.92, z, 0.03, 1.72, 0.9, std(0x3b4650, { metalness: 0.4 })).castShadow = false;
+        cube('v2-deck-louver', x + sx * (d.w / 2 + 0.031), 1.2, z + 1.9, 0.03, 0.7, 1.2, std(0x2c343c, { metalness: 0.5 })).castShadow = false;
       }
     }
   }
@@ -157,7 +207,7 @@ export function decorateMapV2(world, layout) {
       const x = d.x * side, z = d.z * side;
       // REMOLQUE: bastidor, tarima de madera, ejes y ruedas bajo la caja
       cube('v2-trailer-frame', x, d.h - 0.2, z, d.w, 0.28, d.d, steel);
-      cube('v2-trailer-bed', x, d.h - 0.03, z, d.w - 0.12, 0.06, d.d - 0.08, bed);
+      cube('v2-trailer-bed', x, d.h - 0.03, z, d.w - 0.12, 0.06, d.d, bed);
       cube('v2-trailer-skirt', x, 0.52, z, d.w - 0.5, 0.74, d.d - 0.6, steel);
       for (const s of [-1, 1]) {
         cube('v2-trailer-rail', x + s * (d.w / 2 - 0.04), d.h - 0.01, z, 0.08, 0.1, d.d, yellow).castShadow = false;

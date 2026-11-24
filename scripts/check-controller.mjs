@@ -1,6 +1,8 @@
-// Regresiones deterministas de la máquina de estados. No necesita navegador:
-// ataca directamente las combinaciones que antes daban falsos positivos en
-// el harness visual (dive->dive, acciones simultáneas y momentum lógico).
+// Regresiones deterministas de la máquina de estados del jugador. Sin navegador.
+// PRUEBAS (corrida 6, FPS): se retiraron los bloques de rodada/evadir, cobertura
+// pegada y blindfire (mecánicas retiradas del jugador; ver run6/pruebas/tabla.md).
+// Lo que garantizaban y sigue vivo está en check-fps-movement (sin dive/flip,
+// slide ≤8 m/s, la inclinación nunca mete la cabeza, el asomo baja al soltar).
 import { Controller } from '../src/player/controller.js';
 import { TUNING } from '../src/config/tuning.js';
 import { DEFAULT_LOADOUT, Weapons } from '../src/combat/weapons.js';
@@ -15,13 +17,13 @@ class TestInput {
     this.mv = { x: 0, z: 0 };
     this.sprintHeld = false;
     this.jumpPressed = false;
-    this.evadePressed = false;
+    this.crouchHeld = false;
     this.aimHeld = false;
     this.firePressed = false;
     this.weaponPressed = false;
   }
   moveVec() { return this.mv; }
-  endFrame() { this.jumpPressed = false; this.evadePressed = false; }
+  endFrame() { this.jumpPressed = false; this.crouchPressed = false; }
 }
 
 function makeController() {
@@ -40,10 +42,9 @@ function makeController() {
     thirdPerson: true,
     targetYaw: 0,
   };
-  let dives = 0;
-  const controller = new Controller(world, camera, { onDive() { dives++; } });
+  const controller = new Controller(world, camera, {});
   controller.respawn({ x: 0, z: 0, yaw: 0 });
-  return { controller, world, ranges, dives: () => dives };
+  return { controller, world, ranges };
 }
 
 function frame(controller, input, count = 1) {
@@ -63,203 +64,13 @@ check(DEFAULT_LOADOUT[PAD_DPAD_SLOTS[12]] === 'grenade' &&
   DEFAULT_LOADOUT[PAD_DPAD_SLOTS[15]] === 'smg',
 `mapeo de cruceta inválido (${JSON.stringify(PAD_DPAD_SLOTS)})`);
 
-function putAtCoverEdge(controller, h = 1.1) {
-  controller.cover = {
-    a: { x: -3, z: 0 }, b: { x: 3, z: 0 }, n: { x: 0, z: 1 }, h,
-  };
-  controller.state = 'cover';
-  controller.stateT = 0.5;
-  controller.pos = { x: 3 - 0.38 * 0.7, z: 0.38 };
-  controller.vel = { x: 0, z: 0 };
-}
-
-// Correr normal debe ser run lógico y ganar momentum real.
+// Correr normal debe ser run lógico.
 {
   const { controller } = makeController();
   const input = new TestInput();
   input.mv = { x: 0, z: 1 };
   frame(controller, input, 90);
-  check(controller.state === 'run', `carrera normal quedó en ${controller.state}`);
-  check(controller.runT > 1, `carrera no acumuló tiempo (${controller.runT})`);
-  check(controller.runDist >= TUNING.evade.momentumRunDist,
-    `carrera no acumuló distancia (${controller.runDist})`);
-}
-
-// Spam en campo abierto nunca puede reiniciar dive->dive.
-{
-  const { controller, dives } = makeController();
-  const input = new TestInput();
-  input.mv = { x: 0, z: 1 };
-  let restarts = 0;
-  for (let i = 0; i < 300; i++) {
-    const beforeState = controller.state;
-    const beforeT = controller.stateT;
-    input.evadePressed = i === 0 || i % 12 === 0;
-    controller.update(DT, input);
-    if (beforeState === 'dive' && controller.state === 'dive' && controller.stateT < beforeT) restarts++;
-    input.endFrame();
-  }
-  check(restarts === 0, `spam reinició dive ${restarts} veces`);
-  // Pulsos cada 200 ms: como cada dive dura 360 ms, solo uno de cada dos
-  // puede iniciar otro; no existe espera adicional después de terminar.
-  check(dives() >= 12 && dives() <= 14, `spam inició ${dives()} evasiones en 5 s`);
-}
-
-// Al recuperar control, la siguiente pulsación funciona en el primer frame.
-{
-  const { controller, dives } = makeController();
-  const input = new TestInput();
-  input.mv = { x: 0, z: 1 };
-  input.evadePressed = true;
-  frame(controller, input);
-  let guard = 0;
-  while (controller.state === 'dive' && guard++ < 60) frame(controller, input);
-  check(controller.state === 'run', `evade no devolvió control (${controller.state})`);
-  input.evadePressed = true;
-  frame(controller, input);
-  check(controller.state === 'dive' && dives() === 2,
-    `segunda pulsación inmediata no inició evade (${controller.state}, ${dives()})`);
-}
-
-// Mantener el botón no genera otro edge al terminar la animación.
-{
-  const { controller, dives } = makeController();
-  const input = new TestInput();
-  input.mv = { x: 0, z: 1 };
-  input.evadePressed = true; // único keydown válido
-  frame(controller, input);
-  input.evadeHeld = true;    // el controlador deliberadamente no consume held
-  frame(controller, input, 120);
-  check(dives() === 1, `botón mantenido inició ${dives()} evasiones`);
-}
-
-// Un input opuesto durante dive no invierte la velocidad instantáneamente.
-{
-  const { controller } = makeController();
-  const input = new TestInput();
-  input.mv = { x: 1, z: 0 };
-  input.evadePressed = true;
-  frame(controller, input);
-  frame(controller, input, 11);
-  const before = { ...controller.vel };
-  input.mv = { x: -1, z: 0 };
-  input.evadePressed = true;
-  frame(controller, input, 2);
-  check(before.x * controller.vel.x + before.z * controller.vel.z > 0,
-    'evade opuesto invirtió la velocidad en seco');
-}
-
-// Sprint+evade sin carrera previa no obtiene alcance roadie.
-{
-  const { controller, ranges } = makeController();
-  const input = new TestInput();
-  frame(controller, input, 10);
-  input.mv = { x: 0, z: 1 };
-  input.sprintHeld = true;
-  input.evadePressed = true;
-  frame(controller, input);
-  check(Math.max(...ranges) <= TUNING.evade.slideMaxDist,
-    `sprint+evade regaló alcance ${Math.max(...ranges)}`);
-}
-
-// En el extremo, botones explícitos ganan a la salida automática.
-{
-  const { controller } = makeController();
-  const input = new TestInput();
-  putAtCoverEdge(controller);
-  input.mv = { x: 1, z: 0 };
-  input.sprintHeld = true;
-  input.jumpPressed = true;
-  frame(controller, input);
-  check(controller.state === 'run' && !controller.grounded,
-    `Shift+salto terminó ${controller.state}, grounded=${controller.grounded}`);
-}
-{
-  const { controller, dives } = makeController();
-  const input = new TestInput();
-  putAtCoverEdge(controller);
-  input.mv = { x: 1, z: 0 };
-  input.sprintHeld = true;
-  input.evadePressed = true;
-  frame(controller, input);
-  check(controller.state === 'dive' && dives() === 1,
-    `Shift+evade terminó ${controller.state}`);
-}
-{
-  const { controller, dives } = makeController();
-  const input = new TestInput();
-  putAtCoverEdge(controller);
-  input.mv = { x: 0.72, z: 0.72 };
-  input.evadePressed = true;
-  frame(controller, input);
-  check(controller.state === 'dive' && dives() === 1,
-    `evade diagonal de extremo terminó ${controller.state}`);
-}
-
-// El stick lateral queda locked-in incluso sostenido contra el extremo.
-{
-  const { controller } = makeController();
-  const input = new TestInput();
-  putAtCoverEdge(controller, 2.1);
-  input.mv = { x: 1, z: 0 };
-  frame(controller, input, 90);
-  check(controller.state === 'cover' && !!controller.cover,
-    `stick lateral expulsó del cover (${controller.state})`);
-  check(controller.speed < 0.05,
-    `stick contra el extremo dejó velocidad fantasma (${controller.speed})`);
-}
-
-// En cover alto, disparar desde la orilla activa blindfire contextual aunque
-// la cámara no apunte con precisión alrededor de la esquina.
-for (const side of [-1, 1]) {
-  const { controller } = makeController();
-  const input = new TestInput();
-  putAtCoverEdge(controller, 2.1);
-  if (side < 0) controller.pos.x = -3 + 0.38 * 0.7;
-  frame(controller, input, 1);
-  controller.update(DT, input, true);
-  check(controller.state === 'cover' && !!controller.blindMode,
-    `blindfire alto ${side < 0 ? 'izquierdo' : 'derecho'} no activó pose`);
-}
-
-// Engancharse a una cobertura cercana absorbe distancia y momentum en varios
-// frames; nunca teletransporta ni borra en seco la componente paralela.
-{
-  const { controller } = makeController();
-  const input = new TestInput();
-  const face = {
-    a: { x: -3, z: 0 }, b: { x: 3, z: 0 }, n: { x: 0, z: 1 }, h: 2.1,
-  };
-  controller.pos = { x: 0, z: 1.05 };
-  controller.vel = { x: 2.2, z: -4.4 };
-  const before = { ...controller.pos };
-  controller._enterCover(face, { x: 0, z: 0.38 });
-  check(controller.pos.x === before.x && controller.pos.z === before.z,
-    'entrada a cover cambió la posición en el mismo frame');
-  check(controller.vel.x > 1 && Math.abs(controller.vel.z) < 0.01,
-    `entrada a cover no conservó momentum paralelo (${controller.vel.x}, ${controller.vel.z})`);
-  controller.update(DT, input, false);
-  const firstStep = Math.hypot(controller.pos.x - before.x, controller.pos.z - before.z);
-  check(firstStep > 0.001 && firstStep < 0.2,
-    `primer frame de entrada a cover fue inválido (${firstStep})`);
-  for (let i = 0; i < 20; i++) controller.update(DT, input, false);
-  check(Math.abs(controller.pos.z - 0.38) < 0.015 && !controller.coverEntry,
-    `entrada a cover no se asentó (${controller.pos.z}, entry=${!!controller.coverEntry})`);
-}
-
-// La transición lateral de blindfire queda lista temprano; el chequeo físico
-// de muzzle/brazos sigue siendo la autoridad final en el loop de combate.
-{
-  const { controller } = makeController();
-  const input = new TestInput();
-  putAtCoverEdge(controller, 2.1);
-  let readyFrame = 0;
-  while (controller.blindPoseExposure < TUNING.cover.blindFireReady && readyFrame < 10) {
-    controller.update(DT, input, true);
-    readyFrame++;
-  }
-  check(readyFrame <= 2 && !!controller.blindMode,
-    `blindfire lateral tardó ${readyFrame} frames en quedar listo`);
+  check(controller.state === "run", `carrera normal quedó en ${controller.state}`);
 }
 
 // Pendiente descendente: los pies permanecen adheridos al suelo y el rig
@@ -308,37 +119,6 @@ for (const side of [-1, 1]) {
     `respawn conservó la inclinación anterior (${controller.groundPitch})`);
 }
 
-// Salidas explícitas: sprint+lateral sale; stick atrás usa detach filtrado.
-{
-  const { controller } = makeController();
-  const input = new TestInput();
-  putAtCoverEdge(controller, 2.1);
-  input.mv = { x: 1, z: 0 };
-  input.sprintHeld = true;
-  frame(controller, input);
-  check(controller.state === 'roadie', `sprint+lateral terminó ${controller.state}`);
-}
-{
-  const { controller } = makeController();
-  const input = new TestInput();
-  putAtCoverEdge(controller, 2.1);
-  input.mv = { x: 0, z: -1 };
-  frame(controller, input, 12);
-  check(controller.state === 'run' && !controller.cover,
-    `stick atrás no hizo detach (${controller.state})`);
-}
-
-// Un diagonal principalmente lateral no debe confundirse con stick atrás.
-{
-  const { controller } = makeController();
-  const input = new TestInput();
-  putAtCoverEdge(controller, 2.1);
-  input.mv = { x: 1, z: -0.25 };
-  frame(controller, input, 30);
-  check(controller.state === 'cover' && !!controller.cover,
-    `diagonal lateral expulsó del cover (${controller.state})`);
-}
-
 // Muerte cancela swap/reload y conserva el arma visible en ese instante.
 {
   const weapons = new Weapons();
@@ -351,34 +131,32 @@ for (const side of [-1, 1]) {
     `arma cambió tras morir (${atDeath} -> ${weapons.cur})`);
 }
 
-// La muerte tiene prioridad sobre cualquier transición de movimiento. Ningún
-// estado de cover/evade/mantle puede sobrevivir hasta spectator o respawn.
-for (const state of ['cover', 'slide', 'dive', 'mantle', 'roadie']) {
+// La muerte tiene prioridad sobre cualquier transición de movimiento: ningún
+// estado ni postura FPS (slide, mantle, sprint, agachado, inclinado, asomado,
+// golpe) sobrevive hasta espectador o reaparición.
+for (const state of ["slide", "mantle", "roadie", "crouch", "melee"]) {
   const { controller } = makeController();
   controller.state = state;
-  controller.cover = { a: { x: -2, z: 0 }, b: { x: 2, z: 0 }, h: 2 };
-  controller.coverEntry = { target: { x: 0, z: 0.38 }, t: 0.02, dur: 0.15, tangentSpeed: 2 };
-  controller.slide = { target: { x: 1, z: 1 }, face: controller.cover, dir: { x: 1, z: 0 } };
-  controller.dive = { dir: { x: 1, z: 0 } };
+  controller.slide = { t: 0.1, dur: 0.5, dir: { x: 1, z: 0 } };
   controller.mantle = { t: 0.2, dur: 0.6 };
+  controller.crouched = true; controller.crouch01 = 1;
+  controller.lean = -1; controller.peek = 0.6;
   controller.aim = true;
-  controller.firingBlind = 0.25;
-  controller.blindMode = 'right';
   controller.vel = { x: 5, z: -2 };
   controller.kill();
-  check(controller.dead && controller.state === 'idle',
+  check(controller.dead && controller.state === "idle",
     `muerte desde ${state} dejó estado ${controller.state}`);
-  check(!controller.cover && !controller.coverEntry && !controller.slide &&
-    !controller.dive && !controller.mantle && !controller.aim &&
-    !controller.blindMode && controller.firingBlind === 0 && controller.speed === 0,
+  check(!controller.slide && !controller.mantle && !controller.aim && !controller.crouched &&
+    controller.crouch01 === 0 && controller.lean === 0 && controller.peek === 0 &&
+    controller.stanceLow === 0 && controller.speed === 0,
   `muerte desde ${state} conservó estado transitorio`);
   controller.respawn({ x: 0, z: 0, yaw: 0 });
-  check(!controller.dead && controller.state === 'idle' && controller.grounded,
+  check(!controller.dead && controller.state === "idle" && controller.grounded,
     `respawn después de ${state} no recuperó control`);
 }
 
 if (failures.length) {
-  for (const failure of failures) console.error('FALLO:', failure);
+  for (const failure of failures) console.error("FALLO:", failure);
   process.exit(1);
 }
-console.log('CONTROLLER OK');
+console.log("CONTROLLER OK");

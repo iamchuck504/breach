@@ -5,9 +5,18 @@ import { WebSocket } from 'ws';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { eyeAt } from './lib-test.mjs';
+import { freePort } from './lib-test.mjs';
+import { withSamples } from './lib-fps-sample.mjs';
+// PRUEBAS (ronda 2 de RED): cada fire/rocket/nade/protoFire humano lleva su muestra `fs`
+// (n creciente, w = arma equipada) desde el último estado `s` de ese emisor
+const SAMPLED = withSamples((peer, m) => peer.ws.send(JSON.stringify(m)));
+
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const port = 8797;
+const port = FREE_PORT;
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
   // Esta prueba aísla autoridad balística; el flujo de presentación tiene su
   // propio contrato y aquí se desactiva para no añadir 13 s a cada ejecución.
@@ -20,7 +29,7 @@ function connect(name, action) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}`);
     const peer = { ws, welcome: null, messages: [], waiters: [] };
-    ws.on('open', () => ws.send(JSON.stringify({ t: 'join', action, name, v: 0 })));
+    ws.on('open', () => ws.send(JSON.stringify({ t: 'join', action, name, v: 0, hp: 2, fps: 1 })));
     ws.on('error', reject);
     ws.on('message', (raw) => {
       const msg = JSON.parse(raw);
@@ -51,10 +60,10 @@ function waitFor(peer, pred, timeout = 1200) {
   });
 }
 
-const send = (peer, msg) => peer.ws.send(JSON.stringify(msg));
+const send = (peer, msg) => SAMPLED(peer, msg);
 const firePacket = (peer, target) => ({
   t: 'fire', w: 'smg',
-  o: [peer.self.x, 1.1, peer.self.z],
+  o: eyeAt(peer.self.x, 0, peer.self.z, peer.self.yaw ?? 0), // ojo FPS (servidor ≤0.02 m)
   p: [target.self.x, 1.1, target.self.z], d: [],
 });
 const hpOf = (snap, id) => snap.ps.find((p) => p.id === id)?.hp;
@@ -86,10 +95,10 @@ try {
     send(b, { t: 's', x: bx, z: bz, y: 0, yaw: 0, st: 'idle', w: 'smg', am: 50, ar: 150 });
     send(a, { t: 's', x: bx, z: bz - 1.4, y: 0, yaw: Math.PI, st: 'idle', w: 'smg', am: 50, ar: 150 });
   };
-  place(); b.self.x = bx; b.self.z = bz; a.self.x = bx; a.self.z = bz - 1.4;
+  place(); b.self.x = bx; b.self.z = bz; b.self.yaw = 0; a.self.x = bx; a.self.z = bz - 1.4;
   await delay(150);
 
-  send(a, { t: 'fire', w: 'melee', o: [bx, 1.1, bz - 1.4], p: [bx, 1.0, bz], d: [] });
+  send(a, { t: 'fire', w: 'melee', o: eyeAt(bx, 0, bz - 1.4, Math.PI), p: [bx, 1.0, bz], d: [] });
   send(a, { t: 'hit', target: b.welcome.id, dmg: 60, part: 'body', p: [bx, 1.0, bz] });
   const confirm = await waitFor(a, (m) => m.t === 'hitConfirm' && m.target === b.welcome.id);
   if (!(confirm.dz > 0.3)) throw new Error('la patada no aturde: dz=' + confirm.dz);
@@ -113,7 +122,7 @@ try {
   snap = await waitFor(a, (m) => m.t === 'snap' && hpOf(m, a.welcome.id) < 100, 2000);
 
   // una segunda patada dentro del margen no vuelve a aturdir
-  send(a, { t: 'fire', w: 'melee', o: [bx, 1.1, bz - 1.4], p: [bx, 1.0, bz], d: [] });
+  send(a, { t: 'fire', w: 'melee', o: eyeAt(bx, 0, bz - 1.4, Math.PI), p: [bx, 1.0, bz], d: [] });
   send(a, { t: 'hit', target: b.welcome.id, dmg: 60, part: 'body', p: [bx, 1.0, bz] });
   a.messages.length = 0;
   const again = await waitFor(a, (m) => m.t === 'hitConfirm' && m.target === b.welcome.id, 2000).catch(() => null);

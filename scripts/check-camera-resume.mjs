@@ -3,11 +3,14 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CHROME } from './lib-chrome.mjs';
+import { freePort } from './lib-test.mjs';
+// puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
+const FREE_PORT = await freePort();
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const server = spawn(process.execPath, [
   path.join(root, 'node_modules', 'vite', 'bin', 'vite.js'),
-  '--host', '127.0.0.1', '--port', '8794',
+  '--host', '127.0.0.1', '--port', String(FREE_PORT),
 ], { cwd: root, stdio: 'ignore' });
 
 let browser;
@@ -17,7 +20,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 960, height: 640 } });
   const pageErrors = [];
   page.on('pageerror', (e) => pageErrors.push(e.message));
-  await page.goto('http://localhost:8794/?nolock=1', { waitUntil: 'networkidle' });
+  await page.goto(`http://localhost:${FREE_PORT}/?nolock=1`, { waitUntil: 'networkidle' });
   await page.evaluate(() => document.getElementById('btn-enter')?.click());
   await page.waitForSelector('#splash.off', { state: 'attached' });
   await page.evaluate(() => document.getElementById('btn-practice').click());

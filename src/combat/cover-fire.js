@@ -1,6 +1,9 @@
 // Contrato físico entre pose de cobertura y balística. La cámara decide la
 // intención, pero el arma solo puede disparar cuando hombro, cañón y muzzle
 // tienen una salida real de la geometría.
+// FPS (etapa B): el JUGADOR ya no tiene cobertura pegada ni blindfire; este
+// módulo queda para los bots (rig.js usa coverAimPose/coverBlindPose con sus
+// estados cover_*/blind_*) hasta que la etapa de bots los retire.
 
 export function coverKind(face) {
   return face?.kind || (face?.h <= 1.4 ? 'low' : 'high');

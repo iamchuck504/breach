@@ -6,7 +6,8 @@ export function blastFactor(distance,radius,core=.7){
  const t=Math.max(0,Math.min(1,(distance-core)/(radius-core)));
  return 1-t*t*(3-2*t);
 }
-export const blastBodyHeight=target=>target.crouch||String(target.st??target.state).includes('low') ? .85:1.65;
+// blastH: altura derivada del volumen de la pose (hit-pose.js); sin ella, la regla por estado
+export const blastBodyHeight=target=>target.blastH??(target.crouch||String(target.st??target.state).includes('low') ? .85:1.65);
 export function blastExposure(origin,target,blocked){
  const height=blastBodyHeight(target);
  const samples=[[0,height*.23,0,.15],[0,height*.52,0,.30],[0,height*.86,0,.25],

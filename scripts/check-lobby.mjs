@@ -45,7 +45,7 @@ function client(name, action) {
     });
   };
   const send = (obj) => ws.send(JSON.stringify(obj));
-  return once(ws, 'open').then(() => { send({ t: 'join', action, name, v: 0 }); return { ws, wait, send }; });
+  return once(ws, 'open').then(() => { send({ t: 'join', action, name, v: 0, hp: 2, fps: 1 }); return { ws, wait, send }; });
 }
 
 try {
