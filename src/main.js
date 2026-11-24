@@ -4268,7 +4268,7 @@ function stepOrdnance(dt) {
   rockets.update(dt, G.mode ? allCharacterTargets() : [], explodeRocket);
 }
 
-function simStep(dt) {
+function simStep(dt, frameRemaining) {
   G.simClock += dt;
   hud.pickupPrompt('');
   const p = G.player;
@@ -4443,7 +4443,7 @@ function simStep(dt) {
     noteLocalPose(p, p.weaponKey, G.simClock - dt);
     p.offlineDodgePose = true;
   }
-  p.update(dt, input, (input.fireHeld || G.fireBuffer > 0) && !p.dead && hasAmmo && !dazed);
+  p.update(dt, input, (input.fireHeld || G.fireBuffer > 0) && !p.dead && hasAmmo && !dazed, frameRemaining);
 
   if (!G.net && p.offlineDodgePose) {
     noteLocalPose(p, p.weaponKey, G.simClock);
@@ -4480,7 +4480,7 @@ function simStep(dt) {
   G.weapons.aimHint = p.aim; // menos retroceso lateral apuntando
   const fired = p.dead ? false
     : G.weapons.update(dt, input.fireHeld && !dazed, input.firePressed || G.fireBuffer > 0, canFire && !dazed,
-      p.state !== 'melee');
+      p.state !== 'melee', frameRemaining);
   // (gatillo en seco, recarga y cambio suenan por los eventos del arma)
   // Tras la primera inserción desde 0, conservar margen para que cover/arma
   // alcancen una pose válida antes de consumir el click que estaba esperando.
@@ -4860,7 +4860,7 @@ function frame(now) {
       let acc = dt, steps = 0;
       while (acc > 1e-6 && steps < 4) {
         const st = Math.min(acc, 1 / 30);
-        simStep(st);
+        simStep(st, G.net ? acc - st : 0);
         stepOrdnance(st);
         acc -= st; steps++;
       }

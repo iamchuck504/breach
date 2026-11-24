@@ -10,7 +10,7 @@ import { clearClip } from './lib-clip.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
 import { CHROME } from './lib-chrome.mjs';
-import { freePort } from './lib-test.mjs';
+import { freePort, untilGame, waitHttp } from './lib-test.mjs';
 // puertos libres: en esta máquina hay huérfanos en puertos fijos (PRUEBAS)
 const FREE_PORT = await freePort();
 const PORT = FREE_PORT;
@@ -18,7 +18,6 @@ const PORT = FREE_PORT;
 const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')], {
   env: { ...process.env, BREACH_FILL_BOTS: '0', PORT: String(PORT) }, stdio: 'ignore',
 });
-await new Promise((resolve) => setTimeout(resolve, 900));
 
 let browser;
 const failures = [];
@@ -29,6 +28,7 @@ const check = (name, ok, detail = '') => {
 };
 
 try {
+  await waitHttp(`http://localhost:${PORT}/status`);
   browser = await chromium.launch({ executablePath: CHROME, headless: true });
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   page.on('pageerror', (error) => {
@@ -39,9 +39,8 @@ try {
   await page.goto(`http://localhost:${PORT}/?nolock=1`, { waitUntil: 'networkidle' });
   await page.evaluate(() => { window.BREACH.mapChoice = 'fortaleza'; });
   await page.evaluate(() => document.getElementById('btn-practice').click());
-  await page.waitForFunction(() => !!window.BREACH?.player && !!window.BREACH?.rig,
-    null, { timeout: 10000 });
-  await page.waitForTimeout(900);
+  await page.waitForFunction(() => window.BREACH_FP?.live && window.BREACH?.rig,
+    null, { timeout: 30000 });
 
   // Colocar al jugador en un estado estable y entregar el sniper sin depender
   // del tiempo de hold del pedestal; la recogida ya tiene su propia suite.
@@ -65,12 +64,12 @@ try {
     G.weapons.state.sniper.reload = 0;
     I._mouseAim = true;
   });
-  // Esperar al estado óptico, no a un número fijo de milisegundos: en una
-  // máquina cargada la interpolación conserva el mismo comportamiento pero
-  // puede necesitar algunos frames adicionales. Si nunca converge, el check
-  // inferior sigue fallando con el FOV real observado.
-  await page.waitForFunction(() => Math.abs(window.BREACH_CAM.fov - 20) < 1.2,
-    null, { timeout: 1800 }).catch(() => {});
+  // La cámara fija el FOV base en su destino al terminar la interpolación.
+  // El FOV dibujado se comprueba por separado, incluidos los efectos ópticos.
+  const zoomReady = await untilGame(page, () => {
+    const G = window.BREACH;
+    return G.scopeActive && G.player.cam.fov === G.weapons.def.fovAim;
+  }, 3);
 
   const scoped = await page.evaluate(() => {
     const G = window.BREACH;
@@ -90,11 +89,7 @@ try {
       scoped.aria === 'false' && !scoped.genericReticle,
     JSON.stringify(scoped));
   check('scope usa zoom óptico real cercano a 20°',
-    Math.abs(scoped.fov - 20) < 1.2, `fov=${scoped.fov.toFixed(2)}`);
-
-  // La entrada al hombro es una transición visual breve; medir estabilidad
-  // después de que termina evita confundir esa animación intencional con drift.
-  await page.waitForTimeout(360);
+    zoomReady && Math.abs(scoped.fov - 20) < 1.2, `fov=${scoped.fov.toFixed(2)}`);
 
   // La cruz del scope no deriva ni cambia de color: ADS usa siempre el rayo
   // central y no hereda estados de obstrucción del muzzle.
@@ -231,9 +226,8 @@ try {
       duringSwap.fov > duringSwap.fov0 + 0.05,
     JSON.stringify(duringSwap));
 
-  await page.waitForFunction(() => !window.BREACH.weapons.swapping,
-    null, { timeout: 1800 }).catch(() => {});
-  const returnSwapStarted = await page.evaluate(() =>
+  const swapDone = await untilGame(page, () => !window.BREACH.weapons.swapping, 3);
+  const returnSwapStarted = swapDone && await page.evaluate(() =>
     window.BREACH.weapons.startSwap('sniper'));
   // tope en TIEMPO DE JUEGO (3 s): cambio + subida del ocular + FOV de la mira
   const swapT0 = await page.evaluate(() => window.BREACH.simClock);

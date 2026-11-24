@@ -418,7 +418,7 @@ export class Weapons {
 
   // Devuelve true si disparó (o lanzó) este frame. `canHandle` = las manos
   // están libres para el arma (false durante melee y su recovery).
-  update(dt, wantsFire, wantsFirePressed, canFire, canHandle = true) {
+  update(dt, wantsFire, wantsFirePressed, canFire, canHandle = true, frameRemaining = 0) {
     const s = this.st, d = this.def;
     this.reloadInterrupted = this._reloadInterruptPending;
     this._reloadInterruptPending = false;
@@ -586,7 +586,9 @@ export class Weapons {
     const interval = 60 / d.rpm;
     const left = cdBefore - credit; // lo que faltaba al empezar el paso
     this._credit = cdBefore > 0 ? Math.min(interval * 0.5, Math.max(0, dt - left)) : 0;
-    s.cd = interval;
+    // En línea todos los subpasos de este cuadro salen juntos al cable. El
+    // resto del cuadro del tiro aún no cuenta como separación entre envíos.
+    s.cd = interval + (this.online && d.auto ? frameRemaining : 0);
     if (d.thrown) {
       this._autoFire = false;
       this._throw = { weapon: this.cur, t: 0, release: d.throwRelease ?? 0.28, total: d.throwTime ?? 0.5, released: false };

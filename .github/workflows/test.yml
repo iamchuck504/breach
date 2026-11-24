@@ -8,8 +8,8 @@ on:
 jobs:
   test:
     runs-on: macos-latest
-    # La suite creció a 103 comprobaciones: en este runner tarda más de una hora.
-    timeout-minutes: 120
+    # Las 103 suites con reintentos alcanzaron dos horas en el runner macOS alojado.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
         with:

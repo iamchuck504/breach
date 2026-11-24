@@ -464,7 +464,7 @@ export class Controller {
     return face;
   }
 
-  _beginSlide(mw) {
+  _beginSlide(mw, frameRemaining = 0) {
     const F = TUNING.fp;
     const sp = this.speed;
     const dir = sp > 0.1 ? { x: this.vel.x / sp, z: this.vel.z / sp }
@@ -472,19 +472,21 @@ export class Controller {
     this.slide = { t: 0, dir, v0: Math.min(F.slideMaxSpeed, sp + F.slideBoost) };
     this.vel.x = dir.x * this.slide.v0; this.vel.z = dir.z * this.slide.v0;
     this.crouched = true;
-    this.sinceSprint = 0;
+    this.sinceSprint = -frameRemaining;
     this._setState('slide');
     this.ev.onSlideStart?.(0);
   }
 
   // Salir del sprint por la causa que sea: el retraso de disparo arranca aquí
-  _leaveSprint(input, next) {
-    this.sinceSprint = 0;
+  _leaveSprint(input, next, frameRemaining = 0) {
+    // En línea, la última postura del sprint puede salir en este mismo
+    // cuadro. Su recuperación empieza a contar desde el envío efectivo.
+    this.sinceSprint = -frameRemaining;
     input?.releaseToggle?.('sprint');
     this._setState(next);
   }
 
-  update(dt, input, firing) {
+  update(dt, input, firing, frameRemaining = 0) {
     const F = TUNING.fp, M = TUNING.move;
     this.stateT += dt;
     this.meleeCd = Math.max(0, this.meleeCd - dt);
@@ -537,7 +539,7 @@ export class Controller {
         if (this.state === 'roadie' && !sprintWant) {
           // en el aire el sprint se mantiene hasta aterrizar (sin cambio de velocidad)
           if (this.grounded || !input.sprintHeld || firing || input.aimHeld) {
-            this._leaveSprint(input, hasInput || this.speed > 0.4 ? 'run' : 'idle');
+            this._leaveSprint(input, hasInput || this.speed > 0.4 ? 'run' : 'idle', frameRemaining);
             this._roadieExitT = 0.05; // antirrebote: solo tras SALIR del sprint
           }
         }
@@ -545,7 +547,7 @@ export class Controller {
         if (this.state === 'roadie' && input.crouchPressed && this.grounded &&
             this.speed >= F.slideMinSpeed && this.slideCd <= 0) {
           input.releaseToggle?.('sprint');
-          this._beginSlide(mw);
+          this._beginSlide(mw, frameRemaining);
           break;
         }
         // --- agacharse: intención o techo bajo; sprintar levanta

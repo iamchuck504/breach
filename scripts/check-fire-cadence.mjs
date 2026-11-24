@@ -12,6 +12,8 @@ import { Weapons } from '../src/combat/weapons.js';
 import { TUNING } from '../src/config/tuning.js';
 import * as G from '../server/guards.js';
 import { NetClient } from '../src/net/client.js';
+import { Controller } from '../src/player/controller.js';
+import { sprintFireOk } from '../src/combat/fire-gates.js';
 
 const W = TUNING.weapons;
 const WIN = [0.1, 0.2, 0.4, 1];
@@ -27,6 +29,63 @@ const NEW = {
   allow: (e, w, t, m) => G.fireCadenceAllows(e, w, iv(w), t, { requireSwapEvidence: true, ...m }),
   commit: (e, w, t, m) => G.commitFireCadence(e, w, iv(w), t, { requireSwapEvidence: true, ...m }),
 };
+
+// Una ráfaga empieza en el primer subpaso del cuadro largo. En el cable
+// ese tiro sale al final del cuadro; los siguientes ya salen a 30/60 c/s.
+for (const rate of [30, 60]) for (const frameMs of [100, 175, 250]) {
+  const w = new Weapons(), player = { fps: true };
+  w.online = true;
+  let wall = 0, ct = 0, arrival = 0, shots = 0, stateTime = 0;
+  const deliver = delay => {
+    arrival = Math.max(arrival, wall + delay);
+    G.noteMessageArrival(player, arrival);
+    G.advanceCadenceClock(player, +ct.toFixed(3), arrival);
+  };
+  deliver(0);
+  for (let frame = 0; frame <= rate; frame++) {
+    const elapsed = frame ? 1 / rate : frameMs / 1000;
+    wall += elapsed;
+    for (let left = Math.min(elapsed, 0.1); left > 1e-6;) {
+      const step = Math.min(left, 1/30);
+      ct += step; left -= step; stateTime += step;
+      if (w.update(step, true, false, true, true, left)) {
+        // 60 ms para el primer tiro y 0 para los siguientes, siempre FIFO.
+        deliver(shots ? 0 : 0.06);
+        const meta = { sq: ++shots };
+        assert.ok(G.srvBurstAllows(player, 'smg', iv('smg'), arrival),
+          `ráfaga honesta rechazada: cuadro de ${frameMs} ms a ${rate} c/s, tiro ${shots}`);
+        assert.ok(G.fireCadenceAllows(player, 'smg', iv('smg'), player.cclk, meta));
+        G.commitSrvBurst(player, 'smg', arrival);
+        G.commitFireCadence(player, 'smg', iv('smg'), player.cclk, meta);
+      }
+      if (stateTime >= 1 / TUNING.net.sendHz) {
+        deliver(0); stateTime %= 1 / TUNING.net.sendHz;
+      }
+    }
+  }
+  assert.equal(shots, 11, 'un segundo de fuego sostenido tras el cuadro largo');
+  assert.equal(w.st.mag, W.smg.mag - shots);
+}
+console.log('OK  SMG en línea: cuadros de 100/175/250 ms, 30/60 c/s, difusión FIFO con jitter de 60 ms');
+
+// La transición publica la última postura del sprint al final de un cuadro
+// de 100 ms. Aun llegando 60 ms tarde, debe permitir el primer tiro honesto.
+{
+  const world = { groundHeight: () => 0, resolveCircle() {}, raycast: () => null };
+  const cam = { yaw: 0, pitch: 0, flatForward: () => ({x:0,z:-1}), flatRight: () => ({x:1,z:0}) };
+  const p = new Controller(world, cam);
+  p.respawn({x:0,z:0,yaw:0});
+  p.state = 'roadie';
+  const input = { moveVec: () => ({x:0,z:0}) };
+  let wall = 0.1;
+  for (let i = 0; i < 3; i++) p.update(1/30, input, true, (2-i)/30);
+  while (!p.fireAligned() && wall < 0.5) {
+    p.update(1/60, input, true);
+    wall += 1/60;
+  }
+  assert.ok(p.fireAligned() && sprintFireOk(0.16, wall, 'smg'), 'recuperación tras el sprint entre envíos reales');
+}
+
 const maxIn = (times, w) => {
   let best = 0;
   for (let i = 0, j = 0; i < times.length; i++) { while (times[i] - times[j] >= w - 1e-9) j++; best = Math.max(best, i - j + 1); }

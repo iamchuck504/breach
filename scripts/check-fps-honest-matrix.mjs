@@ -52,11 +52,25 @@ function startProxy(port, target, seed, stats) {
   const wss = new WebSocketServer({ server: http });
   wss.on('connection', (client) => {
     const up = new WebSocket(`ws://127.0.0.1:${target}`);
-    // UN temporizador encadenado por sentido (un setTimeout por mensaje desordenaba)
-    const lane = () => { let last = 0, seq = 0, done = -1; const q = []; let busy = false;
-      const pump = () => { if (!q.length) { busy = false; return; } busy = true; const { at, fn, n } = q[0];
-        setTimeout(() => { q.shift(); if (n < done) stats.reordered++; done = n; stats.delivered++; fn(); pump(); }, Math.max(0, at - Date.now())); };
-      return (fn) => { const at = Math.max(last, Date.now() + rnd() * 60); last = at; q.push({ at, fn, n: seq++ }); if (!busy) pump(); }; };
+    // Un temporizador por sentido. Al despertar, entregar en orden todo lo
+    // vencido: un temporizador adicional por paquete inventaba más latencia.
+    const lane = () => {
+      const queue = [];
+      let last = 0, seq = 0, done = -1;
+      const pump = () => {
+        while (queue.length && queue[0].at <= performance.now()) {
+          const { fn, n } = queue.shift();
+          if (n <= done) stats.reordered++;
+          done = n; stats.delivered++; fn();
+        }
+        if (queue.length) setTimeout(pump, Math.ceil(queue[0].at - performance.now()));
+      };
+      return fn => {
+        last = Math.max(last, performance.now() + rnd() * 60);
+        queue.push({ at: last, fn, n: seq++ });
+        if (queue.length === 1) pump();
+      };
+    };
     const toServer = lane(), toClient = lane();
     const pending = [];
     up.on('open', () => { for (const m of pending.splice(0)) up.send(m); });
@@ -101,6 +115,7 @@ async function runAt(rate, seed, special) {
       page.setDefaultTimeout(300000);
       // sin recarga en caliente de Vite (otros editan el árbol durante la prueba)
       await page.addInitScript(() => { const W = window.WebSocket;
+        localStorage.setItem('breach.video.scale', '0.5');
         window.WebSocket = function (url, proto) { if (proto === 'vite-hmr' || (Array.isArray(proto) && proto.includes('vite-hmr'))) return { readyState: 3, send() {}, close() {}, addEventListener() {}, removeEventListener() {} }; return new W(url, proto); };
         window.WebSocket.prototype = W.prototype; Object.assign(window.WebSocket, { OPEN: 1, CLOSED: 3, CONNECTING: 0, CLOSING: 2 }); });
       // 30/60 c/s REALES (cuadros retenidos hasta que pasa `ft` real) y una
@@ -110,7 +125,13 @@ async function runAt(rate, seed, special) {
           if (next === null) next = ts; if (ts + 0.5 >= next) { next += ft; if (ts - next > 4 * ft) next = ts + ft; vt = ts; window.__frames = (window.__frames || 0) + 1; const run = q; q = []; armed = false; for (const cb of run) { try { cb(vt); } catch (e) { setTimeout(() => { throw e; }); } } } else o(tick); };
         window.requestAnimationFrame = (cb) => { q.push(cb); if (!armed) { armed = true; o(tick); } return q.length; }; }, FT);
       await page.goto(`${BASE}/?nolock=1&gfx=off`, { waitUntil: 'networkidle' });
-      await page.evaluate(() => { localStorage.setItem('breach.map', 'fortaleza'); document.getElementById('btn-enter')?.click(); });
+      await page.evaluate(() => {
+        // Dos clientes comparten la GPU del runner; la matriz mide la
+        // simulación, la red y los cuadros reales. El mapa sigue dibujándose.
+        window.BREACH_RENDERER.shadowMap.enabled = false;
+        localStorage.setItem('breach.map', 'fortaleza');
+        document.getElementById('btn-enter')?.click();
+      });
       await page.waitForSelector('#splash.off', { state: 'attached' });
       await page.evaluate(([p, n]) => {
         document.getElementById('in-server').value = `ws://127.0.0.1:${p}`;
@@ -221,6 +242,13 @@ async function runAt(rate, seed, special) {
           ...(m.t === 'fire' ? {scope: window.BREACH_VM?.fp2?.vm?.scopeIn01?.()} : {})});
         return send(m);
       };
+      let fence;
+      const snapshot = n.handlers.snap;
+      n.on('testFence', m => { fence = m; });
+      n.on('snap', m => {
+        snapshot(m);
+        window.__snapFence = fence;
+      });
       for (const t of ['correction','death','respawn','testDamage','testStateDiscard','fire','nadeAck','nadeReject','rocketReject',
         'rocketBoom','smokeStart','protoEvent','protoState','specialTaken']) {
         const handler = n.handlers[t];
@@ -241,27 +269,43 @@ async function runAt(rate, seed, special) {
         };
       }
     });
-    const aim = (part = 1.15) => a.evaluate(([id, part]) => {
-      const G = window.BREACH, r = G.remotes.get(id), e = window.BREACH_FP.eye, p = G.player;
-      if (!r) throw new Error('falta el blanco');
-      const dx = r.x - e.x, dy = (r.y ?? 0) + part - e.y, dz = r.z - e.z;
-      p.cam.yaw = Math.atan2(-dx, -dz); p.cam.pitch = Math.atan2(dy, Math.hypot(dx, dz)); return true;
-    }, [idB, part]);
-    const hold = async (secs, each) => {
-      if (each) await each();
-      const start = await a.evaluate(() => {
-        const I = window.BREACH_INPUT; I._mouseFire = true; I.firePressed = true;
-        return window.BREACH.simClock;
-      });
-      const steps = Math.max(1, Math.round(secs / 0.05));
-      try {
-        for (let i = 1; i <= steps; i++) {
-          await until(a, end => window.BREACH.simClock >= end, 3, start + secs * i / steps);
-          if (each && i < steps) await each();
-        }
-      } finally {
-        await a.evaluate(() => { const I = window.BREACH_INPUT; I._mouseFire = false; I.fireReleased = true; });
-      }
+    await a.evaluate(id => {
+      window.__aimAt = part => {
+        const G = window.BREACH, r = G.remotes.get(id), e = window.BREACH_FP.eye;
+        if (!r) throw new Error('falta el blanco');
+        const dx = r.x - e.x, dy = (r.y ?? 0) + part - e.y, dz = r.z - e.z;
+        G.player.cam.yaw = Math.atan2(-dx, -dz);
+        G.player.cam.pitch = Math.atan2(dy, Math.hypot(dx, dz));
+      };
+      window.__key = (code, down) => {
+        window.dispatchEvent(new KeyboardEvent(down ? 'keydown' : 'keyup', { code }));
+      };
+      // Desde la pulsación hasta la suelta, la página controla el gatillo.
+      // Ningún viaje de Playwright puede alargar la ráfaga ni sus posturas.
+      window.__hold = (secs, part, crouchKey) => {
+        const G = window.BREACH, I = window.BREACH_INPUT, start = G.simClock;
+        I.firePressed = true; I._mouseFire = true;
+        const tick = () => {
+          const elapsed = G.simClock - start;
+          if (crouchKey) {
+            const down = elapsed >= 0.15 && elapsed < 0.4;
+            if (I.keys.has(crouchKey) !== down) window.__key(crouchKey, down);
+          }
+          if (elapsed >= secs) {
+            I._mouseFire = false; I.fireReleased = true;
+            return;
+          }
+          if (part != null) window.__aimAt(part);
+          requestAnimationFrame(tick);
+        };
+        tick();
+      };
+    }, idB);
+    const aim = (part = 1.15) => a.evaluate(h => window.__aimAt(h), part);
+    const released = () => until(a, () => !window.BREACH_INPUT._mouseFire, 2);
+    const hold = async (secs, part, crouchKey) => {
+      await a.evaluate(args => window.__hold(...args), [secs, part, crouchKey]);
+      await released();
     };
     const equip = async w => {
       await a.evaluate(w => {
@@ -305,12 +349,20 @@ async function runAt(rate, seed, special) {
       // interpolado de A no puede empujar a B desde el final del slide anterior.
       await atRemote(b, idA, spot.x, spot.za, false);
       await place(b, spot.x, spot.za + d); await face(b, 0);
-      await game(a, 0.3);
       await atRemote(a, idB, spot.x, spot.za+d, true);
       const [out, received, marked] = await a.evaluate(() => [window.__sent.length, window.__received.length, window.__claims.length]);
       const remoteStart = await b.evaluate(() => window.__received.length);
       await fn({need});
-      await game(a, 1.2);
+      // La marca viaja detrás de las acciones de A. El siguiente snapshot
+      // incorpora su daño: B empieza el próximo escenario con vida confirmada.
+      await a.evaluate(seq => window.BREACH.net.send({t:'testFence', seq}), out);
+      await Promise.all([a,b].map(page => until(page, ({id,seq}) =>
+        window.__snapFence?.id === id && window.__snapFence.seq === seq,
+      3, {id:idA, seq:out})));
+      const r1 = await refusals();
+      const diff = Object.fromEntries(Object.entries(r1).map(([k,v]) => [k,v-(r0[k] ?? 0)]).filter(([,v]) => v));
+      assert.deepEqual(Object.fromEntries(Object.entries(diff).filter(([k]) => k !== 'state-life')),
+        expectedRefusals, name + ' · descartes del servidor');
       const sent = await a.evaluate(i => window.__sent.slice(i), out);
       const packets = await a.evaluate(i => window.__received.slice(i), received);
       const remote = await b.evaluate(i => window.__received.slice(i), remoteStart);
@@ -336,10 +388,6 @@ async function runAt(rate, seed, special) {
           () => false,{direct:true}).damage; // directo, exposición completa en el carril
         assert.deepEqual(applied.map(m => [m.w,m.dmg]), [['bazooka', expected]]);
       } else assert.deepEqual(applied.filter(m => m.sq == null), [], name + ' · daño sin reclamar en B');
-      const r1 = await refusals();
-      const diff = Object.fromEntries(Object.entries(r1).map(([k,v]) => [k,v-(r0[k] ?? 0)]).filter(([,v]) => v));
-      assert.deepEqual(Object.fromEntries(Object.entries(diff).filter(([k]) => k !== 'state-life')),
-        expectedRefusals, name + ' · descartes del servidor');
       const rejects = packets.filter(m => ['nadeReject','rocketReject'].includes(m.t));
       need(rejects.length === (expectedRefusals['launch-origin'] ?? 0), 'respuestas de rechazo exactas');
       const result = {acts, packets, sent, claims};
@@ -352,15 +400,15 @@ async function runAt(rate, seed, special) {
 
     await equip('smg');
     await run('agacharse/levantarse disparando', async () => {
-      await aim(); let k = 0;
-      await hold(0.6, async () => { if (k === 3) await a.keyboard.down(kb.crouch); if (k === 8) await a.keyboard.up(kb.crouch); k++; await aim(); });
+      await hold(0.6, 1.15, kb.crouch);
+      await until(a, () => window.BREACH.player.stanceLow === 0, 1);
     }, {verify: ({acts, sent}) => {
       const down = acts.find(q => q.m.fs?.st === 'crouch' && q.m.fs.ce < 0.5);
       assert.ok(down && sent.some(q => q.m.t === 's' && q.m.st === 'idle' && q.m.n > down.m.fs.n),
         'disparó agachado y volvió a estar de pie');
     }});
     await run('inclinarse hacia el muro', async () => {
-      await a.keyboard.down(lean); await game(a, 0.25); await hold(0.4, aim); await a.keyboard.up(lean);
+      await a.keyboard.down(lean); await game(a, 0.25); await hold(0.4, 1.15); await a.keyboard.up(lean);
     }, {verify: ({acts}) => {
       assert.ok(acts.some(({m}) => -spot.wallSide * m.fs?.cl > 0), 'disparó inclinado hacia el muro');
     }});
@@ -373,27 +421,35 @@ async function runAt(rate, seed, special) {
       await a.keyboard.down(kb.crouch); await game(a,0.35);
       await a.evaluate(() => { window.BREACH_INPUT._mouseAim = true; });
       await until(a, () => window.BREACH.player.peek > 0.6, 2);
-      await aim(); await hold(0.4,aim);
+      await hold(0.4, 1.15);
       await a.evaluate(() => { window.BREACH_INPUT._mouseAim = false; });
       await a.keyboard.up(kb.crouch);
     });
     assert.ok(peek.acts.some(({m}) => m.fs?.st === 'crouch' && m.fs.aim && m.fs.ce > 0.6));
     await run('salida de sprint', async (sc) => {
-      await a.keyboard.down(kb.forward); await a.keyboard.down(kb.sprint);
-      sc.need(await until(a, id => {
+      await a.evaluate(keys => keys.forEach(key => window.__key(key, true)), [kb.forward,kb.sprint]);
+      sc.need(await until(a, ({id,keys}) => {
         const G = window.BREACH, p = G.player, distance = G.remotes.get(id).z - p.pos.z;
-        return p.state === 'roadie' && p.speed > 6 && distance > 0 && distance <= 4.5;
-      }, 3, idB), 'A sale del sprint a distancia de tiro');
-      await a.keyboard.up(kb.sprint); await a.keyboard.up(kb.forward);
-      await hold(0.6, aim);
+        if (!(p.state === 'roadie' && p.speed > 6 && distance > 0 && distance <= 4.5)) return false;
+        for (const key of keys) window.__key(key, false);
+        window.__hold(0.6, 1.15);
+        return true;
+      }, 3, {id:idB, keys:[kb.sprint,kb.forward]}), 'A sale del sprint a distancia de tiro');
+      await released();
     }, { d: 12 });
     await run('esquivar y disparar al terminar', async (sc) => {
       await aim();
-      await a.keyboard.down(kb.forward);
-      await a.keyboard.press(kb.evade);
-      sc.need(await until(a, () => window.BREACH.player.state === 'dodge', 1), 'impulso activo');
-      await a.keyboard.up(kb.forward);
-      await hold(0.85, aim);
+      await a.evaluate(({forward,evade}) => {
+        window.__key(forward, true);
+        window.__key(evade, true); window.__key(evade, false);
+      }, kb);
+      sc.need(await until(a, key => {
+        if (window.BREACH.player.state !== 'dodge') return false;
+        window.__key(key, false);
+        window.__hold(0.85, 1.15);
+        return true;
+      }, 1, kb.forward), 'impulso activo');
+      await released();
     }, { d: 6, verify: ({acts, sent}) => {
       const entrada = sent.find(({m}) => m.t === 's' && m.st === 'dodge')?.m;
       assert.ok(entrada && acts.length && acts.every(({m}) => m.fs && m.fs.st !== 'dodge' &&
@@ -411,6 +467,7 @@ async function runAt(rate, seed, special) {
       const name = pauseMs ? 'pausa de 400 ms a mitad de slide, luego disparar' : 'slide';
       let resumeAt;
       await run(name, async () => {
+        const before = await a.evaluate(() => window.__sent.length);
         await until(a, id => {
           const {player:p, weapons:w} = window.BREACH;
           const target = window.BREACH.remotes.get(id);
@@ -448,6 +505,7 @@ async function runAt(rate, seed, special) {
             window.BREACH_INPUT.firePressed = true;
             return true;
           }, 2, {id:idB, range:shotRange, resumeAt});
+          await until(a, i => window.__sent.slice(i).some(q => q.m.t === 'fire'), 1, before);
         } finally {
           await a.keyboard.up(kb.sprint); await a.keyboard.up(kb.forward);
         }
@@ -468,12 +526,22 @@ async function runAt(rate, seed, special) {
     await run('primer tiro tras cambio de arma', async (sc) => {
       await a.evaluate(() => window.BREACH.weapons.startSwap('pistol'));
       sc.need(await until(a, () => window.BREACH.weapons.cur === 'pistol' && !window.BREACH.weapons.swapping, 2), 'cambio a pistola');
-      await aim(); await hold(0.1, aim);
+      await hold(0.1, 1.15);
     }, { d: 4 });
     await equip('shotgun');
-    const jump = await run('salto desde agachado con escopeta', async (sc) => {
-      await a.keyboard.down(kb.crouch); await game(a, 0.35); await a.keyboard.up(kb.crouch); await a.keyboard.press(kb.jump);
-      sc.need(await until(a, () => !window.BREACH.player.grounded, 0.5), 'A en el aire'); await aim(); await hold(0.1, aim);
+    const jump = await run('salto desde agachado con escopeta', async () => {
+      await a.keyboard.down(kb.crouch);
+      const before = await a.evaluate(() => window.__sent.length);
+      await until(a, () => {
+        const {player:p, weapons:w} = window.BREACH;
+        if (!p.grounded || p.stanceLow < 0.99 || !p.fireAligned() || w.st.cd > 0 || w.reloading) return false;
+        // El controller salta antes de actualizar el arma en el mismo subpaso.
+        window.__aimAt(0.85);
+        window.BREACH_INPUT.jumpPressed = window.BREACH_INPUT.firePressed = true;
+        return true;
+      }, 2);
+      await until(a, i => window.__sent.slice(i).some(q => q.m.t === 'fire' && q.m.fs.air === 1), 0.5, before);
+      await a.keyboard.up(kb.crouch);
     }, { d: 4 });
     assert.ok(creditedIn(jump, fs => fs.st === 'crouch' && fs.air === 1), 'perdigón acreditado durante el salto desde agachado');
     await equip('smg');
@@ -515,14 +583,23 @@ async function runAt(rate, seed, special) {
           const pk = await a.evaluate((k) => (window.BREACH.protoSnapshot?.pickups || []).find((q) => q.kind === k && q.count > 0) ?? null, kind);
           if (!sc.need(!!pk, `pickup de ${kind} en el mapa`)) return;
           sc.need(await place(a, pk.x, pk.z, pk.y), `A llega al pickup de ${kind}`);
-          await a.keyboard.press(kb.pickup); await game(a, 0.6);
+          await a.keyboard.press(kb.pickup);
           sc.need(await until(a, (k) => window.BREACH.weapons.state[k]?.mag > 0, 3, kind), `A recoge ${kind}`);
         }
         sc.need(await place(a, low.x, low.z), 'A pegado a la LOW'); await face(a, low.yaw - 1.13, 0.93);
         await a.keyboard.down(kb.crouch); await game(a, 0.4);
+        const start = await a.evaluate(() => window.__received.length);
         if (kind === 'grenade') await a.keyboard.press(kb.grenade);
         else { sc.need(await equip(kind), `equipa ${kind}`); await hold(0.1); }
-        await game(a, 2.7); await a.keyboard.up(kb.crouch);
+        // Humo y proyectiles se resuelven en el reloj del servidor.
+        await until(a, ({start,kind,id}) => {
+          const packets = window.__received.slice(start);
+          if (kind === 'grenade') return packets.some(m => m.t === 'smokeStart' && m.id === id);
+          if (kind === 'frag') return packets.some(m => m.t === 'protoEvent' && m.kind === 'explosion' && m.owner === id);
+          return packets.some(m => m.t === 'protoState' && m.projectiles.some(q => q.kind === kind)) &&
+            !window.BREACH.protoSnapshot.projectiles.some(q => q.kind === kind);
+        }, 5, {start,kind,id:idA});
+        await a.keyboard.up(kb.crouch);
       }, { kind: 'throw' });
       const launches = flight.acts.map(q=>q.m);
       assert.equal(launches.length, 1);
@@ -568,7 +645,7 @@ async function runAt(rate, seed, special) {
         };
       }, {killer:idB, fireOnDeath});
       const setup = await b.evaluate(() => ({
-        start: window.__received.length, deadline: window.BREACH.simClock + 15,
+        start: window.__received.length, marked: window.__claims.length, deadline: window.BREACH.simClock + 15,
       }));
       const maxRange = (STAND.br - 0.08) / Math.tan(spreadFor('smg') * Math.PI / 180);
       let hpBefore = TUNING.combat.hp + 1;
@@ -592,6 +669,14 @@ async function runAt(rate, seed, special) {
         if (value === 'death') break;
         hpBefore = value;
       }
+      // Esta ráfaga siempre termina en baja. Incluir el último impacto con
+      // su daño íntegro aunque a A le quedaran menos puntos de vida.
+      const lethal = await b.evaluate(({id,start,marked}) => ({
+        applied: window.__received.slice(start).filter(m => m.t === 'testDamage' && m.target === id).map(m => [m.sq,m.dmg]),
+        marked: window.__claims.slice(marked).filter(c => c.target === id).map(c => [c.sq,c.dmg]),
+      }), {id:idA, start:setup.start, marked:setup.marked});
+      assert.ok(lethal.marked.length > 0);
+      assert.deepEqual(lethal.applied, lethal.marked, 'daño exacto de B hasta el tiro letal');
       await until(a, () => window.__sawLocalDeath, 3);
     };
     const respawnAfter = oldLife => until(a, old => {
@@ -656,11 +741,27 @@ async function runAt(rate, seed, special) {
       assert.ok(sn.m.w === 'sniper' && sn.m.fs.aim === 1 && sn.m.fs.sa === 0 && sn.scope > 0 && sn.scope < 0.98);
     } else {
       await equip('bazooka');
-      await run('cohete a 3 m en ADS', async () => { await a.evaluate(() => { window.BREACH_INPUT._mouseAim = true; }); await game(a, 0.45); await aim(0.6); await hold(0.1, () => aim(0.6)); await a.evaluate(() => { window.BREACH_INPUT._mouseAim = false; }); }, { d: 3, kind: 'auth' });
+      await run('cohete a 3 m en ADS', async () => {
+        const start = await a.evaluate(() => {
+          window.BREACH_INPUT._mouseAim = true;
+          return window.__received.length;
+        });
+        await until(a, () => window.BREACH.player.aim, 2);
+        await hold(0.1, 0.6);
+        await a.evaluate(() => { window.BREACH_INPUT._mouseAim = false; });
+        await until(a, ({start,id}) => window.__received.slice(start).some(m =>
+          (m.t === 'rocketBoom' && m.id === id) || m.t === 'rocketReject'), 3, {start,id:idA});
+      }, { d: 3, kind: 'auth' });
     }
 
     await auditRefusals({});
 
+    // Medir durante el último escenario (sin pausa intencional), incluidos
+    // los cuadros de combate y reaparición. Ambos relojes deben avanzar.
+    const clockSample = () => a.evaluate(() => ({
+      wall: performance.now(), sim: window.BREACH.simClock, frames: window.__frames,
+    }));
+    const startClock = await clockSample();
     // Control negativo aislado: una suelta real con velocidad inválida da un
     // rechazo real. Retener solo su aplicación local permite entregarlo en una
     // vida posterior sin cambiar el orden del transporte ni inventar un cid.
@@ -713,13 +814,11 @@ async function runAt(rate, seed, special) {
     }, {d: 2, kind: 'throw', expectedRefusals: {'launch-origin': 1}});
     await auditRefusals({'launch-origin': 1});
     check(`${tag}: el proxy no desordena (${stats.delivered} mensajes)`, stats.reordered === 0, String(stats.reordered));
-    // La frecuencia real y el cociente juego/real requieren medir tiempo de pared.
-    const {ratio,hz} = await a.evaluate(async () => {
-      const g0 = window.BREACH.simClock, t0 = performance.now(), f0 = window.__frames;
-      await new Promise(r => setTimeout(r,3000));
-      const elapsed = (performance.now()-t0)/1000;
-      return {ratio:(window.BREACH.simClock-g0)/elapsed, hz:(window.__frames-f0)/elapsed};
-    });
+    await a.waitForFunction(t => performance.now() - t >= 3000, startClock.wall);
+    const endClock = await clockSample();
+    const seconds = (endClock.wall - startClock.wall) / 1000;
+    const ratio = (endClock.sim - startClock.sim) / seconds;
+    const hz = (endClock.frames - startClock.frames) / seconds;
     check(`${tag}: frecuencia real ${hz.toFixed(1)} c/s`, Math.abs(hz-rate) < rate*0.1);
     check(`${tag}: el juego corre a tiempo real (juego/real ${ratio.toFixed(2)})`, ratio > 0.9 && ratio < 1.1);
     check(`${tag}: sin errores de página`, errors === 0, String(errors));

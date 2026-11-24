@@ -1520,6 +1520,11 @@ wss.on('connection', (ws) => {
       startMatch(); return;
     }
     if (msg.t === 's') { acceptOwnState(me, msg); return; }
+    // Marca FIFO de la matriz: confirma a ambos clientes hasta dónde llegó
+    // el servidor. No modifica la partida ni el resultado de ninguna acción.
+    if (msg.t === 'testFence' && process.env.NODE_ENV === 'test' && Number.isSafeInteger(msg.seq)) {
+      broadcastRaw({ t: 'testFence', id: me.id, seq: msg.seq }); return;
+    }
     // pruebas con TODAS las guardas activas (sin ALLOW_TEST_TELEPORTS): colocar
     // al jugador explícitamente; reinicia guardas e historial como una aparición
     if (msg.t === 'testPlace' && process.env.NODE_ENV === 'test') {
