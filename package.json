@@ -60,7 +60,7 @@
     "check:sniper": "node scripts/check-sniper-identity.mjs",
     "check:bazooka": "node scripts/check-bazooka-identity.mjs",
     "check:ordnance": "node scripts/check-ordnance.mjs",
-    "check:fire-cadence": "node scripts/check-fire-cadence.mjs",
+    "check:fire-cadence": "node scripts/check-fire-cadence.mjs && node scripts/check-honest-slow-frames.mjs",
     "check:bot-ammo-swap": "node scripts/check-bot-ammo-swap.mjs",
     "check:pickup-fire": "node scripts/check-pickup-fire.mjs",
     "check:hosted-bot-ammo": "node scripts/check-hosted-bot-ammo.mjs",

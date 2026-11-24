@@ -39,7 +39,7 @@ import { HUD } from './ui/hud.js';
 import { ImagePipeline, QUALITY } from './render/pipeline.js';
 import { AutoQuality, initialQuality } from './render/auto-quality.js';
 import { SkyEnvironment } from './render/sky.js';
-import { NetClient, localPose, noteLocalPose, resetTransition } from './net/client.js';
+import { NetClient, localPose, dodgeEyeReady, noteLocalPose, resetTransition } from './net/client.js';
 import { BotMatch, INTRO_TIME as BOT_INTRO_TIME } from './game/botmatch.js';
 import { SmokeSystem } from './game/smoke.js';
 import {
@@ -2649,6 +2649,7 @@ function setupOnlineBots(roster) {
     botHit: (bot, targetId, dmg, part, gib, point, meta) => {
       // bot alojado que me pega: su posición orienta el arco de daño del snapshot
       if (targetId === G.net?.id) noteHurtSource(true, bot.pos.x, bot.pos.z, bot.id);
+      noteIncomingBotHit(targetId);
       return G.net?.botHit(bot.id, targetId, dmg, part, gib, point, meta);
     },
     botNade: (bot, origin, velocity, cid) => {
@@ -3844,6 +3845,7 @@ function resolveMelee() {
       // el golpe viaja como disparo validable de corto alcance + su claim
       // origen = ojo de la muestra del golpe (RED §3: el servidor lo rehace desde ahí)
       G.net.fire(shot.origin, point, 'melee', [], G.player, shot);
+      noteIncomingBotHit(tg.id);
       G.net.hit(tg.id, dmg, 'body', false, point);
     }
   }
@@ -3903,13 +3905,19 @@ function applyMechanicalRecoil(k, def) {
   if (Number.isFinite(k?.yaw)) shoulderCam.addYawRecoil(k.yaw);
 }
 
+function noteIncomingBotHit(id) {
+  const target = G.onlineBots?.botById(id);
+  if (target) target.lastIncomingHitCt = +target.simTime.toFixed(3);
+}
+
 // ¿Puede disparar YA? La MISMA tabla que el servidor (fire-gates.js) sobre
 // el estado del controlador Y el que viaja (en una transición pueden
 // diferir: manda el más estricto); el retraso sprint→disparo va en
 // p.fireAligned() (controller, con sprintFireDelay de la misma tabla).
 function fireGateOpen(p) {
   const w = G.weapons.cur;
-  return canFireInState(p.animState(), w) && canFireInState(localPose(p, w, G.simClock).st, w);
+  return canFireInState(p.animState(), w) && canFireInState(localPose(p, w, G.simClock).st, w) &&
+    (!G.net || dodgeEyeReady(p, G.simClock));
 }
 
 // MUESTRA DE TIRO: pose, ojo, dirección, arma y dispersión de UN instante,
@@ -4156,6 +4164,7 @@ function fireShot(ray) {
     // que se marcó (un sniper sin mira acertando por dispersión, cabeza incluida)
     G.net.fire(damageOrigin, def.pellets > 1 ? axisPoint : anyPoint, wep, worldImpacts, G.player, ray);
     for (const c of onlineClaims) {
+      noteIncomingBotHit(c.id);
       G.net.hit(c.id, c.dmg, c.part, c.gib, c.point, { pellets: c.pellets });
     }
   }
@@ -4346,7 +4355,9 @@ function simStep(dt, frameRemaining) {
       (!canFire || wst.cd > 0 || relRemain > 0 || G.weapons.swapping)) {
     G.fireBuffer = requiredFireBuffer(p, wst, relRemain, G.weapons.swapping ? G.weapons.swapT : 0);
   }
-  G.fireBuffer = Math.max(0, G.fireBuffer - dt);
+  // Conservar una pulsación encolada mientras la mezcla de salida sigue
+  // sin tener un origen de tiro reproducible al otro lado de la red.
+  if (!G.net || !G.fireBuffer || dodgeEyeReady(p, G.simClock)) G.fireBuffer = Math.max(0, G.fireBuffer - dt);
 
   // Sin munición físicamente disponible, el gatillo no debe forzar pose de
   // tiro: evita que una recarga vacía deje al jugador expuesto sobre el cover.
@@ -4707,7 +4718,8 @@ function frame(now) {
   if (mapRepairPending) repairMapIfDue();
   // nunca negativo: si el reloj retrocede (pestaña restaurada, reloj de pruebas)
   // un dt < 0 hace divergir todos los suavizados exponenciales
-  const dt = Math.max(0, Math.min(0.1, (now - last) / 1000));
+  const elapsed = (now - last) / 1000;
+  const dt = Math.max(0, Math.min(0.1, elapsed));
   // calidad automática: si los cuadros reales no aguantan, baja un escalón
   if (gfxAuto && autoGfx.sample((now - last) / 1000, document.visibilityState === 'visible')) {
     gfxQuality = autoGfx.quality;
@@ -4864,6 +4876,9 @@ function frame(now) {
         stepOrdnance(st);
         acc -= st; steps++;
       }
+      // Tras un cuadro truncado el servidor puede abrir una cadena nueva.
+      // El exceso del último subpaso ya no adelanta la siguiente bala.
+      if (G.net && elapsed > dt) G.weapons.dropCadenceCredit();
     }
 
     const flowView = activePresentation(Date.now() / 1000);

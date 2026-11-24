@@ -353,6 +353,16 @@ const placed = (pose, b) => HP.placeHitPose(HP.hitPose(pose), b.pos.x, b.y, b.po
   assert.equal(M.botReleaseSmoke(b), false);
   assert.deepEqual([packets.length, projectiles.length, b.nades], [0, 0, 1]);
   net.botState([b]);
+  b.dazeT = TUNING.melee.dazeTime;
+  assert.equal(M.botReleaseSmoke(b), false, 'patada recibida entre sacar el bote y soltarlo');
+  b.dazeT = 0;
+  b.lastIncomingHitCt = b.hostedPose.throwCt = 2;
+  assert.equal(M.botReleaseSmoke(b), false, 'impacto del host todavía sin confirmar');
+  assert.deepEqual([packets.length, projectiles.length, b.nades], [0, 0, 1]);
+  b.hostedPose.throwCt += DT;
+  b.hostedPose.throwReady = false;
+  assert.equal(M.botReleaseSmoke(b), false, 'el servidor aún impide soltar el bote');
+  b.hostedPose.throwReady = true;
   assert.ok(M.botReleaseSmoke(b));
   assert.deepEqual(packets, [out]);
   assert.ok(botPoseAllowsOrigin(world.layout, b.hostedPose, out));

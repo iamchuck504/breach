@@ -2,7 +2,7 @@
 // hp / muertes / respawn / marcador. Posición client-authoritative (slice).
 import { TUNING } from '../config/tuning.js';
 import { t } from '../core/i18n.js';
-import { POSE_BLEND_MAX as POSE_BLEND, poseKey, freezePose } from '../combat/hit-pose.js';
+import { POSE_BLEND_MAX as POSE_BLEND, poseKey, freezePose, poseBlendDuration, SHOT_SINCE_TOL, POSE_PAUSE_GAP } from '../combat/hit-pose.js';
 
 // Postura FPS en el cable (CONTRATO §1 + enmienda RED): en `crouch`, `ce` es
 // la ALTURA de la cabeza (0 agachado … 1 de pie) y cubre el asomo y también
@@ -75,12 +75,47 @@ function fullOf(tr, at) {
   const since = at - tr.entry;
   return tr.from && since >= 0 && since < POSE_BLEND ? { ...tr.last, from: tr.from, fromTo: tr.fromTo, since } : tr.last;
 }
-export function noteSentPose(actor, pose, ct) {
+// Cota inferior del tiempo visto en recepción. En un tramo sin pausas el
+// jitter solo afecta a sus dos extremos. Si un hueco puede alcanzar el
+// umbral de recordOwnPose, contar el menor avance de sus dos ramas.
+function dodgePoseElapsed(exit, sent, ct) {
+  const gap = sent - exit.lastAt;
+  const pause = gap + SHOT_SINCE_TOL >= POSE_PAUSE_GAP;
+  const end = pause ? exit.lastAt : sent;
+  const span = Math.max(0, end - exit.spanAt - SHOT_SINCE_TOL);
+  const step = pause ? Math.max(0, Math.min(ct - exit.lastCt, gap - SHOT_SINCE_TOL)) : 0;
+  return { min: exit.elapsed + span + step, pause };
+}
+
+export function dodgeEyeReady(actor, ct) {
+  const exit = TRACK.get(actor)?.dodgeExit;
+  if (!exit) return true;
+  const sent = performance.now() / 1000;
+  const age = ct - exit.ct;
+  const { min, pause } = dodgePoseElapsed(exit, sent, ct);
+  // Con relojes alineados, shotPose admite la fase local incluso con jitter.
+  // Dos milisegundos de mezcla dejan margen bajo los 2 cm de cuantización.
+  if (!exit.paused && !pause && Math.abs(sent - exit.at - age) <= 0.002) return true;
+  return Math.min(age, min + SHOT_SINCE_TOL) >= exit.duration;
+}
+
+export function noteSentPose(actor, pose, ct, sent = performance.now() / 1000) {
   let tr = TRACK.get(actor);
   const key = poseKey(pose);
   if (!tr) { tr = { key, entry: -Infinity, from: null, fromTo: null, last: pose, lastCt: ct }; TRACK.set(actor, tr); return; }
   if (key !== tr.key) {
-    tr.from = freezePose(fullOf(tr, tr.lastCt)); tr.fromTo = { ...pose }; tr.entry = ct; tr.key = key;
+    tr.from = freezePose(fullOf(tr, tr.lastCt)); tr.fromTo = { ...pose }; tr.entry = ct;
+    tr.dodgeExit = tr.key === 'dodge' ? { at: sent, ct, lastAt: sent, lastCt: ct,
+      spanAt: sent, elapsed: 0, duration: poseBlendDuration(tr.from, pose) } : null;
+    tr.key = key;
+  } else if (tr.dodgeExit) {
+    const exit = tr.dodgeExit;
+    const { min, pause } = dodgePoseElapsed(exit, sent, ct);
+    if (min >= exit.duration && ct - exit.ct >= exit.duration) tr.dodgeExit = null;
+    else {
+      if (pause) { exit.paused = true; exit.elapsed = min; exit.spanAt = sent; }
+      exit.lastAt = sent; exit.lastCt = ct;
+    }
   }
   tr.last = pose; tr.lastCt = ct;
 }
@@ -241,7 +276,12 @@ export class NetClient {
       if (this._lastSent !== prev && (this._lastSent?.n ?? -1) < prev.n) this._sendSeq(prev);
       this._sendSeq(msg); this._sendAcc = 0; return;
     }
-    if (this._sendAcc < interval && !this._events?.length) return;
+    // Un paso puede mover la inclinación o el asomo hasta 0,23. Publicar
+    // el primer cuarto de recorrido evita que el siguiente envío supere
+    // el medio punto que admite la guarda de postura en una muestra.
+    const changed = Math.abs(msg.cl - (this._lastSent?.cl ?? 0)) >= 0.25 ||
+      Math.abs(msg.ce - (this._lastSent?.ce ?? 1)) >= 0.25;
+    if (this._sendAcc < interval && !this._events?.length && !changed) return;
     this._sendAcc %= interval;
     this._sendSeq(msg);
   }
@@ -321,7 +361,7 @@ export class NetClient {
   }
   _noteSample(player, fs) {
     if (!fs) return;
-    this._lastSent = { n: fs.n };
+    this._lastSent = fs;
     const who = player ?? this._last?.player;
     if (who && Number.isFinite(fs.ct)) noteSentPose(who, sentInput(fs, fs.w), fs.ct);
   }

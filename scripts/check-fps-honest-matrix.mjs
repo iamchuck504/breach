@@ -99,12 +99,14 @@ async function runAt(rate, seed, special) {
     let errors = 0;
     const FT = 1000 / rate;
     const refusals = async () => {
-      const r = await fetch(`http://127.0.0.1:${SPORT}/test/refusals`, { signal: AbortSignal.timeout(30000) });
-      assert.equal(r.status, 200, '/test/refusals');
-      const counters = await r.json();
+      const r = await fetch(`http://127.0.0.1:${SPORT}/test/refusals/detail`, { signal: AbortSignal.timeout(30000) });
+      assert.equal(r.status, 200, '/test/refusals/detail');
+      const { counts: counters, samples } = await r.json();
       assert.ok(counters && typeof counters === 'object' && !Array.isArray(counters));
       assert.ok(Object.values(counters).every(n => Number.isSafeInteger(n) && n >= 0));
-      return counters;
+      assert.ok(samples && Object.keys(counters).every(k => samples[k]?.count === counters[k]),
+        'contadores y muestras de descarte · ' + JSON.stringify({counters, samples}));
+      return {counts:counters, samples};
     };
     await refusals();
     check(`${tag}: responde /test/refusals`, true);
@@ -120,10 +122,28 @@ async function runAt(rate, seed, special) {
         window.WebSocket.prototype = W.prototype; Object.assign(window.WebSocket, { OPEN: 1, CLOSED: 3, CONNECTING: 0, CLOSING: 2 }); });
       // 30/60 c/s REALES (cuadros retenidos hasta que pasa `ft` real) y una
       // pausa de pestaña simulable (window.__pauseUntil: no se entrega ningún cuadro)
-      await page.addInitScript((ft) => { const o = window.requestAnimationFrame.bind(window); let vt = 0, next = null, q = [], armed = false;
-        const tick = (ts) => { if (window.__pauseUntil && performance.now() < window.__pauseUntil) { o(tick); return; }
-          if (next === null) next = ts; if (ts + 0.5 >= next) { next += ft; if (ts - next > 4 * ft) next = ts + ft; vt = ts; window.__frames = (window.__frames || 0) + 1; const run = q; q = []; armed = false; for (const cb of run) { try { cb(vt); } catch (e) { setTimeout(() => { throw e; }); } } } else o(tick); };
-        window.requestAnimationFrame = (cb) => { q.push(cb); if (!armed) { armed = true; o(tick); } return q.length; }; }, FT);
+      await page.addInitScript(ft => {
+        const raf = window.requestAnimationFrame.bind(window);
+        let previous, virtual, next, queue = [], armed = false;
+        const tick = ts => {
+          if (performance.now() < window.__pauseUntil || ts + 0.5 < next) { raf(tick); return; }
+          next = (next ?? ts) + ft;
+          if (ts - next > 4 * ft) next = ts + ft;
+          virtual = previous == null ? ts : virtual + Math.min(ts - previous, window.__frameStepLimit ?? Infinity);
+          previous = ts;
+          window.__frames = (window.__frames || 0) + 1;
+          const callbacks = queue;
+          queue = []; armed = false;
+          for (const cb of callbacks) {
+            try { cb(virtual); } catch (error) { setTimeout(() => { throw error; }); }
+          }
+        };
+        window.requestAnimationFrame = cb => {
+          queue.push(cb);
+          if (!armed) { armed = true; raf(tick); }
+          return queue.length;
+        };
+      }, FT);
       await page.goto(`${BASE}/?nolock=1&gfx=off`, { waitUntil: 'networkidle' });
       await page.evaluate(() => {
         // Dos clientes comparten la GPU del runner; la matriz mide la
@@ -162,6 +182,12 @@ async function runAt(rate, seed, special) {
     // FIFO: mover la predicción al enviar testPlace, para que ningún estado
     // posterior lleve las coordenadas viejas durante el viaje de la corrección.
     const place = async (page, x, z, y = 0) => {
+      // testPlace inicializa la guarda de postura de pie. Esperar aquí si
+      // la tecla ya se soltó pero aún está bajando el asomo o la inclinación.
+      await until(page, () => {
+        const p = window.BREACH.player;
+        return p.stanceLow === 0 && p.lean === 0;
+      }, 3);
       await page.evaluate(({x, y, z}) => {
         const {net, player} = window.BREACH;
         window.__placed = null;
@@ -327,19 +353,19 @@ async function runAt(rate, seed, special) {
     const auditRefusals = async expected => {
       // El HTTP puede adelantarse a los recibos FIFO de cualquiera de los dos clientes.
       const deadline = await a.evaluate(() => window.BREACH.simClock + 3);
-      let totals, verified;
+      let totals, samples, verified;
       do {
-        totals = await refusals();
+        ({counts:totals, samples} = await refusals());
         const counts = await Promise.all([a,b].map(p => p.evaluate(() => window.__discardedStates.size)));
         verified = counts[0] + counts[1];
         if (verified === (totals['state-life'] ?? 0)) break;
         await game(a, 1 / rate);
       } while (await a.evaluate(end => window.BREACH.simClock < end, deadline));
-      assert.deepEqual(totals, {...expected, ...(verified ? { 'state-life': verified } : {})}, 'todos los descartes comprobados');
+      assert.deepEqual(totals, {...expected, ...(verified ? { 'state-life': verified } : {})}, 'todos los descartes comprobados · ' + JSON.stringify(samples));
     };
     const run = async (name, fn, { d = 6, kind = 'hit', expectedRefusals = {}, verify } = {}) => {
       console.log(`   ${tag}: ${name}`);
-      const r0 = await refusals();
+      const {counts:r0} = await refusals();
       const need = (ok, message) => { assert.ok(ok, name + ' · ' + message); return true; };
       await playing(a); await playing(b);
       await until(b, () => window.BREACH.selfHp >= 100 && !(window.BREACH.spawnProt > 0), 30);
@@ -352,17 +378,24 @@ async function runAt(rate, seed, special) {
       await atRemote(a, idB, spot.x, spot.za+d, true);
       const [out, received, marked] = await a.evaluate(() => [window.__sent.length, window.__received.length, window.__claims.length]);
       const remoteStart = await b.evaluate(() => window.__received.length);
-      await fn({need});
+      try { await fn({need}); }
+      catch (error) {
+        const {counts, samples} = await refusals();
+        const changed = Object.keys(counts).filter(k => counts[k] > (r0[k] ?? 0));
+        if (changed.length) console.error(name, JSON.stringify(Object.fromEntries(changed.map(k => [k, samples[k]]))));
+        throw error;
+      }
       // La marca viaja detrás de las acciones de A. El siguiente snapshot
       // incorpora su daño: B empieza el próximo escenario con vida confirmada.
       await a.evaluate(seq => window.BREACH.net.send({t:'testFence', seq}), out);
       await Promise.all([a,b].map(page => until(page, ({id,seq}) =>
         window.__snapFence?.id === id && window.__snapFence.seq === seq,
       3, {id:idA, seq:out})));
-      const r1 = await refusals();
+      const {counts:r1, samples} = await refusals();
       const diff = Object.fromEntries(Object.entries(r1).map(([k,v]) => [k,v-(r0[k] ?? 0)]).filter(([,v]) => v));
       assert.deepEqual(Object.fromEntries(Object.entries(diff).filter(([k]) => k !== 'state-life')),
-        expectedRefusals, name + ' · descartes del servidor');
+        expectedRefusals, name + ' · descartes del servidor · ' + JSON.stringify(
+          Object.fromEntries(Object.keys(diff).map(k => [k,samples[k]]))));
       const sent = await a.evaluate(i => window.__sent.slice(i), out);
       const packets = await a.evaluate(i => window.__received.slice(i), received);
       const remote = await b.evaluate(i => window.__received.slice(i), remoteStart);
@@ -389,7 +422,7 @@ async function runAt(rate, seed, special) {
         assert.deepEqual(applied.map(m => [m.w,m.dmg]), [['bazooka', expected]]);
       } else assert.deepEqual(applied.filter(m => m.sq == null), [], name + ' · daño sin reclamar en B');
       const rejects = packets.filter(m => ['nadeReject','rocketReject'].includes(m.t));
-      need(rejects.length === (expectedRefusals['launch-origin'] ?? 0), 'respuestas de rechazo exactas');
+      need(rejects.length === (expectedRefusals['launch-origin'] ?? 0), 'respuestas de rechazo exactas · ' + JSON.stringify(rejects));
       const result = {acts, packets, sent, claims};
       verify?.(result);
       console.log(`   OK ${name} · intentos ${acts.length} · marcados ${claims.length} · daño reclamado ${claims.reduce((n,c)=>n+c[1],0)} · aplicado ${applied.reduce((n,m)=>n+m.dmg,0)} · rechazos ${JSON.stringify(diff)}`);
@@ -641,7 +674,19 @@ async function runAt(rate, seed, special) {
           window.__sawLocalDeath = !G.selfAlive;
           // La ola puede llegar en el mismo cuadro que la muerte. El gatillo de
           // A debe estar pulsado antes de que se procese la reaparición.
-          if (fireOnDeath) window.BREACH_INPUT._mouseFire = true;
+          if (fireOnDeath) {
+            window.BREACH_INPUT._mouseFire = true;
+            const previousLife = G.weapons.life, send = G.net.send;
+            G.net.send = function (packet) {
+              const result = send.call(this, packet);
+              if (packet.t === 'fire' && packet.fs?.life > previousLife) {
+                this.send = send;
+                window.BREACH_INPUT._mouseFire = false;
+                window.BREACH_INPUT.fireReleased = true;
+              }
+              return result;
+            };
+          }
         };
       }, {killer:idB, fireOnDeath});
       const setup = await b.evaluate(() => ({
@@ -689,12 +734,9 @@ async function runAt(rate, seed, special) {
       await killA(true);
       await respawnAfter(life);
       await until(a, old => window.__sent.some(q => q.life > old && q.m.t === 'fire'), 3, life);
-      const first = await a.evaluate(old => {
-        window.BREACH_INPUT._mouseFire = false; window.BREACH_INPUT.fireReleased = true;
-        return window.__sent.find(q => q.life > old)?.m;
-      }, life);
+      const first = await a.evaluate(old => window.__sent.find(q => q.life > old)?.m, life);
       assert.ok(first?.t === 'fire' && first.w === 'smg' && first.fs?.w === 'smg');
-    }, { d: 2, kind: 'shot' });
+    }, { d: 2, kind: 'shot', verify: ({acts}) => assert.equal(acts.length, 1) });
     // arma especial de la ronda (del pedestal, recogida de verdad)
     await run(`recoger la especial (${special})`, async (sc) => {
       const S = await a.evaluate(() => { const s = window.BREACH_SPECIALS.active; return s ? { x: s.x, y: s.y, z: s.z, w: s.wep } : null; });
@@ -723,18 +765,28 @@ async function runAt(rate, seed, special) {
         await aim(0.85);
         // Pulsar en el mismo cuadro que acredita el umbral: otro viaje de
         // Playwright entre la medida y el click puede dejar entrar el scope.
-        const first = await a.evaluate(() => window.__sent.length);
-        await until(a, () => {
-          // Empezar ADS con el observador instalado: incluso un viaje lento
-          // de Playwright no puede saltarse la ventana de la mira.
-          window.BREACH_INPUT._mouseAim = true;
-          const k = window.BREACH_VM?.fp2?.vm?.scopeIn01?.();
-          if (!(k > 0.15 && k < 0.7)) return false;
-          window.BREACH_INPUT.firePressed = true;
-          return true;
-        }, 2);
-        await until(a, i => window.__sent.slice(i).some(q => q.m.t === 'fire'), 1, first);
-        await a.evaluate(() => { window.BREACH_INPUT._mouseAim = false; });
+        await a.evaluate(async () => {
+          // La alineación se mide sobre el cuadro dibujado. Un cuadro de
+          // 100 ms puede atravesar toda la ventana. Durante esta subida cada
+          // dibujo avanza como máximo 1/120 s del reloj de la simulación.
+          const G = window.BREACH, input = window.BREACH_INPUT;
+          const deadline = G.simClock + 2, first = window.__sent.length;
+          window.__frameStepLimit = 1000 / 120;
+          input._mouseAim = true;
+          let pressed = false, k;
+          try {
+            while (G.simClock < deadline) {
+              await new Promise(requestAnimationFrame);
+              k = window.BREACH_VM.fp2.vm.scopeIn01();
+              if (!pressed && k > 0.15 && k < 0.7) { input.firePressed = true; pressed = true; }
+              if (pressed && window.__sent.slice(first).some(q => q.m.t === 'fire')) return;
+            }
+            throw new Error('subida de la mira: k=' + k + ', gatillo=' + pressed);
+          } finally {
+            input._mouseAim = false;
+            delete window.__frameStepLimit;
+          }
+        });
       }, { d: 3 });
       assert.equal(rising.acts.length, 1);
       const sn = rising.acts[0];

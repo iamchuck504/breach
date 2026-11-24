@@ -5,6 +5,7 @@
 // difundidos por el servidor con el id del bot, y cohetes/humo rechazados.
 import { chromium } from 'playwright-core';
 import { spawn } from 'node:child_process';
+import { createInterface } from 'node:readline';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CHROME } from './lib-chrome.mjs';
@@ -21,8 +22,11 @@ const server = spawn(process.execPath, [path.join(root, 'server', 'server.js')],
   stdio: ['ignore', 'pipe', 'ignore'],
 });
 // motivos de rechazo que el servidor reporta (solo en pruebas)
-const rejectLog = [];
-server.stdout.on('data', (d) => { for (const l of String(d).split('\n')) if (l.includes('[botFire rechazado]')) rejectLog.push(l); });
+const rejectLog = [], nadeLog = [];
+createInterface({ input: server.stdout }).on('line', line => {
+  if (line.startsWith('[botFire rechazado]')) rejectLog.push(line);
+  if (line.startsWith('[nade rechazado]')) nadeLog.push(line);
+});
 await new Promise((r) => setTimeout(r, 1200));
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
 const page = await browser.newPage();
@@ -119,6 +123,7 @@ try {
   console.log(`${ok ? 'OK ' : 'FAIL'} bots alojados: ${r.sent} disparos, ${r.honestRejected} honestos rechazados (${legit} de bots ya muertos), ${r.reloads} recargas, cohetes/humo rechazados ${r.rocketRej}/${r.nadeRej}`);
   console.log(JSON.stringify({ ...r, errors }));
   if (rejectLog.length) console.log(rejectLog.slice(0, 5).join('\n'));
+  if (nadeLog.length) console.log(nadeLog.join('\n'));
   failed = !ok;
 } finally {
   await browser.close();

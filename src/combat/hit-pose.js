@@ -244,6 +244,9 @@ export const BLEND_SPEED = 5.4;
 export const POSE_BLEND_MAX = 0.35;
 const blendTime = (A, B) => Math.min(POSE_BLEND_MAX, Math.max(POSE_BLEND,
   1.5 * Math.hypot(A.h[0] - B.h[0], A.h[1] - B.h[1], A.h[2] - B.h[2]) / BLEND_SPEED));
+// El ojo usa tanto la cabeza apuntada como su posición nominal sin ADS.
+export const poseBlendDuration = (from, to) => Math.max(
+  blendTime(from.vol, rawHitPose(to)), blendTime(from.steady, rawHitPose({ ...to, aim: false })));
 const smooth = (x) => x * x * (3 - 2 * x);
 // Entre de pie/corriendo/saltando/agachado la continuidad ya la da `ce` (y el
 // ADS no mueve el ojo): esos cambios no mezclan, así agacharse no deja la
@@ -564,13 +567,14 @@ function ctFull(samples, i) {
 // Reloj de la pose propia. Tras una pausa comprobada por el servidor, la
 // simulación puede haber avanzado un solo cuadro. Descontar solo esa parte
 // del silencio también conserva el principio de la mezcla al podar la cola.
+export const POSE_PAUSE_GAP = 0.25;
 export function recordOwnPose(history, sample) {
   const previous = history.at(-1);
   const received = sample.at;
   if (previous) {
     const gap = received - previous.received;
     const simulated = sample.ct - previous.ct;
-    const elapsed = gap >= 0.25 && Number.isFinite(simulated) && simulated >= 0
+    const elapsed = gap >= POSE_PAUSE_GAP && Number.isFinite(simulated) && simulated >= 0
       ? Math.min(gap, simulated) : gap;
     sample.at = previous.at + elapsed;
   }

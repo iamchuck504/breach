@@ -259,7 +259,12 @@ export function acceptMovement(entity, next, now, bypass = false) {
     advanceCadenceClock(guard.botClock, next.ct, now);
   }
   const boundedClock = entity.fps && Number.isFinite(entity.cclk) ? entity.cclk : guard.botClock?.cclk ?? now;
-  const paused = (entity.fps || guard.botClock) && dt >= 0.25 && hasClock && elapsed >= 0;
+  // Un cuadro del cliente simula como máximo 100 ms. También puede perder
+  // tiempo antes de 250 ms: descontarlo solo si hay silencio de transporte
+  // y el salto supera el avance simulado más la tolerancia de la red.
+  const paused = (entity.fps || guard.botClock) && hasClock && elapsed >= 0 &&
+    (dt >= 0.25 || ((next.st === 'dodge' || previous.inDodge) &&
+      elapsed > 0 && dt > elapsed + NET_GATE_TOL));
   if (paused && Number.isFinite(previous.boundedClock)) {
     // El reloj de cadencia puede saltar al mínimo impuesto por la hora real.
     // Ese salto no consume el slide ni repone distancia que no se simuló.
@@ -343,7 +348,11 @@ export function acceptPosture(entity, next, now, ct) {
   let dt = srvDt;
   // C7: tras un silencio ≥ 0.25 s (pestaña en pausa) la primera muestra
   // re-basa la referencia del reloj: sin arrastrar desfases de antes
-  if (srvDt >= 0.25) { g.ct = undefined; g.minOff = undefined; g.bank = 0; }
+  if (srvDt >= 0.25) {
+    // Recalibrar el desfase sin cobrar toda la pausa a su primera muestra.
+    // Los subpasos siguientes solo pueden gastar el saldo de tiempo real.
+    g.minOff = undefined; g.bank = 0;
+  }
   if (Number.isFinite(ct)) {
     // ct que retrocede mucho (cambio de reloj, primera muestra de la vida con
     // otra base): se reinicia la referencia en vez de congelar el crédito
@@ -605,6 +614,7 @@ export function advanceCadenceClock(me, ct, now) {
   me.cBank = Math.min(CADENCE_BANK, (me.cBank ?? 0) + Math.max(0, now - me.cAt)); me.cAt = now;
   let d;
   if (Number.isFinite(ct) && Number.isFinite(me.cCt) && ct >= me.cCt - 0.5) d = Math.max(0, ct - me.cCt);
+  else if (Number.isFinite(ct) && !Number.isFinite(me.cCt)) d = 0; // primera marca de la vida
   else d = me.cBank; // sin reloj (o reloj reiniciado): tiempo de servidor
   d = Math.min(d, me.cBank); me.cBank -= d; me.cclk += d;
   if (Number.isFinite(ct)) me.cCt = Number.isFinite(me.cCt) && ct >= me.cCt - 0.5 ? Math.max(me.cCt, ct) : ct;

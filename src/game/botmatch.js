@@ -251,7 +251,7 @@ export class Bot {
   }
 
   respawn(spawn) {
-    this.hostedPose = null;
+    this.hostedPose = null; this.lastIncomingHitCt = -Infinity;
     this.world.navigation?.cache?.delete(this);
     this._eye = null; this._eyeAt = null; this.seen = []; this.seenD = []; this.senseT = 0; // nada percibido desde la posición anterior
     this.pos = { x: spawn.x, z: spawn.z };
@@ -2899,7 +2899,10 @@ export class BotMatch {
   // antes; el ángulo sale de la tabla de alcance en vez de un arco fijo.
   botReleaseSmoke(bot) {
     const smoke = this.cb.smoke, p = bot.throwPlan;
-    if (!smoke || !p || bot.nades <= 0) return false;
+    // La patada puede llegar después de sacar el bote y antes de la suelta.
+    // Conservarlo si el gesto se acaba mientras sigue impedido para lanzar.
+    if (!smoke || !p || bot.nades <= 0 || !bot.alive || bot.dazeT > 0 || bot.protoStunned ||
+        !canFireInState(bot.netAnim || 'idle', 'grenade') || bot.sinceSprint < sprintFireDelay('grenade')) return false;
     const g = TUNING.weapons.grenade;
     // salida como la del jugador (DECISIONES §4): 0.5 m delante del OJO de
     // la pose difundida, hacia donde lanza, con el tramo ojo→salida libre
@@ -2920,7 +2923,11 @@ export class BotMatch {
       if (hit !== null) hand.copy(_v1).addScaledVector(_v2, Math.max(0, hit - 0.1)); }
     if (this.external) {
       const pose = bot.hostedPose, origin = hand.toArray();
-      if (!pose?.alive || pose.w !== 'grenade' || performance.now() - bot.hostedPoseAt >= BOT_ORIGIN_LAG * 1000 ||
+      // El host puede haber enviado un impacto en este mismo cuadro. Su
+      // resultado (incluidas baja y patada) precede al siguiente botState
+      // en el socket FIFO. Esperar esa pose antes de descontar el bote.
+      if (!pose?.alive || pose.w !== 'grenade' || pose.throwReady === false || pose.throwCt <= bot.lastIncomingHitCt ||
+          performance.now() - bot.hostedPoseAt >= BOT_ORIGIN_LAG * 1000 ||
           !botPoseAllowsOrigin(this.world.layout, pose, origin) || mapPathBlocked(this.world.layout, eye, origin)) return false;
     }
     bot.nades--;

@@ -742,6 +742,8 @@ export class Controller {
       this.vel.x = dt > 0 ? (this.pos.x - moveStartX) / dt : 0;
       this.vel.z = dt > 0 ? (this.pos.z - moveStartZ) / dt : 0;
       if (done) {
+        // La pose de frenada se envía junto a los subpasos restantes.
+        this.sinceSprint = -frameRemaining;
         this.dodge = null;
         this.vel.x = this.vel.z = 0;
         this._setState('idle');

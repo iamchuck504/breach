@@ -131,9 +131,9 @@ const server = http.createServer((req, res) => {
   // sonda de vida para el host (health check del proveedor); sin estado interno
   if (urlPath === '/healthz') { textResponse(res, 200, 'ok'); return; }
   // pruebas (matriz honesta): rechazos del servidor por motivo
-  if (urlPath === '/test/refusals' && process.env.NODE_ENV === 'test') {
+  if (process.env.NODE_ENV === 'test' && ['/test/refusals', '/test/refusals/detail'].includes(urlPath)) {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-    res.end(JSON.stringify(REFUSALS)); return;
+    res.end(JSON.stringify(urlPath.endsWith('/detail') ? { counts: REFUSALS, samples: refusalSamples } : REFUSALS)); return;
   }
   // estado de la sala; CORS abierto porque el cliente puede vivir en otro
   // dominio (sitio estático) y solo expone lo que ya ve cualquiera que entre
@@ -200,10 +200,15 @@ const nowSec = () => Date.now() / 1000;
 const protoBlocked = (a, b) => mapPathBlocked(settings.map, [a.x, a.y, a.z], [b.x, b.y, b.z]);
 // rechazos de humanos por motivo (GET /test/refusals con NODE_ENV=test)
 const REFUSALS = {};
+// Una muestra por motivo basta para explicar el último incremento del contador.
+const refusalSamples = process.env.NODE_ENV === 'test' ? {} : null;
+let refusalInput;
+
 // BREACH_REFUSAL_LOG=<archivo> (pruebas): el detalle de cada rechazo, una línea JSON
 const REFUSAL_LOG = process.env.NODE_ENV === 'test' ? process.env.BREACH_REFUSAL_LOG : null;
 function refused(reason, detail = null) {
   REFUSALS[reason] = (REFUSALS[reason] || 0) + 1;
+  if (refusalSamples) refusalSamples[reason] = { count: REFUSALS[reason], ...refusalInput, detail };
   if (REFUSAL_LOG) { try { fs.appendFileSync(REFUSAL_LOG, JSON.stringify({ t: +monoSec().toFixed(3), reason, ...(detail || {}) }) + '\n'); } catch { /* sin registro */ } }
   return false;
 }
@@ -531,7 +536,7 @@ function freshCombatState(p, spawn) {
   Object.assign(p, { x: spawn.x, z: spawn.z, y: 0, yaw: spawn.yaw, st: 'idle', aim: 0,
     p: 0, ae: 0, cl: 0, ce: 1, ck: null, w: 'smg', sp: 0, hp: HP, alive: true,
     specialWep: null, wGrant: null, wSeen: 'smg', wInstant: false, lastActionWeapon: null,
-    lastRoadieAt: -Infinity, ct: undefined, visualCt: undefined, visualUntil: -Infinity, dodgeVisual: null, sa: undefined,
+    lastRoadieAt: -Infinity, ct: undefined, cCt: undefined, visualCt: undefined, visualUntil: -Infinity, dodgeVisual: null, sa: undefined,
     weaponSlots: ['smg', 'shotgun', 'pistol', 'grenade'],
     ammoBudget: createAmmoBudget(), fireWeapon: null, // vida nueva: sin arma previa
     nades: p.bot ? 1 : WD.grenade.mag,
@@ -558,15 +563,18 @@ function syncBotTransport(b, host) {
 const dazed = (entity) => nowSec() < (entity?.dazeUntil || 0); // pateado: ni dispara, ni golpea, ni lanza
 function relayNade(sourceWs, shooter, msg) {
   if (shooter) shooter.lastRejectReason = 'state';
-  if(dazed(shooter)||prototypes.stunned(shooter?.id))return false;
-  if (!shooter?.alive || phase !== 'playing') return false;
+  if (!shooter) return false;
+  if (dazed(shooter)) { shooter.lastRejectReason = 'dazed'; return false; }
+  if (prototypes.stunned(shooter.id)) { shooter.lastRejectReason = 'stunned'; return false; }
+  if (!shooter.alive || phase !== 'playing') { shooter.lastRejectReason = shooter.alive ? 'phase' : 'dead'; return false; }
   if (shooter.weaponSlots?.[3] === 'frag') { shooter.lastRejectReason = 'wrong-weapon'; return false; }
   if (shooter.nades <= 0) { shooter.lastRejectReason = 'ammo'; return false; }
-  const o = vec3(msg.o), v = vec3(msg.v); if (!o || !v) return false;
+  const o = vec3(msg.o), v = vec3(msg.v); if (!o || !v) { shooter.lastRejectReason = 'origin'; return false; }
   const now = nowSec();
   // orden fijo: muestra/arma → estado → origen → cadencia (ganchos/red.md)
   const human = !shooter.bot && shooter.fps, smp = human ? acceptLaunchSample(shooter, msg, 'grenade') : { ok: true };
-  if (!smp.ok || !dodgeFireReady(shooter, 'grenade')) return false;
+  if (!smp.ok) return false;
+  if (!dodgeFireReady(shooter, 'grenade')) { shooter.lastRejectReason = 'dodge'; return false; }
   if (shooter.w !== 'grenade') { shooter.lastRejectReason = 'wrong-weapon'; return false; }
   const horizontalOrigin = Math.hypot(o[0] - shooter.x, o[2] - shooter.z);
   const verticalOrigin = Math.abs(o[1] - ((shooter.y || 0) + 1.1));
@@ -1268,7 +1276,7 @@ function acceptOwnState(me, msg, sample = false) {
   const currentLife = me.life ?? 0;
   if (msg.life !== undefined && msg.life !== currentLife) {
     if (!sample && process.env.NODE_ENV === 'test') {
-      send(ws, { t: 'testStateDiscard', n: msg.n, life: msg.life, current: currentLife });
+      send(ws, { t: 'testStateDiscard', reason: 'state-life', n: msg.n, life: msg.life, current: currentLife, sample: msg });
     }
     return refused('state-life');
   }
@@ -1377,11 +1385,13 @@ wss.on('connection', (ws) => {
   ws.on('message', (data) => {
     const bytes = typeof data === 'string' ? Buffer.byteLength(data) : (data?.byteLength || data?.length || 0);
     if (!rateGuard.allow(nowSec(), bytes)) {
+      if (refusalSamples) refusalInput = { id: me?.id, bytes };
       refused('rate-limit'); ws.close(1008, 'rate limit'); return;
     }
     let msg; try { msg = JSON.parse(data); } catch { return; }
     // solo objetos con tipo de texto (null, números o listas no son mensajes)
     if (!msg || typeof msg !== 'object' || Array.isArray(msg) || typeof msg.t !== 'string') return;
+    if (refusalSamples) refusalInput = { id: me?.id, life: me?.life, message: msg };
     if (msg.t === 'join' && !me) {
       // Solo clientes FPS (DECISIONES §5): uno anterior no anuncia `fps` y se
       // le rechaza por la vía de siempre (lobbyError antes del welcome, que el
@@ -1606,11 +1616,13 @@ wss.on('connection', (ws) => {
       return;
     }
     if (msg.t === 'nade') {
-      if (!relayNade(ws, eventShooter(me, msg), msg)) {
-        if (LOG_FIRE_REJECTS) console.log('[nade rechazado]', JSON.stringify({ w: me.w, st: me.st, nades: me.nades, cadence: me.lastRejectReason }));
+      const actor = eventShooter(me, msg);
+      if (!relayNade(ws, actor, msg)) {
+        if (LOG_FIRE_REJECTS) console.log('[nade rechazado]', JSON.stringify({ id: actor?.id, life: actor?.life,
+          st: actor?.st, phase, reason: actor?.lastRejectReason, message: msg }));
         const cid = typeof msg.cid === 'string' ? msg.cid.slice(0, 40) : null;
         // qué se rechazó: el cliente devuelve el bote (weapons.refundThrow)
-        launchReject(ws, eventShooter(me, msg), { cid, kind: 'grenade', life: msg.fs?.life, reason: eventShooter(me, msg)?.lastRejectReason || 'origin' });
+        launchReject(ws, actor, { cid, kind: 'grenade', life: msg.fs?.life, reason: actor?.lastRejectReason || 'origin' });
       }
       return;
     }
@@ -1753,7 +1765,11 @@ setInterval(() => {
       yaw: p.yaw || 0, st: p.st || 'idle', aim: p.aim || 0, p: p.p || 0,
       ae: p.ae || 0, cl: p.cl || 0, ...(p.ceKnown ? { ce: p.ce } : {}),
       ...(p.ck ? { ck: p.ck } : {}), w: p.w || 'smg',
-      ct: p.visualCt, ...(p.st === 'dodge' ? { dg: p.dg, ...p.dodgeVisual } : {}),
+      ct: p.visualCt, ...(p.bot && p.w === 'grenade' ? {
+        throwCt: p.motionGuard?.lastCt,
+        throwReady: phase === 'playing' && p.alive && !dazed(p) && !prototypes.stunned(p.id) && dodgeFireReady(p, 'grenade'),
+      } : {}),
+      ...(p.st === 'dodge' ? { dg: p.dg, ...p.dodgeVisual } : {}),
       sp: p.sp || 0, ...(p.alive && p.rl != null ? { rl: +p.rl.toFixed(2) } : {}),
       ...(p.evQueue?.length ? { ev: p.evQueue.splice(0) } : {}), hp: Math.round(p.hp), alive: p.alive,
       resp: !p.alive && p.respawnAt > now ? +(p.respawnAt - now).toFixed(2) : 0,
